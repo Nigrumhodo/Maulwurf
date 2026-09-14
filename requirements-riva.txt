@@ -1,0 +1,2 @@
+# NVIDIA Riva Python gRPC client (official package for the python-clients repo)
+nvidia-riva-client==2.27.0
