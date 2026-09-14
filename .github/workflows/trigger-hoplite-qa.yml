@@ -1,0 +1,31 @@
+# Trigger Hoplite QA — notifica a Hoplite en cada PR para que corra su QA.
+#
+# Anti-loop: el bot de Hoplite (usehoplite) responde subiendo commits a la
+# rama del PR; esos pushes disparan `synchronize` y re-enviarían el webhook
+# en bucle. Se salta el job completo cuando el actor del evento ES el bot.
+#
+# Nota de seguridad: github.event (títulos/branch/commits del PR) es input
+# NO confiable — nunca se interpola directo en `run:` (riesgo de inyección
+# shell); se pasa por `env:` y el runner la escapa.
+name: Trigger Hoplite QA
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  send-webhook:
+    runs-on: ubuntu-latest
+    # Solo QA de interacción humana: si el push lo hizo el bot de Hoplite
+    # (respuesta automática suya), no re-disparamos el webhook.
+    if: github.actor != 'usehoplite[bot]'
+    steps:
+      - name: Send webhook to Hoplite with Bearer Token
+        env:
+          HOPLITE_TOKEN: ${{ secrets.HOPLITE_TOKEN }}
+          EVENT_JSON: ${{ toJson(github.event) }}
+        run: |
+          curl -X POST "https://api.hoplite.sh/api/automations/webhooks" \
+            -H "Authorization: Bearer $HOPLITE_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$EVENT_JSON"
