@@ -342,6 +342,8 @@ must establish quotas, rate limits, alerts, retention policies, and provider ter
 
 - [Functional and technical specification](docs/ESPECIFICACION.md)
 - [Implementation and validation plan](docs/PLAN_IMPLEMENTACION.md)
+- [Team sprint plan (4 weeks)](docs/PLAN_SPRINTS.md) with per-member sprint sheets in [docs/sprints/](docs/sprints/)
+- [Test catalog by sprint (planned suites, gates G1–G8)](docs/PLAN_TESTS.md)
 - [NVIDIA Riva client audit](docs/NVIDIA_RIVA.md)
 - [Pinned Riva dependency](requirements-riva.txt)
 - [Repository agent guidance](AGENTS.md)
