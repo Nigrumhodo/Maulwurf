@@ -14,8 +14,8 @@
 
 | Área | Estado observado en el repositorio |
 |---|---|
-| Código de aplicación | No existe: ni `apps/`, ni entrypoints, ni build, ni tests, ni CI |
-| Dependencias | Solo `requirements-riva.txt` (`nvidia-riva-client==2.27.0`) instalable |
+| Código de aplicación | Scaffold del PR #2 ya en `develop`: `apps/api` (FastAPI, Alembic, `app/core/config.py`, `app/main.py`), `apps/ingest`, `apps/web` (Next.js + ESLint) y `.github/workflows/` (trigger de QA); módulos de negocio, migraciones y tests aún vacíos |
+| Dependencias | `requirements-riva.txt` (`nvidia-riva-client==2.27.0`); lockfiles del scaffold: `uv.lock` (api/ingest) y `package-lock.json` (web) |
 | Contratos funcionales | `docs/ESPECIFICACION.md` — módulos M1–M9, modelo de datos §6, NFRs §8 |
 | Plan de entrega | `docs/PLAN_IMPLEMENTACION.md` — fases F0–F3, puertas G1–G8, decisiones D1–D8 |
 | Plan de equipo | `docs/PLAN_SPRINTS.md` — S1–S4 con fichas por persona en `docs/sprints/` |
@@ -76,11 +76,18 @@ RLS base (defensa adicional):
 
 ```sql
 ALTER TABLE audios ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audios FORCE ROW LEVEL SECURITY;  -- el dueño de la tabla evade RLS sin FORCE
 CREATE POLICY tenant_isolation ON audios
   USING (user_id = current_setting('app.user_id')::uuid);
 ```
 
-Cada transacción abre con `SET LOCAL app.user_id = '<uuid>'`.
+Cree la misma política (con `WITH CHECK`) en todas las tablas de tenant; aquí solo se
+muestra `audios` por brevedad.
+
+Cada transacción abre con `SET LOCAL app.user_id = '<uuid>'`; si falta, la consulta no
+devuelve filas ni permite escrituras (es el fallo correcto). Esa apertura es obligatoria en
+**todo** camino transaccional: API, SSE, tools y jobs. Las migraciones (Alembic) usan un rol
+dedicado sin RLS; documentar ese rol es parte del ticket de esquema S1.
 
 ### 2.1.1 Extensiones
 
@@ -409,6 +416,15 @@ Notas:
 
 - Un chunk **no** es la unidad mínima de evidencia: `chunk_segments` conserva los segmentos y
   sus spans aunque haya solapamiento entre chunks.
+- Excepción a la convención de FKs compuestas (§2.1): `chunk_segments` y `embeddings` usan
+  FK simple a `chunks(id)` y PK sin `user_id` porque la PK de `chunks` es globalmente única
+  y no admite referencias cruzadas de tenant; se documenta para no dejar la convención como
+  aparente universal.
+- El HNSW es por tabla, no por `index_version`: el filtro de generación activa se aplica
+  tras el scan. Plan de operación: `hnsw.ef_search` / `hnsw.iterative_scan` (pgvector ≥ 0.8)
+  y búsqueda exacta para corpus pequeños (spec §6.2). El tipmod fijo `vector(1536)` no
+  acompaña el versionado: un cambio de dimensión exigirá columna nueva por generación o
+  `vector` sin tipmod con `CHECK` contra `index_generations.dimension`.
 - Cambiar el modelo/dimensión/versión de embeddings exige una **generación nueva de índice**
   y reindexación completa; nunca se mezclan versiones ni se expone un índice parcial.
 - Borrar una clase purga chunks → embeddings y los caches/citas derivadas; los jobs
@@ -437,6 +453,8 @@ CREATE TABLE outbox_events (
   published_at     timestamptz,
   completed_at     timestamptz,
   created_at       timestamptz NOT NULL DEFAULT now(),
+  -- NULLS NOT DISTINCT a propósito: sin dedupe_key colapsa a como mucho un evento por
+  -- (type, resource_id, resource_version); los reintentos reutilizan la misma fila.
   UNIQUE NULLS NOT DISTINCT (type, resource_id, resource_version, dedupe_key)
 );
 CREATE INDEX outbox_pending ON outbox_events (status, next_attempt_at) WHERE enabled;
@@ -488,9 +506,15 @@ CREATE TABLE messages (
   prompt_version    text,
   input_tokens      integer,
   output_tokens     integer,
-  created_at        timestamptz NOT NULL DEFAULT now(),
-  UNIQUE NULLS NOT DISTINCT (conversation_id, client_message_id)
+  created_at        timestamptz NOT NULL DEFAULT now()
 );
+
+-- Idempotencia solo para envíos del usuario: los mensajes assistant no traen
+-- client_message_id y, con NULLS NOT DISTINCT, sus NULL cuentan como iguales (solo
+-- cabría una respuesta por conversación).
+CREATE UNIQUE INDEX messages_inbox_idem
+  ON messages (conversation_id, client_message_id)
+  WHERE client_message_id IS NOT NULL;
 
 CREATE TABLE message_sources (
   id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -564,7 +588,11 @@ CREATE TABLE tasks (
           AND due_date IS NULL AND due_at IS NULL)
   )
 );
-CREATE INDEX tasks_inbox ON tasks (user_id, status, COALESCE(due_at, due_date::timestamptz));
+-- Índices separados por el contrato spec §6.2 (due_at/due_date): el cast
+-- date → timestamptz depende del GUC TimeZone de la sesión que inserta (contenido de
+-- índice no determinista) y el planner solo lo usa si la expresión coincide exacto.
+CREATE INDEX tasks_inbox_instant ON tasks (user_id, status, due_at)   WHERE due_at IS NOT NULL;
+CREATE INDEX tasks_inbox_allday  ON tasks (user_id, status, due_date) WHERE due_date IS NOT NULL;
 
 CREATE TABLE task_evidence (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -676,7 +704,9 @@ CREATE TABLE notifications (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id             uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   task_id             uuid,                       -- nullable: digests y prueba no dependen de tarea
-  FOREIGN KEY (user_id, task_id) REFERENCES tasks (user_id, id) ON DELETE SET NULL,
+  -- PG 15+: SET NULL (task_id) anula solo la columna del recurso; un SET NULL a secas
+  -- intentaría user_id = NULL (NOT NULL) y rompería el borrado de la tarea (purga S3).
+  FOREIGN KEY (user_id, task_id) REFERENCES tasks (user_id, id) ON DELETE SET NULL (task_id),
   type                text NOT NULL CHECK (type IN
     ('reminder_t48','reminder_t24','reminder_t2',
      'reminder_t3d','reminder_t1d','digest_daily','digest_weekly','test')),
@@ -692,9 +722,13 @@ CREATE TABLE notifications (
   provider_message_id text,
   last_error_code     text,                       -- redactado, sin PII
   created_at          timestamptz NOT NULL DEFAULT now(),
-  updated_at          timestamptz NOT NULL DEFAULT now(),
-  UNIQUE NULLS NOT DISTINCT (user_id, type, task_id, due_version, occurrence)
+  updated_at          timestamptz NOT NULL DEFAULT now()
 );
+-- La dedupe excluye 'test': dos POST /notifications/test con (task_id, due_version,
+-- occurrence) NULL colisionarían y solo se podría enviar una prueba en la vida del usuario.
+CREATE UNIQUE INDEX notifications_dedupe
+  ON notifications (user_id, type, task_id, due_version, occurrence)
+  WHERE type <> 'test';
 CREATE INDEX notifications_due ON notifications (status, scheduled_at) WHERE status = 'pending';
 ```
 
@@ -815,7 +849,6 @@ Códigos tipados (sin PII ni contenido sensible):
 | `attempt_not_active` | 409 | Intento no está en `awaiting_upload` |
 | `payload_too_large` | 413 | Límite de bytes/duración superado |
 | `unsupported_format` | 415 | Contenedor/codec no probado o malformado |
-| `duplicate_exact` | 200 | Dedupe exacto: devuelve la clase canónica |
 | `duplicate_variant` | 409 | Mismo hash, contexto distinto: exige confirmación |
 | `capacity_unavailable` | 503 | Sin slot de RAM/concurrencia |
 | `rate_limited` | 429 | Cuota por usuario |
@@ -826,9 +859,16 @@ Códigos tipados (sin PII ni contenido sensible):
 | `srt_unavailable` | 409 | Timestamps inválidos para SRT |
 | `evidence_invalid` | 422 | Span/cita no reconstruible desde BD |
 | `date_unresolved` | 422 | Confirmar exige fecha válida |
-| `calendar_blocked` | 202 | Confirmada sin integración: sync queda `blocked` |
 | `provider_unavailable` | 503 | LLM/embeddings/Google caídos |
 | `internal_error` | 500 | Sin detalles sensibles |
+
+Resultados del contrato (respuestas de éxito; **no** usan el envelope `error` y el cliente
+no debe parsear `error.code` en ellas):
+
+| Resultado | HTTP | Uso |
+|---|---|---|
+| `duplicate_exact` | 200 | Dedupe exacto: devuelve la clase canónica (`outcome` en el cuerpo) |
+| `calendar_blocked` | 202 | Confirmada sin integración de Calendar: sync queda `blocked` |
 
 ### 3.3 M1 — Autenticación, perfil e integraciones (S1; connect/reconnect en S3)
 
@@ -882,19 +922,20 @@ Rechazar permisos de Calendar/Gmail **no** impide transcribir ni chatear.
 `GET /ingestion/capabilities` (los valores efectivos provienen del spike de Santiago; los
 placeholders se marcan TBD-F0):
 
-```json
+```jsonc
+// Ejemplo honesto hasta cerrar F0: los objetivos (200 MiB / 3 h) NO están validados.
 {
-  "max_upload_bytes": 209715200,
-  "max_duration_seconds": 10800,
+  "max_upload_bytes": null,        // TBD-F0 (objetivo 200 MiB, no validado)
+  "max_duration_seconds": null,    // TBD-F0 (objetivo 3 h, no validado)
   "accepted_input_formats": ["mp3","m4a","wav","ogg","opus","flac","webm"],
-  "languages": ["es","en"],
+  "languages": null,               // TBD-F0: allowlist solo tras el spike
   "language_policy": "explicit_select_required_no_multi",
-  "ttl": { "upload_start_minutes": 10, "receive_minutes": 30, "asr_minutes": 60 },
+  "ttl": { "upload_start_minutes": null, "receive_minutes": null, "asr_minutes": null },
   "asr": { "provider": "nvidia-riva", "model": "whisper-large-v3",
            "timestamp_precision": "word" },
   "active_slots": 1,
   "required_stages": ["index"],
-  "limits_validated": true
+  "limits_validated": false        // nunca publicar true antes del spike F0
 }
 ```
 
@@ -1237,6 +1278,10 @@ nuevos en MVP.
 ---
 
 ## 4. Sprints detallados día a día
+
+**Alcance de §4:** expansión normativa de las fichas `docs/sprints/*` (conserva sus
+identificadores de ticket); cualquier cambio de ticket se aplica en **ambos** sitios en la
+misma revisión — las fichas siguen siendo la fuente del reparto por persona.
 
 Reglas comunes a las cuatro semanas (PLAN_SPRINTS §6): lunes = plan + congelación de
 interfaces + reparto (45 min); daily 15 min; miércoles = integración cruzada (cada uno prueba

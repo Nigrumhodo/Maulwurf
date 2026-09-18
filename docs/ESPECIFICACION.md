@@ -162,7 +162,7 @@ Cada módulo define: **propósito**, **qué debe hacer** (requisitos funcionales
 **Qué debe hacer:**
 - FastAPI inicia y resuelve OAuth Authorization Code con `state`, PKCE y validación de `nonce`/issuer/audience del ID token. La identidad usa el `sub` Google, no el email como identificador inmutable.
 - Login con `openid email profile`; permisos Calendar/Gmail solo al conectar cada función. Rechazar esos permisos no impide transcribir ni chatear.
-- Sesión opaca aleatoria en cookie `Secure`, `HttpOnly`, `SameSite=Lax`; guardar solo hash del identificador en `sessions`, con expiración/revocación. Next y API bajo el mismo origen. Validar Origin y CSRF en operaciones mutantes, incluido upload.
+- Sesión opaca aleatoria en cookie `mw_session` (`Secure`, `HttpOnly`, `SameSite=Lax`); guardar solo hash del identificador en `sessions`, con expiración/revocación. Next y API bajo el mismo origen. Validar Origin y CSRF en operaciones mutantes, incluido upload.
 - Guardar el `refresh_token` de Google **cifrado** (AES-GCM con nonce único y versión de clave); nunca enviarlo al navegador. Renovación coordinada para evitar carreras; preservar el refresh token anterior si Google no devuelve otro.
 - Revocación/`invalid_grant` marca la integración `disconnected` y solicita reconexión, sin cerrar necesariamente la sesión de la aplicación.
 - Perfil: zona horaria IANA, hora local del digest y preferencias opt-in. La zona horaria de cada clase se captura como snapshot para que cambios de perfil no alteren fechas ya extraídas.
