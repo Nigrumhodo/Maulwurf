@@ -22,15 +22,26 @@
 
 set -euo pipefail
 
-MODE="${1:-}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-if [[ "$MODE" == "--dry-run" ]]; then
+# Flags en cualquier orden: --dry-run (no crear nada) y --with-env (escribir .env).
+DRY=0
+WITH_ENV=0
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY=1 ;;
+    --with-env) WITH_ENV=1 ;;
+    *)
+      echo "flag desconocido: $arg" >&2
+      echo "uso: $0 [--dry-run] [--with-env]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ $DRY -eq 1 ]]; then
   echo "[dry-run] listaré la estructura sin crear nada (raíz: $ROOT)"
-  DRY=1
-else
-  DRY=0
 fi
 
 # ---------------------------------------------------------------- helpers ----
@@ -144,8 +155,13 @@ npm-debug.log*
 *.flac
 *.webm
 *.aac
-!tests/**/fixtures/*.txt
-!docs/**/*.md
+
+# --- Cobertura / dumps ---
+.coverage
+coverage/
+htmlcov/
+pgdata/
+*.dump
 
 # --- SO / editor ---
 .DS_Store
@@ -187,6 +203,8 @@ EOF
 write_file .env.example <<'EOF'
 # Copiar a .env y completar con valores locales de prueba.
 # NUNCA commitear .env. Los secretos reales van solo en el mecanismo de secretos del backend.
+# En Docker Compose, MAULWURF_DATABASE_URL / MAULWURF_REDIS_URL usan los nombres de
+# servicio (postgres, redis) en vez de localhost.
 
 # --- Backend / API ---
 MAULWURF_ENV=local
@@ -252,7 +270,7 @@ line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E", "F", "I", "UP", "B", "S"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -260,6 +278,8 @@ strict = true
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
   "integration: pruebas de integración contra servicios reales de compose",
   "provider: pruebas provider-contract protegidas (nunca en CI de MR)",
@@ -281,17 +301,29 @@ write_file apps/api/app/core/config.py <<'EOF'
 TODO(Andres): completar campos según M1; los límites de ingesta se reemplazan
 por los medidos en el spike F0 (ver docs/sprints/santiago.md S1).
 """
+from pydantic import PostgresDsn, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="MAULWURF_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="MAULWURF_", env_file=".env", extra="forbid")
+    # extra="forbid": una MAULWURF_* mal escrita falla en vez de ignorarse en silencio.
 
     env: str = "local"
-    secret_key: str = "change-me"
-    encryption_key: str = "change-me"
-    database_url: str = "postgresql+asyncpg://maulwurf:maulwurf@localhost:5432/maulwurf"
+    secret_key: SecretStr  # sin default: obliga a definirlo por entorno
+    encryption_key: SecretStr  # AES-GCM versionada (M1); nunca loguear .get_secret_value()
+    oauth_state_secret: SecretStr  # .env.example sí lo define; antes se descartaba en silencio
+    database_url: PostgresDsn = "postgresql+asyncpg://maulwurf:maulwurf@localhost:5432/maulwurf"
     redis_url: str = "redis://localhost:6379/0"
+
+    @model_validator(mode="after")
+    def _reject_insecure_defaults(self) -> "Settings":
+        # Fail-fast: si un entorno no-local arranca con "change-me", que falle la app.
+        if self.env != "local":
+            for name in ("secret_key", "encryption_key", "oauth_state_secret"):
+                if "change-me" in getattr(self, name).get_secret_value():
+                    raise ValueError(f"{name} inseguro en env={self.env}")
+        return self
 
 
 settings = Settings()
@@ -301,15 +333,30 @@ write_file apps/api/app/main.py <<'EOF'
 """Punto de entrada FastAPI — esqueleto mínimo (A1.1).
 
 TODO(Andres): routers de subjects/audios/me (M1, M2), CORS restrictivo,
-CSRF/Origin en mutaciones, /healthz y /readyz (J1.5).
+CSRF/Origin en mutaciones.
 """
+from importlib.metadata import PackageNotFoundError, version
+
 from fastapi import FastAPI
 
-app = FastAPI(title="Maulwurf API", version="0.1.0")
+try:
+    __version__ = version("maulwurf-api")
+except PackageNotFoundError:
+    # Dev sin instalar el paquete: no debe romper el import.
+    __version__ = "0.1.0"
+
+app = FastAPI(title="Maulwurf API", version=__version__)
 
 
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
+    # Liveness: solo prueba que el proceso responde; no toca dependencias.
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+async def readyz() -> dict[str, str]:
+    # TODO(Andres): ping real a Postgres+pgvector y Redis; 503 si no listos (J1.5).
     return {"status": "ok"}
 EOF
 
@@ -356,7 +403,7 @@ write_file apps/web/package.json <<'EOF'
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "eslint ."
   },
   "dependencies": {
     "next": "^15",
@@ -369,9 +416,31 @@ write_file apps/web/package.json <<'EOF'
     "@types/react-dom": "^19",
     "typescript": "^5",
     "tailwindcss": "^4",
-    "vitest": "^3"
+    "vitest": "^3",
+    "eslint": "^9",
+    "eslint-config-next": "^15.1.3"
   }
 }
+EOF
+
+write_file apps/web/eslint.config.mjs <<'EOF'
+import { dirname } from "path";
+import { fileURLToPath } from "url";
+import { FlatCompat } from "@eslint/eslintrc";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+const compat = new FlatCompat({
+  baseDirectory: __dirname,
+});
+
+const eslintConfig = [
+  ...compat.extends("next/core-web-vitals", "next/typescript"),
+  { ignores: [".next/**", "out/**", "build/**", "next-env.d.ts"] },
+];
+
+export default eslintConfig;
 EOF
 
 write_file apps/web/tsconfig.json <<'EOF'
@@ -399,12 +468,15 @@ write_file apps/web/tsconfig.json <<'EOF'
 EOF
 
 write_file apps/web/app/layout.tsx <<'EOF'
-export const metadata = {
+import type { Metadata } from "next";
+import type { ReactNode } from "react";
+
+export const metadata: Metadata = {
   title: "Maulwurf",
   description: "De la grabación de clase al estudio accionable.",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="es">
       <body>{children}</body>
@@ -458,9 +530,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.2", "ruff>=0.4", "mypy>=1.10"]
+dev = ["pytest>=8.2", "pytest-asyncio>=0.23", "ruff>=0.4", "mypy>=1.10"]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
   "integration: servicios reales de compose",
   "provider: protegida, presupuesto autorizado (spike F0.1)",
@@ -499,6 +573,19 @@ Pendiente (placeholders intencionales, no implementación):
 - `Caddyfile` — proxy sin buffering/caché para uploads.
 - CI (GitLab): ruff+ESLint, mypy+tsc, pytest+Vitest, builds.
 EOF
+
+# ---------------------------------------------------------------- .env ----
+
+if [[ $WITH_ENV -eq 1 && $DRY -eq 0 ]]; then
+  if [[ ! -e .env ]]; then
+    cp .env.example .env
+    echo "  + file  .env (desde .env.example; completar secretos localmente)"
+  else
+    echo "  = skip .env (ya existe)"
+  fi
+elif [[ $WITH_ENV -eq 1 && $DRY -eq 1 ]]; then
+  echo "  write  .env (desde .env.example)"
+fi
 
 # ---------------------------------------------------------------- fin ----
 

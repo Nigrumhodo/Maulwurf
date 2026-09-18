@@ -37,6 +37,13 @@ npm-debug.log*
 *.webm
 *.aac
 
+# --- Cobertura / dumps ---
+.coverage
+coverage/
+htmlcov/
+pgdata/
+*.dump
+
 # --- SO / editor ---
 .DS_Store
 Thumbs.db
