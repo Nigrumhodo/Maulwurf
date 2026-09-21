@@ -3,25 +3,29 @@
 Este árbol fue creado por `scripts/scaffold_monorepo.sh` (tarea L1.1 del líder).
 Corresponde a la estructura §3.3 de `docs/ESPECIFICACION.md`.
 
-## Propiedad de carpetas (plan de sprints, §5a del plan maestro)
+## Áreas del backlog (plan de sprints, §0.2 del plan maestro)
 
-| Ruta | Dueño |
+La letra designa el **área**, no a una persona: los tickets se reclaman cada lunes según
+`docs/PLAN_SPRINTS.md` y se registran en las bitácoras de `docs/sprints/`.
+
+| Ruta | Área típica |
 |---|---|
-| `apps/api/` | Andres (excepto `prompts/` → José, `app/workers/` → Jefferson) |
-| `apps/ingest/` | Santiago |
-| `apps/web/` | Daniel |
-| `infra/` | Jefferson |
-| `scripts/` | José (coordinación) |
-| `apps/api/prompts/` | José |
+| `apps/api/` | `A-` API/BD (excepto `prompts/` → `L-` RAG, `app/workers/` → `J-` Infra) |
+| `apps/ingest/` | `S-` Ingesta/ASR |
+| `apps/web/` | `D-` Web/UX |
+| `infra/` | `J-` Infra/Integraciones |
+| `scripts/` | coordinación (líder) |
+| `apps/api/prompts/` | `L-` RAG |
 
-## Próximos pasos por dueño
+## Próximos pasos por ticket
 
-1. **Andres (A1.x):** `pip install fastapi "uvicorn[standard]" "pydantic-settings"` etc.;
+1. **`A1.x` (API/BD):** `pip install fastapi "uvicorn[standard]" "pydantic-settings"` etc.;
    `alembic init alembic`; auth Google + sesión opaca.
-2. **Daniel (D1.1):** `npx create-next-app@latest apps/web --typescript --tailwind --app`;
+2. **`D1.x` (Web):** `npx create-next-app@latest apps/web --typescript --tailwind --app`;
    luego `npx shadcn@latest init`.
-3. **Santiago (S1):** spike F0 con `requirements-riva.txt`; prototipo efímero.
-4. **Jefferson (J1.x):** `infra/docker-compose.yml` + `Caddyfile` + CI.
-5. **José (L1.2):** ADRs en `docs/`.
+3. **`S1.x` (Ingesta/ASR):** spike F0 con `requirements-riva.txt`; prototipo efímero.
+4. **`J1.x` (Infra):** `infra/docker-compose.yml` + `Caddyfile` + CI.
+5. **`L1.x` (RAG/liderazgo):** ADRs en `docs/`.
 
-> Regla: nada aquí está implementado. Los TODOs marcan trabajo pendiente de cada dueño.
+> Regla: nada aquí está implementado. Los TODOs marcan trabajo pendiente; los responsables
+> se reclaman cada semana, no están preasignados.

@@ -255,7 +255,7 @@ There is no application build, run, test, lint, type-check, or deployment comman
 | Type checking | Not configured; mypy and `tsc` are future targets |
 | Deployment | No container or deployment manifests exist |
 
-The future CI target is GitLab CI with linting, type checks, unit tests, local service
+The future CI target is GitHub Actions with linting, type checks, unit tests, local service
 integration, E2E tests, migrations, and application builds. Cloud-provider tests must be
 protected and manual or scheduled; mocks do not establish provider support or retention
 behavior.
@@ -342,7 +342,10 @@ must establish quotas, rate limits, alerts, retention policies, and provider ter
 
 - [Functional and technical specification](docs/ESPECIFICACION.md)
 - [Implementation and validation plan](docs/PLAN_IMPLEMENTACION.md)
-- [Team sprint plan (4 weeks)](docs/PLAN_SPRINTS.md) with per-member sprint sheets in [docs/sprints/](docs/sprints/)
+- [Team sprint plan (S1–S4)](docs/PLAN_SPRINTS.md) — open weekly backlogs with ticket
+  dependencies and a Definition of Done per sprint; only the active sprint is claimable, and
+  ownership lives in [docs/sprints/CLAIMS.md](docs/sprints/CLAIMS.md) (per-sprint specs in
+  [docs/plan/S1.md](docs/plan/S1.md)–[docs/plan/S4.md](docs/plan/S4.md)).
 - [Test catalog by sprint (planned suites, gates G1–G8)](docs/PLAN_TESTS.md)
 - [NVIDIA Riva client audit](docs/NVIDIA_RIVA.md)
 - [Pinned Riva dependency](requirements-riva.txt)
