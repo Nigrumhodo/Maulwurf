@@ -50,10 +50,10 @@ Audio → Transcripción → Extracción de tareas (LLM) → Google Calendar
 - **Proveedores detrás de interfaces:** transcripción NVIDIA Riva/Whisper large-v3 por gRPC; LLM y embeddings con adaptadores independientes. Cambiar de proveedor exige pruebas de capacidades y, para embeddings, reindexación.
 - **Privacidad por diseño:** sin persistencia de audio en nuestra infraestructura. Texto, embeddings y credenciales sí se conservan y requieren protección. El servicio cloud recibe el audio; no se promete modo 100% local.
 
-### Decisiones vinculantes — revisión 2026-09-14
+### Decisiones vinculantes — revisión 2026-09-19
 
 1. **No guardar audio de forma persistente:** solo buffers y archivos temporales en RAM (`tmpfs`) mientras se recibe, valida, convierte y transcribe. Esto incluye original, fragmentos y versiones convertidas. Nada de S3/MinIO, disco, backups, payloads Redis, logs, trazas ni cachés con audio. Es una interpretación operativa de «transcribir y borrar», no una promesa de ausencia de buffers de memoria.
-2. **Eliminar inmediatamente al terminar la transcripción o al abortar**, antes de extracción/indexación; no esperar a que la clase esté `ready`. Un fallo de almacenamiento del transcript no autoriza a conservar el audio. Toda salida usa cleanup en `finally`; un supervisor independiente elimina temporales huérfanos por vencimiento.
+2. **Iniciar la eliminación síncrona al terminar la transcripción o al abortar**, antes de extracción/indexación; no esperar a que la clase esté `ready`. En el camino normal, el intento no llega a `succeeded` hasta verificar el cleanup. Tras `SIGKILL` o pérdida de host no se promete borrado instantáneo: el estado queda `transcript_committed_cleanup_pending`, la outbox permanece bloqueada y un supervisor del mismo host/namespace debe verificar la ausencia de temporales. Un fallo de almacenamiento del transcript nunca autoriza a conservar el audio.
 3. **Idioma obligatorio seleccionado por el usuario**, sin valor inferido ni autodetección por defecto. Código validado contra una allowlist comprobada con el endpoint desplegado; `multi` queda fuera del MVP. No confundir idioma del audio, locale del perfil y zona horaria.
 4. **NVIDIA Riva por gRPC TLS:** `grpc.nvcf.nvidia.com:443`, modelo `whisper-large-v3`, `function-id=b702f636-f60c-4a3d-a6f4-f3568c13bd7d`, cliente `nvidia-riva-client`. Autorización Bearer solo desde el servidor. Operación de transcripción, nunca `task:translate`.
 5. **Sin audio durable no hay reintento durable de ASR:** si se pierde el proceso/temporal, el usuario debe volver a subir el archivo. Análisis e indexación sí se reintentan desde el texto persistido.
@@ -162,7 +162,7 @@ Cada módulo define: **propósito**, **qué debe hacer** (requisitos funcionales
 **Qué debe hacer:**
 - FastAPI inicia y resuelve OAuth Authorization Code con `state`, PKCE y validación de `nonce`/issuer/audience del ID token. La identidad usa el `sub` Google, no el email como identificador inmutable.
 - Login con `openid email profile`; permisos Calendar/Gmail solo al conectar cada función. Rechazar esos permisos no impide transcribir ni chatear.
-- Sesión opaca aleatoria en cookie `Secure`, `HttpOnly`, `SameSite=Lax`; guardar solo hash del identificador en `sessions`, con expiración/revocación. Next y API bajo el mismo origen. Validar Origin y CSRF en operaciones mutantes, incluido upload.
+- Sesión opaca aleatoria en cookie `Secure`, `HttpOnly`, `SameSite=Lax`; guardar solo hash del identificador en `sessions`, con expiración/revocación. Next y API bajo el mismo origen. `GET /me` entrega el token CSRF plano en el body bajo `Cache-Control: no-store`; `sessions` guarda solo `csrf_hash`. Toda mutación, incluido el upload binario, exige `X-CSRF-Token` y `Origin` same-origin. El token rota al crear/rotar la sesión, es compartido por las pestañas de esa sesión y queda inválido al cerrar/revocar la sesión.
 - Guardar el `refresh_token` de Google **cifrado** (AES-GCM con nonce único y versión de clave); nunca enviarlo al navegador. Renovación coordinada para evitar carreras; preservar el refresh token anterior si Google no devuelve otro.
 - Revocación/`invalid_grant` marca la integración `disconnected` y solicita reconexión, sin cerrar necesariamente la sesión de la aplicación.
 - Perfil: zona horaria IANA, hora local del digest y preferencias opt-in. La zona horaria de cada clase se captura como snapshot para que cambios de perfil no alteren fechas ya extraídas.
@@ -184,14 +184,14 @@ Cada módulo define: **propósito**, **qué debe hacer** (requisitos funcionales
 **Qué debe hacer:**
 - Formatos de entrada objetivo: `mp3, m4a, wav, ogg, opus, flac, webm`. Solo habilitar los probados con ffprobe/ffmpeg. Los formatos aceptados por la UI no son los formatos enviados a Riva.
 - Objetivo máximo de entrada: **200 MiB / 3 h**, sujeto a prueba de capacidad F0. Publicar límites efectivos en `/ingestion/capabilities`; validar tamaño durante streaming y duración real con ffprobe, no solo `Content-Length` o extensión.
-- Antes de transferir bytes, pedir **materia, fecha de clase, zona horaria e idioma del audio**; idioma sin preselección silenciosa. Opcionales: título y profesor. Explicar borrado, tratamiento cloud y ausencia de reproducción/retranscripción posterior.
-- Crear sesión de ingesta con metadatos JSON y reservar capacidad RAM/concurrencia. Subida binaria mediante `PUT`, no Server Actions de Next ni `UploadFile` con spooling por defecto a disco. No soportar subida reanudable en MVP.
-- Hash SHA-256 incremental y deduplicación **por usuario e identidad de ingesta**: hash, idioma, materia, fecha de clase y zona horaria (no título/profesor). Una coincidencia exacta devuelve la clase canónica sin nuevo ASR. Mismo hash con idioma/contexto diferente exige confirmación explícita antes del upload mediante referencia autorizada a la clase previa; si se descubre al terminar de recibir, limpiar el nuevo audio y devolver conflicto que requiere confirmar y volver a subir. No retener audio esperando decisiones humanas. Una variante confirmada crea otra clase, sin mutar evidencia ni tareas existentes. Intentos fallidos sin transcript reutilizan el registro canónico; concurrencia se resuelve con unicidad transaccional.
-- ASR efímero: `awaiting_upload → receiving → transcribing → succeeded | requires_reupload | rejected | cancelled`. Un timeout antes del upload también termina la sesión. Ningún estado final permite conservar temporales.
+- Antes de transferir bytes, pedir **materia, fecha de clase, zona horaria e idioma del audio**; idioma sin preselección silenciosa. Opcionales: título y profesor. El request incluye `privacy_notice_version`, `cloud_processing_accepted=true` y `third_party_voice_acknowledged=true`; el servidor registra usuario, versión, instante y proveedores declarados. Ausencia o versión obsoleta se rechaza antes de reservar capacidad o aceptar bytes.
+- `POST /audios` solo valida metadatos/consentimiento, reserva capacidad RAM y crea el intento; todavía no puede decidir deduplicación porque no recibió el contenido. La subida binaria usa `PUT`, no Server Actions de Next ni `UploadFile` con spooling por defecto a disco. No hay subida reanudable en MVP.
+- El `PUT` calcula SHA-256 incremental y decide la deduplicación **por usuario e identidad de ingesta**: hash, idioma, materia, fecha de clase y zona horaria (no título/profesor). Coincidencia exacta: limpiar el upload, liberar la reserva y devolver la clase canónica sin ASR. Mismo hash con idioma/contexto diferente: limpiar y devolver `409 duplicate_variant` con un `variant_confirmation_token` opaco, de un solo uso, expiración corta y ligado a usuario/hash/metadatos/clase previa. Un segundo `POST /audios` con ese token crea una reserva de variante y exige volver a subir; al terminar el segundo `PUT`, el servidor comprueba que el hash coincide antes de transcribir. Nunca se retiene audio esperando una decisión. Una variante confirmada crea otra clase sin mutar evidencia ni tareas existentes. La unicidad transaccional resuelve uploads concurrentes hacia la clase canónica.
+- ASR efímero: `awaiting_upload → receiving → transcribing → transcript_committed_cleanup_pending → succeeded`; desde los estados activos también puede terminar en `requires_reupload | rejected | cancelled`. `awaiting_upload` expira a `cancelled`; formato/silencio sin texto utilizable termina `rejected` con código tipado; pérdida técnica del temporal/proceso termina `requires_reupload`. Ningún estado final permite conservar temporales.
 - Análisis e índice tienen estados **independientes** `not_requested | pending | running | succeeded | failed | cancelled`. Etapas requeridas capturadas por clase: F1 solo índice; desde F2 análisis e índice para nuevas clases (backfill explícito de las anteriores). `not_requested` no equivale a éxito. Estado agregado: `processing` mientras haya etapas requeridas pendientes/en ejecución; `ready` si todas tienen éxito; `partial` si hay transcript utilizable pero alguna etapa requerida falla o se cancela; `failed` si no hay transcript utilizable. Durante ingesta se expone el estado del intento, sin declarar éxito por tener cero etapas de texto iniciadas. Un índice correcto permite chat aunque falle análisis; tareas correctas permiten revisión aunque falle índice. Resumen/temas quedan en F2 y no bloquean F1.
 - Cancelación explícita del intento mediante endpoint autenticado; desconectar la subida antes de completarla cancela y limpia. Tras el 202, cerrar la pestaña/SSE no cancela ASR: continúa bajo su lease. Cancelar después del commit no destruye el transcript; devuelve conflicto con estado actual. Cancelar o eliminar invalida el token de ejecución para impedir commits tardíos; el supervisor cancela subprocess/gRPC y limpia.
 - Progreso real: bytes recibidos, fragmentos terminados/total si se conoce; nunca porcentajes inventados. SSE con snapshot desde BD y polling como fallback.
-- Eliminar una clase cancela intentos/jobs mediante tombstone y evita escrituras tardías. Borra transcript, chunks, embeddings, tareas derivadas, resumen y citas/snippets de mensajes asociados (o el mensaje completo si no puede purgarse con seguridad). Eventos Google existentes se conservan por defecto con aviso; eliminarlos exige opción explícita y trabajo remoto rastreable.
+- Eliminar una clase cancela intentos/jobs mediante tombstone y evita escrituras tardías. Borra transcript, chunks, embeddings, tareas derivadas, resumen y contenido/citas de mensajes asociados; si no puede separar la procedencia con seguridad, reemplaza el mensaje y sus descendientes por un tombstone sin contenido. `invalidated` nunca conserva texto recuperable por API, búsqueda, prompts o tools. Eventos Google existentes se conservan por defecto con aviso; eliminarlos exige opción explícita y trabajo remoto rastreable.
 
 **Qué debe existir:**
 - CRUD de materias con propiedad tenant (`GET/POST /subjects`, `PATCH/DELETE /subjects/{id}`); impedir borrar una materia con clases activas hasta moverlas o confirmar su borrado explícito.
@@ -199,7 +199,7 @@ Cada módulo define: **propósito**, **qué debe hacer** (requisitos funcionales
 - Servicio de ingesta con temporales `tmpfs` privados por intento, reserva de recursos, supervisor de tareas y limpieza independiente. No encolar ASR en ARQ ni pasar rutas temporales a workers remotos. F0/F1 despliega una sola instancia de ingesta; escalar requiere routing al propietario de la reserva, sin trasladar archivos. La URL de upload es relativa al mismo origen y se valida con sesión/CSRF/attempt_id; no es un token bearer público ni permite elegir hosts internos.
 - Biblioteca de clases con lector de transcripción, idioma, estado y aviso permanente «audio no conservado».
 
-**Endpoints:** `GET /ingestion/capabilities`, `POST /audios` (JSON → `audio_id`, `attempt_id`, URL y expiración de upload), `PUT /audios/{id}/content?attempt_id=…` (binario → 202 tras recepción y admisión al proceso supervisado), `GET /audios?subject_id=`, `GET /audios/{id}`, `GET /audios/{id}/progress` (SSE), `POST /audios/{id}/retry` (solo análisis/índice), `POST /audios/{id}/reupload` (solo sin transcript utilizable; nueva sesión efímera con la misma identidad), `POST /audios/{id}/attempts/{attempt_id}/cancel`, `DELETE /audios/{id}`, `GET /audios/{id}/transcript.txt`, `GET /audios/{id}/transcript.srt` (solo con timestamps válidos).
+**Endpoints:** `GET /ingestion/capabilities`; `POST /audios` (JSON de metadatos/consentimiento y `variant_confirmation_token` opcional → `audio_id`, `attempt_id`, URL y expiración); `PUT /audios/{id}/content?attempt_id=…` (binario → `202` tras recepción/admisión, `200 duplicate_exact` o `409 duplicate_variant` siempre después de cleanup); `GET /audios?subject_id=`; `GET /audios/{id}`; `GET /audios/{id}/progress` (SSE); `POST /audios/{id}/retry` con `{stages:["index"|"analyze"], transcript_version}`; `POST /audios/{id}/reupload` (solo sin transcript utilizable); `POST /audios/{id}/attempts/{attempt_id}/cancel`; `DELETE /audios/{id}`; `GET /audios/{id}/transcript.txt`; `GET /audios/{id}/transcript.srt` (solo con timestamps válidos).
 
 ---
 
@@ -271,9 +271,10 @@ Cada módulo define: **propósito**, **qué debe hacer** (requisitos funcionales
 - Carpeta `prompts/` **versionada** (v1, v2, …) con tests de regresión por versión; el resultado guarda `prompt_version`.
 - Job ARQ `analyze(audio_id)`.
 - Bandeja de revisión con cita textual y botón «ver segmento de transcripción»; timestamp solo si existe. Edición de fecha/hora/zona antes de confirmar.
-- Tabla `tasks` (ver modelo de datos).
+- Tablas `tasks`, `task_evidence`, `task_sources` y `task_revisions` (ver modelo de datos). Una tarea manual usa `source=manual` y cero fuentes. Una propuesta de extracción/chat basada en el corpus requiere al menos una fuente validada; una sugerencia general sin evidencia se identifica como tal y no se presenta como actividad extraída.
+- Editar una tarea `confirmed` crea `task_revision(status=pending_confirmation, base_task_version, proposed_fields)` sin alterar los campos activos. Confirmar recibe `revision_id` y `expected_version`; en una transacción promueve la revisión, incrementa `tasks.version` y crea la outbox. Revisión obsoleta → `409 version_conflict`. Reanálisis usa el mismo mecanismo y nunca activa resultados parciales.
 
-**Endpoints:** `GET /tasks?status=pending|needs_review|confirmed|dismissed|completed`, `PATCH /tasks/{id}` (edición con versión para evitar actualizaciones perdidas), `POST /tasks/{id}/confirm`, `POST /tasks/{id}/dismiss`, `POST /tasks/{id}/complete`, `POST /tasks` (manual/propuesta de chat). `calendar_sync_status` se devuelve aparte.
+**Endpoints:** `GET /tasks?status=&subject_id=&due_from=&due_to=`; `GET /tasks/{id}`; `PATCH /tasks/{id}` con `version`; `POST /tasks/{id}/confirm` con `{expected_version, revision_id?}`; `POST /tasks/{id}/dismiss`; `POST /tasks/{id}/complete`; `POST /tasks` (manual/propuesta de chat). `calendar_sync_status` y `pending_revision` se devuelven aparte.
 
 ---
 
@@ -298,7 +299,7 @@ Cada módulo define: **propósito**, **qué debe hacer** (requisitos funcionales
 
 **Qué debe existir:**
 - `GoogleCalendarService` con cliente bloqueante aislado del event loop; reintentos acotados para 429/5xx y errores de cuota transitorios, respetando `Retry-After`. `invalid_grant` desconecta; no tratar cualquier 403 como reintentable.
-- Job `sync_task_event(task_id, task_version)` idempotente; `calendar_sync_status=not_requested|pending|synced|failed|blocked` separado del ciclo de vida de la tarea. Descartar jobs de versiones obsoletas.
+- Job `sync_task_event(task_id, task_version)` idempotente; `calendar_sync_status=not_requested|pending|synced|failed|blocked` separado del ciclo de vida de la tarea. Descartar jobs de versiones obsoletas. Al reconectar Calendar, las tareas `blocked` de la versión vigente pasan atómicamente a `pending` y crean/reutilizan su outbox; revisiones o versiones obsoletas no se reactivan.
 - Tabla `calendar_events` espejo, clave única `(user_id, calendar_id, event_id)`, fechas all-day separadas de instantes, ETag, estado remoto y `last_synced_at`. El dashboard no dibuja dos veces la tarea y su evento vinculado.
 
 **Endpoints:** `GET /calendar/events?from&to`, `POST /calendar/sync` (forzar), `GET /calendar/conflicts`.
@@ -321,7 +322,7 @@ Cada módulo define: **propósito**, **qué debe hacer** (requisitos funcionales
 - Servicio `SearchService` con la fusión RRF (reutilizable por el chat).
 - Endpoint rápido de búsqueda (usado por el Ctrl+K global del frontend).
 
-**Endpoints:** `GET /search?q=&materia=&desde=&hasta=` → resultados con snippet + materia + audio + timestamp.
+**Endpoints:** `GET /search?q=&subject_id=&from=&to=&limit=&cursor=` → resultados paginados con snippet, materia, clase, segmento, `t_start/t_end` nullable y `score_rrf`.
 
 ---
 
@@ -333,7 +334,7 @@ Cada módulo define: **propósito**, **qué debe hacer** (requisitos funcionales
 - **Streaming** de la respuesta (SSE), token a token.
 - Pipeline F1: pregunta → embedding → candidatos vectoriales y léxicos (p. ej. 30 por rama) → RRF → dedupe/diversidad → ~8 chunks bajo presupuesto de tokens → respuesta fundamentada. Valores iniciales, no umbrales demostrados. Re-ranker opcional en F3 solo si mejora métricas con latencia/costo aceptables.
 - Citas `[Cálculo II · Clase 03 · 31:15]` abren `/biblioteca/{audio_id}?segment={segment_id}` y resaltan el texto. Sin offsets fiables, mostrar «segmento N», no minuto inventado. El backend entrega un registro de citas con IDs permitidos; el modelo solo referencia esos IDs, validados antes de renderizar enlaces.
-- En streaming, mantener marcadores de citas en buffer hasta validar su ID; nunca renderizar enlaces arbitrarios del modelo como fuentes. Registrar todas las fuentes entregadas al modelo (no solo las citadas), también las heredadas del historial/resúmenes, en `message_sources`. Al borrar una fuente, invalidar o purgar respuestas y descendientes dependientes; revalidar tombstone/versión antes de persistir y emitir `done`. No se puede retirar texto ya visto por el usuario ni enviado a un proveedor; informar ese límite.
+- En streaming, mantener marcadores de citas en buffer hasta validar su ID; nunca renderizar enlaces arbitrarios del modelo como fuentes. Registrar todas las fuentes entregadas al modelo (no solo las citadas), también las heredadas del historial/resúmenes, en `message_sources`. Al borrar una fuente, purgar contenido/citas dependientes o sustituir mensajes y descendientes por tombstones sin contenido; revalidar tombstone/versión antes de persistir y emitir `done`. No se puede retirar texto ya visto por el usuario ni enviado a un proveedor; informar ese límite.
 - Sin evidencia suficiente: reconocerlo y pedir contexto; no fabricar fuentes/fechas. Distinguir evidencia del transcript, datos de Calendar y explicación general. El historial no sustituye la recuperación actual ni autoriza usar fuentes eliminadas.
 - **Tool calling F2:** allowlist `get_calendar_events(rango)`, `get_pending_tasks()` y `propose_task()`. Usuario/permisos los inyecta backend; rangos/esquemas validados, máximo de iteraciones/tiempo. Ninguna tool del chat escribe Calendar o envía correo; confirmar siempre en UI.
 - Transcript, resultados de tools y mensajes son datos no confiables: resistir instrucciones embebidas, no ejecutar comandos ni URLs extraídas. Render Markdown sanitizado, sin HTML inseguro, y redacción de trazas de proveedor.
@@ -345,7 +346,7 @@ Cada módulo define: **propósito**, **qué debe hacer** (requisitos funcionales
 - Servicio `RAGService` (reutiliza `SearchService`) + orquestador de tools.
 - UI: composer con selector de modo, render de citas clicables, sugerencias de follow-up.
 
-**Endpoints:** `POST /chat/conversations`, `GET /chat/conversations`, `GET /chat/conversations/{id}/messages`, `POST /chat/conversations/{id}/messages` (SSE consumido con `fetch`, no `EventSource` que solo permite GET), `DELETE /chat/conversations/{id}`. Eventos `delta`, `citation`, `done`, `error` con ID; citas comprobadas y resultado final persistido. El SSE de progreso de ingesta sí usa GET/EventSource y se recupera mediante snapshot.
+**Endpoints:** `POST /chat/conversations`; `GET /chat/conversations`; `GET /chat/conversations/{id}/messages`; `POST /chat/conversations/{id}/messages` (SSE consumido con `fetch`, no `EventSource`); `POST /chat/conversations/{id}/messages/{message_id}/cancel`; `DELETE /chat/conversations/{id}`. El stream emite `snapshot` inicial, luego `delta*`, `citation*` y exactamente un terminal `done|error`, todos con ID monotónico. La reconexión consulta el mensaje persistido; no vuelve a ejecutar el LLM con el mismo `client_message_id`. El SSE GET de ingesta se recupera mediante snapshot.
 
 ---
 
@@ -357,7 +358,7 @@ Cada módulo define: **propósito**, **qué debe hacer** (requisitos funcionales
 - **Recordatorio escalado** por tarea confirmada no completada/descartada: **T-48 h**, **T-24 h** y **T-2 h** para instantes con hora (configurables). «Ver en Calendar» solo si existe evento; enlace alternativo a tarea. «Posponer» abre UI autenticada, nunca muta estado mediante un GET de correo.
 - **Digest diario** (hora configurable, ej. 07:00): pendientes de hoy + lo que vence mañana.
 - **Digest semanal** (domingo por la noche): panorama de la semana, nuevas tareas detectadas, advertencia de conflictos de calendario.
-- Envío vía **Gmail API** (la misma cuenta OAuth; cero proveedores extra). Alternativa: Resend si se quiere dominio propio.
+- Envío vía **Gmail API** (la misma cuenta OAuth; cero proveedores extra en MVP/v1). Resend u otro proveedor queda fuera de alcance y exige una decisión nueva, revisión de privacidad/retención, contrato de entrega, presupuesto y actualización conjunta de especificación y plan.
 - **Anti-spam:** agrupar recordatorios y deduplicar la programación mediante clave única `(user_id, tipo, task_id, due_version, occurrence)`. Digest por usuario/fecha local. Cambiar vencimiento/preferencias cancela ocurrencias futuras obsoletas; nunca enviar retrospectivamente todos los umbrales vencidos de una tarea recién confirmada.
 - Gmail no ofrece garantía de exactamente una entrega con `gmail.send`: si se pierde la respuesta tras enviar, marcar `delivery_unknown` y no reintentar automáticamente para evitar duplicados. Mostrarlo en el panel; una reexpedición manual advierte del riesgo. Un `Message-ID` estable no garantiza dedupe remota.
 - Fechas **sin hora**: recordatorios T-3d/T-1d a la hora local configurada, no T-2h. DST: hora inexistente se mueve al siguiente instante válido y hora repetida se ejecuta una sola vez (ocurrencia local única). Tareas sin fecha no tienen recordatorios escalados.
@@ -367,7 +368,7 @@ Cada módulo define: **propósito**, **qué debe hacer** (requisitos funcionales
 - Templates HTML + texto plano, contenido escapado y datos mínimos; destinatario limitado al email verificado del usuario en MVP. No exponer envío arbitrario al LLM.
 - `notifications`: `scheduled_at`, `due_version`, `dedupe_key`, `status=pending|sending|sent|failed|delivery_unknown|cancelled`, `sent_at`, `provider_message_id`, intentos y error redactado. Lease de `sending` vencido se considera entrega incierta, no pendiente automáticamente.
 
-**Endpoints:** `PATCH /me/notifications` (preferencias), `POST /notifications/test` (enviar correo de prueba).
+**Endpoints:** `PATCH /me/notifications` (preferencias); `POST /notifications/test`; `GET /notifications?status=&from=&to=&limit=&cursor=`; `POST /notifications/{id}/resend` con `{acknowledge_duplicate_risk:true}`. Reenviar crea una ocurrencia auditada nueva y nunca cambia una entrega `delivery_unknown` a `pending`.
 
 ---
 
@@ -383,9 +384,11 @@ Cada módulo define: **propósito**, **qué debe hacer** (requisitos funcionales
 - Ficha de clase: **lector de transcripción** con segmentos enlazables/resaltados, timestamps cuando existan, resumen, temas e items detectados. No incluir `<audio>`, URLs firmadas, reproducción karaoke ni botón de retranscribir sin nueva subida.
 - UI de upload con idioma obligatorio, límites efectivos y consentimiento; «volver a subir» para ASR perdido y «reintentar análisis/índice» para fallos sobre texto, sin confundirlos.
 
-**Qué debe existir:**
-- Componentes: `CalendarView`, `TaskInbox`, `TranscriptReader`, `SubjectStats`, `AudioUploadForm`.
-- Rutas Next: `/` (dashboard), `/biblioteca`, `/biblioteca/[audio_id]`, `/chat`, `/materias`, `/settings`.
+**Qué debe existir por fase:**
+- F1: `AudioUploadForm`, biblioteca, `TranscriptReader`, estado de ingesta/índice y chat.
+- F2: `TaskInbox`, `CalendarView`, conflictos, estado de sincronización y reconexión.
+- F3: panel de entregas/notificaciones, preferencias finales, `SubjectStats` y Ctrl+K. «Dashboard completo» significa la suma de estas capacidades; no adelanta Gmail a F2.
+- Rutas Next: `/` (landing pública sin sesión y dashboard con sesión), `/biblioteca`, `/biblioteca/[audio_id]`, `/chat`, `/materias`, `/settings`.
 
 ---
 
@@ -458,7 +461,9 @@ erDiagram
     CHUNKS ||--o{ CHUNK_SEGMENTS : referencia
     SEGMENTS ||--o{ CHUNK_SEGMENTS : evidencia
     CHUNKS ||--o{ EMBEDDINGS : versiona
-    AUDIOS o|--o{ TASKS : deriva
+    AUDIOS o|--o{ TASK_SOURCES : origina
+    TASKS ||--o{ TASK_SOURCES : documenta
+    TASKS ||--o{ TASK_REVISIONS : propone
     TASKS |o--o| CALENDAR_EVENTS : vincula
     USERS ||--o{ OUTBOX_EVENTS : publica
     USERS ||--o{ CONVERSATIONS : abre
@@ -515,6 +520,10 @@ erDiagram
         text status
         text calendar_sync_status
         int version
+        timestamptz event_start_at
+        timestamptz event_end_at
+        date event_start_date
+        date event_end_date_exclusive
         text calendar_id
         text calendar_event_id
     }
@@ -536,15 +545,16 @@ El ER es un resumen, no sustituye las migraciones. Contratos mínimos adicionale
 
 - Todas las tablas tenant contienen `user_id`; claves foráneas compuestas `(user_id, recurso_id)` evitan referencias cruzadas, además de autorización en servicios. RLS como defensa adicional con `SET LOCAL` transaccional y rol de aplicación sin bypass; probar también el pool de conexiones y workers.
 - `audios` no tiene `storage_key`, blob ni ruta durable. SHA nullable hasta completar upload; único parcial `(user_id, sha256, language_code, subject_id, fecha_clase, class_timezone)` para clases no eliminadas con hash conocido; campos de contexto NOT NULL y normalizados. Índice no único `(user_id, sha256)` detecta variantes que requieren confirmación según M2. Inserciones concurrentes resuelven conflicto transaccionalmente hacia el registro canónico; borrar también borra el hash. Intentos fallidos reutilizan registro, no crean duplicados. Guardar etapas requeridas por clase y versiones activas de transcript/análisis/índice.
-- `ingestion_attempts`: un único intento activo por clase, contadores de bytes, propietario/lease/heartbeat, token de fencing, `cleanup_status`, evidencia de cleanup sin payload sensible, timestamps de recepción/ASR/cleanup y error tipado. `audio_deleted_at` solo tras comprobar ausencia de temporales. Caducidad inicial propuesta: 10 min para iniciar upload, 30 min de recepción, 60 min desde recepción completa para ASR; ajustar con benchmark F0 y publicar límites efectivos. Sweeper objetivo cada 60 s; el cleanup normal es inmediato, no espera al TTL.
+- `ingestion_attempts`: un único intento activo por clase, contadores de bytes, propietario/lease/heartbeat, token de fencing, `cleanup_status`, evidencia de cleanup sin payload sensible, timestamps de recepción/ASR/cleanup y error tipado. También registra `privacy_notice_version`, `cloud_processing_accepted_at`, `third_party_voice_acknowledged_at` y el conjunto/versiones de proveedores declarados. `audio_deleted_at` solo tras comprobar ausencia de temporales. Caducidad inicial propuesta: 10 min para iniciar upload, 30 min de recepción, 60 min desde recepción completa para ASR; ajustar con benchmark F0 y publicar límites efectivos. Sweeper objetivo cada 60 s; el cleanup normal es inmediato, no espera al TTL.
 - `transcripts`: único `(audio_id, version)`, texto, idioma solicitado, proveedor/modelo/configuración, `timestamp_precision`, calidad y resumen/temas con versión de análisis. `segments`: ID estable dentro de versión, ordinal, texto y offsets de caracteres; `t_inicio/t_fin` nullable, con `0 ≤ inicio < fin ≤ duración` cuando existan. No duplicar un JSON mutable de segmentos y filas como dos fuentes de verdad.
 - `chunk_segments` vincula chunks a segmentos/spans y conserva evidencia aunque haya overlap. `embeddings`: chunk, modelo, dimensión, versión y vector de dimensión fija; HNSW por generación compatible. `processing_runs` únicos por `(audio_id, stage, transcript_version, config_version)` con estado y error. Versiones activas se publican atómicamente.
-- `tasks.status`: `pending|needs_review → confirmed|dismissed`; `confirmed → completed|dismissed`. Resolver fecha/calidad antes de confirmar; confirmar exige fecha válida y evidencia comprobada para tareas extraídas. `calendar_sync_status` separado; `scheduled` no es un estado de tarea. `audio_id` nullable para tareas manuales/chat sin origen.
-- CHECK de fecha: resuelta all-day → solo `due_date`; resuelta con hora → solo `due_at`; ambigua/sin fecha → ambos null. Guardar texto original de fecha, motivo de revisión, versión de vencimiento, evidencia (transcript/segmentos/spans) y snapshot de timezone. Persistir también los pares de inicio/fin Calendar de M5 con sus CHECKs y la revisión pendiente de cambios; confirmar requiere validar tanto vencimiento como bloque de agenda. `confidence_score` nullable en tareas manuales, acotado [0,1], sin semántica probabilística.
+- `tasks.status`: `pending|needs_review → confirmed|dismissed`; `confirmed → completed|dismissed`. Resolver fecha/calidad antes de confirmar; confirmar exige fecha válida y evidencia comprobada para tareas extraídas. `calendar_sync_status` separado; `scheduled` no es un estado de tarea. `audio_id` puede conservarse como fuente primaria opcional, pero la procedencia normativa vive en `task_sources` para admitir propuestas de chat con cero, una o varias clases.
+- `task_sources` enlaza tarea, audio, versión de transcript, segmento y span validado; borrar una fuente invalida/purga propuestas pendientes que dependan de ella. `task_revisions` guarda `base_task_version`, campos propuestos, estado `pending_confirmation|activated|discarded` y relación tenant-aware con el run que la originó.
+- CHECK de fecha: resuelta all-day → solo `due_date`; resuelta con hora → solo `due_at`; ambigua/sin fecha → ambos null. Guardar texto original de fecha, motivo de revisión, versión de vencimiento y snapshot de timezone. Persistir `event_start_at/event_end_at` o `event_start_date/event_end_date_exclusive` directamente en `tasks`, con pares mutuamente excluyentes y fin posterior al inicio. Confirmar valida vencimiento, bloque de agenda y revisión. `confidence_score` nullable en tareas manuales, acotado [0,1], sin semántica probabilística.
 - `calendar_events`: clave `(user_id, calendar_id, event_id)`; vínculo nullable a tarea y fuente `google|maulwurf`. Una tarea tiene como máximo un evento vinculado; otros eventos Google no tienen tarea. Persistir calendario de escritura en settings, calendarios de lectura seleccionados y estado/ETag/cobertura de sincronización.
 - `messages.citas` referencia `{audio_id, transcript_version, chunk_id, segment_id, t_inicio, t_fin}` y texto validado; normalizar vínculos en `message_sources` para localizar/purgar respuestas derivadas al borrar una fuente. No conservar snippets huérfanos ni confiar en JSON no validado del LLM.
-- `outbox_events`: ID, tenant, tipo, recurso, versión, estado de habilitación, intentos y fecha de publicación; **solo IDs/configuración no sensible**, nunca audio ni tokens. Jobs consumidores idempotentes; reconciliación de outbox y ejecuciones atascadas. El borrado remoto solicitado usa un registro independiente de operación (IDs Google, autorización explícita, estado y error), que sobrevive a la purga de la tarea/clase hasta resolverlo; no depender de una FK con cascade que destruya el trabajo pendiente. No habilitar nuevos envíos tras tombstone, salvo la operación de borrado autorizada.
-- `notifications` según M8, `sessions` según M1, `settings` uno por usuario. Índices: GIN en `chunks.tsv`, HNSW en vector compatible, BTREE tenant+materia/fechas y `tasks(user_id, status, due_at/due_date)`. No declarar índices sin probar planes/recall con datos representativos.
+- `outbox_events`: ID, tenant, tipo, recurso, versión, `blocked_reason`, intentos y fecha de publicación; **solo IDs/configuración no sensible**, nunca audio ni tokens. El gate `cleanup_pending` solo aplica a `index_requested` y `analyze_requested` derivados de una ingesta. Calendar, notificaciones y borrados se crean habilitados en su propia transacción después de validar autorización/tombstone/versión. Jobs consumidores idempotentes; reconciliación de outbox y ejecuciones atascadas. El borrado remoto solicitado usa un registro independiente de operación que sobrevive a la purga hasta resolverlo.
+- `notifications` según M8 y `sessions` según M1. `settings` existe como máximo en F2 para calendario de escritura/lectura y se amplía en F3 con preferencias Gmail/digests. Para tareas usar dos índices parciales —`(user_id,status,due_at)` y `(user_id,status,due_date)`—; no convertir `date` a `timestamptz` en un índice. Índices GIN/HNSW se validan con planes y recall representativos.
 
 ---
 
@@ -572,7 +582,7 @@ El ER es un resumen, no sustituye las migraciones. Contratos mínimos adicionale
 - Defensa de ingesta según M2/M3: parser streaming, límites de bytes/duración/tiempo, ffmpeg sandbox, nombres internos aleatorios. Proxy sin buffering a disco, caché ni captura de bodies; no usar CDN con almacenamiento de requests de upload.
 - Sin audio, transcript, prompts completos, credenciales ni PII en logs/Sentry/trazas. Solo IDs, duración, tamaños, estado y errores redactados. Desactivar core dumps, swap persistente y snapshots/hibernación de memoria en hosts de ingesta; tmpfs por sí solo **no** basta si puede ir a swap.
 - Navegador: `Cache-Control: no-store` para contenido privado; service worker excluye upload, API, transcripts/chat y respuestas SSE; no guardar audio en IndexedDB/Cache Storage. Liberar `File`/object URLs al terminar/cancelar; el original local del usuario no lo borra la aplicación.
-- Borrado de cuenta: tombstone, bloquear sesiones/jobs, purgar datos propios y fuentes derivadas. Si se pide borrar eventos Maulwurf, realizar esa acción antes de revocar/eliminar tokens. No borrar eventos ajenos. Fallos remotos se informan; sin permisos no se puede garantizar borrado en Google.
+- Borrado de cuenta: `DELETE /me` devuelve `202 {deletion_operation_id}`. El flujo aplica tombstone, bloquea sesiones/jobs, solicita borrados remotos autorizados mientras existan credenciales, purga datos y después elimina tokens. `GET /me/deletion/{id}` expone `pending|completed|completed_with_remote_failures`; el registro residual conserva solo IDs remotos, autorización, estado, error redactado y expiración. No borrar eventos ajenos; sin permisos no se garantiza borrado en Google.
 - Backups solo de texto/metadatos cifrados, retención máxima propuesta 30 días y registro de borrados reaplicado al restaurar. La UI distingue borrado de datos activos, expiración de backups y datos ya enviados a terceros. Consentimiento para voces de terceros y tratamiento cloud antes del upload.
 
 ### Performance
@@ -595,10 +605,12 @@ Servicios: `web`, `api`, `ingest` (FastAPI, supervisor, ffmpeg y cliente Riva), 
 
 Persistencia para PostgreSQL y, si se configura, Redis solo con IDs/estado. Ingesta con `tmpfs` por instancia, root read-only, usuario no root, límites de recursos, sin swap/core dumps. En reinicio/drain cancelar o completar ASR dentro del deadline y limpiar; un despliegue puede exigir reupload. No escalar/reubicar intentos como si el audio fuera durable. Verificar en el host que la configuración de memoria cumple la política.
 
-### 9.2 CI/CD (GitLab CI)
+### 9.2 CI/CD (GitHub Actions)
+
+Decisión del equipo 2026-09-20; el runner y el registry se registran formalmente en el ADR de L1.2.
 
 - **MR:** lint (ruff + ESLint), tipos (mypy + tsc), tests (pytest + Vitest), integración Postgres/pgvector/Redis, E2E y builds API/ingest/web. Pipeline sin secretos de proveedores en MRs no confiables.
-- **Rama principal:** imágenes en GitLab Container Registry; deploy controlado con aprobación y rollback, no actualizaciones automáticas sin pruebas. Alembic como job único previo, migraciones compatibles con rollback de aplicación.
+- **Rama principal:** imágenes versionadas publicadas desde Actions en el registry del proyecto (GitHub Container Registry como candidato); deploy controlado con aprobación y rollback, no actualizaciones automáticas sin pruebas. Alembic como job único previo, migraciones compatibles con rollback de aplicación.
 - Pruebas cloud explícitas/manuales o programadas con presupuesto y credenciales protegidas; no confundir un mock con contrato validado de Riva/Google.
 
 ### 9.3 Calidad
@@ -634,9 +646,9 @@ Sin almacenamiento durable de audio se elimina ese costo, **no** el de memoria, 
 | Fase | Contenido | Criterio de salida |
 |---|---|---|
 | **F0 — Viabilidad y fundación** | Spike real Riva/privacidad/timestamps/idiomas/límites; arquitectura efímera; monorepo, CI, auth opaca, esquema, materias | Contrato y capacidad documentados; cleanup ante fallos probado; sesión/aislamiento y builds/tests pasan. Sin esto no se habilita ingesta real |
-| **F1 — Conocimiento** | Ingesta efímera → transcript → índice híbrido → lector → chat con citas textuales | E2E de clase de 1 h y límite efectivo; audio ausente antes de procesar texto; idioma respetado; citas/timestamps y evaluación RAG superan puertas del plan |
-| **F2 — Acción** | Extracción versionada, revisión humana, Calendar idempotente, agenda/tools de lectura y conflictos | Tarea con fecha/evidencia correctas, evento solo tras confirmar; timeout remoto/doble clic no duplican; all-day/DST y reconexión probados |
-| **F3 — Recordatorios** | Gmail opt-in, digests, recordatorios, dashboard completo, Ctrl+K; evaluar re-ranker | Dedupe/DST/entrega incierta probados y envío real de prueba observado; mejora del re-ranker medida antes de activarlo |
+| **F1 — Conocimiento** | Ingesta efímera → transcript → índice híbrido → lector → chat con citas textuales | E2E de clase de 1 h y límite efectivo; G1, G2-T o G2-X, G3, G4 y G5-F1 aprobadas |
+| **F2 — Acción** | Extracción versionada, revisión humana, Calendar idempotente, agenda/tools de lectura y conflictos | G5-F2, G6 y G7-CAL aprobadas; evento solo tras confirmar; all-day/DST y reconexión probados |
+| **F3 — Recordatorios** | Gmail opt-in, digests, recordatorios, panel de entregas, estadísticas y Ctrl+K | G7-MAIL y G8 aprobadas; dedupe/DST/entrega incierta y envío real de prueba observados |
 | **F4 — Backlog no comprometido** | Quizzes, exportaciones, plan de estudio, briefing | Requiere priorización propia; no bloquea MVP ni implica persistir audio |
 
 El [plan detallado](PLAN_IMPLEMENTACION.md) define dependencias, entregables y pruebas por fase. No se mantienen estimaciones de semanas sin spike de capacidad ni equipo definido.
@@ -651,12 +663,12 @@ Las decisiones de audio efímero, idioma obligatorio y proveedor Riva están cer
 |---|---|---|
 | D1 | Despliegue personal inicialmente; confirmar si habrá SaaS | Multi-tenant desde F0. Audiencia/consentimiento Google y revisión de privacidad antes de abrir a terceros |
 | D2 | Contrato Riva: idiomas exactos, timestamps, formatos/rate, límites, concurrencia, cuotas y tarifa | Spike F0 bloqueante; allowlist solo con códigos probados. `en`/`fr` aparecen en el ejemplo aportado, no prueban soporte de todos los idiomas necesarios |
-| D3 | Retención/tratamiento de audio y texto por proveedores, permiso para grabar voces de terceros | Bloquea clases reales; si se exige cero retención externa sin garantía contractual, revisar proveedor/despliegue con el usuario |
+| D3 | Retención/tratamiento de proveedores y permiso para voces de terceros | **D3-Audio** se cierra en F0 antes de audio real. **D3-Texto** se cierra por proveedor/modelo antes del primer transcript real enviado a embeddings/LLM; cambiar proveedor reabre la decisión |
 | D4 | Tamaño/duración/deadlines y RAM por slot | Objetivo 200 MiB/3 h, valores iniciales de lease en §6; benchmark F0 determina límites publicados y capacidad de instancia |
 | D5 | Calidad/costo del LLM y embeddings propuestos | Evaluación F1/F2 por idioma; no asumir que JSON válido o confianza alta implica exactitud |
 | D6 | Timestamps no disponibles o insuficientes en endpoint | Bloquea la promesa temporal de F1; decidir alineación efímera validada o aceptar producto solo textual. No implementar fallback oculto |
-| D7 | Scopes mínimos y comportamiento real Google | Verificar creación/lectura/patch, tokens y Testing antes de F2; Gmail y entrega incierta antes de F3 |
-| D8 | Retención de texto/chat y backups | Propuesta: activos hasta borrado por usuario, backups máximo 30 días; confirmar política y restauración segura antes de producción |
+| D7 | Scopes mínimos y comportamiento real Google | **D7-CAL** antes de F2; **D7-MAIL** y entrega incierta antes de F3. Cada mitad requiere contrato real y cuenta protegida |
+| D8 | Retención de texto/chat y backups | Aprobar política antes de persistir el primer transcript/chat no sintético; F3 valida restore, expiración y reaplicación de borrados |
 
 Fuera de MVP/v1: diarización, fuentes por URL/bots, colaboración, modo local, calendarios por materia y otros gestores de tareas. La diarización futura necesitaría ejecutarse durante ingesta o pedir reupload; no es posible recuperarla del audio ya eliminado.
 

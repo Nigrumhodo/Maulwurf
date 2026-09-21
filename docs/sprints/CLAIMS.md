@@ -1,0 +1,61 @@
+# Registro canónico de claims — Maulwurf
+
+> Estado: **sin claims aceptados**. Revisión: 2026-09-19.
+>
+> Este archivo es la única fuente de verdad para la propiedad de tickets. Las bitácoras
+> personales conservan evidencia, bloqueos y notas, pero una fila allí no asigna un ticket
+> por sí sola. Las filas prellenadas antes de esta revisión son candidatos históricos y **no
+> son claims vigentes** hasta que aparezcan aquí.
+
+## 1. Reglas de uso
+
+1. Solo se abre la sección del sprint activo después de verificar la puerta anterior, la
+   capacidad medida y la disponibilidad del equipo. S2–S4 no se reclaman por adelantado.
+2. Un claim se acepta mediante un único PR de planificación que añade una fila completa. La
+   revisión del líder o de la persona designada por el equipo resuelve conflictos de edición.
+3. `Owner` es la única persona responsable del ticket. `Contributors` y `Reviewers` pueden
+   colaborar, pero no comparten la propiedad ni el cierre.
+4. Si el ticket tiene una prueba `P-*` o una llamada real a Riva, LLM/embeddings, Google o
+   Gmail, `Elegibilidad cloud` debe indicar `verificada` con fecha y revisor, sin secretos.
+5. Al transferir un ticket, se conserva la fila histórica y se agrega otra con `acción =
+   transfer`. Al dividirlo, primero se actualiza el backlog con IDs hijos aprobados; no se
+   reclaman partes con IDs informales.
+6. Un ticket `continuo` usa estado operativo `en curso` durante el sprint y debe cerrar como
+   `hecho`, `bloqueado` o `transferido` con evidencia semanal. `continuo` no es un estado.
+
+## 2. Estados y acciones permitidos
+
+| Campo | Valores |
+|---|---|
+| `Acción` | `claim`, `transfer`, `unclaim`, `split` |
+| `Estado` | `pendiente`, `en curso`, `bloqueado`, `hecho`, `transferido`, `cancelado` |
+| `Elegibilidad cloud` | `no aplica`, `pendiente`, `verificada` |
+
+Un `unclaim` solo es válido antes de iniciar trabajo o si registra el traspaso de evidencia.
+Un `split` referencia el PR que creó los IDs hijos. Ninguna acción elimina el historial.
+
+Estos seis valores son **todo** el vocabulario de estado: no existen `reclamado`, `en_curso`,
+`en_revision` ni `continuo` como estados. `continuo` describe la naturaleza acotada de un
+ticket (ver regla 6) y las acciones de la tabla se registran como eventos con fecha.
+
+## 3. Sprint activo
+
+**Ningún sprint está abierto todavía.** El líder abre la sección correspondiente durante la
+planificación del lunes después de registrar la decisión de capacidad/puerta en la bitácora
+colectiva o en el PR de planificación.
+
+### S1 — Fundación + spike F0
+
+> Las bitácoras conservan la sección «Tickets reclamados» como historial. Solo las filas de
+> esta tabla son claims vigentes; al aceptar un claim, el PR enlaza la evidencia de la
+> bitácora pero no la sustituye.
+
+| Acción | Ticket | Owner | Estado | Claimed at (UTC) | Elegibilidad cloud | Contributors / reviewers | Motivo, evidencia o PR |
+|---|---|---|---|---|---|---|---|
+| — | — | — | — | — | — | — | — |
+
+## 4. Historial de cambios
+
+| Fecha UTC | Decisión | Referencia |
+|---|---|---|
+| 2026-09-19 | Se adopta registro canónico; los listados personales prellenados pasan a ser candidatos históricos. | Revisión documental |
