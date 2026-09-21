@@ -582,7 +582,13 @@ El ER es un resumen, no sustituye las migraciones. Contratos mínimos adicionale
 - Defensa de ingesta según M2/M3: parser streaming, límites de bytes/duración/tiempo, ffmpeg sandbox, nombres internos aleatorios. Proxy sin buffering a disco, caché ni captura de bodies; no usar CDN con almacenamiento de requests de upload.
 - Sin audio, transcript, prompts completos, credenciales ni PII en logs/Sentry/trazas. Solo IDs, duración, tamaños, estado y errores redactados. Desactivar core dumps, swap persistente y snapshots/hibernación de memoria en hosts de ingesta; tmpfs por sí solo **no** basta si puede ir a swap.
 - Navegador: `Cache-Control: no-store` para contenido privado; service worker excluye upload, API, transcripts/chat y respuestas SSE; no guardar audio en IndexedDB/Cache Storage. Liberar `File`/object URLs al terminar/cancelar; el original local del usuario no lo borra la aplicación.
-- Borrado de cuenta: `DELETE /me` devuelve `202 {deletion_operation_id}`. El flujo aplica tombstone, bloquea sesiones/jobs, solicita borrados remotos autorizados mientras existan credenciales, purga datos y después elimina tokens. `GET /me/deletion/{id}` expone `pending|completed|completed_with_remote_failures`; el registro residual conserva solo IDs remotos, autorización, estado, error redactado y expiración. No borrar eventos ajenos; sin permisos no se garantiza borrado en Google.
+- Borrado de cuenta: `DELETE /me` devuelve `202 {deletion_operation_id}`. El flujo aplica
+  tombstone, bloquea sesiones/jobs, deja la sesión iniciadora en modo restringido (consultar
+  el estado del borrado y cerrar sesión; las demás sesiones se revocan), solicita borrados
+  remotos autorizados mientras existan credenciales, purga datos y después elimina tokens.
+  `GET /me/deletion/{id}` expone `pending|completed|completed_with_remote_failures`; el
+  registro residual conserva solo IDs remotos, autorización, estado, error redactado y
+  expiración. No borrar eventos ajenos; sin permisos no se garantiza borrado en Google.
 - Backups solo de texto/metadatos cifrados, retención máxima propuesta 30 días y registro de borrados reaplicado al restaurar. La UI distingue borrado de datos activos, expiración de backups y datos ya enviados a terceros. Consentimiento para voces de terceros y tratamiento cloud antes del upload.
 
 ### Performance

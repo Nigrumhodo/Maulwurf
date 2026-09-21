@@ -55,6 +55,8 @@ reclamar de cualquier área respetando las reglas de arriba.
    más de un día sin una decisión visible.
 3. **PRs y reviews:** nada se mergea sin 1 review; el código que cruza fronteras de área lo
    revisa una persona con claim activo en esa carpeta o el líder si no hay claim.
+   Los PR de claim tocan únicamente su fila de `CLAIMS.md` y se fusionan en cuanto pasan
+   review; si dos PR reclaman el mismo ticket, gana el primero mergeado y el otro se cierra.
 4. **Prioridad de documentos:** si este plan choca con `ESPECIFICACION.md` o
    `PLAN_IMPLEMENTACION.md`, ganan ellos; actualizar spec/plan en la misma revisión si un
    cambio de contrato es inevitable.

@@ -166,7 +166,7 @@ ingesta (§M2); shape de respuesta SSE de progreso.
 
 | Ticket | Tarea (resumen) | Depende de | Tests |
 |---|---|---|---|
-| J1.1 | `docker-compose.yml` con 8 servicios; `pgvector/pgvector:pg16` fijada; sin volumen de audio | L1.1 | I-S1-JF-01 |
+| J1.1 | `docker-compose.yml` con 8 servicios; `pgvector/pgvector:pg16` fijada; volumen nombrado para PG; secretos fuera del compose; imágenes multi-stage no-root; sin volumen de audio | L1.1 | I-S1-JF-01 |
 | J1.2 | Servicio `ingest` endurecido (read-only, tmpfs, no root, límites) con ffmpeg/ffprobe | J1.1 | I-S1-SG-06 |
 | J1.3 | Caddy TLS local sin buffering/caché para uploads | J1.1 | I-S1-JF-02 |
 | J1.4 | CI: ruff/ESLint, mypy/tsc, pytest/Vitest, integración, builds | J1.1 | pipeline verde |
@@ -227,7 +227,7 @@ eventos SSE del chat `snapshot|delta|citation|done|error` con ID monotónico y t
 | L2.4 | `SearchService` + `GET /search` (en pareja con A2.11) | L2.3 | I-S2-JL-06 |
 | L2.5 | Chat SSE: embedding → 30/rama → RRF → ~8 chunks bajo presupuesto; streaming | L2.4 | I-S2-JL-07/08 |
 | L2.6 | Citas solo a IDs validados en BD; «segmento N» sin offsets; `message_sources` completo | L2.5 | U-S2-JL-05 |
-| L2.7 | Evaluación G4 sobre dataset S1 (Recall@8 ≥ 0.85, citas ≥ 0.95, abstención ≥ 0.90) | L2.1–L2.6 | G4 |
+| L2.7 | Evaluación G4 sobre dataset S1 (Recall@8 con filtros activos ≥ 0.85, citas ≥ 0.95, abstención ≥ 0.90) | L2.1–L2.6 | G4 |
 | L2.8 | p95 de recuperación ≤ 500 ms y primer token de chat p95 ≤ 5 s medidos | L2.4 | G4 |
 
 ### Backlog S2 — API/BD (`A2.x`)

@@ -73,16 +73,29 @@ Este documento fija:
    index_version, ordinal)`; embeddings por `(chunk_id, index_version)` con modelo/dimensión
    registrados; análisis por `processing_runs` `(audio_id, stage, transcript_version,
    config_version)`. Las versiones activas se publican atómicamente (mismas transacción).
+8. **Índices de soporte para FKs:** PostgreSQL no indexa el lado referenciante; toda FK
+   compuesta o `ON DELETE` lleva índice en la tabla hija. Las purgas de clase y de cuenta
+   recorren cascadas y no pueden degenerar en seq-scan.
 
-RLS base (defensa adicional):
+RLS base (defensa adicional) en cada tabla tenant, con `USING` y `WITH CHECK` (en `users`,
+sobre `id`). Sin `missing_ok`: si `app.user_id` no está fijado, la consulta falla
+(fail-closed):
 
 ```sql
 ALTER TABLE audios ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON audios
-  USING (user_id = current_setting('app.user_id')::uuid);
+  USING (user_id = current_setting('app.user_id')::uuid)
+  WITH CHECK (user_id = current_setting('app.user_id')::uuid);
 ```
 
-Cada transacción abre con `SET LOCAL app.user_id = '<uuid>'`.
+Misma plantilla `FOR ALL` en `subjects`, `audios`, `transcripts`, `segments`, `chunks`,
+`chunk_segments`, `embeddings`, `index_generations`, `processing_runs`, `outbox_events`,
+`ingestion_attempts`, `variant_confirmation_tokens`, `conversations`, `messages`,
+`message_sources`, `tasks`, `task_evidence`, `task_sources`, `task_revisions`,
+`calendar_events`, `google_remote_operations`, `notifications`, `sessions` y
+`google_credentials`. Cada transacción abre con `SET LOCAL app.user_id = '<uuid>'`
+(transaccional, por tanto compatible con el pool); los workers lo fijan igual y lo cubren
+I-S1-AN-05 y G3.
 
 ### 2.1.1 Extensiones
 
@@ -294,12 +307,15 @@ CREATE TABLE variant_confirmation_tokens (
 );
 CREATE INDEX variant_tokens_expiry
   ON variant_confirmation_tokens (expires_at) WHERE consumed_at IS NULL;
+CREATE INDEX variant_tokens_by_canonical
+  ON variant_confirmation_tokens (user_id, canonical_audio_id);
 
 -- Un único intento activo por clase; cleanup pendiente sigue siendo trabajo activo.
 CREATE UNIQUE INDEX attempts_one_active
   ON ingestion_attempts (audio_id)
   WHERE status IN ('awaiting_upload','receiving','transcribing',
                    'transcript_committed_cleanup_pending');
+CREATE INDEX attempts_by_audio ON ingestion_attempts (user_id, audio_id);
 ```
 
 Notas de diseño ([ESPECIFICACION.md](ESPECIFICACION.md) §6.2):
@@ -345,7 +361,8 @@ CREATE TABLE transcripts (
   timestamp_precision text NOT NULL
                         CHECK (timestamp_precision IN ('word','segment','none')),
   text                text NOT NULL,             -- fuente durable completa del transcript
-  char_count          integer NOT NULL DEFAULT 0,
+  char_count          integer NOT NULL DEFAULT 0
+                        CHECK (char_count = char_length(text)),
   quality_flags       jsonb NOT NULL DEFAULT '[]',  -- repeticiones/silencios detectados
   warnings            jsonb NOT NULL DEFAULT '[]',
   fts_config          text NOT NULL,             -- 'spanish' | 'english' | 'simple'
@@ -391,13 +408,15 @@ CREATE TABLE chunks (
   content            text NOT NULL,
   char_start         integer NOT NULL,           -- offsets preservados sobre el texto íntegro
   char_end           integer NOT NULL,
-  token_count        integer NOT NULL,           -- objetivo ~800, overlap ~100
+  token_count        integer NOT NULL,           -- objetivo ~800, overlap ~100; contado con
+                                                 -- el tokenizador del proveedor (D5)
   t_start            double precision,           -- derivados, nullable
   t_end              double precision,
   tsv                tsvector,                   -- construido con transcripts.fts_config
   UNIQUE (transcript_id, index_version, ordinal)
 );
 CREATE INDEX chunks_fts ON chunks USING GIN (tsv);
+CREATE INDEX chunks_by_audio ON chunks (user_id, audio_id);
 
 CREATE TABLE chunk_segments (
   user_id      uuid NOT NULL,
@@ -410,6 +429,7 @@ CREATE TABLE chunk_segments (
   overlap_span jsonb,                           -- offsets del solapamiento, para la evidencia
   PRIMARY KEY (user_id, chunk_id, segment_id)
 );
+CREATE INDEX chunk_segments_by_segment ON chunk_segments (user_id, segment_id);
 
 CREATE TABLE embeddings (
   user_id       uuid NOT NULL,
@@ -423,6 +443,8 @@ CREATE TABLE embeddings (
   created_at    timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, chunk_id, index_version)
 );
+-- HNSW global y coseno (coherente con el embedding); el recall con filtros de
+-- tenant/versión se garantiza en la consulta (§3.9), no en el índice.
 CREATE INDEX embeddings_hnsw ON embeddings USING hnsw (vector vector_cosine_ops);
 
 CREATE TABLE index_generations (
@@ -466,6 +488,15 @@ Notas:
 
 - Un chunk **no** es la unidad mínima de evidencia: `chunk_segments` conserva los segmentos y
   sus spans aunque haya solapamiento entre chunks.
+- Chunks y generaciones: reindexar con una `index_version` nueva re-chunkea — crea filas
+  nuevas de `chunks`/`chunk_segments` para esa generación y purga los embeddings retirados.
+  Un `chunk_id` pertenece a exactamente una generación; el `index_version` de `embeddings`
+  es redundancia defensiva y debe coincidir con el del chunk.
+- Recuperación vectorial con filtros (contrato §3.9): la consulta exige
+  `hnsw.iterative_scan = strict_order` (pgvector ≥ 0.8; versión fijada) y over-fetch
+  (los ~30 candidatos por rama) para que los filtros `user_id`/versión no dejen el top-k
+  con menos de k candidatos; en corpus pequeños, escaneo exacto. G4 evalúa recall **con
+  filtros activos**, no solo global.
 - Cambiar el modelo/dimensión/versión de embeddings exige una **generación nueva de índice**
   y reindexación completa; nunca se mezclan versiones ni se expone un índice parcial.
 - Borrar una clase purga chunks → embeddings y los caches/citas derivadas; los jobs
@@ -507,6 +538,7 @@ CREATE TABLE outbox_events (
 );
 CREATE INDEX outbox_pending
   ON outbox_events (status, next_attempt_at) WHERE enabled AND status = 'pending';
+CREATE INDEX outbox_by_user ON outbox_events (user_id) WHERE status <> 'completed';
 ```
 
 - El **shape** se congela el lunes S1. El área API/BD mantiene tabla y emisores; el área
@@ -558,9 +590,13 @@ CREATE TABLE messages (
   prompt_version    text,
   input_tokens      integer,
   output_tokens     integer,
-  created_at        timestamptz NOT NULL DEFAULT now(),
-  UNIQUE NULLS NOT DISTINCT (conversation_id, client_message_id)
+  created_at        timestamptz NOT NULL DEFAULT now()
 );
+-- Idempotencia solo para peticiones del usuario: NULLS NOT DISTINCT colisionaría todos los
+-- mensajes con client_message_id NULL y bloquearía el segundo turno del asistente.
+CREATE UNIQUE INDEX messages_client_idem
+  ON messages (conversation_id, client_message_id)
+  WHERE client_message_id IS NOT NULL;
 
 CREATE TABLE message_sources (
   id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -585,12 +621,17 @@ CREATE TABLE message_sources (
      AND transcript_version IS NOT NULL AND chunk_id IS NOT NULL))
 );
 CREATE INDEX message_sources_by_audio ON message_sources (user_id, audio_id);
+CREATE INDEX message_sources_by_message ON message_sources (user_id, message_id);
 ```
 
 - `message_sources` registra **todas** las fuentes entregadas al modelo (también las de
   tools y las heredadas del historial) para purgar respuestas descendientes al borrar una
   fuente (G5-F1/G5-F2). El texto ya visto no puede retirarse; se informa ese límite.
-- Historial con presupuesto de tokens y retención configurable por conversación.
+- Historial con presupuesto de tokens y retención configurable por conversación. Presupuesto
+  por turno: `ventana_del_modelo − reserva_de_salida − margen`; la evidencia (≤ ~8 chunks ×
+  ~800 tokens) manda y el historial se recorta de forma determinista (turnos completos, del
+  más antiguo; nunca a mitad). El presupuesto se verifica con el tokenizador real del
+  proveedor antes de cada llamada; si ni con el historial mínimo cabe, `context_exceeded`.
 
 ### 2.8 S3 — Tareas, fuentes, revisiones, Calendar y settings (API/BD + Integraciones)
 
@@ -944,6 +985,14 @@ propiedad de ticket. El owner efectivo se consulta en `sprints/CLAIMS.md`.
 
 ### 3.2 Envelope de error y códigos
 
+Éxitos con semántica especial (no son errores; se documentan aparte para que el manejo de
+excepciones no los trate como fallos):
+
+| Código | HTTP | Uso |
+|---|---|---|
+| `duplicate_exact` | 200 | Dedupe exacto: devuelve la clase canónica |
+| `calendar_blocked` | 202 | Confirmada sin integración: sync queda `blocked` |
+
 ```json
 {
   "error": {
@@ -969,18 +1018,17 @@ Códigos tipados (sin PII ni contenido sensible):
 | `attempt_not_active` | 409 | Intento no está en `awaiting_upload` |
 | `payload_too_large` | 413 | Límite de bytes/duración superado |
 | `unsupported_format` | 415 | Contenedor/codec no probado o malformado |
-| `duplicate_exact` | 200 | Dedupe exacto: devuelve la clase canónica |
 | `duplicate_variant` | 409 | Mismo hash, contexto distinto: exige confirmación |
 | `capacity_unavailable` | 503 | Sin slot de RAM/concurrencia |
 | `rate_limited` | 429 | Cuota por usuario |
 | `tombstoned` | 409 | Operación sobre clase eliminada |
 | `version_conflict` | 409 | Locking optimista (tasks) |
 | `invalid_transition` | 409 | Estado destino no permitido |
-| `transcript_unavailable` | 409/404 | Sin transcript utilizable (reupload) |
+| `transcript_unavailable` | 409 | Sin transcript utilizable (reupload); 404 si el recurso no existe para el tenant |
 | `srt_unavailable` | 409 | Timestamps inválidos para SRT |
 | `evidence_invalid` | 422 | Span/cita no reconstruible desde BD |
+| `context_exceeded` | 422 | Historial + evidencia no caben tras recorte determinista |
 | `date_unresolved` | 422 | Confirmar exige fecha válida |
-| `calendar_blocked` | 202 | Confirmada sin integración: sync queda `blocked` |
 | `provider_unavailable` | 503 | LLM/embeddings/Google caídos |
 | `internal_error` | 500 | Sin detalles sensibles |
 
@@ -999,7 +1047,11 @@ Códigos tipados (sin PII ni contenido sensible):
 | `PATCH` | `/me/notifications` | S4 | Preferencias M8 (opt-in Gmail, digests, umbrales) | `200` |
 | `POST` | `/notifications/test` | S4 | Envío de prueba al email verificado | `202` |
 | `DELETE` | `/me` | S4 | Borrado de cuenta; admite `delete_maulwurf_events` explícito, crea operación y pide borrados remotos antes de revocar tokens | `202 {deletion_operation_id}` |
-| `GET` | `/me/deletion/{id}` | S4 | Estado no sensible de la operación de borrado | `pending\|completed\|completed_with_remote_failures` |
+| `GET` | `/me/deletion/{id}` | S4 | Estado no sensible del borrado; acepta la sesión restringida iniciadora | `pending\|completed\|completed_with_remote_failures` |
+
+Tras `DELETE /me`, la sesión que inició la operación queda en **modo restringido**: solo
+`GET /me/deletion/{id}` y `POST /auth/logout`; cualquier otra sesión se revoca. Así el
+cliente puede mostrar el estado del borrado sin conservar acceso al resto de la cuenta.
 
 Ejemplo `GET /me`:
 
@@ -1153,7 +1205,9 @@ data: {"code":"asr_deadline_exceeded","detail":"requires_reupload"}
 ```
 
 Progreso real: bytes recibidos y fragmentos terminados/total si se conoce; **nunca
-porcentajes inventados**. Snapshot al reconectar; polling como fallback.
+porcentajes inventados**. Latidos `: ping` cada ~15 s mantienen la conexión a través de
+proxies. Al reconectar con `Last-Event-ID`, el servidor reenvía `snapshot` (los eventos son
+estado, no incrementales); polling como fallback.
 
 Otros endpoints M2:
 
@@ -1288,7 +1342,11 @@ tombstoned ni versiones obsoletas.
 ```
 
 - Ambas ramas (pgvector + FTS con configuración por idioma) filtran **primero** `user_id`,
-  recursos activos, versión activa y filtros; nunca top-k global y filtro después.
+  recursos activos, versión activa y filtros; nunca top-k global y filtro después. La rama
+  vectorial exige `hnsw.iterative_scan = strict_order` y over-fetch (§2.5) para sostener
+  ese contrato; alternativa medida: escaneo exacto en corpus pequeños.
+- La fusión RRF produce orden total determinista: `ORDER BY score_rrf DESC, chunk_id`; el
+  `cursor` de paginación incluye el desempate para no omitir ni duplicar resultados.
 - Sin offsets fiables, `t_start/t_end` van `null` y la UI muestra «segmento N».
 - Objetivo p95 ≤ 500 ms medido, no garantizado (spec §8).
 
@@ -1304,9 +1362,11 @@ tombstoned ni versiones obsoletas.
 | `POST` | `/chat/conversations/{id}/messages/{message_id}/cancel` | S2 | Cancela el streaming en curso; el parcial queda `cancelled` | `202` |
 
 Eventos SSE del chat (congelados S2; todos con `id`): comienza con `snapshot`, sigue con
-cero o más `delta`/`citation` y termina exactamente una vez en `done` o `error`. Tras un corte,
-el cliente consulta el mensaje persistido; no reenvía el mismo `client_message_id` para pedir
-una nueva generación.
+cero o más `delta`/`citation` y termina exactamente una vez en `done` o `error`. Latidos
+`: ping` entre deltas mantienen la conexión a través de proxies; al reconectar, el
+`Last-Event-ID` permite omitir lo ya enviado (el estado completo vive en el mensaje
+persistido) y el cliente no reenvía el mismo `client_message_id` para pedir una nueva
+generación.
 
 ```text
 event: snapshot

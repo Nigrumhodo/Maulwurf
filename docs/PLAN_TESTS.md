@@ -184,7 +184,7 @@ Estas asociaciones completan las referencias del backlog sin cambiar los IDs est
 |---|---|---|---|
 | U-S2-JL-01 | U | Chunking: objetivo ~800 tokens, overlap ~100, cortes en límites de frase/segmento; offsets Unicode preservados (emoji, acentos, CJK); `chunk_segments` correcto | M6 |
 | U-S2-JL-02 | U | Versionado de embeddings: generación de índice nueva con activación atómica; nunca mezcla modelo/dimensión/versión | M6/D5 |
-| U-S2-JL-03 | U | RRF: fusión determinista dada la misma entrada; `k` documentado; dedupe y diversidad aplicados antes del top-k | M6 |
+| U-S2-JL-03 | U | RRF: fusión determinista dada la misma entrada; `k` documentado; desempate por `chunk_id` (cursor estable); dedupe y diversidad aplicados antes del top-k | M6 |
 | U-S2-JL-04 | U | Filtros `user_id`/versión/tombstone aplicados **en ambas ramas** (lexical y vectorial) antes del top-k | G3 |
 | U-S2-JL-05 | U | Citas: solo hacia IDs validados en BD; sin offsets fiables → «segmento N»; el modelo nunca inventa fuentes | M7/regla 5 |
 | I-S2-JL-06 | I | Búsqueda híbrida contra Postgres+pgvector reales con corpus de prueba (texto redactado) | M6 |
@@ -193,7 +193,8 @@ Estas asociaciones completan las referencias del backlog sin cambiar los IDs est
 | E-S2-JL-09 | E | Pregunta desde navegador → respuesta con cita clicable que abre el lector en el segmento | G4/F1 |
 | P-S2-JL-10 | P | Proveedor de embeddings/LLM: contrato real, dimensiones y cuotas (protegida) — alimenta D5 | D5 |
 
-**Criterio G4 (semanal, script reproducible):** Recall@8 ≥ 0.85 (respondibles), precisión de citas
+**Criterio G4 (semanal, script reproducible):** Recall@8 ≥ 0.85 (respondibles, con filtros de
+tenant/versión activos), precisión de citas
 ≥ 0.95, abstención ≥ 0.90; p95 de recuperación ≤ 500 ms. Números por idioma con
 numerador/denominador, dataset versionado con partición `test` congelada, fórmula y adjudicación
 publicadas conforme al protocolo de PLAN_IMPLEMENTACION §7.1.
@@ -301,7 +302,7 @@ protocolo §7.1: unidad de emparejamiento (tipo + fecha normalizada + evidencia)
 | U-S4-AN-01 | U | Estados de `notifications` (`pending\|sending\|sent\|failed\|delivery_unknown\|cancelled`) y transiciones válidas | M8 |
 | U-S4-AN-02 | U | `dedupe_key` (user, tipo, task, due_version, occurrence) previene duplicados por construcción | M8 |
 | U-S4-AN-03 | U | Cambiar vencimiento/preferencias cancela **solo** ocurrencias futuras obsoletas; nunca ráfaga retrospectiva | M8 |
-| I-S4-AN-04 | I | `DELETE /me` devuelve 202 + `deletion_operation_id`; tombstone, sesiones/jobs bloqueados y purga idempotente; borrado remoto antes de revocar tokens; `GET /me/deletion/{id}` expone `pending\|completed\|completed_with_remote_failures` y solo residuo mínimo expirado | seguridad/G3 |
+| I-S4-AN-04 | I | `DELETE /me` devuelve 202 + `deletion_operation_id`; tombstone, sesiones/jobs bloqueados y purga idempotente; la sesión iniciadora queda restringida a `GET /me/deletion/{id}` y logout, las demás se revocan; borrado remoto antes de revocar tokens; `GET /me/deletion/{id}` expone `pending\|completed\|completed_with_remote_failures` y solo residuo mínimo expirado | seguridad/G3 |
 | I-S4-AN-05 | I | Restore de backup (D8): solo texto/metadatos cifrados; tombstones reaplicados; nada borrado reaparece | D8/G8 |
 | I-S4-AN-06 | I | Rate limits básicos: `429/503` con cabeceras correctas en endpoints sensibles; ownership en API/SSE/tools/jobs | G3/NFR |
 | I-S4-AN-07 | I | Sweep de huérfanos: cero chunks/embeddings/filas derivadas sin clase tras borrados | G3 |
