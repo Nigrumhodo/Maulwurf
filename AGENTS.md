@@ -41,15 +41,19 @@ explicit Definition of Done. See "Sprint Model" below.
     dependencies, tests per ticket, and Definition of Done per sprint. Only the active
     sprint opens for claiming; the rest stays blocked.
   - `docs/plan/S1.md`..`docs/plan/S4.md` — Detailed sprint specifications: frozen
-    contracts, per-ticket behavior, acceptance criteria, verification and evidence.
+    contracts, per-ticket behavior, acceptance criteria, verification/evidence and a
+    ticket→files "implementation map" per sprint. The S1 file also holds the normative
+    ticket template that S2–S4 reference.
   - `docs/PLAN_TESTS.md` — Test catalog per sprint (layers `U-`, `I-`, `P-`, `E-`, `L-`,
     `C-`, `R-`) that tickets reference as evidence.
   - `docs/DISENO_BD_API_SPRINTS.md` — Database design, full API contract, and day-by-day
     ticket detail.
   - `docs/PROPUESTA_PROYECTO_FINAL.md`, `docs/PROPUESTA_DISENO_FRONT.md` — Project vision
     and frontend design proposal.
-  - `docs/sprints/` — One personal **bitácora** (logbook) per member: claimed tickets,
-    status, evidence, blockers. Rules and template in `docs/sprints/README.md`.
+  - `docs/sprints/` — Canonical claim registry in `docs/sprints/CLAIMS.md` (ownership and
+    state) plus one personal **bitácora** (logbook) per member for evidence, blockers and
+    notes; a bitácora row does not assign a ticket. Rules and template in
+    `docs/sprints/README.md`.
   - `docs/NVIDIA_RIVA.md` — Audited Riva client parameters and reference invocation.
 - `infra/` — Placeholder README only (area `J-`: compose, Caddy, CI are pending J1.x and
   subject to claiming in `docs/sprints/CLAIMS.md`).
