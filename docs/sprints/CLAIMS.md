@@ -1,6 +1,6 @@
 # Registro canónico de claims — Maulwurf
 
-> Estado: **sin claims aceptados**. Revisión: 2026-09-19.
+> Estado: **S1 abierto**. Revisión: 2026-09-23.
 >
 > Este archivo es la única fuente de verdad para la propiedad de tickets. Las bitácoras
 > personales conservan evidencia, bloqueos y notas, pero una fila allí no asigna un ticket
@@ -40,9 +40,8 @@ ticket (ver regla 6) y las acciones de la tabla se registran como eventos con fe
 
 ## 3. Sprint activo
 
-**Ningún sprint está abierto todavía.** El líder abre la sección correspondiente durante la
-planificación del lunes después de registrar la decisión de capacidad/puerta en la bitácora
-colectiva o en el PR de planificación.
+**S1 está abierto.** S2–S4 siguen cerrados. La apertura queda registrada en el historial
+de este PR de planificación.
 
 ### S1 — Fundación + spike F0
 
@@ -52,10 +51,14 @@ colectiva o en el PR de planificación.
 
 | Acción | Ticket | Owner | Estado | Claimed at (UTC) | Elegibilidad cloud | Contributors / reviewers | Motivo, evidencia o PR |
 |---|---|---|---|---|---|---|---|
-| — | — | — | — | — | — | — | — |
+| claim | L1.1 | satnovaOG | hecho | 2026-09-23 | no aplica | — / líder | Pins y lockfiles; mergeado en #7 |
+| claim | L1.2 | satnovaOG | hecho | 2026-09-23 | no aplica | — / líder | ADRs 0001–0004; mergeado en #7 |
+| claim | L1.3 | satnovaOG | hecho | 2026-09-23 | no aplica | — / líder | `docs/spike/F0.1-protocolo.md`; mergeado en #7 |
+| claim | S1.A1 | satnovaOG | hecho | 2026-09-23 | no aplica | — / líder | Generador sintético en RAM; mergeado en #6 |
 
 ## 4. Historial de cambios
 
 | Fecha UTC | Decisión | Referencia |
 |---|---|---|
 | 2026-09-19 | Se adopta registro canónico; los listados personales prellenados pasan a ser candidatos históricos. | Revisión documental |
+| 2026-09-23 | Se abre S1; se reclaman L1.1, L1.2, L1.3 y S1.A1 (hecho). | Este PR |
