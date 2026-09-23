@@ -99,7 +99,7 @@ architecture; only the following are real today.
 ### Install (Python packages, per app)
 
 ```bash
-# API (uses uv.lock; requires Python >= 3.11)
+# API (uses uv.lock; requires Python >= 3.12)
 cd apps/api && uv sync --extra dev
 
 # Ingest
@@ -183,8 +183,8 @@ application and has not been run against NVIDIA from this repository.
 - Keep the planned service names and domain identifiers (`TranscriptionService`,
   `GoogleCalendarService`, `SearchService`, `RAGService`) rather than inventing parallel
   names.
-- No commit-message template, commit hook, or commit-lint configuration is present.
-  `> TODO:` define the required commit format with the maintainers before enforcing it.
+- Commit and PR format: [docs/adr/ADR-0004-commits-pr.md](docs/adr/ADR-0004-commits-pr.md).
+  No commit-lint hook is installed yet; do not invent one outside J1.4.
 
 ## Architecture Notes
 
@@ -354,8 +354,10 @@ versioned or retained as a CI artifact. Persist only non-sensitive metrics and e
 ## Further Reading
 
 - [`README.md`](README.md) — Product vision, planned contract, and current limitations.
-- [`README.scaffold.md`](README.scaffold.md) — What the scaffold script generated and what
-  is pending.
+- [`docs/VERSIONES.md`](docs/VERSIONES.md) — Runtime pins (Python 3.12, Node 22, PG16,
+  Riva 2.27.0) verified in L1.1; formalized in [ADR-0002](docs/adr/ADR-0002-versiones.md).
+- [`docs/adr/README.md`](docs/adr/README.md) — Short ADRs (monorepo, versions, lockfiles,
+  commits/PR).
 - [`docs/ESPECIFICACION.md`](docs/ESPECIFICACION.md) — Functional and technical source of
   truth, including architecture, data model, security, phases, and unresolved decisions.
 - [`docs/PLAN_IMPLEMENTACION.md`](docs/PLAN_IMPLEMENTACION.md) — Implementation gates,
@@ -373,6 +375,8 @@ versioned or retained as a CI artifact. Persist only non-sensitive metrics and e
   detailed specifications and acceptance criteria.
 - [`docs/NVIDIA_RIVA.md`](docs/NVIDIA_RIVA.md) — Riva client audit, connection parameters,
   and limits that still require real endpoint validation.
+- [`docs/spike/F0.1-protocolo.md`](docs/spike/F0.1-protocolo.md) — F0.1 contract-spike
+  protocol (unique format for the S1.A8 report).
 - [`LICENSE`](LICENSE) — GNU General Public License, version 3.
-- `> TODO:` add `docs/ARCH.md`, ADRs, and operational runbooks as the corresponding tickets
-  (L1.2, S4.1, J4.8) land; those documents do not exist yet.
+- `> TODO:` add `docs/ARCH.md` and operational runbooks when tickets S4.1 and J4.8 land;
+  L1.2 ADRs are in `docs/adr/`.

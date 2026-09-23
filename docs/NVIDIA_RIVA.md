@@ -149,3 +149,6 @@ Se comprobó localmente:
 - código fuente del repositorio oficial en el commit indicado.
 
 No se ejecutó una transcripción contra NVIDIA: este proyecto no tiene API key configurada ni un audio de prueba autorizado. Por eso el límite efectivo de 1 GiB, los idiomas, cuotas, deadlines y timestamps siguen **pendientes de prueba de contrato**.
+
+El informe de esas pruebas (S1.A8) debe seguir el protocolo
+[F0.1-protocolo.md](spike/F0.1-protocolo.md) (ticket L1.3). Otro formato no cierra F0.

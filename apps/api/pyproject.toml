@@ -2,7 +2,7 @@
 name = "maulwurf-api"
 version = "0.1.0"
 description = "Maulwurf API — FastAPI + Pydantic v2 + SQLAlchemy 2 async (§3.2)"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
@@ -29,13 +29,13 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "S"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 ignore_missing_imports = true
 
