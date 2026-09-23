@@ -2,6 +2,7 @@
 
 Este árbol fue creado por `scripts/scaffold_monorepo.sh` (tarea L1.1 del líder).
 Corresponde a la estructura §3.3 de `docs/ESPECIFICACION.md`.
+Las versiones de runtime pinneadas están en [docs/VERSIONES.md](docs/VERSIONES.md).
 
 ## Áreas del backlog (plan de sprints, §0.2 del plan maestro)
 
@@ -25,7 +26,7 @@ La letra designa el **área**, no a una persona: los tickets se reclaman cada lu
    luego `npx shadcn@latest init`.
 3. **`S1.x` (Ingesta/ASR):** spike F0 con `requirements-riva.txt`; prototipo efímero.
 4. **`J1.x` (Infra):** `infra/docker-compose.yml` + `Caddyfile` + CI.
-5. **`L1.x` (RAG/liderazgo):** ADRs en `docs/`.
+5. **`L1.x` (RAG/liderazgo):** ADRs en [docs/adr/](docs/adr/README.md).
 
 > Regla: nada aquí está implementado. Los TODOs marcan trabajo pendiente; los responsables
 > se reclaman cada semana, no están preasignados.
