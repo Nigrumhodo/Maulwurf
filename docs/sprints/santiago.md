@@ -12,12 +12,14 @@
 ### Semana 1 (S1) — Fundación + spike (F0, bloqueante)
 
 > Sección histórica: las filas anteriores a la revisión 2026-09-19 son candidatos, no
-> claims; los tickets vigentes se registran primero en [CLAIMS.md](CLAIMS.md). Hasta que
-> exista una fila allí, esta tabla permanece vacía.
+> claims. Ownership vigente: [CLAIMS.md](CLAIMS.md). Esta tabla es evidencia.
 
 | Ticket | Área | Estado | Evidencia (comando, fecha, entorno, resultado) |
 |---|---|---|---|
-| — | — | — | Sin claims aún: el sprint S1 se abre por PR en `CLAIMS.md`. |
+| L1.1 | L | hecho | 2026-09-23 UTC. `uv sync --extra dev` en `apps/api` y `apps/ingest`; `npm install` en `apps/web`. Pins `.python-version` 3.12, `.nvmrc` 22, `docs/VERSIONES.md` y lockfiles. Merge #7. |
+| L1.2 | L | hecho | 2026-09-23 UTC. ADR-0001–0004 en `docs/adr/` (monorepo, versiones, lockfiles, commit/PR). Merge #7. |
+| L1.3 | L | hecho | 2026-09-23 UTC. Protocolo en `docs/spike/F0.1-protocolo.md`. No es el informe S1.A8 ni llamadas Riva. Merge #7. |
+| S1.A1 | S | hecho | 2026-09-23 UTC, WSL. `cd apps/ingest && uv run pytest tests/test_synthetic_audio.py` (U-S1-SG-01): 9 passed. WAV sintético en RAM. Merge #6. |
 
 ## Bloqueos y dependencias
 
@@ -25,4 +27,4 @@
 
 ## Notas de semana
 
-- (decisiones, hallazgos, desvíos de alcance — una línea por evento con fecha)
+- 2026-09-23: registro retroactivo; trabajo en #6 y #7; claim canónico en #8.
