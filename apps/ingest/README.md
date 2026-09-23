@@ -8,3 +8,5 @@
   (o `espeak`) en `PATH`. En Windows se puede usar WSL (`sudo apt install
   espeak-ng`). El WAV se genera por stdout y no se versiona ni se guarda como
   artefacto; solo se persiste el texto esperado y métricas no sensibles.
+  Cuando exista el Dockerfile de ingest (S1.B1), fijar la versión del paquete
+  `espeak-ng` para que la forma de onda sea reproducible en CI.

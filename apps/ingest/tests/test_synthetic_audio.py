@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import cmath
 import io
 import math
@@ -9,13 +10,15 @@ import struct
 import wave
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from maulwurf_ingest.audio.synthetic import (
+from maulwurf_ingest.audio import (
     DEFAULT_PHRASE_ES,
     generate_synthetic_utterance,
 )
+from maulwurf_ingest.audio import synthetic as synthetic_mod
 
 # U-S1-SG-01: in-RAM synthetic speech with a known phrase, seeded, not a tone.
 
@@ -65,24 +68,36 @@ def test_spectrum_is_not_a_pure_tone() -> None:
     assert not _has_speech_like_spectrum(tone)
 
 
-def test_does_not_write_wav_to_disk(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    writes: list[Path] = []
+def test_does_not_write_wav_to_disk(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    writes: list[str] = []
+    real_open = builtins.open
 
-    original_write_bytes = Path.write_bytes
-
-    def tracking_write_bytes(self: Path, data: bytes) -> int:
-        writes.append(self)
-        return original_write_bytes(self, data)
+    def tracking_open(file: Any, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+        if any(flag in mode for flag in ("w", "a", "x", "+")):
+            writes.append(str(file))
+        return real_open(file, mode, *args, **kwargs)
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(Path, "write_bytes", tracking_write_bytes)
+    monkeypatch.setattr(builtins, "open", tracking_open)
 
     generate_synthetic_utterance(seed=0)
 
     assert writes == []
     assert list(tmp_path.rglob("*.wav")) == []
+
+
+def test_leading_dash_is_spoken_not_espeak_flags() -> None:
+    phrase = "-v de hola"
+    utterance = generate_synthetic_utterance(text=phrase, seed=0)
+    assert utterance.expected_text == phrase
+    with wave.open(io.BytesIO(utterance.wav_bytes), "rb") as reader:
+        assert reader.getnframes() > 0
+
+
+def test_rejects_overlong_utterance(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(synthetic_mod, "_MAX_OUTPUT_SECONDS", 0.01)
+    with pytest.raises(RuntimeError, match="too long"):
+        generate_synthetic_utterance(seed=0)
 
 
 def _pcm_samples(wav_bytes: bytes) -> tuple[list[int], int]:

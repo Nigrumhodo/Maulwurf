@@ -21,6 +21,8 @@ DEFAULT_PHRASE_ES = "El perro corre en el parque todas las mañanas."
 
 _ESPEAK_CANDIDATES = ("espeak-ng", "espeak")
 _ESPEAK_TIMEOUT_S = 30
+# Soft RAM bound: fail before dither instead of keeping unbounded PCM in memory.
+_MAX_OUTPUT_SECONDS = 300
 # Pinned so the same binary version yields a stable waveform before dither.
 _ESPEAK_WORDS_PER_MIN = 120
 _ESPEAK_PITCH = 50
@@ -48,8 +50,14 @@ def generate_synthetic_utterance(
         raise ValueError("synthetic utterance text must be non-empty")
 
     raw_wav = _espeak_wav_stdout(spoken, language_code=language_code)
+    sample_rate_hz, nframes = _wav_pcm_meta(raw_wav)
+    seconds = nframes / sample_rate_hz if sample_rate_hz else 0.0
+    if seconds > _MAX_OUTPUT_SECONDS:
+        raise RuntimeError(
+            f"synthetic utterance too long ({seconds:.0f}s > {_MAX_OUTPUT_SECONDS}s); "
+            "acota el texto de entrada"
+        )
     dithered = _apply_seeded_dither(raw_wav, seed)
-    sample_rate_hz = _wav_sample_rate(dithered)
     return SyntheticUtterance(
         wav_bytes=dithered,
         expected_text=spoken,
@@ -93,6 +101,7 @@ def _espeak_wav_stdout(text: str, *, language_code: str) -> bytes:
         str(_ESPEAK_PITCH),
         "-a",
         str(_ESPEAK_AMPLITUDE),
+        "--",
         text,
     ]
     try:
@@ -184,6 +193,6 @@ def _apply_seeded_dither(wav_bytes: bytes, seed: int) -> bytes:
     return out.getvalue()
 
 
-def _wav_sample_rate(wav_bytes: bytes) -> int:
+def _wav_pcm_meta(wav_bytes: bytes) -> tuple[int, int]:
     with wave.open(io.BytesIO(wav_bytes), "rb") as reader:
-        return reader.getframerate()
+        return reader.getframerate(), reader.getnframes()
