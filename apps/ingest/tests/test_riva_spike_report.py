@@ -24,6 +24,36 @@ def _load() -> ModuleType:
     return module
 
 
+def test_future_timeout_error_is_not_builtin_timeout() -> None:
+    """grpcio 1.84 FutureTimeoutError does not inherit TimeoutError."""
+    import grpc
+
+    error = grpc.FutureTimeoutError()
+    assert not isinstance(error, TimeoutError)
+
+
+def test_future_timeout_records_deadline_and_cancels() -> None:
+    """A local gRPC wait timeout becomes DEADLINE_EXCEEDED and cancels the call."""
+    import grpc
+
+    class _Call:
+        def __init__(self) -> None:
+            self.cancelled = False
+
+        def result(self, timeout: float | None = None) -> object:
+            raise grpc.FutureTimeoutError()
+
+        def cancel(self) -> None:
+            self.cancelled = True
+
+    spike = _load()
+    call = _Call()
+    outcome = spike.finish_recognize_call(call, "unit-test-nvidia-key-timeout")  # noqa: S106
+    assert outcome["grpc_code"] == "DEADLINE_EXCEEDED"
+    assert outcome["hypothesis"] == ""
+    assert call.cancelled is True
+
+
 def test_report_omits_secret_bearer_and_wav(monkeypatch: pytest.MonkeyPatch) -> None:
     """F0.1 redaction: the printed report has no key, Bearer, or audio bytes."""
     secret = "unit-test-nvidia-key-9f3c2a"  # noqa: S105

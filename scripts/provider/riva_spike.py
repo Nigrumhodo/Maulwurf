@@ -176,6 +176,48 @@ def grpc_status_name(exc: BaseException) -> str:
     return "UNKNOWN"
 
 
+def finish_recognize_call(call: object, api_key: str) -> dict[str, Any]:
+    """Read one RPC result. A local gRPC wait timeout is ``DEADLINE_EXCEEDED``.
+
+    ``grpc.FutureTimeoutError`` does not inherit from the builtin ``TimeoutError``
+    on grpcio 1.84, so it is handled on its own. The call is cancelled and not retried.
+    """
+    import grpc
+
+    try:
+        response = call.result(timeout=CLIENT_DEADLINE_S)  # type: ignore[attr-defined]
+    except grpc.FutureTimeoutError:
+        cancel = getattr(call, "cancel", None)
+        if callable(cancel):
+            cancel()
+        return {
+            "grpc_code": "DEADLINE_EXCEEDED",
+            "hypothesis": "",
+            "server_version": NOT_VERIFIED,
+            "metadata_keys": [],
+        }
+    except grpc.RpcError as exc:
+        return {
+            "grpc_code": grpc_status_name(exc),
+            "hypothesis": "",
+            "server_version": server_version_from_metadata(exc, api_key),
+            "metadata_keys": observed_metadata_keys(exc, api_key),
+        }
+    except TimeoutError as exc:
+        return {
+            "grpc_code": grpc_status_name(exc),
+            "hypothesis": "",
+            "server_version": server_version_from_metadata(exc, api_key),
+            "metadata_keys": observed_metadata_keys(exc, api_key),
+        }
+    return {
+        "grpc_code": "OK",
+        "hypothesis": hypothesis_text(response),
+        "server_version": server_version_from_metadata(call, api_key),
+        "metadata_keys": observed_metadata_keys(call, api_key),
+    }
+
+
 def hypothesis_text(response: object) -> str:
     results = getattr(response, "results", None) or []
     parts: list[str] = []
@@ -299,7 +341,6 @@ def recognize_wav(
     allow_empty_language: bool = False,
 ) -> dict[str, Any]:
     """One offline Recognize. The result omits the hypothesis text and the WAV."""
-    import grpc
     import riva.client
 
     if not _use_ssl():
@@ -337,21 +378,11 @@ def recognize_wav(
     try:
         asr = riva.client.ASRService(auth)
         call = asr.offline_recognize(wav_bytes, config, future=True)
-        try:
-            response = call.result(timeout=CLIENT_DEADLINE_S)
-        except grpc.RpcError as exc:
-            grpc_code = grpc_status_name(exc)
-            server_version = server_version_from_metadata(exc, api_key)
-            metadata_keys = observed_metadata_keys(exc, api_key)
-        except TimeoutError as exc:
-            grpc_code = grpc_status_name(exc)
-            server_version = server_version_from_metadata(exc, api_key)
-            metadata_keys = observed_metadata_keys(exc, api_key)
-        else:
-            grpc_code = "OK"
-            hypothesis = hypothesis_text(response)
-            server_version = server_version_from_metadata(call, api_key)
-            metadata_keys = observed_metadata_keys(call, api_key)
+        outcome = finish_recognize_call(call, api_key)
+        grpc_code = str(outcome["grpc_code"])
+        hypothesis = str(outcome["hypothesis"])
+        server_version = str(outcome["server_version"])
+        metadata_keys = list(outcome["metadata_keys"])
     finally:
         close = getattr(auth.channel, "close", None)
         if callable(close):
