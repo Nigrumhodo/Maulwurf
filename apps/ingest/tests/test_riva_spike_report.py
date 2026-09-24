@@ -54,6 +54,20 @@ def test_future_timeout_records_deadline_and_cancels() -> None:
     assert call.cancelled is True
 
 
+def test_future_cancelled_records_cancelled() -> None:
+    """A cancelled future is CANCELLED and is not retried."""
+    import grpc
+
+    class _Call:
+        def result(self, timeout: float | None = None) -> object:
+            raise grpc.FutureCancelledError()
+
+    spike = _load()
+    outcome = spike.finish_recognize_call(_Call(), "unit-test-nvidia-key-cancel")  # noqa: S106
+    assert outcome["grpc_code"] == "CANCELLED"
+    assert outcome["hypothesis"] == ""
+
+
 def test_report_omits_secret_bearer_and_wav(monkeypatch: pytest.MonkeyPatch) -> None:
     """F0.1 redaction: the printed report has no key, Bearer, or audio bytes."""
     secret = "unit-test-nvidia-key-9f3c2a"  # noqa: S105
