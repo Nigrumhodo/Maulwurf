@@ -148,7 +148,9 @@ Se comprobó localmente:
 - aceptación de `1073741824` por el validador de tamaño;
 - código fuente del repositorio oficial en el commit indicado.
 
-No se ejecutó una transcripción contra NVIDIA: este proyecto no tiene API key configurada ni un audio de prueba autorizado. Por eso el límite efectivo de 1 GiB, los idiomas, cuotas, deadlines y timestamps siguen **pendientes de prueba de contrato**.
+El 2026-09-24 (WSL) `scripts/provider/riva_spike.py` hizo un `Recognize` offline con audio sintético de S1.A1. El endpoint respondió gRPC `OK`. El cliente observado fue `nvidia-riva-client==2.27.0`, `grpcio==1.84.0`, `protobuf==6.33.5`. La metadata no trajo versión de servidor: queda `NO VERIFICADO`.
+
+El mismo día, S1.A3 propuso la allowlist `es`, `en`, `fr` (gRPC `OK`, frase esperada no coincidente). `zz` y el idioma ausente respondieron `INVALID_ARGUMENT`. S1.A4 aceptó WAV PCM s16 mono en local. Con ffmpeg/ffprobe 8.0.1, mp3, ogg, opus, flac y webm se normalizan por pipe a WAV PCM s16 mono; m4a por pipe queda `NO VERIFICADO`. 16 kHz también respondió `OK` y no queda como límite aprobado; 22050 Hz es la observación de S1.A2. La evidencia redactada está en la bitácora de Santiago. Cuotas, deadlines, timestamps y el límite efectivo de 1 GiB siguen **pendientes de prueba de contrato** (S1.A5–A8).
 
 El informe de esas pruebas (S1.A8) debe seguir el protocolo
 [F0.1-protocolo.md](spike/F0.1-protocolo.md) (ticket L1.3). Otro formato no cierra F0.
