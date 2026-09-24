@@ -48,3 +48,37 @@ def test_floor_does_not_approve_targets_or_leak_secret() -> None:
     assert report["server_deadline"] == "NO VERIFICADO"
     assert secret not in payload
     assert wav.decode("ascii") not in payload
+
+
+def test_unexpected_code_is_marked_and_floor_stays_unapproved() -> None:
+    """A probe that misses its code is marked. The 30 s floor still approves nothing."""
+    limits = _load()
+    row = limits._row(
+        "client_wait_timeout",
+        observed={
+            "grpc_code": "OK",
+            "wav_num_bytes": 1,
+            "sample_rate_hz": 22050,
+            "hypothesis_char_len": 0,
+        },
+        expected_code="DEADLINE_EXCEEDED",
+    )
+    assert row["outcome_expected"] is False
+    assert row["expected_code"] == "DEADLINE_EXCEEDED"
+
+    floor = limits._row(
+        "payload_duration_floor",
+        observed={
+            "grpc_code": "OK",
+            "wav_num_bytes": 960044,
+            "sample_rate_hz": 16000,
+            "hypothesis_char_len": 46,
+        },
+        kind="floor",
+        payload_bound="minimum_observed",
+    )
+    assert "expected_code" not in floor
+    assert "outcome_expected" not in floor
+    report = limits.build_limits_report([floor])
+    assert report["approved_200_mib"] is False
+    assert report["approved_3h"] is False

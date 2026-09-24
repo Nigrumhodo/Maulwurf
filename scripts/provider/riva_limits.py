@@ -74,7 +74,13 @@ def build_limits_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _row(probe: str, *, observed: dict[str, Any], **extra: Any) -> dict[str, Any]:
+def _row(
+    probe: str,
+    *,
+    observed: dict[str, Any],
+    expected_code: str | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
     row = {
         "probe": probe,
         "grpc_code": observed["grpc_code"],
@@ -82,6 +88,9 @@ def _row(probe: str, *, observed: dict[str, Any], **extra: Any) -> dict[str, Any
         "sample_rate_hz": observed["sample_rate_hz"],
         "hypothesis_char_len": observed["hypothesis_char_len"],
     }
+    if expected_code is not None:
+        row["expected_code"] = expected_code
+        row["outcome_expected"] = observed["grpc_code"] == expected_code
     row.update(extra)
     return row
 
@@ -114,6 +123,7 @@ def run_limit_probes(api_key: str) -> tuple[dict[str, Any], list[bytes]]:
             "client_wait_timeout",
             observed=waited,
             kind="client_wait_timeout",
+            expected_code="DEADLINE_EXCEEDED",
             timeout_s=CLIENT_WAIT_S,
             server_deadline=NOT_VERIFIED,
         )
@@ -127,7 +137,14 @@ def run_limit_probes(api_key: str) -> tuple[dict[str, Any], list[bytes]]:
         expected_text=expected,
         cancel_immediately=True,
     )
-    rows.append(_row("cancel_immediately", observed=cancelled, kind="cancellation"))
+    rows.append(
+        _row(
+            "cancel_immediately",
+            observed=cancelled,
+            expected_code="CANCELLED",
+            kind="cancellation",
+        )
+    )
 
     resampled = resample_wav_pcm_s16_mono(short, FLOOR_HZ)
     floor = pad_wav_with_silence(resampled, FLOOR_SECONDS)

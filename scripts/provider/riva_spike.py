@@ -290,6 +290,11 @@ def build_redacted_report(
 
 
 def report_is_redacted(payload: str, *, api_key: str, wav_bytes: bytes) -> bool:
+    """Reject a payload that contains the key, a Bearer, or an ASCII WAV prefix.
+
+    The audio guard compares only the first 48 WAV bytes, and only when they
+    decode as ASCII of at least 16 characters. It is not a full redaction proof.
+    """
     if api_key and api_key in payload:
         return False
     lowered = payload.casefold()
@@ -396,8 +401,9 @@ def recognize_wav(
         call = asr.offline_recognize(wav_bytes, config, future=True)
         if cancel_immediately:
             cancel = getattr(call, "cancel", None)
-            if callable(cancel):
-                cancel()
+            if not callable(cancel):
+                raise SpikeConfigError("future has no cancel(); cancellation probe is not reliable")
+            cancel()
         outcome = finish_recognize_call(call, api_key, timeout_s=timeout_s)
         grpc_code = str(outcome["grpc_code"])
         hypothesis = str(outcome["hypothesis"])

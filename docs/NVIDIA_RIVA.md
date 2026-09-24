@@ -152,7 +152,7 @@ El 2026-09-24 (WSL) `scripts/provider/riva_spike.py` hizo un `Recognize` offline
 
 El mismo día, S1.A3 propuso la allowlist `es`, `en`, `fr` (gRPC `OK`, frase esperada no coincidente). `zz` y el idioma ausente respondieron `INVALID_ARGUMENT`. S1.A4 aceptó WAV PCM s16 mono en local. Con ffmpeg/ffprobe 8.0.1, mp3, ogg, opus, flac y webm se normalizan por pipe a WAV PCM s16 mono; m4a por pipe queda `NO VERIFICADO`. 16 kHz también respondió `OK` y no queda como límite aprobado; 22050 Hz es la observación de S1.A2.
 
-S1.A5 midió tres llamadas en serie, sin reintentos. Una espera local de 0.05 s quedó como `DEADLINE_EXCEEDED` y no es deadline del servidor (`NO VERIFICADO`). Una cancelación inmediata respondió `CANCELLED`. Un WAV de 30.0 s a 16 kHz (960044 bytes) respondió `OK`: es un mínimo observado, no el máximo. 200 MiB y 3 h no se aprueban. Cuota, concurrencia y el límite efectivo de 1 GiB siguen `NO VERIFICADO`. La evidencia redactada está en la bitácora de Santiago. Timestamps y el informe S1.A8 siguen pendientes (S1.A6–A8).
+S1.A5 midió tres llamadas en serie, sin reintentos. Una espera local de 0.05 s quedó como `DEADLINE_EXCEEDED` y no es deadline del servidor (`NO VERIFICADO`). Una cancelación inmediata respondió `CANCELLED`. Un WAV de 30.0 s a 16 kHz (960044 bytes) respondió `OK`: es un mínimo observado, no el máximo. 200 MiB y 3 h no se aprueban. Cuota, concurrencia y el límite efectivo de 1 GiB siguen `NO VERIFICADO`. La evidencia redactada está en la bitácora de Santiago. `P-S1-SG-08` (latencia y memoria) queda para S1.A7. Timestamps y el informe S1.A8 siguen pendientes (S1.A6–A8).
 
 El informe de esas pruebas (S1.A8) debe seguir el protocolo
 [F0.1-protocolo.md](spike/F0.1-protocolo.md) (ticket L1.3). Otro formato no cierra F0.

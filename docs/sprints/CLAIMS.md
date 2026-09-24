@@ -58,7 +58,7 @@ de este PR de planificación.
 | claim | S1.A2 | satnovaOG | hecho | 2026-09-24 | pendiente | — / líder | Llamada observada gRPC `OK`; servidor `NO VERIFICADO`. Cloud sin revisor. |
 | claim | S1.A3 | satnovaOG | hecho | 2026-09-24 | pendiente | — / líder | Allowlist propuesta `es`, `en`, `fr`. Cloud sin revisor. |
 | claim | S1.A4 | satnovaOG | hecho | 2026-09-24 | pendiente | — / líder | WAV `accept`; mp3/ogg/opus/flac/webm `normalize`. m4a `NO VERIFICADO`. 16 kHz `OK`, no aprobado. Cloud sin revisor. |
-| claim | S1.A5 | satnovaOG | hecho | 2026-09-24 | pendiente | — / líder | Tres llamadas: espera local `DEADLINE_EXCEEDED`, cancelación `CANCELLED`, piso 30 s `OK`. 200 MiB y 3 h no aprobados. Cloud sin revisor. |
+| claim | S1.A5 | satnovaOG | hecho | 2026-09-24 | pendiente | — / líder | Tres llamadas: espera local `DEADLINE_EXCEEDED`, cancelación `CANCELLED`, piso 30 s `OK`. 200 MiB y 3 h no aprobados. Cuota, concurrencia y máximos `NO VERIFICADO`. Cloud sin revisor. |
 
 ## 4. Historial de cambios
 
