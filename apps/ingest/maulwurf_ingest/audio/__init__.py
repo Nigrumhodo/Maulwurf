@@ -5,9 +5,12 @@ from maulwurf_ingest.audio.synthetic import (
     SyntheticUtterance,
     generate_synthetic_utterance,
 )
+from maulwurf_ingest.audio.validate import FormatDecision, classify_upload
 
 __all__ = [
     "DEFAULT_PHRASE_ES",
+    "FormatDecision",
     "SyntheticUtterance",
+    "classify_upload",
     "generate_synthetic_utterance",
 ]

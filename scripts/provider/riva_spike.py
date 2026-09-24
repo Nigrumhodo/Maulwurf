@@ -276,26 +276,39 @@ def _client_versions() -> dict[str, str]:
     }
 
 
-def run_recognize(api_key: str) -> tuple[dict[str, Any], bytes]:
-    """One offline Recognize. Returns the redacted report and the in-RAM WAV."""
+def language_for_request(language_code: str, *, allow_empty: bool = False) -> str:
+    """Explicit code only. Empty is sent solely when the caller is probing that case."""
+    code = language_code.strip()
+    folded = code.casefold()
+    if folded == "multi" or "translate" in folded:
+        raise SpikeConfigError("refusing multi or task:translate")
+    if not code:
+        if not allow_empty:
+            raise SpikeConfigError("language_code must be explicit")
+        return ""
+    return str(recognition_settings(code)["language_code"])
+
+
+def recognize_wav(
+    api_key: str,
+    *,
+    wav_bytes: bytes,
+    language_code: str,
+    sample_rate_hz: int,
+    expected_text: str,
+    allow_empty_language: bool = False,
+) -> dict[str, Any]:
+    """One offline Recognize. The result omits the hypothesis text and the WAV."""
     import grpc
     import riva.client
 
-    ingest_root = repo_root() / "apps" / "ingest"
-    ingest_path = str(ingest_root)
-    if ingest_path not in sys.path:
-        sys.path.insert(0, ingest_path)
-    from maulwurf_ingest.audio.synthetic import generate_synthetic_utterance
-
     if not _use_ssl():
-        raise SpikeConfigError("RIVA_USE_SSL must be true; S1.A2 requires TLS")
-
+        raise SpikeConfigError("RIVA_USE_SSL must be true")
+    sent = language_for_request(language_code, allow_empty=allow_empty_language)
     endpoint = _endpoint()
     function_id = _function_id()
-    utterance = generate_synthetic_utterance()
-    settings = recognition_settings(str(utterance.language_code))
     config = riva.client.RecognitionConfig(
-        language_code=settings["language_code"],
+        language_code=sent,
         max_alternatives=1,
         profanity_filter=False,
         enable_automatic_punctuation=False,
@@ -303,7 +316,7 @@ def run_recognize(api_key: str) -> tuple[dict[str, Any], bytes]:
         enable_word_time_offsets=False,
     )
     if config.custom_configuration:
-        raise SpikeConfigError("S1.A2 does not send custom_configuration")
+        raise SpikeConfigError("custom_configuration is not sent")
 
     auth = riva.client.Auth(
         use_ssl=True,
@@ -323,7 +336,7 @@ def run_recognize(api_key: str) -> tuple[dict[str, Any], bytes]:
     metadata_keys: list[str] = []
     try:
         asr = riva.client.ASRService(auth)
-        call = asr.offline_recognize(utterance.wav_bytes, config, future=True)
+        call = asr.offline_recognize(wav_bytes, config, future=True)
         try:
             response = call.result(timeout=CLIENT_DEADLINE_S)
         except grpc.RpcError as exc:
@@ -344,20 +357,57 @@ def run_recognize(api_key: str) -> tuple[dict[str, Any], bytes]:
         if callable(close):
             close()
 
-    report = build_redacted_report(
-        client_versions=_client_versions(),
-        server_version=server_version,
-        endpoint=endpoint,
-        tls=True,
-        function_id=function_id,
+    return {
+        "client": _client_versions(),
+        "server_version": server_version,
+        "endpoint": endpoint,
+        "tls": True,
+        "function_id": function_id,
+        "language_sent": sent,
+        "sample_rate_hz": sample_rate_hz,
+        "wav_num_bytes": len(wav_bytes),
+        "expected_text": expected_text,
+        "grpc_code": grpc_code,
+        "hypothesis_char_len": len(hypothesis),
+        "expected_text_in_hypothesis": expected_text_in_hypothesis(hypothesis, expected_text),
+        "metadata_keys": metadata_keys,
+        "max_message_length_client": CLIENT_MAX_MESSAGE_LENGTH,
+        "max_message_length_scope": _MAX_MESSAGE_SCOPE,
+    }
+
+
+def run_recognize(api_key: str) -> tuple[dict[str, Any], bytes]:
+    """One offline Recognize for S1.A2. Returns the redacted report and the in-RAM WAV."""
+    ingest_root = repo_root() / "apps" / "ingest"
+    ingest_path = str(ingest_root)
+    if ingest_path not in sys.path:
+        sys.path.insert(0, ingest_path)
+    from maulwurf_ingest.audio.synthetic import generate_synthetic_utterance
+
+    utterance = generate_synthetic_utterance()
+    observed = recognize_wav(
+        api_key,
+        wav_bytes=utterance.wav_bytes,
+        language_code=str(utterance.language_code),
         sample_rate_hz=int(utterance.sample_rate_hz),
-        wav_num_bytes=len(utterance.wav_bytes),
-        language_code=str(settings["language_code"]),
         expected_text=str(utterance.expected_text),
-        grpc_code=grpc_code,
-        hypothesis=hypothesis,
-        metadata_keys=metadata_keys,
     )
+    report = build_redacted_report(
+        client_versions=observed["client"],
+        server_version=str(observed["server_version"]),
+        endpoint=str(observed["endpoint"]),
+        tls=bool(observed["tls"]),
+        function_id=str(observed["function_id"]),
+        sample_rate_hz=int(observed["sample_rate_hz"]),
+        wav_num_bytes=int(observed["wav_num_bytes"]),
+        language_code=str(observed["language_sent"]),
+        expected_text=str(observed["expected_text"]),
+        grpc_code=str(observed["grpc_code"]),
+        hypothesis="x" * int(observed["hypothesis_char_len"]),
+        metadata_keys=list(observed["metadata_keys"]),
+    )
+    report["expected_text_in_hypothesis"] = observed["expected_text_in_hypothesis"]
+    report["hypothesis_char_len"] = observed["hypothesis_char_len"]
     return report, utterance.wav_bytes
 
 
