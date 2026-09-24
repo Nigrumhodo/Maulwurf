@@ -20,6 +20,7 @@
 | L1.2 | L | hecho | 2026-09-23 UTC. ADR-0001–0004 en `docs/adr/` (monorepo, versiones, lockfiles, commit/PR). Merge #7. |
 | L1.3 | L | hecho | 2026-09-23 UTC. Protocolo en `docs/spike/F0.1-protocolo.md`. No es el informe S1.A8 ni llamadas Riva. Merge #7. |
 | S1.A1 | S | hecho | 2026-09-23 UTC, WSL. `cd apps/ingest && uv run pytest tests/test_synthetic_audio.py` (U-S1-SG-01): 9 passed. WAV sintético en RAM. Merge #6. |
+| S1.A2 | S | hecho | 2026-09-24 UTC, WSL. `cd apps/ingest && .venv/bin/pytest tests/test_riva_spike_report.py`: 8 passed. `cd apps/ingest && .venv/bin/python ../../scripts/provider/riva_spike.py`: gRPC `OK`, cliente `nvidia-riva-client==2.27.0`, `grpcio==1.84.0`, `protobuf==6.33.5`. Metadata inicial/final sin versión (`date`, `nvcf-reqid`, `set-cookie`; sin valores). Servidor `NO VERIFICADO`. Hipótesis 46 caracteres; la frase esperada no coincide tal cual. |
 
 ## Bloqueos y dependencias
 

@@ -148,7 +148,7 @@ Se comprobó localmente:
 - aceptación de `1073741824` por el validador de tamaño;
 - código fuente del repositorio oficial en el commit indicado.
 
-No se ejecutó una transcripción contra NVIDIA: este proyecto no tiene API key configurada ni un audio de prueba autorizado. Por eso el límite efectivo de 1 GiB, los idiomas, cuotas, deadlines y timestamps siguen **pendientes de prueba de contrato**.
+El 2026-09-24 (WSL) `scripts/provider/riva_spike.py` hizo un `Recognize` offline con audio sintético de S1.A1. El endpoint respondió gRPC `OK`. El cliente observado fue `nvidia-riva-client==2.27.0`, `grpcio==1.84.0`, `protobuf==6.33.5`. La metadata no trajo versión de servidor: queda `NO VERIFICADO`. La evidencia redactada está en la bitácora de Santiago. Idiomas, cuotas, deadlines, timestamps y el límite efectivo de 1 GiB siguen **pendientes de prueba de contrato** (S1.A3–A8).
 
 El informe de esas pruebas (S1.A8) debe seguir el protocolo
 [F0.1-protocolo.md](spike/F0.1-protocolo.md) (ticket L1.3). Otro formato no cierra F0.
