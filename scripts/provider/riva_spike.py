@@ -176,22 +176,36 @@ def grpc_status_name(exc: BaseException) -> str:
     return "UNKNOWN"
 
 
-def finish_recognize_call(call: object, api_key: str) -> dict[str, Any]:
+def finish_recognize_call(
+    call: object,
+    api_key: str,
+    timeout_s: float | None = None,
+) -> dict[str, Any]:
     """Read one RPC result. A local gRPC wait timeout is ``DEADLINE_EXCEEDED``.
 
     ``grpc.FutureTimeoutError`` does not inherit from the builtin ``TimeoutError``
     on grpcio 1.84, so it is handled on its own. The call is cancelled and not retried.
+    ``timeout_s`` is only the local wait. It is not a server deadline.
+    ``grpc.FutureCancelledError`` is recorded as ``CANCELLED`` and is not retried.
     """
     import grpc
 
+    wait_s = CLIENT_DEADLINE_S if timeout_s is None else timeout_s
     try:
-        response = call.result(timeout=CLIENT_DEADLINE_S)  # type: ignore[attr-defined]
+        response = call.result(timeout=wait_s)  # type: ignore[attr-defined]
     except grpc.FutureTimeoutError:
         cancel = getattr(call, "cancel", None)
         if callable(cancel):
             cancel()
         return {
             "grpc_code": "DEADLINE_EXCEEDED",
+            "hypothesis": "",
+            "server_version": NOT_VERIFIED,
+            "metadata_keys": [],
+        }
+    except grpc.FutureCancelledError:
+        return {
+            "grpc_code": "CANCELLED",
             "hypothesis": "",
             "server_version": NOT_VERIFIED,
             "metadata_keys": [],
@@ -339,6 +353,8 @@ def recognize_wav(
     sample_rate_hz: int,
     expected_text: str,
     allow_empty_language: bool = False,
+    timeout_s: float | None = None,
+    cancel_immediately: bool = False,
 ) -> dict[str, Any]:
     """One offline Recognize. The result omits the hypothesis text and the WAV."""
     import riva.client
@@ -378,7 +394,11 @@ def recognize_wav(
     try:
         asr = riva.client.ASRService(auth)
         call = asr.offline_recognize(wav_bytes, config, future=True)
-        outcome = finish_recognize_call(call, api_key)
+        if cancel_immediately:
+            cancel = getattr(call, "cancel", None)
+            if callable(cancel):
+                cancel()
+        outcome = finish_recognize_call(call, api_key, timeout_s=timeout_s)
         grpc_code = str(outcome["grpc_code"])
         hypothesis = str(outcome["hypothesis"])
         server_version = str(outcome["server_version"])
