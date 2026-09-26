@@ -1,6 +1,7 @@
 # Decisiones de arquitectura (ADR)
 
-ADRs cortos de L1.2. Prefijo `ADR-`. Sin secretos. Redis (ADR-0005) queda para J1.6.
+ADRs cortos. Prefijo `ADR-`. Sin secretos. Los cuatro primeros son de L1.2;
+ADR-0005 (Redis) se añade en J1.6.
 
 | ID | Título | Estado |
 |---|---|---|
@@ -8,6 +9,7 @@ ADRs cortos de L1.2. Prefijo `ADR-`. Sin secretos. Redis (ADR-0005) queda para J
 | [ADR-0002](ADR-0002-versiones.md) | Versiones de runtime y proveedores | Aceptado |
 | [ADR-0003](ADR-0003-lockfiles.md) | Política de lockfiles | Aceptado |
 | [ADR-0004](ADR-0004-commits-pr.md) | Formato de commit/PR y reviews | Aceptado |
+| [ADR-0005](ADR-0005-redis.md) | Política de Redis | Propuesto |
 
 ## Verificación L1.2
 
@@ -21,3 +23,10 @@ ADRs cortos de L1.2. Prefijo `ADR-`. Sin secretos. Redis (ADR-0005) queda para J
   el PR, no en este archivo.
 
 El artefacto verificable es el diff documental de estos ADR.
+
+## Verificación J1.6
+
+- [ ] ADR-0005 revisado y marcado `Aceptado` al fusionar el PR de J1.6.
+- [x] La política coincide con `infra/docker-compose.yml` (sin persistencia,
+  `noeviction`, tope de 256 MB provisional, puerto solo loopback) y con
+  I-S1-JF-03 (`apps/api/tests/integration/test_redis_policy.py`).

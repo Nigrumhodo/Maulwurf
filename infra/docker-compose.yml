@@ -1,6 +1,7 @@
 # J1.1 — compose local de los 8 servicios (S1).
 # Sin MinIO/S3, sin volumen ni mount persistente de audio: los temporales de
-# ingesta serán tmpfs privados por contenedor (J1.2) y se pierden al recrear.
+# ingesta son tmpfs privados por contenedor (J1.2) y se pierden al recrear.
+# Redis no tiene volumen: la persistencia duradera es de Postgres (J1.6/ADR-0005).
 name: maulwurf
 
 x-api-env: &api-env
@@ -27,11 +28,24 @@ services:
 
   redis:
     image: redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-256mb}
+      - --maxmemory-policy
+      - noeviction
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
+    ports:
+      # Solo loopback, para ejecutar I-S1-JF-03 desde el host (ADR-0005).
+      - "127.0.0.1:6379:6379"
     networks: [data]
     restart: unless-stopped
 
