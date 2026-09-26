@@ -8,13 +8,15 @@
 https://localhost {
 	tls internal
 
-	# 1) PUT binario de ingesta: streaming puro, sin compresión ni buffering.
+	# 1) PUT binario: en S1 el esqueleto vive en la API (A1.8); en S2 pasa a
+	#    ingest:8000 cuando exista la recepción real (plan J1.3 §2.2).
+	#    Streaming puro, sin compresión ni buffering.
 	@upload {
 		method PUT
 		path /audios/*/content
 	}
 	handle @upload {
-		reverse_proxy ingest:8000
+		reverse_proxy api:8000
 	}
 
 	# 2) SSE de progreso: flush inmediato por evento.
