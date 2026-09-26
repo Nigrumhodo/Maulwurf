@@ -19,6 +19,7 @@
 | J1.8 | J | hecho | 2026-09-25 UTC, Ubuntu (Docker 29.8/WSL). `docker build --target base -t maulwurf-ingest:base apps/ingest`; dentro: ffmpeg 7.1.5-0+deb13u1, ffprobe 7.1.5, Python 3.12.14; Id `sha256:91ef546d…`. Pendiente: paridad con ffmpeg 8.0.1 del spike (S1.A4) — decisión registrada en el PR. |
 | J1.1 | J | hecho | 2026-09-25 UTC. `docker compose up -d --build --wait`: 8/8 healthy (caddy en 8080/8443 porque 80/443 están ocupados en el host); `/`→404 web y `/readyz`→200 api; `docker compose config --volumes` solo `pgdata`/`caddy_data`/`caddy_config`; `ingest` sin mounts. |
 | J1.2 | J | hecho | 2026-09-25 UTC. `docker inspect` de `ingest`: ReadonlyRootfs=true, User=10001:10001, CapDrop=ALL, no-new-privileges, tmpfs 256 MB, MemorySwap=1g, pids 128, NanoCpus 2; dentro: `/` de solo lectura, `/work/tmp` escribible, `ulimit -c 0`; cgroup `memory.swap.max=0`. Host: `zram` activo y `core_pattern` a systemd-coredump — pendiente de operación. |
+| J1.3 | J | hecho | 2026-09-25 UTC. `caddy validate` OK; `scripts/load/proxy_no_buffering.sh`: 536 870 912 B por Caddy → HTTP 202; sin archivos nuevos (excluye certificados), sin descriptores borrados, 0 bodies en logs. Usa el Caddyfile real con el upstream de ingesta sustituido por un sink; pendiente repetir contra el endpoint real (S2). |
 
 ## Bloqueos y dependencias
 
