@@ -59,13 +59,13 @@ de este PR de planificación.
 | claim | S1.A3 | satnovaOG | hecho | 2026-09-24 | pendiente | — / líder | Allowlist propuesta `es`, `en`, `fr`. Cloud sin revisor. |
 | claim | S1.A4 | satnovaOG | hecho | 2026-09-24 | pendiente | — / líder | WAV `accept`; mp3/ogg/opus/flac/webm `normalize`. m4a `NO VERIFICADO`. 16 kHz `OK`, no aprobado. Cloud sin revisor. |
 | claim | S1.A5 | satnovaOG | hecho | 2026-09-24 | pendiente | — / líder | Tres llamadas: espera local `DEADLINE_EXCEEDED`, cancelación `CANCELLED`, piso 30 s `OK`. 200 MiB y 3 h no aprobados. Cuota, concurrencia y máximos `NO VERIFICADO`. Cloud sin revisor. |
-| claim | J1.8 | jpinillaz | en curso | 2026-09-25 | no aplica | — / líder | Target `base` con ffmpeg fijado; evidencia en bitácora; PR pendiente de review |
-| claim | J1.1 | jpinillaz | en curso | 2026-09-25 | no aplica | — / líder | Compose de 8 servicios; evidencia en bitácora; PR pendiente de review |
-| claim | J1.2 | jpinillaz | en curso | 2026-09-25 | no aplica | — / líder | Ingest endurecido; evidencia en bitácora; PR pendiente de review |
-| claim | J1.3 | jpinillaz | en curso | 2026-09-25 | no aplica | — / líder | Caddy sin buffering; evidencia en bitácora; PR pendiente de review |
-| claim | J1.4 | jpinillaz | en curso | 2026-09-25 | no aplica | — / líder | CI + plantilla de PR (ADR-0004); evidencia en bitácora; PR pendiente de review |
-| claim | J1.6 | jpinillaz | en curso | 2026-09-25 | no aplica | — / líder | ADR-0005 y política Redis; evidencia en bitácora; PR pendiente de review |
-| claim | J1.7 | jpinillaz | en curso | 2026-09-25 | no aplica | — / líder | Runbook de desarrollo; evidencia en bitácora; PR pendiente de review |
+| claim | J1.8 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | Target `base` con ffmpeg fijado y paridad 7.1.5 vs 8.0.1 verificada; mergeado en #12 |
+| claim | J1.1 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | Compose de 8 servicios; evidencia en bitácora; mergeado en #13 |
+| claim | J1.2 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | Ingest endurecido; evidencia en bitácora; host pendiente de operación; mergeado en #14 |
+| claim | J1.3 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | Caddy sin buffering; SSE pendiente de A1.8/S2; mergeado en #15 |
+| claim | J1.4 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | CI + plantilla de PR (ADR-0004); pipeline verde; mergeado en #16 |
+| claim | J1.6 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | ADR-0005 y política Redis; mergeado en #17 |
+| claim | J1.7 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | Runbook de desarrollo; verificado desde clon limpio; mergeado en #18 |
 
 ## 4. Historial de cambios
 
@@ -77,3 +77,4 @@ de este PR de planificación.
 | 2026-09-24 | Se reclaman S1.A3 y S1.A4. Corridas observadas; estado `hecho`. Elegibilidad cloud sigue `pendiente`. | Este cambio |
 | 2026-09-24 | Se reclama S1.A5. La serie de tres llamadas queda observada; estado `hecho`. 200 MiB y 3 h no se aprueban. Elegibilidad cloud `pendiente`. | Este cambio |
 | 2026-09-25 | Se reclaman J1.1–J1.4 y J1.6–J1.8 (J1.5 queda pendiente en S1). Trabajo y evidencia registrados antes del merge; estado `en curso` hasta review. | Este PR |
+| 2026-09-26 | Se cierran J1.1–J1.4 y J1.6–J1.8 como `hecho` tras fusionar #12–#18 en `develop` (pipeline de calidad verde en `4aa8ced`). J1.5 sigue pendiente en S1. | Este PR |
