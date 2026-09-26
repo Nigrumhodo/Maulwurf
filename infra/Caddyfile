@@ -1,10 +1,45 @@
-# J1.1 — Caddyfile mínimo de arranque para el smoke del compose.
-# J1.3 lo reemplaza por el ruteo completo (api/ingest/SSE) sin buffering.
+# J1.3 — Caddy TLS local, mismo origen para web/api/ingest.
+# Reglas: streaming puro en uploads (sin buffers a disco), sin caché, sin
+# captura de bodies en logs, flush inmediato en SSE y sin admin API publicada.
 {
 	admin off
 }
 
 https://localhost {
 	tls internal
-	reverse_proxy web:3000
+
+	# 1) PUT binario: en S1 el esqueleto vive en la API (A1.8); en S2 pasa a
+	#    ingest:8000 cuando exista la recepción real (plan J1.3 §2.2).
+	#    Streaming puro, sin compresión ni buffering.
+	@upload {
+		method PUT
+		path /audios/*/content
+	}
+	handle @upload {
+		reverse_proxy api:8000
+	}
+
+	# 2) SSE de progreso: flush inmediato por evento.
+	@progress path /audios/*/progress
+	handle @progress {
+		reverse_proxy api:8000 {
+			flush_interval -1
+		}
+	}
+
+	# 3) API JSON (M1/M2 y /readyz para el smoke I-S1-JF-01).
+	@api path /auth/* /me /me/* /subjects /subjects/* /integrations/* /audios /audios/* /ingestion/* /readyz
+	handle @api {
+		reverse_proxy api:8000
+	}
+
+	# 4) Web (fallback).
+	handle {
+		reverse_proxy web:3000
+	}
+
+	log {
+		output stdout
+		format json
+	}
 }
