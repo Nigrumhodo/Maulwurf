@@ -89,11 +89,18 @@ npm ci
 npm run lint && npm run typecheck && npm test && npm run build
 ```
 
-Integración local (Redis se publica solo en `127.0.0.1:6379`; PostgreSQL no se
-publica al host):
+Integración local (Redis se publica solo en loopback; PostgreSQL no se publica
+al host):
 
 ```bash
 cd apps/api && uv run pytest -m integration
+```
+
+Si el puerto 6379 está ocupado (p. ej. otro stack local), usa otro puerto:
+
+```bash
+REDIS_PORT=6380 docker compose up -d redis
+MAULWURF_REDIS_URL=redis://localhost:6380/0 uv run pytest -m integration
 ```
 
 Para pruebas que necesiten PostgreSQL desde el host, crear un
