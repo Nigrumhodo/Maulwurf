@@ -8,8 +8,10 @@ aún no existen.
 |---|---|---|
 | Python | 3.12 (`requires-python = ">=3.12"`) | `.python-version`, `apps/api/pyproject.toml`, `apps/ingest/pyproject.toml` |
 | Node.js | 22 (LTS; `engines.node` `>=22 <23`) | `.nvmrc`, `apps/web/package.json` |
-| PostgreSQL | 16 | Consumir en J1.1 |
-| pgvector | imagen `pgvector/pgvector:pg16` | Consumir en J1.1 |
+| PostgreSQL | 16 (`pgvector/pgvector:pg16`, fijada por digest) | `infra/docker-compose.yml` |
+| pgvector | incluido en `pgvector/pgvector:pg16` | `infra/docker-compose.yml` |
+| Redis | 7.4-alpine, fijado por digest (`--save "" --appendonly no`) | `infra/docker-compose.yml`, [ADR-0005](adr/ADR-0005-redis.md) |
+| Caddy | 2.8-alpine, fijado por digest | `infra/docker-compose.yml`, `infra/Caddyfile` |
 | Cliente Riva | `nvidia-riva-client==2.27.0` | `apps/ingest/pyproject.toml`, `requirements-riva.txt` |
 
 Lockfiles que deben instalarse sin resolver a ciegas: `apps/api/uv.lock`,
