@@ -1,0 +1,144 @@
+# J1.4 — Pipeline de calidad (GitHub Actions).
+# Sin secretos de proveedores: las suites `P-*`/`load` nunca corren en MR.
+# El workflow trigger-hoplite-qa.yml es QA externo y no sustituye este pipeline.
+name: quality
+
+on:
+  pull_request:
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-static:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [api, ingest]
+    defaults:
+      run:
+        working-directory: apps/${{ matrix.app }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.18"
+          enable-cache: true
+          cache-dependency-glob: apps/${{ matrix.app }}/uv.lock
+      - run: uv sync --frozen --extra dev
+      - run: uv run ruff check .
+      - run: uv run mypy .
+
+  python-unit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [api, ingest]
+    defaults:
+      run:
+        working-directory: apps/${{ matrix.app }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.18"
+          enable-cache: true
+          cache-dependency-glob: apps/${{ matrix.app }}/uv.lock
+      - run: uv sync --frozen --extra dev
+      # TODO(J1.4): quitar la tolerancia al código 5 cuando existan suites por app.
+      - name: Unit tests
+        run: |
+          set +e
+          uv run pytest -m "not integration and not provider and not load" -q
+          code=$?
+          if [ "$code" -ne 0 ] && [ "$code" -ne 5 ]; then exit "$code"; fi
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  integration:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [api, ingest]
+    defaults:
+      run:
+        working-directory: apps/${{ matrix.app }}
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
+        env:
+          POSTGRES_USER: maulwurf
+          POSTGRES_PASSWORD: maulwurf
+          POSTGRES_DB: maulwurf
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U maulwurf -d maulwurf"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      MAULWURF_ENV: local
+      MAULWURF_DATABASE_URL: postgresql+asyncpg://maulwurf:maulwurf@localhost:5432/maulwurf
+      MAULWURF_REDIS_URL: redis://localhost:6379/0
+      # Placeholders de CI, no secretos de proveedor.
+      MAULWURF_SECRET_KEY: ci-secret-key
+      MAULWURF_ENCRYPTION_KEY: ci-encryption-key
+      MAULWURF_OAUTH_STATE_SECRET: ci-oauth-state
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.18"
+          enable-cache: true
+          cache-dependency-glob: apps/${{ matrix.app }}/uv.lock
+      - run: uv sync --frozen --extra dev
+      # TODO(J1.4): quitar la tolerancia al código 5 cuando existan suites por app.
+      - name: Integration tests
+        run: |
+          set +e
+          uv run pytest -m integration -q
+          code=$?
+          if [ "$code" -ne 0 ] && [ "$code" -ne 5 ]; then exit "$code"; fi
+
+  build-images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t maulwurf-api:ci apps/api
+      - run: docker build --target runtime -t maulwurf-ingest:ci apps/ingest
+      - run: docker build -t maulwurf-web:ci apps/web

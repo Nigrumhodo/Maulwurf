@@ -6,11 +6,12 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import ModuleType
 
 _SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "provider" / "riva_limits.py"
 
 
-def _load():
+def _load() -> ModuleType:
     spec = importlib.util.spec_from_file_location("riva_limits", _SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
