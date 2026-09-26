@@ -23,8 +23,13 @@ cleanup() {
 trap cleanup EXIT
 
 docker rm -f "$SINK_NAME" "$CADDY_NAME" >/dev/null 2>&1 || true
-# Mismo Caddyfile de producción, solo cambia el upstream de ingesta por el sink.
-sed "s/ingest:8000/${SINK_NAME}:8000/" "$ROOT/infra/Caddyfile" >"$TMP_CADDYFILE"
+# Mismo Caddyfile de producción; solo el upstream del PUT (bloque @upload) se
+# sustituye por el sink para poder consumir el cuerpo sin endpoint real.
+sed "/handle @upload {/,/^\t}/ s/api:8000/${SINK_NAME}:8000/" "$ROOT/infra/Caddyfile" >"$TMP_CADDYFILE"
+grep -q "${SINK_NAME}:8000" "$TMP_CADDYFILE" || {
+	echo "no se pudo sustituir el upstream de upload en el Caddyfile" >&2
+	exit 1
+}
 
 docker run -d --rm --name "$SINK_NAME" --network "$NETWORK" \
 	-v "$ROOT/scripts/load/sink_server.py:/sink.py:ro" \
