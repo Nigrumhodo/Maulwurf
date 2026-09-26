@@ -169,7 +169,7 @@ ingesta (§M2); shape de respuesta SSE de progreso.
 | J1.1 | `docker-compose.yml` con 8 servicios; `pgvector/pgvector:pg16` fijada; volumen nombrado para PG; secretos fuera del compose; imágenes multi-stage no-root; sin volumen de audio | L1.1 | I-S1-JF-01 |
 | J1.2 | Servicio `ingest` endurecido (read-only, tmpfs, no root, límites) con ffmpeg/ffprobe | J1.1 | I-S1-SG-06 |
 | J1.3 | Caddy TLS local sin buffering/caché para uploads | J1.1 | I-S1-JF-02 |
-| J1.4 | CI: ruff/ESLint, mypy/tsc, pytest/Vitest, integración, builds | J1.1 | pipeline verde |
+| J1.4 | CI: ruff/ESLint, mypy/tsc, pytest/Vitest, integración, builds; plantilla de PR que implementa ADR-0004 | J1.1 | pipeline verde |
 | J1.5 | Esqueleto ARQ worker+scheduler, dispatcher outbox básico, `/healthz` `/readyz` | J1.1, A1.8 | I-S1-JF-01, U-S1-JF-04 |
 | J1.6 | Redis solo IDs/estado; persistencia solo Postgres | J1.1 | I-S1-JF-03 |
 | J1.7 | README con comandos reproducibles (levantar, testear, lint) | J1.1 | — |

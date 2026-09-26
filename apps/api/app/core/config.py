@@ -3,6 +3,8 @@
 TODO(Andres): completar campos según M1; los límites de ingesta se reemplazan
 por los medidos en el spike F0 (ver docs/sprints/santiago.md S1).
 """
+from typing import cast
+
 from pydantic import PostgresDsn, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -15,7 +17,10 @@ class Settings(BaseSettings):
     secret_key: SecretStr  # sin default: obliga a definirlo por entorno
     encryption_key: SecretStr  # AES-GCM versionada (M1); nunca loguear .get_secret_value()
     oauth_state_secret: SecretStr  # .env.example sí lo define; antes se descartaba en silencio
-    database_url: PostgresDsn = "postgresql+asyncpg://maulwurf:maulwurf@localhost:5432/maulwurf"
+    # cast: pydantic valida el DSN en runtime; mypy no relaja el tipo del default.
+    database_url: PostgresDsn = cast(
+        PostgresDsn, "postgresql+asyncpg://maulwurf:maulwurf@localhost:5432/maulwurf"
+    )
     redis_url: str = "redis://localhost:6379/0"
 
     @model_validator(mode="after")
