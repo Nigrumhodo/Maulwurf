@@ -1,0 +1,17 @@
+# Contexto de build: apps/ingest. Sin audio, entornos virtuales ni artefactos.
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+tests/
+.env
+*.wav
+*.mp3
+*.m4a
+*.ogg
+*.opus
+*.flac
+*.webm

@@ -16,7 +16,7 @@
 
 | Ticket | Área | Estado | Evidencia (comando, fecha, entorno, resultado) |
 |---|---|---|---|
-| — | — | — | Sin claims aún: el sprint S1 se abre por PR en `CLAIMS.md`. |
+| J1.8 | J | hecho | 2026-09-25 UTC, Ubuntu (Docker 29.8/WSL). `docker build --target base -t maulwurf-ingest:base apps/ingest`; dentro: ffmpeg 7.1.5-0+deb13u1, ffprobe 7.1.5, Python 3.12.14; Id `sha256:91ef546d…`. Pendiente: paridad con ffmpeg 8.0.1 del spike (S1.A4) — decisión registrada en el PR. |
 
 ## Bloqueos y dependencias
 

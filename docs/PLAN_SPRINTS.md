@@ -173,7 +173,7 @@ ingesta (§M2); shape de respuesta SSE de progreso.
 | J1.5 | Esqueleto ARQ worker+scheduler, dispatcher outbox básico, `/healthz` `/readyz` | J1.1, A1.8 | I-S1-JF-01, U-S1-JF-04 |
 | J1.6 | Redis solo IDs/estado; persistencia solo Postgres | J1.1 | I-S1-JF-03 |
 | J1.7 | README con comandos reproducibles (levantar, testear, lint) | J1.1 | — |
-| J1.8 | Imagen base con ffmpeg temprana para el spike (`S1.A`) | J1.1 | — |
+| J1.8 | Imagen base de `ingest` con ffmpeg/ffprobe fijados para compose; comparar versión con la 8.0.1 del spike | J1.1 | — |
 
 ### Backlog S1 — Web/UX (`D1.x`)
 
