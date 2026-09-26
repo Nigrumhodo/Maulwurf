@@ -5,7 +5,7 @@ name: maulwurf
 
 x-api-env: &api-env
   MAULWURF_ENV: local
-  MAULWURF_DATABASE_URL: postgresql+asyncpg://maulwurf:maulwurf@postgres:5432/maulwurf
+  MAULWURF_DATABASE_URL: postgresql+asyncpg://maulwurf:${POSTGRES_PASSWORD:-maulwurf}@postgres:5432/maulwurf
   MAULWURF_REDIS_URL: redis://redis:6379/0
 
 services:
@@ -13,7 +13,9 @@ services:
     image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
     environment:
       POSTGRES_USER: maulwurf
-      POSTGRES_PASSWORD: maulwurf
+      # Override con POSTGRES_PASSWORD en el entorno (o `--env-file ../.env`); el
+      # valor por defecto es solo para desarrollo local.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-maulwurf}
       POSTGRES_DB: maulwurf
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -113,7 +115,7 @@ services:
     image: maulwurf-ingest:local
     environment:
       MAULWURF_ENV: local
-      MAULWURF_DATABASE_URL: postgresql+asyncpg://maulwurf:maulwurf@postgres:5432/maulwurf
+      MAULWURF_DATABASE_URL: postgresql+asyncpg://maulwurf:${POSTGRES_PASSWORD:-maulwurf}@postgres:5432/maulwurf
     depends_on:
       postgres:
         condition: service_healthy
