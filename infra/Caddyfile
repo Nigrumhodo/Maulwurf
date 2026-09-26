@@ -1,0 +1,10 @@
+# J1.1 — Caddyfile mínimo de arranque para el smoke del compose.
+# J1.3 lo reemplaza por el ruteo completo (api/ingest/SSE) sin buffering.
+{
+	admin off
+}
+
+https://localhost {
+	tls internal
+	reverse_proxy web:3000
+}
