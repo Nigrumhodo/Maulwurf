@@ -109,8 +109,26 @@ services:
     build:
       context: ../apps/ingest
       dockerfile: Dockerfile
-      target: base
+      target: runtime
     image: maulwurf-ingest:local
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /work/tmp:rw,noexec,nosuid,nodev,size=${INGEST_TMPFS_BYTES:-268435456},mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: ${INGEST_MEM_LIMIT:-1g}
+    memswap_limit: ${INGEST_MEM_LIMIT:-1g}
+    mem_swappiness: 0
+    cpus: 2
+    ulimits:
+      core: 0
+      nofile:
+        soft: 1024
+        hard: 1024
+    stop_grace_period: 30s
     environment:
       MAULWURF_ENV: local
       MAULWURF_DATABASE_URL: postgresql+asyncpg://maulwurf:maulwurf@postgres:5432/maulwurf

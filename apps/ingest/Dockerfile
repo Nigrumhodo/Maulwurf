@@ -24,3 +24,11 @@ COPY maulwurf_ingest ./maulwurf_ingest
 ENV PATH="/opt/venv/bin:$PATH"
 EXPOSE 8000
 CMD ["uvicorn", "maulwurf_ingest.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# J1.2 — target endurecido: usuario no raíz y TMPDIR en el tmpfs del compose.
+# El endurecimiento real (read-only, tmpfs, límites, sin swap/core dumps) se
+# aplica en compose; aquí solo se garantiza que el proceso pueda correr sin root.
+FROM base AS runtime
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin app \
+ && chown 10001:10001 /work/tmp
+USER 10001:10001
