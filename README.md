@@ -6,10 +6,11 @@
 *Maulwurf* means “mole” in German: the project is intended to dig through class recordings
 and build connections between notes, a calendar, and reminders.
 
-> **Project status — design stage.** This repository is currently documentation-first. It does
-> not contain the application scaffold, build system, test suite, CI configuration, deployment
-> manifests, or working services described below. The only supported local setup today installs
-> the official NVIDIA Riva Python client. Planned services and roadmap gates must not be read as
+> **Project status — foundation under construction.** The repository contains the minimal
+> monorepo scaffold, a local Docker Compose stack (8 services, S1/J1.1), initial unit and
+> integration tests, and a quality CI workflow (S1/J1.4), but **no end-to-end feature yet**:
+> authentication, migrations, upload/transcription, provider contracts, and deployment
+> manifests are still pending. Planned services and roadmap gates must not be read as
 > implemented features.
 
 ## Product vision
@@ -229,8 +230,16 @@ maulwurf/
 
 ## Local setup
 
-The repository currently has no application entrypoint. The only supported local operation is
-installing the pinned Riva client dependency:
+The local development stack (Compose, tests, lint and migrations) is documented step by step
+in [docs/RUNBOOK-dev.md](docs/RUNBOOK-dev.md). Quick start:
+
+```bash
+cp .env.example .env   # complete the MAULWURF_* secrets
+cd infra && docker compose up -d --build --wait
+```
+
+The pinned Riva client can also be installed standalone for provider work (authorized key and
+test audio required; never a real class recording):
 
 ```bash
 python3 -m venv .venv
@@ -239,26 +248,26 @@ python3 -m venv .venv
 
 The direct dependency is `nvidia-riva-client==2.27.0`. The documented validation environment
 also resolved `grpcio==1.84.0`, `grpcio-tools==1.81.1`, `protobuf==6.33.5`, and
-`websockets==15.0.1`. The client was imported successfully with Python 3.14.7 during the
-local audit. A supported application-wide Python version has not yet been fixed.
+`websockets==15.0.1`. Application runtimes are pinned in [docs/VERSIONES.md](docs/VERSIONES.md)
+(Python 3.12, Node 22).
 
 ### Current development commands
 
-There is no application build, run, test, lint, type-check, or deployment command yet:
+See [docs/RUNBOOK-dev.md](docs/RUNBOOK-dev.md) for the reproducible commands. Summary:
 
 | Activity | Current status |
 | --- | --- |
-| Install dependencies | Use the command above |
-| Run the application | Not available; no application entrypoint exists |
-| Tests | No test suite or test runner exists |
-| Lint and formatting | Not configured; Ruff and ESLint are future targets |
-| Type checking | Not configured; mypy and `tsc` are future targets |
-| Deployment | No container or deployment manifests exist |
+| Install dependencies | `uv sync --extra dev` per Python app; `npm ci` in `apps/web` |
+| Run the stack | `docker compose up -d --build --wait` in `infra/` (8 services) |
+| Tests | pytest (api/ingest) and Vitest (web); initial suites only |
+| Lint and formatting | Ruff (Python) and ESLint (web), configured |
+| Type checking | mypy strict (Python) and `tsc --noEmit` (web), configured |
+| Migrations | Pending A1.7 (`alembic upgrade head` documented in the runbook) |
+| Deployment | No deployment manifests exist yet (S4/J4.x) |
 
-The future CI target is GitHub Actions with linting, type checks, unit tests, local service
-integration, E2E tests, migrations, and application builds. Cloud-provider tests must be
-protected and manual or scheduled; mocks do not establish provider support or retention
-behavior.
+CI is defined in `.github/workflows/quality.yml` (lint, types, unit and integration tests,
+image builds); provider-contract tests remain protected and manual or scheduled, and mocks do
+not establish provider support or retention behavior.
 
 ## NVIDIA Riva integration reference
 
@@ -341,6 +350,7 @@ must establish quotas, rate limits, alerts, retention policies, and provider ter
 ## Further documentation
 
 - [Functional and technical specification](docs/ESPECIFICACION.md)
+- [Development runbook](docs/RUNBOOK-dev.md) — local stack, healthchecks, tests, lint, migrations
 - [Implementation and validation plan](docs/PLAN_IMPLEMENTACION.md)
 - [Team sprint plan (S1–S4)](docs/PLAN_SPRINTS.md) — open weekly backlogs with ticket
   dependencies and a Definition of Done per sprint; only the active sprint is claimable, and
