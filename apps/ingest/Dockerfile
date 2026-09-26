@@ -10,7 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TMPDIR=/work/tmp
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+ && apt-get install -y --no-install-recommends ffmpeg=7:7.1.5-0+deb13u1 ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /work/tmp && chmod 1777 /work/tmp
 
