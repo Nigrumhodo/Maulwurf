@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# I-S1-JF-02 (J1.3): sube un flujo grande a través de Caddy y verifica que no
-# aparece ningún archivo nuevo en los filesystems del proxy (ni spool temporal).
+# I-S1-JF-02 (J1.3): sube un flujo grande a través de Caddy y falla si aparece
+# cualquier rastro de buffering (archivos, spools o bodies en logs).
 #
 # Requiere el stack de infra levantado (docker compose) y genera el dato en RAM
 # (/dev/zero): no se versiona ni se conserva audio ni artefacto alguno.
@@ -47,15 +47,37 @@ done
 docker exec "$CADDY_NAME" sh -lc 'touch /tmp/marker' >/dev/null
 
 echo "Subiendo ${SIZE_BYTES} bytes en streaming vía Caddy..."
-head -c "$SIZE_BYTES" /dev/zero | curl -ks -X PUT -T - \
+HTTP=$(head -c "$SIZE_BYTES" /dev/zero | curl -ks -X PUT -T - \
 	-H 'Content-Type: application/octet-stream' \
 	"https://localhost:${TEST_PORT}/audios/smoke/content?attempt_id=smoke" \
-	-o /dev/null -w 'HTTP %{http_code} · %{size_upload} bytes subidos\n'
+	-o /dev/null -w '%{http_code}')
+echo "HTTP ${HTTP}"
 
-echo "--- Archivos nuevos en el contenedor de Caddy (excluye /data y /config) ---"
-docker exec "$CADDY_NAME" sh -lc \
-	'find / -xdev -newer /tmp/marker -type f 2>/dev/null | grep -vE "^/(data|config)/" || echo "(ninguno)"'
-echo "--- Descriptores con archivos borrados (posible spool) ---"
-docker exec "$CADDY_NAME" sh -lc 'ls -l /proc/[0-9]*/fd 2>/dev/null | grep deleted || echo "(ninguno)"'
-echo "--- Bodies en claro en el log de acceso ---"
-docker logs "$CADDY_NAME" 2>&1 | grep -ciE 'BEGIN|Content-Disposition|filename=' || true
+FILES=$(docker exec "$CADDY_NAME" sh -lc \
+	'find / -xdev -newer /tmp/marker -type f 2>/dev/null | grep -vE "^/(data|config)/"' || true)
+DELETED=$(docker exec "$CADDY_NAME" sh -lc \
+	'ls -l /proc/[0-9]*/fd 2>/dev/null | grep deleted' || true)
+BODIES=$(docker logs "$CADDY_NAME" 2>&1 | grep -ciE 'BEGIN|Content-Disposition|filename=' || true)
+
+status=0
+if [ "$HTTP" != "202" ]; then
+	echo "FALLO: HTTP ${HTTP} != 202" >&2
+	status=1
+fi
+if [ -n "$FILES" ]; then
+	echo "FALLO: archivos nuevos en el proxy:" >&2
+	echo "$FILES" >&2
+	status=1
+fi
+if [ -n "$DELETED" ]; then
+	echo "FALLO: descriptores con archivos borrados (posible spool)" >&2
+	status=1
+fi
+if [ "$BODIES" != "0" ]; then
+	echo "FALLO: bodies detectados en el log (${BODIES})" >&2
+	status=1
+fi
+if [ "$status" -eq 0 ]; then
+	echo "OK: I-S1-JF-02 — sin buffering a disco, sin spool y sin bodies."
+fi
+exit "$status"
