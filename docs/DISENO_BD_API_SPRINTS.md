@@ -1552,7 +1552,7 @@ opaca + CSRF con login de desarrollo tras feature flag temporal, nunca mergeado 
 | Día | Ticket | Tarea | Entregable verificable |
 |---|---|---|---|
 | 1 | J1.1 | `infra/docker-compose.yml` con los 8 servicios (`web`, `api`, `ingest`, `worker`, `scheduler`, `postgres` pgvector, `redis`, `caddy`); sin MinIO/S3 ni volumen de audio | `compose up` levanta todo |
-| 2 | J1.8 | Imagen base con ffmpeg para el spike de ASR S1.A (sin endurecer aún) | Spike desbloqueado día 2 |
+| 2 | J1.8 | Imagen base de `ingest` con ffmpeg/ffprobe fijados para compose (sin endurecer aún) | Target `base` verificado y comparado con ffmpeg 8.0.1 del spike |
 | 1–2 | J1.2 | `ingest` endurecido: root fs read-only, tmpfs por instancia, no root, límites de recursos, sin swap/core dumps | Imagen endurecida |
 | 2–3 | J1.3 | Caddy TLS local: sin buffering a disco, sin caché, sin captura de bodies en uploads | Prueba de no-buffering documentada |
 | 2–4 | J1.4 | CI: ruff+ESLint, mypy+tsc, pytest+Vitest, integración con PG/pgvector/Redis reales, builds api/ingest/web; sin secretos de proveedores en MRs | Pipeline verde en MR |
