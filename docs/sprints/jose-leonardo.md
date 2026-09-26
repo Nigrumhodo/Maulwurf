@@ -21,6 +21,7 @@
 | J1.2 | J | hecho | 2026-09-25 UTC. `docker inspect` de `ingest`: ReadonlyRootfs=true, User=10001:10001, CapDrop=ALL, no-new-privileges, tmpfs 256 MB, MemorySwap=1g, pids 128, NanoCpus 2; dentro: `/` de solo lectura, `/work/tmp` escribible, `ulimit -c 0`; cgroup `memory.swap.max=0`. Host: `zram` activo y `core_pattern` a systemd-coredump — pendiente de operación. |
 | J1.3 | J | hecho | 2026-09-25 UTC. `caddy validate` OK; `scripts/load/proxy_no_buffering.sh`: 536 870 912 B por Caddy → HTTP 202; sin archivos nuevos (excluye certificados), sin descriptores borrados, 0 bodies en logs. Usa el Caddyfile real con el upstream de ingesta sustituido por un sink; pendiente repetir contra el endpoint real (S2). |
 | J1.4 | J | hecho | 2026-09-25 UTC. Local: api `ruff`+`mypy` verdes (0 unitarias aún); ingest `ruff`+`mypy` verdes y 27 tests; web `lint`+`typecheck`+Vitest (0 tests)+`build` OK. `quality.yml` validado (YAML); primera corrida en GitHub pendiente del PR. Correcciones de tipos: plugin pydantic y `cast` del DSN; anotaciones en tests de ingesta; scripts `typecheck`/`test` en web. |
+| J1.6 | J | hecho | 2026-09-25 UTC. `uv run pytest -m integration tests/integration/test_redis_policy.py`: 2 passed; `aof_enabled=0`, `save` vacío, `maxmemory-policy=noeviction`, barrido con umbral de 4 KiB (ADR-0005). El ADR queda `Propuesto` hasta el review. |
 
 ## Bloqueos y dependencias
 
