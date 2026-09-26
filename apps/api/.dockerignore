@@ -1,0 +1,10 @@
+# Contexto de build: apps/api. Sin entornos virtuales, tests ni caches.
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+tests/
+.env
