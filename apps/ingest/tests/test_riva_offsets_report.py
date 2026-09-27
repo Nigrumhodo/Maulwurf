@@ -24,8 +24,8 @@ def _load(path: Path, name: str) -> ModuleType:
 def _observed(
     *,
     code: str = "OK",
-    words: list[list[float]] | None = None,
-    segments: list[list[float]] | None = None,
+    words: list[list[int]] | list[list[float]] | None = None,
+    segments: list[list[int]] | list[list[float]] | None = None,
 ) -> dict[str, object]:
     return {
         "grpc_code": code,
