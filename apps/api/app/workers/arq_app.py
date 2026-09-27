@@ -15,6 +15,8 @@ from arq.cron import CronJob, cron
 from arq.worker import Function
 
 from app.core.config import settings
+from app.core.db import session_scope
+from app.workers.dispatcher import dispatch_pending
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +37,16 @@ async def analyze(ctx: dict[str, Any], audio_id: str) -> None:
 
 
 async def dispatch_outbox(ctx: dict[str, Any]) -> None:
-    # El dispatcher con gate de cleanup (U-S1-JF-04) se conecta cuando exista la tabla
-    # `outbox_events` (A1.5); hasta entonces el cron solo prueba que el scheduler late.
-    logger.debug("dispatch_outbox.noop")
+    """Cron del scheduler: publica en la cola del worker los eventos de outbox listos."""
+    try:
+        async with session_scope() as db:
+            report = await dispatch_pending(db, ctx["redis"], queue_name=WORKER_QUEUE)
+    except Exception as exc:  # p. ej. BD aún sin migrar: el siguiente ciclo reintenta
+        # Solo el tipo: el mensaje puede incluir el DSN.
+        logger.warning("dispatch_outbox.failed error=%s", type(exc).__name__)
+        return
+    if report:
+        logger.info("dispatch_outbox %s", dict(report))
 
 
 class WorkerSettings:

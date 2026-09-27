@@ -9,6 +9,7 @@ visible de esa petición y no un efecto tras enviarla. Si el handler lanza, la s
 revierte y no persiste nada a medias.
 """
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -34,6 +35,18 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with SessionFactory() as session:
         try:
             yield session
+        except Exception:
+            await session.rollback()
+            raise
+
+
+@asynccontextmanager
+async def session_scope() -> AsyncGenerator[AsyncSession, None]:
+    """Para workers y scripts (sin handler HTTP): confirma al salir bien, revierte si falla."""
+    async with SessionFactory() as session:
+        try:
+            yield session
+            await session.commit()
         except Exception:
             await session.rollback()
             raise
