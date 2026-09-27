@@ -41,6 +41,13 @@ class AudioCreate(BaseModel):
     cloud_processing_accepted: bool
     third_party_voice_acknowledged: bool
 
+    @field_validator("language_code")
+    @classmethod
+    def _normalize_language(cls, value: str) -> str:
+        # BCP-47 no distingue mayúsculas: "ES" y "es" son el mismo idioma, y se persiste
+        # normalizado para que el dedupe de S2 no vea variantes.
+        return value.lower()
+
     @field_validator("class_timezone")
     @classmethod
     def _iana(cls, value: str) -> str:
@@ -67,7 +74,9 @@ def _consent_required() -> ApiError:
 
 
 @router.post("/audios", status_code=201)
-async def create_audio(body: AudioCreate, session: MutationSession, db: DbSession) -> AudioCreated:
+async def create_audio(
+    body: AudioCreate, response: Response, session: MutationSession, db: DbSession
+) -> AudioCreated:
     # Consentimiento e idioma se rechazan antes de tocar la BD o reservar capacidad.
     if (
         not body.cloud_processing_accepted
@@ -121,6 +130,7 @@ async def create_audio(body: AudioCreate, session: MutationSession, db: DbSessio
         upload_expires_at=expires_at,
     )
     await db.commit()
+    response.headers["Location"] = created.upload_url
     return created
 
 
@@ -155,7 +165,10 @@ async def upload_content(
         raise not_found()
     if attempt.status != "awaiting_upload":
         raise ApiError(409, "attempt_not_active", "Este intento de subida ya no está activo.")
-    if attempt.upload_expires_at is None or attempt.upload_expires_at <= datetime.now(UTC):
+    if attempt.upload_expires_at is None:
+        # Un intento sin ventana de subida no admite bytes: no "expiró", nunca estuvo activo.
+        raise ApiError(409, "attempt_not_active", "Este intento de subida ya no está activo.")
+    if attempt.upload_expires_at <= datetime.now(UTC):
         raise ApiError(410, "upload_expired", "La subida expiró; vuelve a crear la clase.")
     # Se decide por la cabecera, sin leer bytes: el cuerpo nunca se consume en S1. Es solo
     # un pre-filtro: una subida chunked no declara Content-Length, así que en S2 el límite

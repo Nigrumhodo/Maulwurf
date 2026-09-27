@@ -97,6 +97,7 @@ async def test_post_audios_creates_attempt_awaiting_upload(
     assert response.status_code == 201
     data = response.json()
     assert data["outcome"] == "new"
+    assert response.headers["location"] == data["upload_url"]
     assert data["upload_url"] == (
         f"/audios/{data['audio_id']}/content?attempt_id={data['attempt_id']}"
     )
@@ -252,6 +253,50 @@ async def test_put_chunked_without_content_length_is_still_503(
 
     assert "content-length" not in response.request.headers
     assert response.status_code == 503
+
+
+async def test_post_audios_normalizes_language_case(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await _actor(db_session)
+    subject = await _subject(db_session, actor)
+
+    response = await _post_audio(client, actor, _body(subject, language_code="ES"))
+
+    assert response.status_code == 201
+    audio = await db_session.get(Audio, uuid.UUID(response.json()["audio_id"]))
+    assert audio is not None and audio.language_code == "es"
+
+
+async def test_put_at_exact_size_limit_is_not_413(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    # El límite es inclusivo: exactamente upload_max_bytes no es "demasiado grande".
+    actor = await _actor(db_session)
+    reserved = await _reserved(client, db_session, actor)
+    headers = {**actor.headers, "Content-Length": str(settings.upload_max_bytes)}
+
+    response = await client.put(
+        reserved["upload_url"], cookies=actor.cookies, headers=headers, content=b""
+    )
+
+    assert response.status_code == 503
+
+
+async def test_put_on_attempt_without_upload_window_is_409(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await _actor(db_session)
+    reserved = await _reserved(client, db_session, actor)
+    attempt = await db_session.get(IngestionAttempt, uuid.UUID(reserved["attempt_id"]))
+    assert attempt is not None
+    attempt.upload_expires_at = None
+    await db_session.flush()
+
+    response = await _put(client, actor, reserved["upload_url"])
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "attempt_not_active"
 
 
 async def test_put_on_expired_attempt_is_410(
