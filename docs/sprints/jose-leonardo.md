@@ -30,4 +30,9 @@
 
 ## Notas de semana
 
+- 2026-09-27: S1.B1 no modifica el host de desarrollo (zram y `core_pattern` a
+  systemd-coredump quedan como están). Las garantías se prueban a nivel de contenedor
+  (`memswap_limit` = `mem_limit`, `memory.swap.max=0`, `ulimit -c 0`); el host real se
+  valida en el despliegue (J4.x). Se registra como excepción, no como aprobación.
+- 2026-09-27: aislamiento S1 por filtrado en aplicación y RLS en S2 (ADR-0006).
 - (decisiones, hallazgos, desvíos de alcance — una línea por evento con fecha)

@@ -35,7 +35,8 @@ target-version = "py312"
 select = ["E", "F", "I", "UP", "B", "S"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
+# Tests usan secretos ficticios literales; nunca credenciales reales.
+"tests/**" = ["S101", "S105", "S106"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -44,6 +45,7 @@ ignore_missing_imports = true
 plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
