@@ -31,6 +31,7 @@ def created_at() -> Mapped[datetime]:
 
 
 def updated_at() -> Mapped[datetime]:
+    # Solo se actualiza en UPDATE emitidos por el ORM; SQL crudo debe fijarlo a mano.
     return mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
