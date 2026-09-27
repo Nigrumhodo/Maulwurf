@@ -1,4 +1,10 @@
 """J1.5: contrato de los procesos ARQ (colas y healthcheck), sin Redis."""
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+import pytest
+
+from app.workers import arq_app
 from app.workers.arq_app import (
     HEALTH_CHECK_INTERVAL_S,
     SchedulerSettings,
@@ -34,3 +40,28 @@ def test_scheduler_runs_only_the_outbox_cron() -> None:
 def test_no_retries_until_backoff_policy_exists() -> None:
     assert WorkerSettings.max_tries == 1
     assert SchedulerSettings.max_tries == 1
+
+
+async def test_dispatch_cron_survives_a_database_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Con la BD caída o sin migrar, el cron registra el tipo de error y el scheduler sigue.
+    @asynccontextmanager
+    async def broken_scope() -> AsyncIterator[None]:
+        # Canario fuera de la posición de contraseña: herramientas que enmascaran DSN no lo
+        # ocultan, así que si el cron registrara str(exc) el test fallaría de verdad.
+        raise ConnectionRefusedError("connect to db failed: CANARIO-7f3a9c user=maulwurf")
+        yield
+
+    monkeypatch.setattr(arq_app, "session_scope", broken_scope)
+
+    await dispatch_outbox({"redis": object()})
+
+    assert "dispatch_outbox.failed error=ConnectionRefusedError" in caplog.text
+    assert "CANARIO-7f3a9c" not in caplog.text
+
+
+def test_dispatch_cron_runs_every_minute_at_second_zero() -> None:
+    (job,) = SchedulerSettings.cron_jobs
+    assert job.second == 0
+    assert job.minute is None and job.run_at_startup
