@@ -1,20 +1,24 @@
-"""Configuración del servicio de ingesta (prefijo `MAULWURF_`, igual que la API).
+"""Configuración del servicio de ingesta.
 
-Solo las claves que ingest usa hoy. El `.env` compartido trae claves de otros servicios,
-por eso se ignoran las ajenas en vez de rechazarlas.
+`MAULWURF_DATABASE_URL` se comparte con la API. Las claves propias de ingest usan el
+prefijo `INGEST_` (como `INGEST_SLOTS` en `.env.example`): la API rechaza cualquier
+`MAULWURF_*` que no conozca, y el `.env` es compartido.
 """
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="MAULWURF_", extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore")
 
-    database_url: str | None = None
+    database_url: str | None = Field(default=None, validation_alias="MAULWURF_DATABASE_URL")
     # `enforce` (defecto, fail closed): sin endurecimiento el proceso no arranca.
     # `report` solo para desarrollo fuera del contenedor: arranca, pero /readyz responde 503.
-    ingest_hardening: Literal["enforce", "report"] = "enforce"
+    ingest_hardening: Literal["enforce", "report"] = Field(
+        default="enforce", validation_alias="INGEST_HARDENING"
+    )
 
 
 settings = Settings()
