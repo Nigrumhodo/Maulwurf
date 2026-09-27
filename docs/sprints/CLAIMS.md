@@ -96,3 +96,4 @@ de este PR de planificación.
 | 2026-09-27 | A1.1 y A1.5 pasan a `hecho` (#21, #24). J1.5 sigue `en curso` con el parcial de #25. A1.2 y A1.4 en revisión. | Este PR |
 | 2026-09-27 | Se reclaman S1.A6 y S1.A7. Corridas observadas; D6 queda `pending` con propuesta `none`. Coste `NO VERIFICADO`. Elegibilidad cloud `pendiente`. | Este cambio |
 | 2026-09-27 | Se reclaman S1.A8 y S1.A9. Informe y acta publicados. D2 y D6 `pending`; D3-Audio y D4 `blocked`. Elegibilidad cloud `pendiente`. | Este cambio |
+| 2026-09-27 | La elegibilidad cloud de S1.A2–A7 sigue `pendiente` hasta que haya revisor. S1.A8 y S1.A9 no llaman a NVIDIA. | Este cambio |
