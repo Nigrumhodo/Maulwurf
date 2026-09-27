@@ -24,7 +24,7 @@ persistencia duradera no revisada.
 | Evicción | `maxmemory-policy noeviction` | Fallar visible antes que evacuar jobs en silencio |
 | `maxmemory` | `${REDIS_MAXMEMORY:-256mb}` (provisional) | Acota el contenedor; se revisa en S2/S4 |
 | Umbral de valor | **4 KiB por valor** | IDs, estados, contadores y resultados cortos de ARQ; nada mayor pertenece a Redis |
-| Catálogo de claves | `arq:*`, `arq:health-check:*`, `mw:*` solo IDs/estado | Toda clave nueva se documenta aquí |
+| Catálogo de claves | `arq:*` (colas `arq:queue` y `arq:scheduler`, claves de salud `arq:queue:health-check` y `arq:scheduler:health-check`), `mw:*` solo IDs/estado | Toda clave nueva se documenta aquí |
 | TTL | Resultados ARQ `keep_result=60` s; claves de salud 30–60 s | Sin estado de larga vida |
 | Prohibido | Audio, transcripts, textos, prompts, tokens, credenciales, PII | G1 y reglas no negociables |
 | Exposición | Sin puerto al host; en local solo `127.0.0.1:6379` para el test de barrido | Reduce superficie sin bloquear I-S1-JF-03 |
