@@ -22,17 +22,18 @@ import contextlib
 import json
 import logging
 import sys
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from enum import StrEnum
 from pathlib import Path
 
 import asyncpg
 
+from maulwurf_ingest import cleanup
 from maulwurf_ingest import lease as leases
-from maulwurf_ingest import workspace
 from maulwurf_ingest.asr_job import ORIGINAL
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class Outcome(StrEnum):
     ASR_FAILED = "asr_failed"
     TIMEOUT = "asr_timeout"
     CLEANUP_FAILED = "cleanup_failed"
+    SUPERVISOR_ERROR = "supervisor_error"  # fallo imprevisto del propio supervisor
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,7 @@ class SupervisorConfig:
     asr_timeout_s: float = 600.0
     tmp_dir: str | None = None  # None = TMPDIR (el tmpfs del contenedor)
     realtime: bool = False  # solo pruebas: ffmpeg a velocidad real
+    fragment_seconds: int = 1  # stub de S1; afinar con límites reales antes del ASR de S2
 
 
 @dataclass
@@ -77,13 +80,18 @@ class _LeaseKeeper:
         self._task = asyncio.create_task(self._loop(pool, lease, interval_s))
 
     async def _loop(self, pool: asyncpg.Pool, lease: leases.Lease, interval_s: float) -> None:
+        # Un error de conexión no pierde el lease por sí solo: se tolera dentro del
+        # presupuesto del propio TTL (sin números nuevos). Un `False` definitivo
+        # (lease perdido o vencido) corta igual.
+        grace_deadline = time.monotonic() + lease.ttl.total_seconds()
         while True:
             await asyncio.sleep(interval_s)
             try:
                 alive = await leases.heartbeat(pool, lease)
+                grace_deadline = time.monotonic() + lease.ttl.total_seconds()
             except (OSError, asyncpg.PostgresError) as exc:
                 logger.warning("supervisor.heartbeat_error error=%s", type(exc).__name__)
-                alive = False
+                alive = time.monotonic() < grace_deadline
             if not alive:
                 self.lost.set()
                 return
@@ -97,6 +105,7 @@ class _LeaseKeeper:
 @dataclass
 class _Job:
     pgid: int | None = None  # se fija nada más arrancar: la limpieza lo necesita siempre
+    starttime: int | None = None  # para descartar el reciclado teórico del pgid
 
 
 async def _run_asr(
@@ -104,7 +113,8 @@ async def _run_asr(
     job: _Job,
 ) -> tuple[Outcome | None, int | None]:
     """Ejecuta el trabajo ASR; devuelve (fallo o None, fragmentos)."""
-    argv = [sys.executable, "-m", "maulwurf_ingest.asr_job", str(workdir)]
+    argv = [sys.executable, "-m", "maulwurf_ingest.asr_job", str(workdir),
+            "--fragment-seconds", str(config.fragment_seconds)]
     if config.realtime:
         argv.append("--realtime")
     proc = await asyncio.create_subprocess_exec(
@@ -112,6 +122,7 @@ async def _run_asr(
         start_new_session=True,  # grupo propio: el supervisor puede matar hijo y nietos
     )
     job.pgid = proc.pid  # con start_new_session el pgid es el pid del hijo
+    job.starttime = cleanup.start_time(proc.pid)
     if on_child is not None:
         on_child(proc.pid, workdir)
 
@@ -122,7 +133,7 @@ async def _run_asr(
     )
     lost.cancel()
     if output not in done:
-        workspace.kill_group(proc.pid)
+        cleanup.kill_group(proc.pid, job.starttime)
         await output
         return (Outcome.LEASE_LOST if lost in done else Outcome.TIMEOUT), None
 
@@ -144,16 +155,21 @@ async def run_attempt(
         return RunResult(Outcome.NOT_ACQUIRED)
 
     result = RunResult(Outcome.LEASE_LOST, fencing_token=lease.fencing_token)
+    # El workdir se crea ANTES del keeper: si mkdtemp falla (tmpfs lleno) no debe quedar
+    # una tarea de heartbeat renovando para siempre el lease de un run que ya no existe.
+    workdir = cleanup.create_workdir(str(attempt_id), config.tmp_dir)
     keeper = _LeaseKeeper(pool, lease, config.heartbeat_interval_s)
-    workdir = workspace.create_workdir(str(attempt_id), config.tmp_dir)
     job = _Job()
     committed = False
+    owned_audio = False  # solo el run que escribió el audio puede acreditar su limpieza
     try:
         if not await leases.transition(
             pool, lease, from_status="awaiting_upload", to_status="receiving"
         ):
             return result
-        workspace.write_private(workdir / ORIGINAL, audio)
+        # Hasta upload_max_bytes (200 MiB): fuera del event loop, como destroy_and_verify.
+        await asyncio.to_thread(cleanup.write_private, workdir / ORIGINAL, audio)
+        owned_audio = True
         if not await leases.transition(
             pool, lease, from_status="receiving", to_status="transcribing"
         ):
@@ -178,14 +194,37 @@ async def run_attempt(
         result.fragments = fragments
         result.outcome = Outcome.SUCCEEDED if committed else Outcome.LEASE_LOST
         return result
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Fallo imprevisto (BD caída, tmpfs lleno, JSON malformado): si el lease sigue
+        # vigente, dejar el intento en requires_reupload en vez de depender solo de la
+        # reconciliación de B4/B6. transition() ya exige token y lease vigente.
+        logger.exception("supervisor.unexpected_error attempt_id=%s", attempt_id)
+        result.outcome = Outcome.SUPERVISOR_ERROR
+        for prev in ("awaiting_upload", "receiving", "transcribing"):
+            if await leases.transition(
+                pool, lease, from_status=prev, to_status="requires_reupload",
+                error_code=Outcome.SUPERVISOR_ERROR.value,
+            ):
+                break
+        return result
     finally:
         # Independiente del hijo y del lease: siempre se limpia y se verifica.
-        evidence = await asyncio.to_thread(workspace.destroy_and_verify, workdir, job.pgid)
+        evidence = await asyncio.to_thread(
+            cleanup.destroy_and_verify, workdir, job.pgid, starttime=job.starttime
+        )
         result.evidence = evidence.as_json()
         try:
-            recorded = await leases.record_cleanup(
-                pool, lease, verified=evidence.verified, evidence=result.evidence,
-                checked_at=datetime.now(UTC),
+            # La evidencia de ESTE directorio solo acredita audio que este run escribió;
+            # en un takeover sin trabajo propio el intento queda `pending` para B4/B6
+            # (nadie pudo acreditar el audio real). Que el lease venza nunca marca
+            # `verified` por sí mismo: esto lo mantiene así.
+            recorded = (
+                await leases.record_cleanup(
+                    pool, lease, verified=evidence.verified, evidence=result.evidence,
+                )
+                if owned_audio else False
             )
             if not evidence.verified:
                 logger.error("supervisor.cleanup_failed attempt_id=%s", attempt_id)

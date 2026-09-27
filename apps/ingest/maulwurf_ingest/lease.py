@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import asyncpg
 
@@ -94,18 +94,17 @@ async def transition(
 
 async def record_cleanup(
     pool: asyncpg.Pool, lease: Lease, *, verified: bool, evidence: dict[str, object],
-    checked_at: datetime,
 ) -> bool:
     status = await pool.execute(
         """
         UPDATE ingestion_attempts
            SET cleanup_status = $4::text, cleanup_evidence = $5::jsonb,
-               cleanup_verified_at = CASE WHEN $4 = 'verified' THEN $6::timestamptz END,
-               audio_deleted_at = CASE WHEN $4 = 'verified' THEN $6::timestamptz END,
+               cleanup_verified_at = CASE WHEN $4 = 'verified' THEN now() END,
+               audio_deleted_at = CASE WHEN $4 = 'verified' THEN now() END,
                updated_at = now()
          WHERE id = $1 AND user_id = $2 AND fencing_token = $3
         """,
         lease.attempt_id, lease.user_id, lease.fencing_token,
-        "verified" if verified else "failed", json.dumps(evidence), checked_at,
+        "verified" if verified else "failed", json.dumps(evidence),
     )
     return bool(status == "UPDATE 1")

@@ -18,9 +18,24 @@ import pytest
 
 API_ROOT = Path(__file__).resolve().parents[2] / "api"
 
+# Alembic importa Settings: sin estas variables el subprocess de migración falla en un
+# checkout limpio. Valores dummy, solo para el subprocess (nunca producen escrituras).
+_ALEMBIC_DUMMY_SECRETS = {
+    "MAULWURF_SECRET_KEY": "conftest-dummy-secret-key",
+    "MAULWURF_ENCRYPTION_KEY": "conftest-dummy-encryption-key",
+    "MAULWURF_OAUTH_STATE_SECRET": "conftest-dummy-oauth-state-secret",
+}
+
 
 def _plain_dsn(url: str) -> str:
     return url.replace("postgresql+asyncpg://", "postgresql://", 1)
+
+
+def _asyncpg_dsn(url: str) -> str:
+    # El Alembic de la API usa el driver asyncpg: con el DSN plano buscaría psycopg2.
+    if url.startswith("postgresql+asyncpg://"):
+        return url
+    return url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 
 def _with_database(url: str, name: str) -> str:
@@ -45,7 +60,9 @@ def migrated_database_url() -> Iterator[str]:
     asyncio.run(_admin(url, f'CREATE DATABASE "{name}"'))
     test_url = _with_database(url, name)
     try:
-        env = {**os.environ, "MAULWURF_DATABASE_URL": test_url}
+        env = {**os.environ, "MAULWURF_DATABASE_URL": _asyncpg_dsn(test_url)}
+        for key, value in _ALEMBIC_DUMMY_SECRETS.items():
+            env.setdefault(key, value)
         migrated = subprocess.run(  # noqa: S603 — argv fija, sin shell
             ["uv", "run", "--frozen", "alembic", "upgrade", "head"],  # noqa: S607
             cwd=API_ROOT, env=env, capture_output=True, text=True, timeout=300, check=False,

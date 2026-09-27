@@ -21,7 +21,7 @@ from pathlib import Path
 import asyncpg
 import pytest
 
-from maulwurf_ingest import hardening, lease, workspace
+from maulwurf_ingest import cleanup, hardening, lease
 from maulwurf_ingest.asr_job import CONVERTED, ORIGINAL
 from maulwurf_ingest.supervisor import Outcome, SupervisorConfig, run_attempt
 
@@ -169,7 +169,7 @@ async def test_sigkill_to_asr_process_still_cleans_up(
     await _wait_for(workdir / CONVERTED)
     # Hijo y nieto (ffmpeg) vivos con ficheros abiertos; se mata SOLO al hijo: ffmpeg queda
     # huérfano y el supervisor tiene que encontrarlo por su grupo.
-    assert workspace.live_group_members(pid) >= 2
+    assert cleanup.live_group_members(pid) >= 2
     os.kill(pid, signal.SIGKILL)
     result = await run
     row = await _row(pool, attempt)
@@ -177,7 +177,7 @@ async def test_sigkill_to_asr_process_still_cleans_up(
     assert result.outcome is Outcome.ASR_FAILED
     assert (row["status"], row["error_code"]) == ("requires_reupload", "asr_failed")
     assert row["cleanup_status"] == "verified"
-    assert workspace.live_group_members(pid) == 0
+    assert cleanup.live_group_members(pid) == 0
     assert not workdir.exists()
 
 
@@ -281,8 +281,41 @@ async def test_expired_lease_blocks_publication_but_not_cleanup_evidence(
     # Nadie tomó el intento: la evidencia real de limpieza sí se puede registrar.
     assert await lease.record_cleanup(
         pool, owned, verified=True, evidence={"verified": True},
-        checked_at=await pool.fetchval("SELECT now()"),
     )
+
+
+async def test_takeover_of_in_flight_attempt_does_not_credit_its_cleanup(
+    pool: asyncpg.Pool, audio: bytes, tmpfs_dir: Path
+) -> None:
+    # Un supervisor que toma un intento en vuelo (lease vencido reasignado) no escribió
+    # el audio: no puede acreditar la limpieza de un directorio que nunca lo contuvo.
+    attempt = await _seed(pool)
+    owner = await lease.acquire(
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, instance="ingest:a",
+        ttl=timedelta(seconds=30),
+    )
+    assert owner is not None
+    assert await lease.transition(
+        pool, owner, from_status="awaiting_upload", to_status="receiving"
+    )
+    await pool.execute(
+        "UPDATE ingestion_attempts SET lease_expires_at = now() - interval '1 second'"
+        " WHERE id = $1", attempt.attempt_id,
+    )
+
+    # El supervisor de B es el que toma el intento en vuelo (lease vencido reasignado).
+    result = await run_attempt(
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+        config=_config(tmpfs_dir, instance="ingest:b"),
+    )
+    row = await _row(pool, attempt)
+
+    assert result.outcome is Outcome.LEASE_LOST
+    assert row["owner_instance"] == "ingest:b" and row["fencing_token"] == 3
+    assert row["status"] == "receiving"  # B no publicó nada
+    # Sin audio propio que acreditar: queda `pending` para la reconciliación de B4/B6.
+    assert row["cleanup_status"] == "pending"
+    assert row["cleanup_verified_at"] is None and row["audio_deleted_at"] is None
 
 
 async def test_only_one_supervisor_acquires_the_lease(pool: asyncpg.Pool) -> None:

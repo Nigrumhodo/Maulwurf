@@ -34,12 +34,16 @@ class CleanupEvidence:
 
     @property
     def verified(self) -> bool:
+        # Fail-closed: `unreadable_processes > 0` significa que hubo /proc/<pid>/fd
+        # ilegibles (otro UID); la ausencia de descriptores NO está probada. En el
+        # contenedor endurecido (un solo UID) debe ser 0.
         return (
             self.workdir_absent
             and self.tmp_is_tmpfs
             and self.live_processes == 0
             and self.open_descriptors == 0
             and self.mounts_under_workdir == 0
+            and self.unreadable_processes == 0
         )
 
     def as_json(self) -> dict[str, object]:
@@ -58,8 +62,27 @@ def write_private(path: Path, data: bytes) -> None:
         handle.write(data)
 
 
-def kill_group(pgid: int) -> None:
-    """SIGKILL a todo el grupo del trabajo ASR (hijo y nietos como ffmpeg)."""
+def start_time(pid: int) -> int | None:
+    """Campo `starttime` (22) de `/proc/<pid>/stat`; None si el proceso ya no existe."""
+    try:
+        stat = (PROC / str(pid) / "stat").read_text()
+    except OSError:
+        return None
+    fields = stat[stat.rindex(")") + 2 :].split()
+    return int(fields[19])
+
+
+def kill_group(pgid: int, starttime: int | None = None) -> None:
+    """SIGKILL a todo el grupo del trabajo ASR (hijo y nietos como ffmpeg).
+
+    Con `starttime` del hijo capturado al arrancar se descarta el reciclado teórico del
+    pgid: si el líder visible no es ese proceso, el grupo original ya no existe y matarlo
+    podría alcanzar a un grupo ajeno.
+    """
+    if starttime is not None:
+        current = start_time(pgid)
+        if current is not None and current != starttime:
+            return
     try:
         os.killpg(pgid, signal.SIGKILL)
     except ProcessLookupError:
@@ -110,14 +133,14 @@ def open_descriptors_under(root: Path) -> tuple[int, int]:
 
 
 def destroy_and_verify(
-    workdir: Path, pgid: int | None, *, settle_s: float = 5.0
+    workdir: Path, pgid: int | None, *, starttime: int | None = None, settle_s: float = 5.0
 ) -> CleanupEvidence:
     """Mata el grupo, espera a que muera, borra el directorio y verifica en `/proc`.
 
     Bloqueante (lee `/proc` y duerme): el supervisor lo ejecuta en un hilo.
     """
     if pgid is not None:
-        kill_group(pgid)
+        kill_group(pgid, starttime)
         # SIGKILL es asíncrono: un nieto puede seguir vivo unos milisegundos y escribir.
         deadline = time.monotonic() + settle_s
         while live_group_members(pgid) and time.monotonic() < deadline:
