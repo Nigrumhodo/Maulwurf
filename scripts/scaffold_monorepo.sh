@@ -210,13 +210,16 @@ write_file .env.example <<'EOF'
 MAULWURF_ENV=local
 MAULWURF_SECRET_KEY=change-me-openssl-rand-hex-32
 MAULWURF_ENCRYPTION_KEY=change-me-openssl-rand-hex-32   # AES-GCM, clave versionada (M1)
+MAULWURF_ENCRYPTION_KEY_VERSION=1
 MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@localhost:5432/maulwurf
 MAULWURF_REDIS_URL=redis://localhost:6379/0
 MAULWURF_OAUTH_STATE_SECRET=change-me
+# Origin exacto que sirve Caddy (incluye el puerto si no es 443); CSRF lo exige.
+MAULWURF_PUBLIC_ORIGIN=https://localhost
 
 # --- Google OAuth (credenciales de prueba, backend únicamente) ---
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
+MAULWURF_GOOGLE_CLIENT_ID=
+MAULWURF_GOOGLE_CLIENT_SECRET=
 
 # --- NVIDIA Riva (solo backend, ver docs/NVIDIA_RIVA.md) ---
 NVIDIA_API_KEY=
