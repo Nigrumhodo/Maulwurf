@@ -21,7 +21,13 @@ from test_supervisor import (  # noqa: E402
 )
 
 from maulwurf_ingest.asr_job import ORIGINAL
-from maulwurf_ingest.audio_absence import report_from_tree, scannable_mount_points, sweep
+from maulwurf_ingest.audio_absence import (
+    _Counts,
+    _walk,
+    report_from_tree,
+    scannable_mount_points,
+    sweep,
+)
 from maulwurf_ingest.supervisor import ChildHook, Outcome, RunResult, run_attempt
 
 # Re-export fixtures so this module collects them.
@@ -62,6 +68,18 @@ def test_empty_tree_is_clear(tmp_path: Path) -> None:
     assert report.audio_files == 0
     assert report.magic_matches == 0
     assert report.clear is True
+
+
+def test_pruned_infra_child_is_not_scanned(tmp_path: Path) -> None:
+    hidden = tmp_path / "usr"
+    hidden.mkdir()
+    (hidden / "original").write_bytes(b"RIFF" + b"\x00" * 8)
+    (tmp_path / "converted.wav").write_bytes(b"RIFFxxxxWAVE")
+    counts = _Counts()
+    _walk(tmp_path, counts, suffixes=False, budget=1000, prune={os.path.normpath(hidden)})
+
+    assert counts.audio_files == 1
+    assert counts.complete is True
 
 
 def test_scannable_mounts_skip_pseudo_and_foreign_disks() -> None:

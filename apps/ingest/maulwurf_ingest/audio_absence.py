@@ -34,6 +34,16 @@ _SKIP_FSTYPES = frozenset({
     "autofs", "binfmt_misc", "nsfs", "rpc_pipefs", "ramfs",
     "drvfs", "9p", "cifs", "nfs", "nfs4", "smb3", "fuse.drvfs",
 })
+# Árboles de la imagen del runner y de Docker. Como root, CI los recorre enteros,
+# agota el presupuesto y el barrido deja de estar completo sin haber visto audio.
+_INFRA_PREFIXES = (
+    "/usr",
+    "/opt",
+    "/snap",
+    "/mnt",
+    "/var/lib/docker",
+    "/var/lib/containerd",
+)
 
 
 @dataclass
@@ -338,6 +348,7 @@ def sweep(
     info = mountinfo if mountinfo is not None else _read_mountinfo()
     points = scannable_mount_points(info) if info is not None else []
     prune = {os.path.normpath(mount.mount_point) for mount in hardening.parse_mountinfo(info or "")}
+    prune.update(os.path.normpath(prefix) for prefix in _INFRA_PREFIXES)
     for point in points:
         if not counts.complete:
             break
