@@ -75,6 +75,12 @@ class Settings(BaseSettings):
     google_client_secret: SecretStr | None = None
     # Vida máxima de la sesión opaca (A1.4); el logout la revoca antes.
     session_ttl_hours: int = Field(default=168, ge=1, le=720)
+    # Contrato de ingesta S1 (A1.8). Valores provisionales hasta D2/D4 (S1.A8/A2.2):
+    # allowlist propuesta por S1.A3 y límite de bytes de `.env.example` (200 MiB, no aprobado).
+    privacy_notice_version: str = "2026-09-v1"
+    ingest_languages: tuple[str, ...] = ("es", "en", "fr")
+    upload_max_bytes: int = Field(default=209_715_200, ge=1)
+    upload_ttl_minutes: int = Field(default=15, ge=1, le=120)
     # Único Origin aceptado en mutaciones (A1.4): el que sirve Caddy, same-origin.
     public_origin: AnyHttpUrl = cast(AnyHttpUrl, "https://localhost")
     # cast: pydantic valida los DSN en runtime; mypy no relaja el tipo del default.
