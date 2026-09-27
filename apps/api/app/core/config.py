@@ -4,21 +4,47 @@ Fuentes, de menor a mayor prioridad: `../../.env` (el `.env` de la raíz del rep
 con Compose, cuando se arranca desde `apps/api`), `.env` del directorio de trabajo y el
 entorno del proceso. Esos archivos también traen variables de otros servicios
 (`POSTGRES_PASSWORD`, `RIVA_*`, `INGEST_*`), por eso las claves sin prefijo se ignoran;
-una `MAULWURF_*` desconocida, venga de donde venga, tumba el arranque.
+una `MAULWURF_*` desconocida en el entorno o en los `.env` efectivos tumba el arranque.
+`VAR=` vacío cuenta como no configurado. Con `extra="ignore"`, un argumento con typo en
+`Settings(**kwargs)` se ignora: solo el código de tests construye Settings así.
+
+Fuera de `local`, los valores de desarrollo (DSN de localhost, Origin de localhost) no se
+aceptan: una variable olvidada en staging/prod debe fallar al arrancar, no en la primera
+consulta.
 
 Los límites de ingesta se añaden cuando el spike F0 publique los valores medidos (A2.2).
 """
 import os
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from dotenv import dotenv_values
-from pydantic import AnyHttpUrl, Field, PostgresDsn, RedisDsn, SecretStr, model_validator
+from pydantic import (
+    AnyHttpUrl,
+    Field,
+    PostgresDsn,
+    RedisDsn,
+    SecretStr,
+    TypeAdapter,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_PREFIX = "MAULWURF_"
 ENV_FILES = ("../../.env", ".env")
 _SECRET_FIELDS = ("secret_key", "encryption_key", "oauth_state_secret", "google_client_secret")
+_DEV_DEFAULT_FIELDS = ("database_url", "redis_url", "public_origin")
+# `.env` que usa la construcción en curso (respeta `_env_file`, p. ej. None en tests).
+_active_env_files: ContextVar[tuple[str, ...]] = ContextVar("_active_env_files", default=ENV_FILES)
+
+
+def _as_tuple(env_file: Any) -> tuple[str, ...]:
+    if env_file is None:
+        return ()
+    if isinstance(env_file, str | Path):
+        return (str(env_file),)
+    return tuple(str(f) for f in env_file)
 
 
 class Settings(BaseSettings):
@@ -29,7 +55,15 @@ class Settings(BaseSettings):
         # Un ValidationError incrusta el valor recibido: sin esto, un DSN mal formado con
         # su contraseña real acabaría impreso en logs al arrancar.
         hide_input_in_errors=True,
+        env_ignore_empty=True,  # `VAR=` es «no configurado», no cadena vacía
     )
+
+    def __init__(self, **values: Any) -> None:
+        token = _active_env_files.set(_as_tuple(values.get("_env_file", ENV_FILES)))
+        try:
+            super().__init__(**values)
+        finally:
+            _active_env_files.reset(token)
 
     env: Literal["local", "ci", "staging", "prod"] = "local"
     secret_key: SecretStr  # sin default: obliga a definirlo por entorno
@@ -56,7 +90,7 @@ class Settings(BaseSettings):
     def _reject_unknown_env_vars(self) -> "Settings":
         known = {f"{ENV_PREFIX}{name}".upper() for name in type(self).model_fields}
         names = set(os.environ)
-        for path in ENV_FILES:
+        for path in _active_env_files.get():
             if Path(path).is_file():
                 names.update(dotenv_values(path))
         unknown = sorted(
@@ -68,9 +102,17 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _reject_invalid_origin(self) -> "Settings":
-        # Un header Origin es solo esquema://host[:puerto]; con path nunca coincidiría.
-        if self.public_origin.path not in (None, "", "/") or self.public_origin.query:
-            raise ValueError("public_origin no admite path ni query")
+        # Un header Origin es solo esquema://host[:puerto]; con path, query o fragment
+        # nunca coincidiría y el CSRF fallaría siempre sin diagnóstico.
+        origin = self.public_origin
+        if origin.path not in (None, "", "/") or origin.query or origin.fragment:
+            raise ValueError("public_origin no admite path, query ni fragment")
+        return self
+
+    @model_validator(mode="after")
+    def _reject_incomplete_oauth(self) -> "Settings":
+        if (self.google_client_id is None) != (self.google_client_secret is None):
+            raise ValueError("google_client_id y google_client_secret van juntos")
         return self
 
     @model_validator(mode="after")
@@ -88,6 +130,11 @@ class Settings(BaseSettings):
                 raise ValueError(f"{name} inseguro en env={self.env}")
         if self.public_origin.scheme != "https":
             raise ValueError(f"public_origin debe usar https en env={self.env}")
+        for name in _DEV_DEFAULT_FIELDS:
+            field = type(self).model_fields[name]
+            default: object = TypeAdapter(field.annotation).validate_python(field.get_default())
+            if str(getattr(self, name)) == str(default):
+                raise ValueError(f"{name} conserva el valor de desarrollo en env={self.env}")
         return self
 
 
