@@ -82,6 +82,8 @@ de este PR de planificación.
 | claim | S1.B2 | satnovaOG | hecho | 2026-09-27 | no aplica | — / líder | Tabla `docs/spike/F0.2-capacidad-slot.md`. Dos slots no caben en el tmpfs de 256 MiB. 200 MiB y 3 h no aprobados. |
 | claim | S1.B3 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área S | Desbloquea S1.B4, S1.B5, S1.B6 |
 | claim | S1.B4 | satnovaOG | hecho | 2026-09-27 | no aplica | — / líder | Matriz I-S1-SG-04: 10 passed en contenedor Ubuntu (PID propio). En el WSL del host, `unreadable_processes` de root impide `verified`. |
+| claim | S1.B5 | satnovaOG | hecho | 2026-09-27 | no aplica | — / área S | I-S1-SG-06: 9 passed en WSL. Barrido en cero. En este host el éxito no queda `verified` por `unreadable_processes` (igual que S1.B4). |
+| claim | S1.B6 | satnovaOG | hecho | 2026-09-27 | no aplica | — / área S | I-S1-SG-05: lease `pending` no cierra admisión; cleanup `failed` alerta y la cierra. Outbox: 1 passed. |
 
 ## 4. Historial de cambios
 
@@ -100,3 +102,5 @@ de este PR de planificación.
 | 2026-09-27 | Se reclaman S1.A8 y S1.A9. Informe y acta publicados. D2 y D6 `pending`; D3-Audio y D4 `blocked`. Elegibilidad cloud `pendiente`. | Este cambio |
 | 2026-09-27 | La elegibilidad cloud de S1.A2–A7 sigue `pendiente` hasta que haya revisor. S1.A8 y S1.A9 no llaman a NVIDIA. | Este cambio |
 | 2026-09-27 | Se reclaman S1.B2 (hecho) y S1.B4. La matriz pasa en contenedor (10 passed). En el host WSL no, por procesos root ilegibles. S1.B1 y S1.B3 siguen `en curso` de jpinillaz. | Este cambio |
+| 2026-09-27 | Se reclaman S1.B5 y S1.B6 (`en curso`). | Este cambio |
+| 2026-09-27 | S1.B5 y S1.B6 pasan a `hecho`. I-S1-SG-06: 9 passed en ingest. I-S1-SG-05: el gate de outbox, 1 passed. En el WSL el éxito no queda `verified` por `unreadable_processes`. | Este cambio |

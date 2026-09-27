@@ -8,8 +8,9 @@ Flujo de un intento (S1.md §1.4):
 La limpieza no depende del proceso ASR: la hace el supervisor en `finally`, pase lo que
 pase con el hijo (éxito, error, timeout, SIGKILL, lease perdido). Mata el grupo entero,
 borra el directorio y verifica en `/proc` descriptores, procesos y mounts; solo con esa
-evidencia registra `cleanup_status = verified`. Si la evidencia falla, queda `failed` y el
-intento no pasa a `succeeded` (S1.B6 decide la alerta y la admisión).
+evidencia registra `cleanup_status = verified`. Si la evidencia falla y este run
+persistió `failed`, cierra la admisión de la instancia y dispara la alerta (S1.B6).
+Un lease vencido que no llega a escribir esa fila deja `pending` y no cierra la admisión.
 
 Si el supervisor muere entero (SIGKILL al contenedor), el tmpfs desaparece con el
 contenedor (S1.B1) y el intento queda con lease vencido y `cleanup_status = pending`: la
@@ -32,7 +33,7 @@ from pathlib import Path
 
 import asyncpg
 
-from maulwurf_ingest import cleanup
+from maulwurf_ingest import admission, cleanup
 from maulwurf_ingest import lease as leases
 from maulwurf_ingest.asr_job import ORIGINAL
 
@@ -249,6 +250,10 @@ async def run_attempt(
                 )
                 if not evidence.verified:
                     logger.error("supervisor.cleanup_failed attempt_id=%s", attempt_id)
+                    # Solo un `failed` persistido con el token de este run. Si el lease
+                    # ya no es nuestro, la fila sigue `pending` y la admisión no se cierra.
+                    if recorded:
+                        admission.halt(attempt_id)
                     if result.outcome is Outcome.SUCCEEDED:
                         result.outcome = Outcome.CLEANUP_FAILED
                 elif committed and not (
