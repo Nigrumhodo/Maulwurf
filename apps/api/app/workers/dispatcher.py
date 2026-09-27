@@ -11,6 +11,9 @@ schedulers no publican el mismo evento), aplica `services.outbox.decide` y encol
   evento sigue pendiente y el siguiente ciclo lo reencola. `_job_id = outbox:<id>` solo
   deduplica mientras el job o su resultado siguen en Redis (`keep_result = 60 s`); pasado
   ese tiempo puede repetirse, así que los consumidores deben ser idempotentes.
+- El encolado ocurre con los row locks tomados: si Redis se degrada, la transacción se
+  alarga y otros schedulers saltan esas filas (SKIP LOCKED). Aceptable con lote 100 y cron
+  minutal; revisar si aparece presión real.
 - Sin reintentos con backoff, `attempts` ni `next_attempt_at` en S1 (J2.1).
 """
 import logging
@@ -103,6 +106,10 @@ async def dispatch_pending(
                 "outbox.gated_non_audio event_id=%s type=%s resource_type=%s",
                 event.id, event.type, event.resource_type,
             )
+        elif event.type == "index_requested" and event.resource_version is None:
+            # index(audio_id, version) necesita la versión del transcript: evento mal formado.
+            decision = Decision(Outcome.UNKNOWN_TYPE)
+            logger.warning("outbox.missing_version event_id=%s", event.id)
         else:
             decision = decide(
                 event.type,
@@ -119,6 +126,8 @@ async def dispatch_pending(
             continue
         if not decision.publish or decision.job is None:
             continue
+        # enqueue_job devuelve None si `arq:job/result:<id>` ya existe (un ciclo anterior
+        # encoló y su commit falló): el job ya está en cola, marcar dispatched es correcto.
         await redis.enqueue_job(
             decision.job,
             *_job_args(event, decision.job),

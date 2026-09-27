@@ -29,7 +29,10 @@ async def redis() -> AsyncIterator[tuple[ArqRedis, str]]:
     try:
         yield pool, queue
     finally:
-        job_keys = [k async for k in pool.scan_iter(match="arq:job:outbox:*")]
+        # `arq:job:<id>` no lleva namespace de cola y los jobs reales también se llaman
+        # `outbox:<id>`: solo se borran los ids que están en la cola de ESTE test.
+        job_ids = await pool.zrange(queue, 0, -1)
+        job_keys = [f"arq:job:{job_id.decode()}" for job_id in job_ids]
         await pool.delete(queue, *job_keys)
         await pool.aclose()
 
@@ -231,3 +234,35 @@ async def test_latest_attempt_decides_the_gate(
 
     assert report[Outcome.CLEANUP_PENDING] == 1
     assert await pool.queued_jobs(queue_name=queue) == []
+
+
+async def test_index_without_resource_version_is_skipped(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    # index(audio_id, version) no debe recibir None: un emisor mal formado no se publica.
+    pool, queue = redis
+    user, audio = await _audio(db_session, "verified")
+    event = _event(user, audio, "index_requested")
+    event.resource_version = None
+    db_session.add(event)
+    await db_session.flush()
+
+    report = await dispatch_pending(db_session, pool, queue_name=queue)
+
+    assert report[Outcome.UNKNOWN_TYPE] == 1
+    assert event.status == "skipped"
+    assert await pool.queued_jobs(queue_name=queue) == []
+
+
+async def test_fixture_cleanup_leaves_other_queues_jobs_alone(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    # Un job con el mismo prefijo en otra cola (p. ej. el worker de compose) sobrevive.
+    pool, _ = redis
+    other_queue = f"arq:test-other:{uuid.uuid4().hex}"
+    job_id = f"outbox:{uuid.uuid4()}"
+    await pool.enqueue_job("index", "x", 1, _job_id=job_id, _queue_name=other_queue)
+    try:
+        assert await pool.exists(f"arq:job:{job_id}")
+    finally:
+        await pool.delete(other_queue, f"arq:job:{job_id}")

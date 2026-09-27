@@ -48,8 +48,9 @@ async def test_dispatch_cron_survives_a_database_failure(
     # Con la BD caída o sin migrar, el cron registra el tipo de error y el scheduler sigue.
     @asynccontextmanager
     async def broken_scope() -> AsyncIterator[None]:
-        # Canario en el DSN: si el cron registrara el mensaje, el test fallaría.
-        raise ConnectionRefusedError("postgres://user:canario-secreto@db:5432/api")
+        # Canario fuera de la posición de contraseña: herramientas que enmascaran DSN no lo
+        # ocultan, así que si el cron registrara str(exc) el test fallaría de verdad.
+        raise ConnectionRefusedError("connect to db failed: CANARIO-7f3a9c user=maulwurf")
         yield
 
     monkeypatch.setattr(arq_app, "session_scope", broken_scope)
@@ -57,7 +58,7 @@ async def test_dispatch_cron_survives_a_database_failure(
     await dispatch_outbox({"redis": object()})
 
     assert "dispatch_outbox.failed error=ConnectionRefusedError" in caplog.text
-    assert "canario-secreto" not in caplog.text
+    assert "CANARIO-7f3a9c" not in caplog.text
 
 
 def test_dispatch_cron_runs_every_minute_at_second_zero() -> None:
