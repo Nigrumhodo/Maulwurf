@@ -137,14 +137,29 @@ jobs:
           version: "0.12.18"
           enable-cache: true
           cache-dependency-glob: apps/${{ matrix.app }}/uv.lock
+      # Sin ffmpeg, test_supervisor y test_failure_matrix se saltan y el job
+      # quedaba verde con 0 passed (pytest código 5).
+      - if: matrix.app == 'ingest'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: uv sync --frozen --extra dev
-      # TODO(J1.4): quitar la tolerancia al código 5 cuando existan suites por app.
+      # TODO(J1.4): quitar la tolerancia al código 5 en api cuando su suite exista.
       - name: Integration tests
         run: |
-          set +e
-          uv run pytest -m integration -q
-          code=$?
-          if [ "$code" -ne 0 ] && [ "$code" -ne 5 ]; then exit "$code"; fi
+          if [ "${{ matrix.app }}" = "ingest" ]; then
+            set +e
+            output=$(uv run pytest -m integration -q 2>&1)
+            code=$?
+            printf '%s\n' "$output"
+            passed=$(printf '%s\n' "$output" | sed -n 's/.* \([0-9][0-9]*\) passed.*/\1/p' | tail -n 1)
+            if [ "$code" -ne 0 ] || [ -z "$passed" ] || [ "$passed" -eq 0 ]; then
+              exit 1
+            fi
+          else
+            set +e
+            uv run pytest -m integration -q
+            code=$?
+            if [ "$code" -ne 0 ] && [ "$code" -ne 5 ]; then exit "$code"; fi
+          fi
 
   build-images:
     runs-on: ubuntu-latest

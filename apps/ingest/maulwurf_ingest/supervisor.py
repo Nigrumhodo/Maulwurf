@@ -210,38 +210,48 @@ async def run_attempt(
                 break
         return result
     finally:
-        # Una cancelación no debe impedir la limpieza: sin esto el `await` del
-        # `finally` vuelve a lanzar CancelledError y el audio queda en el tmpfs.
-        task = asyncio.current_task()
-        if task is not None and task.cancelling():
-            task.uncancel()
-        # Independiente del hijo y del lease: siempre se limpia y se verifica.
-        evidence = await asyncio.to_thread(
-            cleanup.destroy_and_verify, workdir, job.pgid, starttime=job.starttime
-        )
-        result.evidence = evidence.as_json()
-        try:
-            # La evidencia de ESTE directorio solo acredita audio que este run escribió;
-            # en un takeover sin trabajo propio el intento queda `pending` para B4/B6
-            # (nadie pudo acreditar el audio real). Que el lease venza nunca marca
-            # `verified` por sí mismo: esto lo mantiene así.
-            recorded = (
-                await leases.record_cleanup(
-                    pool, lease, verified=evidence.verified, evidence=result.evidence,
-                )
-                if owned_audio else False
+        # `to_thread` solo encola el borrado. En CPython 3.12 una sola
+        # cancelación no relanza dentro del finally; una segunda puede cortar
+        # el await antes de que el hilo arranque y dejar el audio en tmpfs.
+        # Una tarea propia con shield termina destroy_and_verify aunque
+        # cancelen otra vez.
+        cleanup_task = asyncio.create_task(
+            asyncio.to_thread(
+                cleanup.destroy_and_verify, workdir, job.pgid, starttime=job.starttime
             )
-            if not evidence.verified:
-                logger.error("supervisor.cleanup_failed attempt_id=%s", attempt_id)
-                if result.outcome is Outcome.SUCCEEDED:
-                    result.outcome = Outcome.CLEANUP_FAILED
-            elif committed and not (
-                recorded
-                and await leases.transition(
-                    pool, lease, from_status="transcript_committed_cleanup_pending",
-                    to_status="succeeded",
-                )
-            ):
-                result.outcome = Outcome.LEASE_LOST
-        finally:
+        )
+        evidence = None
+        try:
+            evidence = await asyncio.shield(cleanup_task)
+        except asyncio.CancelledError:
+            with contextlib.suppress(asyncio.CancelledError):
+                evidence = await cleanup_task
+        if evidence is None:
             await keeper.stop()
+        else:
+            result.evidence = evidence.as_json()
+            try:
+                # La evidencia de ESTE directorio solo acredita audio que este run escribió;
+                # en un takeover sin trabajo propio el intento queda `pending` para B4/B6
+                # (nadie pudo acreditar el audio real). Que el lease venza nunca marca
+                # `verified` por sí mismo: esto lo mantiene así.
+                recorded = (
+                    await leases.record_cleanup(
+                        pool, lease, verified=evidence.verified, evidence=result.evidence,
+                    )
+                    if owned_audio else False
+                )
+                if not evidence.verified:
+                    logger.error("supervisor.cleanup_failed attempt_id=%s", attempt_id)
+                    if result.outcome is Outcome.SUCCEEDED:
+                        result.outcome = Outcome.CLEANUP_FAILED
+                elif committed and not (
+                    recorded
+                    and await leases.transition(
+                        pool, lease, from_status="transcript_committed_cleanup_pending",
+                        to_status="succeeded",
+                    )
+                ):
+                    result.outcome = Outcome.LEASE_LOST
+            finally:
+                await keeper.stop()
