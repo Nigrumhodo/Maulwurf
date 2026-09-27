@@ -128,10 +128,16 @@ async def _run_asr(
 
     output = asyncio.create_task(proc.communicate())
     lost = asyncio.create_task(keeper.lost.wait())
-    done, _ = await asyncio.wait(
-        {output, lost}, timeout=config.asr_timeout_s, return_when=asyncio.FIRST_COMPLETED
-    )
-    lost.cancel()
+    done: set[asyncio.Task[object]] = set()
+    try:
+        done, _ = await asyncio.wait(
+            {output, lost}, timeout=config.asr_timeout_s, return_when=asyncio.FIRST_COMPLETED
+        )
+    finally:
+        # También si cancelan el wait: si no, `lost` queda pendiente para siempre.
+        lost.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await lost
     if output not in done:
         cleanup.kill_group(proc.pid, job.starttime)
         await output

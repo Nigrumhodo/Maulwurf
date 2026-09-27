@@ -15,6 +15,7 @@ from maulwurf_ingest.capacity import (
     PROVISIONAL_UPLOAD_BYTES,
     fits_limit,
     instance_bytes,
+    process_ram_bytes,
     slot_bytes,
 )
 
@@ -61,5 +62,11 @@ def test_two_provisional_slots_do_not_fit_tmpfs_and_nothing_is_approved() -> Non
     assert fits_limit(one, PROVISIONAL_TMPFS_BYTES) is True
     assert fits_limit(both, PROVISIONAL_TMPFS_BYTES) is False
     assert fits_limit(both, PROVISIONAL_MEM_LIMIT_BYTES) is True
+    heap = process_ram_bytes(
+        heap_upload_copies=PROVISIONAL_SLOTS,
+        upload_bytes=PROVISIONAL_UPLOAD_BYTES,
+        runtime_overhead_bytes=0,
+    )
+    assert heap == PROVISIONAL_SLOTS * PROVISIONAL_UPLOAD_BYTES
     assert APPROVED_200_MIB is False
     assert APPROVED_3H is False

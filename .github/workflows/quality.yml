@@ -146,8 +146,10 @@ jobs:
       - name: Integration tests
         run: |
           if [ "${{ matrix.app }}" = "ingest" ]; then
+            # Root lee todo /proc. Sin eso, los procesos root del runner
+            # cuentan como unreadable y ningún escenario queda verified.
             set +e
-            output=$(uv run pytest -m integration -q 2>&1)
+            output=$(sudo -E env "PATH=$PATH" uv run pytest -m integration -q 2>&1)
             code=$?
             printf '%s\n' "$output"
             passed=$(printf '%s\n' "$output" | sed -n 's/.* \([0-9][0-9]*\) passed.*/\1/p' | tail -n 1)

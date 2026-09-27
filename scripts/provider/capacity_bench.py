@@ -6,6 +6,7 @@ Does not approve 200 MiB or 3 h. Does not upload anything and does not keep a WA
 from __future__ import annotations
 
 import json
+import resource
 import shutil
 import subprocess
 import sys
@@ -29,6 +30,7 @@ from maulwurf_ingest.capacity import (  # noqa: E402
     PROVISIONAL_UPLOAD_BYTES,
     fits_limit,
     instance_bytes,
+    process_ram_bytes,
     slot_bytes,
 )
 
@@ -36,19 +38,37 @@ _SECONDS = 2
 _RATE = 16000
 
 
-def process_rss_bytes() -> int | None:
-    """Current resident set size, or None when the OS call fails."""
+def _status_kib(name: str) -> int | None:
     try:
-        if sys.platform == "win32":
-            return None
-        if sys.platform == "darwin":
-            return None
         for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
-            if line.startswith("VmRSS:"):
-                return int(line.split()[1]) * 1024
+            if line.startswith(name + ":"):
+                return int(line.split()[1])
     except (OSError, ValueError, IndexError):
         return None
     return None
+
+
+def process_rss_bytes() -> int | None:
+    """Current resident set size, or None when the OS call fails."""
+    if sys.platform in {"win32", "darwin"}:
+        return None
+    kib = _status_kib("VmRSS")
+    return None if kib is None else kib * 1024
+
+
+def process_hwm_bytes() -> int | None:
+    """Peak resident set size of this process (VmHWM), or None."""
+    if sys.platform in {"win32", "darwin"}:
+        return None
+    kib = _status_kib("VmHWM")
+    return None if kib is None else kib * 1024
+
+
+def children_maxrss_bytes() -> int | None:
+    """High-water RSS of waited children. Linux reports ru_maxrss in KiB."""
+    if sys.platform != "linux":
+        return None
+    return int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss) * 1024
 
 
 def _silent_wav() -> bytes:
@@ -78,6 +98,7 @@ def measure_short_conversion() -> dict[str, Any]:
         raise RuntimeError("ffmpeg is required")
     wav = _silent_wav()
     before = process_rss_bytes()
+    children_before = children_maxrss_bytes()
     peak_rss = before
     peak_dir = 0
     shm = "/dev/shm" if Path("/dev/shm").is_dir() else None  # noqa: S108
@@ -106,9 +127,22 @@ def measure_short_conversion() -> dict[str, Any]:
     finally:
         shutil.rmtree(root, ignore_errors=True)
         del wav
+    children_after = children_maxrss_bytes()
+    child_delta: int | str
+    if (
+        children_before is None
+        or children_after is None
+        or children_after <= children_before
+    ):
+        child_delta = "NO VERIFICADO"
+    else:
+        child_delta = children_after - children_before
     return {
         "rss_before_bytes": before if before is not None else "NO VERIFICADO",
         "rss_peak_bytes": peak_rss if peak_rss is not None else "NO VERIFICADO",
+        "parent_hwm_bytes": process_hwm_bytes() or "NO VERIFICADO",
+        "ffmpeg_child_maxrss_delta_bytes": child_delta,
+        "heap_wav_bytes": _SECONDS * _RATE * 2,
         "tmp_peak_bytes": peak_dir,
         "audio_removed": not root.exists(),
     }
@@ -123,6 +157,12 @@ def build_report(measured: dict[str, Any]) -> dict[str, Any]:
         sdk_buffer_bytes=0,
         margin_bytes=0,
     )
+    files = instance_bytes(one, PROVISIONAL_SLOTS)
+    heap = process_ram_bytes(
+        heap_upload_copies=PROVISIONAL_SLOTS,
+        upload_bytes=PROVISIONAL_UPLOAD_BYTES,
+        runtime_overhead_bytes=0,
+    )
     return {
         "ticket": "S1.B2",
         "approved_200_mib": APPROVED_200_MIB,
@@ -130,13 +170,14 @@ def build_report(measured: dict[str, Any]) -> dict[str, Any]:
         "pcm_3h_bytes_not_in_slot": PCM_3H_16K_S16_BYTES,
         "fragment_1s_bytes": FRAGMENT_1S_16K_S16_BYTES,
         "provisional_one_slot_bytes": one,
-        "provisional_instance_bytes": instance_bytes(one, PROVISIONAL_SLOTS),
+        "provisional_instance_bytes": files,
+        "heap_upload_copies_bytes": heap,
+        "files_plus_heap_bytes": files + heap,
+        "mem_limit_fit_with_heap_and_unmeasured_ffmpeg": "NO VERIFICADO",
         "provisional_tmpfs_bytes": PROVISIONAL_TMPFS_BYTES,
         "provisional_mem_limit_bytes": PROVISIONAL_MEM_LIMIT_BYTES,
         "one_slot_fits_tmpfs": fits_limit(one, PROVISIONAL_TMPFS_BYTES),
-        "two_slots_fit_tmpfs": fits_limit(
-            instance_bytes(one, PROVISIONAL_SLOTS), PROVISIONAL_TMPFS_BYTES
-        ),
+        "two_slots_fit_tmpfs": fits_limit(files, PROVISIONAL_TMPFS_BYTES),
         "short_conversion": measured,
     }
 

@@ -57,6 +57,28 @@ def instance_bytes(slot: int, slots: int) -> int:
     return slot * slots
 
 
+def process_ram_bytes(
+    *,
+    heap_upload_copies: int,
+    upload_bytes: int,
+    runtime_overhead_bytes: int,
+) -> int:
+    """RAM del proceso que el slot de tmpfs no cuenta.
+
+    ``run_attempt`` retiene ``audio: bytes`` en el heap. El pico del hijo
+    ffmpeg no entra aquí: hay que medirlo aparte.
+    """
+    parts = {
+        "heap_upload_copies": heap_upload_copies,
+        "upload_bytes": upload_bytes,
+        "runtime_overhead_bytes": runtime_overhead_bytes,
+    }
+    for name, value in parts.items():
+        if value < 0:
+            raise ValueError(f"{name} must be non-negative")
+    return heap_upload_copies * upload_bytes + runtime_overhead_bytes
+
+
 def fits_limit(need_bytes: int, limit_bytes: int) -> bool:
     """True solo si el presupuesto cabe en el límite. No aprueba 200 MiB ni 3 h."""
     if need_bytes < 0 or limit_bytes < 0:
