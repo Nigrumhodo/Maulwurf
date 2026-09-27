@@ -136,7 +136,7 @@ ingesta (§M2); shape de respuesta SSE de progreso.
 | A1.2 | Completar config Pydantic Settings; secretos solo por entorno *(esqueleto ya creado)* | A1.1 | — |
 | A1.3 | OAuth Google backend: `state`, PKCE, `nonce`/issuer/audience; identidad por `sub` | A1.2 | I-S1-AN-06 |
 | A1.4 | Sesión opaca: cookie `Secure/HttpOnly/SameSite=Lax`, hash en `sessions`, revocación; CSRF/Origin | A1.2 | U-S1-AN-01/02 |
-| A1.5 | Tablas núcleo `users/sessions/google_credentials/subjects`; AES-GCM con nonce y versión de clave; FKs compuestas; RLS base | A1.1 | U-S1-AN-03, I-S1-AN-05 |
+| A1.5 | Tablas núcleo `users/sessions/google_credentials/subjects`; AES-GCM con nonce y versión de clave; FKs compuestas; RLS base. Shape S1 de `audios`, `ingestion_attempts` y `outbox_events` (§6a: la tabla outbox se crea en S1) | A1.1 | U-S1-AN-03, I-S1-AN-05 |
 | A1.6 | CRUD materias con regla de borrado con clases activas | A1.5 | I-S1-AN-07 |
 | A1.7 | Migraciones Alembic desde vacío y actualización | A1.5 | I-S1-AN-04 |
 | A1.8 | Esqueleto `POST /audios` + `PUT` binario (contrato congelado); `GET/PATCH /me`, logout, `GET /integrations/status` | A1.4, L1.6 | — |
@@ -157,7 +157,7 @@ ingesta (§M2); shape de respuesta SSE de progreso.
 | S1.A9 | Presentar informe; cerrar D2/D3/D4/D6 con el equipo | S1.A8 | — |
 | S1.B1 | Ingesta con root read-only, tmpfs acotado, no root, sin swap/core dumps | J1.2 (imagen) | I-S1-SG-06 |
 | S1.B2 | Reserva de RAM por slot (200 MiB/3 h como objetivo a validar) | S1.B1 | — |
-| S1.B3 | Supervisor, lease, fencing y cleanup independiente del proceso ASR | S1.B1 | I-S1-SG-04/05 |
+| S1.B3 | Supervisor, lease, fencing y cleanup independiente del proceso ASR | S1.B1, A1.5 (`ingestion_attempts`) | I-S1-SG-04/05 |
 | S1.B4 | Matriz de fallos: 9 escenarios con inyección real (SIGKILL, reinicios, etc.) | S1.B3 | I-S1-SG-04 |
 | S1.B5 | Verificación de ausencia de audio en disco/Redis/logs/trazas/cachés | S1.B3 | I-S1-SG-06 |
 | S1.B6 | Lease vencido no marca cleanup verificado; outbox bloqueada sin evidencia | S1.B3 | I-S1-SG-05 |
@@ -170,7 +170,7 @@ ingesta (§M2); shape de respuesta SSE de progreso.
 | J1.2 | Servicio `ingest` endurecido (read-only, tmpfs, no root, límites) con ffmpeg/ffprobe | J1.1 | I-S1-SG-06 |
 | J1.3 | Caddy TLS local sin buffering/caché para uploads | J1.1 | I-S1-JF-02 |
 | J1.4 | CI: ruff/ESLint, mypy/tsc, pytest/Vitest, integración, builds; plantilla de PR que implementa ADR-0004 | J1.1 | pipeline verde |
-| J1.5 | Esqueleto ARQ worker+scheduler, dispatcher outbox básico, `/healthz` `/readyz` | J1.1, A1.8 | I-S1-JF-01, U-S1-JF-04 |
+| J1.5 | Esqueleto ARQ worker+scheduler, dispatcher outbox básico, `/healthz` `/readyz` | J1.1, A1.5 (tabla outbox), A1.8 | I-S1-JF-01, U-S1-JF-04 |
 | J1.6 | Redis solo IDs/estado; persistencia solo Postgres | J1.1 | I-S1-JF-03 |
 | J1.7 | README con comandos reproducibles (levantar, testear, lint) | J1.1 | — |
 | J1.8 | Imagen base de `ingest` con ffmpeg/ffprobe fijados para compose; comparar versión con la 8.0.1 del spike | J1.1 | — |
@@ -234,7 +234,7 @@ eventos SSE del chat `snapshot|delta|citation|done|error` con ID monotónico y t
 
 | Ticket | Tarea (resumen) | Depende de | Tests |
 |---|---|---|---|
-| A2.1 | Migración S2 completa: ingesta, transcript/segmentos, chunks/embeddings, outbox, chat (FKs tenant-aware) | A1.5 | I-S2-AN-05, I-S2-AN-11 |
+| A2.1 | Migración S2 completa: transcript/segmentos, chunks/embeddings, chat y ajustes de `audios`/`ingestion_attempts`/`outbox_events` creadas en A1.5 (FKs tenant-aware) | A1.5 | I-S2-AN-05, I-S2-AN-11 |
 | A2.2 | `GET /ingestion/capabilities` con límites del spike (no constantes duras) | S1.A8 | U-S2-SG-01 |
 | A2.3 | `POST /audios`: consentimiento versionado, reserva de slot, URL relativa; sin dedupe aquí | A2.1, L1.6 | U-S2-AN-01 |
 | A2.4 | `PUT` binario autenticado; SHA-256 y dedupe tras cleanup; corte por límite | A2.3 | I-S2-AN-05 |

@@ -10,6 +10,7 @@ ADR-0005 (Redis) se añade en J1.6.
 | [ADR-0003](ADR-0003-lockfiles.md) | Política de lockfiles | Aceptado |
 | [ADR-0004](ADR-0004-commits-pr.md) | Formato de commit/PR y reviews | Aceptado |
 | [ADR-0005](ADR-0005-redis.md) | Política de Redis | Propuesto |
+| [ADR-0006](ADR-0006-aislamiento-tenant.md) | Aislamiento por tenant en S1 (filtrado; RLS en S2) | Propuesto |
 
 ## Verificación L1.2
 

@@ -173,7 +173,8 @@ CREATE TABLE google_credentials (
   user_id           uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   access_token_enc  bytea NOT NULL,             -- AES-GCM con nonce único
   refresh_token_enc bytea,                      -- preservar el anterior si Google no devuelve otro
-  nonce_enc         bytea NOT NULL,
+  -- Cada blob es nonce(12 B) || ciphertext+tag con su propio nonce: un nonce compartido
+  -- entre access y refresh reutilizaría el nonce bajo la misma clave, lo que rompe AES-GCM.
   key_version       integer NOT NULL,           -- rotación de claves
   scopes            text[] NOT NULL DEFAULT '{}',
   token_expires_at  timestamptz,
@@ -207,8 +208,9 @@ Notas:
   misma cookie y queda inválido al cerrar, revocar o reemplazar esa sesión. La rotación se
   confirma en una sola transacción que invalida el hash anterior antes de exponer el nuevo
   token; una pestaña con el valor anterior recibe `403 csrf_invalid` y debe repetir `GET /me`.
-- Tokens de Google cifrados AES-GCM con nonce único y `key_version`; `invalid_grant` mueve el
-  estado a `disconnected` sin cerrar necesariamente la sesión de la aplicación.
+- Tokens de Google cifrados AES-GCM con nonce único por blob, AAD `user_id:campo` y
+  `key_version`; `invalid_grant` mueve el estado a `disconnected` sin cerrar necesariamente la
+  sesión de la aplicación.
 - La zona horaria de cada clase se captura como snapshot en `audios`; cambiar el perfil no
   altera fechas ya extraídas.
 
@@ -530,7 +532,9 @@ CREATE TABLE outbox_events (
   CHECK (
     (type IN ('index_requested','analyze_requested')
       AND ((enabled AND blocked_reason IS NULL)
-        OR (NOT enabled AND blocked_reason = 'cleanup_pending')))
+        -- IS NOT DISTINCT FROM: con `=` un blocked_reason NULL daría NULL y el CHECK
+        -- aceptaría un index/analyze deshabilitado sin motivo.
+        OR (NOT enabled AND blocked_reason IS NOT DISTINCT FROM 'cleanup_pending')))
     OR
     (type NOT IN ('index_requested','analyze_requested')
       AND enabled AND blocked_reason IS NULL)
@@ -1510,7 +1514,7 @@ decidir D6 antes de que S2 dependa de ello.
 | 1 | A1.2 | Verificar/completar config Pydantic Settings; `NVIDIA_API_KEY` y secretos solo por entorno | Secretos fuera de código y logs |
 | 2–3 | A1.3 | OAuth Google backend: Authorization Code + `state` + PKCE; valida `nonce`/issuer/audience; identidad por `sub` | Login real en compose |
 | 2–3 | A1.4 | Sesión opaca: cookie `Secure/HttpOnly/SameSite=Lax`, solo hash en `sessions`, expiración/revocación; CSRF y Origin en mutaciones | Tests de revocación/CSRF en verde |
-| 3–4 | A1.5 | Tablas núcleo `users/sessions/google_credentials/subjects` con FKs compuestas y RLS base | Migraciones desde vacío |
+| 3–4 | A1.5 | Tablas núcleo `users/sessions/google_credentials/subjects` con FKs compuestas y RLS base, más shape S1 de `audios`, `ingestion_attempts` y `outbox_events` | Migraciones desde vacío |
 | 4 | A1.6 | CRUD materias con propiedad tenant; bloqueo de borrado con clases activas | CRUD demostrable |
 | 4 | A1.7 | Alembic: desde vacío y actualización; probar con pool y workers | Comandos documentados en README |
 | 5 | A1.8 | Esqueleto `POST /audios` + `PUT` binario (contrato congelado); `GET/PATCH /me`, logout, `/integrations/status` | Endpoints respondiendo |
@@ -1612,7 +1616,7 @@ anotadas para el dataset; nunca maquillar métricas.
 
 | Día | Ticket | Tarea | Entregable verificable |
 |---|---|---|---|
-| 1–2 | A2.1 | Tablas `audios` (sin storage_key), `ingestion_attempts` (lease/heartbeat/fencing/cleanup_status), `transcripts`, `segments`, `processing_runs`, `outbox_events` | Esquema completo sin migración de emergencia |
+| 1–2 | A2.1 | Tablas `transcripts`, `segments`, `processing_runs` y ajustes sobre `audios` (sin storage_key), `ingestion_attempts` (lease/heartbeat/fencing/cleanup_status) y `outbox_events` creadas en A1.5 | Esquema completo sin migración de emergencia |
 | 1 | A2.2 | `GET /ingestion/capabilities` con datos del spike | Límites efectivos publicados |
 | 2 | A2.3 | `POST /audios`: valida metadatos (materia, fecha, zona, idioma allowlist), crea intento `awaiting_upload`, devuelve URL relativa + expiración | Suite de contratos |
 | 2–3 | A2.4 | `PUT` binario con sesión/CSRF/attempt_id; 202 solo tras recepción/admisión; compensar reserva si falla BD; cortar streaming al superar límite | Pruebas de corte |
