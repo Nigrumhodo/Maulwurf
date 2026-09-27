@@ -134,6 +134,10 @@ desaparecen al recrear el contenedor.
   `change-me` falla a propósito (fail-fast de `app/core/config.py`).
 - **Aviso de certificado**: confiar en la CA (§4) o usar `curl -k`.
 - **Primer build lento**: descarga ffmpeg, dependencias Python y `npm ci`.
+- **Réplicas de `api` que fallan al arrancar**: al escalar `api`, todas intentan migrar.
+  Una aplica la migración y las demás esperan el lock; la que espera más de 120 s falla y
+  Docker la reinicia (`restart: unless-stopped`). Es esperado, no un error de la app. En
+  despliegue real (S4) la migración será un paso único, separado de las réplicas.
 
 ## 9. Reglas de privacidad del entorno local
 
