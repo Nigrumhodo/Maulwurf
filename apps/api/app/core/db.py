@@ -2,6 +2,11 @@
 
 El engine se crea al importar pero no conecta hasta el primer uso, así que importar este
 módulo no exige Postgres disponible.
+
+Convención de transacciones: `get_session` NO confirma. Cada handler que escribe llama a
+`await db.commit()` antes de devolver la respuesta, para que un fallo de commit sea un error
+visible de esa petición y no un efecto tras enviarla. Si el handler lanza, la sesión se
+revierte y no persiste nada a medias.
 """
 from collections.abc import AsyncGenerator
 
@@ -24,7 +29,11 @@ engine: AsyncEngine = create_async_engine(
 SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
 
 
-async def get_session() -> AsyncGenerator[AsyncSession]:
-    """Dependencia FastAPI: una sesión por petición, cerrada al terminar."""
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """Dependencia FastAPI: una sesión por petición, revertida si el handler falla."""
     async with SessionFactory() as session:
-        yield session
+        try:
+            yield session
+        except Exception:
+            await session.rollback()
+            raise
