@@ -137,14 +137,39 @@ jobs:
           version: "0.12.18"
           enable-cache: true
           cache-dependency-glob: apps/${{ matrix.app }}/uv.lock
+      # Sin ffmpeg, test_supervisor y test_failure_matrix se saltan y el job
+      # quedaba verde con 0 passed (pytest código 5).
+      - if: matrix.app == 'ingest'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: uv sync --frozen --extra dev
-      # TODO(J1.4): quitar la tolerancia al código 5 cuando existan suites por app.
+      # TODO(J1.4): quitar la tolerancia al código 5 en api cuando su suite exista.
       - name: Integration tests
         run: |
-          set +e
-          uv run pytest -m integration -q
-          code=$?
-          if [ "$code" -ne 0 ] && [ "$code" -ne 5 ]; then exit "$code"; fi
+          if [ "${{ matrix.app }}" = "ingest" ]; then
+            # Root lee todo /proc. Sin eso, los procesos root del runner
+            # cuentan como unreadable y ningún escenario queda verified.
+            set +e
+            output=$(sudo -E env "PATH=$PATH" uv run pytest -m integration -q 2>&1)
+            code=$?
+            printf '%s\n' "$output"
+            passed=$(printf '%s\n' "$output" | awk '{
+              for (i = 1; i < NF; i++) {
+                n = $i
+                w = $(i + 1)
+                gsub(/,/, "", n)
+                gsub(/,/, "", w)
+                if (n ~ /^[0-9]+$/ && w == "passed") { print n; exit }
+              }
+            }')
+            if [ "$code" -ne 0 ] || [ -z "$passed" ] || [ "$passed" -eq 0 ]; then
+              exit 1
+            fi
+          else
+            set +e
+            uv run pytest -m integration -q
+            code=$?
+            if [ "$code" -ne 0 ] && [ "$code" -ne 5 ]; then exit "$code"; fi
+          fi
 
   build-images:
     runs-on: ubuntu-latest
