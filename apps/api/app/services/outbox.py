@@ -29,6 +29,8 @@ class Outcome(StrEnum):
     DISABLED = "disabled"
     NO_CONSUMER = "no_consumer"
     UNKNOWN_TYPE = "unknown_type"
+    # Contador, no decisión: el job ya estaba en Redis y no se volvió a encolar.
+    DEDUPLICATED = "deduplicated"
 
 
 @dataclass(frozen=True)

@@ -105,7 +105,8 @@ async def test_gated_event_waits_for_verified_cleanup(
 
     report = await dispatch_pending(db_session, pool, queue_name=queue)
 
-    assert report[Outcome.CLEANUP_PENDING] == 1
+    # Ni siquiera entra al lote: sigue pendiente hasta que el cleanup se verifique.
+    assert sum(report.values()) == 0
     assert await pool.queued_jobs(queue_name=queue) == []
     assert event.status == "pending" and event.published_at is None
 
@@ -232,7 +233,7 @@ async def test_latest_attempt_decides_the_gate(
 
     report = await dispatch_pending(db_session, pool, queue_name=queue)
 
-    assert report[Outcome.CLEANUP_PENDING] == 1
+    assert sum(report.values()) == 0
     assert await pool.queued_jobs(queue_name=queue) == []
 
 
@@ -266,3 +267,43 @@ async def test_fixture_cleanup_leaves_other_queues_jobs_alone(
         assert await pool.exists(f"arq:job:{job_id}")
     finally:
         await pool.delete(other_queue, f"arq:job:{job_id}")
+
+
+async def test_blocked_gated_backlog_does_not_starve_ready_events(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    # Index antiguos sin cleanup verificado no deben llenar el lote y bloquear uno listo.
+    pool, queue = redis
+    for _ in range(3):
+        stuck_user, stuck_audio = await _audio(db_session, "failed")
+        db_session.add(_event(stuck_user, stuck_audio, "index_requested"))
+    await db_session.flush()
+    user, audio = await _audio(db_session, "verified")
+    ready = _event(user, audio, "index_requested")
+    db_session.add(ready)
+    await db_session.flush()
+
+    report = await dispatch_pending(db_session, pool, queue_name=queue, batch_size=1)
+
+    assert report[Outcome.PUBLISH] == 1
+    assert ready.status == "dispatched"
+
+
+async def test_requeue_after_failed_commit_is_counted_as_deduplicated(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    # Simula un ciclo anterior que encoló y no confirmó: el job ya existe en Redis.
+    pool, queue = redis
+    user, audio = await _audio(db_session, "verified")
+    event = _event(user, audio, "index_requested")
+    db_session.add(event)
+    await db_session.flush()
+    await pool.enqueue_job("index", str(audio.id), 1, _job_id=f"outbox:{event.id}",
+                           _queue_name=queue)
+
+    report = await dispatch_pending(db_session, pool, queue_name=queue)
+
+    assert report[Outcome.PUBLISH] == 1
+    assert report[Outcome.DEDUPLICATED] == 1
+    assert event.status == "dispatched"
+    assert len(await pool.queued_jobs(queue_name=queue)) == 1
