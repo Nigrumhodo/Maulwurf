@@ -36,14 +36,14 @@ CADDY_HTTP_PORT=8080 CADDY_HTTPS_PORT=8443 docker compose up -d --build --wait
 ```
 
 Los 8 servicios (`web`, `api`, `ingest`, `worker`, `scheduler`, `postgres`,
-`redis`, `caddy`) quedan `healthy`. `worker`/`scheduler` corren un placeholder
-sin efectos hasta J1.5.
+`redis`, `caddy`) quedan `healthy`. `api` aplica las migraciones al arrancar (§5);
+`worker`/`scheduler` son procesos ARQ con healthcheck `arq ... --check` (J1.5).
 
 ## 3. Healthchecks
 
 ```bash
 curl -k -o /dev/null -w '%{http_code}\n' https://localhost/          # web (404 hasta D1.x)
-curl -k https://localhost/readyz                                     # api (placeholder 200)
+curl -k https://localhost/readyz                                     # api: 200 con Postgres y Redis, 503 si falta uno
 docker compose exec api    python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8000/healthz').status)"
 docker compose exec ingest python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8000/healthz').status)"
 ```
@@ -59,14 +59,24 @@ sudo cp /tmp/maulwurf-root.crt /usr/local/share/ca-certificates/maulwurf-root.cr
 sudo update-ca-certificates
 ```
 
-## 5. Migraciones (pendiente A1.7)
+## 5. Migraciones (A1.7)
 
-`alembic.ini` aún no existe; cuando A1.7 lo entregue, el comando será:
+El contenedor `api` ejecuta `alembic upgrade head` antes de uvicorn, así que
+`docker compose up` deja la BD en `head` sin paso manual. Si varias réplicas arrancan a la
+vez, un advisory lock las serializa; la que espera más de 120 s falla en lugar de colgarse.
 
 ```bash
-docker compose exec api alembic upgrade head
-docker compose exec api alembic current
+docker compose exec api alembic current            # revisión aplicada (0001 en S1)
+docker compose exec api alembic upgrade head       # aplicar a mano, p. ej. tras un pull
+docker compose exec api alembic downgrade -1       # rollback a la revisión anterior
+docker compose exec api alembic history            # cadena de revisiones
 ```
+
+El rollback de `0001` elimina todas las tablas de la app y sus datos locales: úsalo solo en
+desarrollo. Un cambio de esquema es siempre una revisión nueva
+(`uv run alembic revision --autogenerate -m "..."` desde `apps/api`, revisada a mano);
+nunca se edita una revisión ya aplicada. `uv run alembic check` debe responder «No new
+upgrade operations detected» antes de abrir el PR.
 
 ## 6. Tests y lint
 
@@ -90,10 +100,17 @@ npm run lint && npm run typecheck && npm test && npm run build
 ```
 
 Integración local (Redis se publica solo en loopback; PostgreSQL no se publica
-al host):
+al host). La suite crea su propia BD `maulwurf_test_*`, la migra y la elimina al
+terminar; necesita un PostgreSQL alcanzable, por ejemplo uno desechable:
 
 ```bash
-cd apps/api && uv run pytest -m integration
+docker run -d --rm --name mw-test-pg -e POSTGRES_USER=maulwurf \
+  -e POSTGRES_PASSWORD=maulwurf -e POSTGRES_DB=maulwurf -p 127.0.0.1:55432:5432 \
+  pgvector/pgvector:pg16
+cd apps/api
+MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@127.0.0.1:55432/maulwurf \
+  uv run pytest -m integration
+docker stop mw-test-pg
 ```
 
 Si el puerto 6379 está ocupado (p. ej. otro stack local), usa otro puerto:
