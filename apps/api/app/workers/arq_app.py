@@ -7,6 +7,7 @@ cada `HEALTH_CHECK_INTERVAL_S` con TTL de intervalo + 1 s, así que un proceso c
 deja de estar sano en ~30 s. La clave solo contiene contadores (ADR-0005).
 """
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar
 
 from arq.connections import RedisSettings
@@ -21,7 +22,7 @@ WORKER_QUEUE = "arq:queue"
 SCHEDULER_QUEUE = "arq:scheduler"
 HEALTH_CHECK_INTERVAL_S = 30
 
-_REDIS = RedisSettings.from_dsn(settings.redis_url)
+_REDIS = RedisSettings.from_dsn(str(settings.redis_url))
 
 
 async def index(ctx: dict[str, Any], audio_id: str, transcript_version: int) -> None:
@@ -40,7 +41,7 @@ async def dispatch_outbox(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    functions: ClassVar[list[Function | Any]] = [index, analyze]
+    functions: ClassVar[list[Function | Callable[..., Awaitable[None]]]] = [index, analyze]
     queue_name = WORKER_QUEUE
     redis_settings = _REDIS
     health_check_interval = HEALTH_CHECK_INTERVAL_S

@@ -89,17 +89,25 @@ services:
       - path: ../.env
         required: false
     environment: *api-env
+    # Solo Redis (y Postgres para el dispatcher): un fallo de la API no debe dejar la
+    # cola sin drenar.
     depends_on:
-      api:
-        condition: service_started
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
+    # La imagen ya corre como 10001; sin capacidades ni escalada de privilegios.
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
     healthcheck:
       test: ["CMD", "arq", "app.workers.arq_app.WorkerSettings", "--check"]
       interval: 15s
-      timeout: 5s
+      # `--check` arranca un intérprete que importa la app: margen para arranque en frío.
+      timeout: 10s
       retries: 5
-      start_period: 15s
+      start_period: 30s
     networks: [data]
     restart: unless-stopped
 
@@ -110,17 +118,25 @@ services:
       - path: ../.env
         required: false
     environment: *api-env
+    # Solo Redis (y Postgres para el dispatcher): un fallo de la API no debe dejar la
+    # cola sin drenar.
     depends_on:
-      api:
-        condition: service_started
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
+    # La imagen ya corre como 10001; sin capacidades ni escalada de privilegios.
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
     healthcheck:
       test: ["CMD", "arq", "app.workers.arq_app.SchedulerSettings", "--check"]
       interval: 15s
-      timeout: 5s
+      # `--check` arranca un intérprete que importa la app: margen para arranque en frío.
+      timeout: 10s
       retries: 5
-      start_period: 15s
+      start_period: 30s
     networks: [data]
     restart: unless-stopped
 
