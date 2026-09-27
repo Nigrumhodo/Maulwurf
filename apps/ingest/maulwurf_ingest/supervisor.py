@@ -210,6 +210,11 @@ async def run_attempt(
                 break
         return result
     finally:
+        # Una cancelación no debe impedir la limpieza: sin esto el `await` del
+        # `finally` vuelve a lanzar CancelledError y el audio queda en el tmpfs.
+        task = asyncio.current_task()
+        if task is not None and task.cancelling():
+            task.uncancel()
         # Independiente del hijo y del lease: siempre se limpia y se verifica.
         evidence = await asyncio.to_thread(
             cleanup.destroy_and_verify, workdir, job.pgid, starttime=job.starttime

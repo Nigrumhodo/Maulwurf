@@ -79,7 +79,9 @@ de este PR de planificación.
 | claim | A1.7 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área A | Completa la sección de migraciones pendiente en J1.7 |
 | claim | A1.8 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área A, Web | Depende de A1.4 y L1.6; desbloquea J1.5 |
 | claim | S1.B1 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área S | Desbloquea S1.B2 y S1.B3 |
+| claim | S1.B2 | satnovaOG | hecho | 2026-09-27 | no aplica | — / líder | Tabla `docs/spike/F0.2-capacidad-slot.md`. Dos slots no caben en el tmpfs de 256 MiB. 200 MiB y 3 h no aprobados. |
 | claim | S1.B3 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área S | Desbloquea S1.B4, S1.B5, S1.B6 |
+| claim | S1.B4 | satnovaOG | hecho | 2026-09-27 | no aplica | — / líder | Matriz I-S1-SG-04: 10 passed en contenedor Ubuntu (PID propio). En el WSL del host, `unreadable_processes` de root impide `verified`. |
 
 ## 4. Historial de cambios
 
@@ -97,3 +99,4 @@ de este PR de planificación.
 | 2026-09-27 | Se reclaman S1.A6 y S1.A7. Corridas observadas; D6 queda `pending` con propuesta `none`. Coste `NO VERIFICADO`. Elegibilidad cloud `pendiente`. | Este cambio |
 | 2026-09-27 | Se reclaman S1.A8 y S1.A9. Informe y acta publicados. D2 y D6 `pending`; D3-Audio y D4 `blocked`. Elegibilidad cloud `pendiente`. | Este cambio |
 | 2026-09-27 | La elegibilidad cloud de S1.A2–A7 sigue `pendiente` hasta que haya revisor. S1.A8 y S1.A9 no llaman a NVIDIA. | Este cambio |
+| 2026-09-27 | Se reclaman S1.B2 (hecho) y S1.B4. La matriz pasa en contenedor (10 passed). En el host WSL no, por procesos root ilegibles. S1.B1 y S1.B3 siguen `en curso` de jpinillaz. | Este cambio |
