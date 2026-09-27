@@ -59,6 +59,8 @@ de este PR de planificación.
 | claim | S1.A3 | satnovaOG | hecho | 2026-09-24 | pendiente | — / líder | Allowlist propuesta `es`, `en`, `fr`. Cloud sin revisor. |
 | claim | S1.A4 | satnovaOG | hecho | 2026-09-24 | pendiente | — / líder | WAV `accept`; mp3/ogg/opus/flac/webm `normalize`. m4a `NO VERIFICADO`. 16 kHz `OK`, no aprobado. Cloud sin revisor. |
 | claim | S1.A5 | satnovaOG | hecho | 2026-09-24 | pendiente | — / líder | Tres llamadas: espera local `DEADLINE_EXCEEDED`, cancelación `CANCELLED`, piso 30 s `OK`. 200 MiB y 3 h no aprobados. Cuota, concurrencia y máximos `NO VERIFICADO`. Cloud sin revisor. |
+| claim | S1.A6 | satnovaOG | hecho | 2026-09-27 | pendiente | — / líder | Offsets: gRPC `OK` sin palabras ni segmentos. D6 propuesta `none`, estado `pending`. Cloud sin revisor. |
+| claim | S1.A7 | satnovaOG | hecho | 2026-09-27 | pendiente | — / líder | Latencia `es`/`en` y pico PCM ~330 MiB. Coste `NO VERIFICADO`. 200 MiB y 3 h no aprobados. Cloud sin revisor. |
 | claim | J1.8 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | Target `base` con ffmpeg fijado y paridad 7.1.5 vs 8.0.1 verificada; mergeado en #12 |
 | claim | J1.1 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | Compose de 8 servicios; evidencia en bitácora; mergeado en #13 |
 | claim | J1.2 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | Ingest endurecido; evidencia en bitácora; host pendiente de operación; mergeado en #14 |
@@ -90,3 +92,4 @@ de este PR de planificación.
 | 2026-09-26 | Se cierran J1.1–J1.4 y J1.6–J1.8 como `hecho` tras fusionar #12–#18 en `develop` (pipeline de calidad verde en `4aa8ced`). J1.5 sigue pendiente en S1. | Este PR |
 | 2026-09-27 | Se reclaman J1.5, L1.6, A1.1, A1.2, A1.4, A1.5, A1.7, A1.8, S1.B1 y S1.B3 (camino crítico y tickets con más dependientes). Quedan libres A1.3, A1.6, A1.9, L1.4, L1.5, L1.7 y S1.B2, S1.B4–B6; S1.A6–A9 siguen con su owner en Plane. | Este PR |
 | 2026-09-27 | A1.1 y A1.5 pasan a `hecho` (#21, #24). J1.5 sigue `en curso` con el parcial de #25. A1.2 y A1.4 en revisión. | Este PR |
+| 2026-09-27 | Se reclaman S1.A6 y S1.A7. Corridas observadas; D6 queda `pending` con propuesta `none`. Coste `NO VERIFICADO`. Elegibilidad cloud `pendiente`. | Este cambio |
