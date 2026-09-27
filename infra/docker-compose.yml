@@ -149,6 +149,9 @@ services:
       target: runtime
     image: maulwurf-ingest:local
     user: "10001:10001"
+    # S1.B3: tini como PID 1 recoge los nietos huérfanos (ffmpeg) que mata el supervisor;
+    # sin él quedarían zombis de uvicorn y consumirían el pids_limit.
+    init: true
     read_only: true
     tmpfs:
       - /work/tmp:rw,noexec,nosuid,nodev,size=${INGEST_TMPFS_BYTES:-268435456},mode=1777
