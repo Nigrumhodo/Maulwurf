@@ -55,7 +55,7 @@ def test_change_me_placeholder_rejected_outside_local(field: str) -> None:
 
 
 def test_change_me_placeholder_allowed_in_local() -> None:
-    assert _settings(secret_key="change-me").env == "local"  # noqa: S106 - valor ficticio
+    assert _settings(secret_key="change-me").env == "local"
 
 
 def test_public_origin_requires_https_outside_local() -> None:
@@ -70,7 +70,9 @@ def test_allowed_origin_has_no_trailing_slash() -> None:
 
 
 def test_repr_and_dump_never_expose_secret_values() -> None:
-    settings = _settings(google_client_id="client-id", google_client_secret="google-value-for-test")  # noqa: S106
+    settings = _settings(
+        google_client_id="client-id", google_client_secret="google-value-for-test"
+    )
     rendered = f"{settings!r} {settings} {settings.model_dump()} {settings.model_dump_json()}"
 
     for value in [*SECRETS.values(), "google-value-for-test"]:
