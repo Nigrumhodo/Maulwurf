@@ -202,6 +202,7 @@ def finish_recognize_call(
             "hypothesis": "",
             "server_version": NOT_VERIFIED,
             "metadata_keys": [],
+            **_empty_timing(),
         }
     except grpc.FutureCancelledError:
         return {
@@ -209,6 +210,7 @@ def finish_recognize_call(
             "hypothesis": "",
             "server_version": NOT_VERIFIED,
             "metadata_keys": [],
+            **_empty_timing(),
         }
     except grpc.RpcError as exc:
         return {
@@ -216,6 +218,7 @@ def finish_recognize_call(
             "hypothesis": "",
             "server_version": server_version_from_metadata(exc, api_key),
             "metadata_keys": observed_metadata_keys(exc, api_key),
+            **_empty_timing(),
         }
     except TimeoutError as exc:
         return {
@@ -223,13 +226,45 @@ def finish_recognize_call(
             "hypothesis": "",
             "server_version": server_version_from_metadata(exc, api_key),
             "metadata_keys": observed_metadata_keys(exc, api_key),
+            **_empty_timing(),
         }
     return {
         "grpc_code": "OK",
         "hypothesis": hypothesis_text(response),
         "server_version": server_version_from_metadata(call, api_key),
         "metadata_keys": observed_metadata_keys(call, api_key),
+        **_timing_from_response(response),
     }
+
+
+def _empty_timing() -> dict[str, list[list[float]]]:
+    return {"word_times_raw": [], "segment_times_raw": []}
+
+
+def _timing_from_response(response: object) -> dict[str, list[list[float]]]:
+    """Numeric word and segment bounds only. Word text stays out of the result."""
+    words_out: list[list[float]] = []
+    segments_out: list[list[float]] = []
+    results = getattr(response, "results", None) or []
+    for result in results:
+        alternatives = getattr(result, "alternatives", None) or []
+        if not alternatives:
+            continue
+        words = getattr(alternatives[0], "words", None) or []
+        pairs: list[list[float]] = []
+        for word in words:
+            start = getattr(word, "start_time", None)
+            end = getattr(word, "end_time", None)
+            if isinstance(start, bool) or isinstance(end, bool):
+                continue
+            if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+                continue
+            pairs.append([float(start), float(end)])
+        if not pairs:
+            continue
+        words_out.extend(pairs)
+        segments_out.append([pairs[0][0], pairs[-1][1]])
+    return {"word_times_raw": words_out, "segment_times_raw": segments_out}
 
 
 def hypothesis_text(response: object) -> str:
@@ -360,6 +395,7 @@ def recognize_wav(
     allow_empty_language: bool = False,
     timeout_s: float | None = None,
     cancel_immediately: bool = False,
+    enable_word_time_offsets: bool = False,
 ) -> dict[str, Any]:
     """One offline Recognize. The result omits the hypothesis text and the WAV."""
     import riva.client
@@ -375,7 +411,7 @@ def recognize_wav(
         profanity_filter=False,
         enable_automatic_punctuation=False,
         verbatim_transcripts=True,
-        enable_word_time_offsets=False,
+        enable_word_time_offsets=enable_word_time_offsets,
     )
     if config.custom_configuration:
         raise SpikeConfigError("custom_configuration is not sent")
@@ -396,6 +432,8 @@ def recognize_wav(
     grpc_code = "UNKNOWN"
     server_version = NOT_VERIFIED
     metadata_keys: list[str] = []
+    word_times_raw: list[list[float]] = []
+    segment_times_raw: list[list[float]] = []
     try:
         asr = riva.client.ASRService(auth)
         call = asr.offline_recognize(wav_bytes, config, future=True)
@@ -409,6 +447,8 @@ def recognize_wav(
         hypothesis = str(outcome["hypothesis"])
         server_version = str(outcome["server_version"])
         metadata_keys = list(outcome["metadata_keys"])
+        word_times_raw = [list(pair) for pair in outcome["word_times_raw"]]
+        segment_times_raw = [list(pair) for pair in outcome["segment_times_raw"]]
     finally:
         close = getattr(auth.channel, "close", None)
         if callable(close):
@@ -430,6 +470,9 @@ def recognize_wav(
         "metadata_keys": metadata_keys,
         "max_message_length_client": CLIENT_MAX_MESSAGE_LENGTH,
         "max_message_length_scope": _MAX_MESSAGE_SCOPE,
+        "enable_word_time_offsets": enable_word_time_offsets,
+        "word_times_raw": word_times_raw,
+        "segment_times_raw": segment_times_raw,
     }
 
 
