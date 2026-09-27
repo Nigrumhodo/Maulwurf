@@ -64,6 +64,7 @@ def test_csrf_matches_only_its_own_session() -> None:
     assert not sessions.csrf_matches(session, COOKIE, None)
     assert not sessions.csrf_matches(session, COOKIE, "forged")
     assert not sessions.csrf_matches(session, COOKIE, sessions.csrf_token_for("other-cookie"))
+    assert not sessions.csrf_matches(session, COOKIE, "t\u00fcken\udcff")
 
 
 # --- U-S1-AN-02: CSRF y Origin en mutaciones --------------------------------------------
@@ -100,7 +101,9 @@ async def _call(
     async with AsyncClient(
         transport=transport, base_url=ORIGIN, cookies={deps.COOKIE_NAME: COOKIE}
     ) as client:
-        response = await client.request(method, path, headers=headers, content=content)
+        # Bytes latin-1: así llegan los headers por ASGI y httpx no rechaza los no ASCII.
+        raw = {k.encode(): v.encode("latin-1") for k, v in headers.items()}
+        response = await client.request(method, path, headers=raw, content=content)
     return response.status_code, response.json()
 
 
@@ -128,8 +131,14 @@ async def test_reads_do_not_require_csrf() -> None:
         {deps.CSRF_HEADER: VALID[deps.CSRF_HEADER]},  # sin Origin
         {"Origin": "https://evil.example", deps.CSRF_HEADER: VALID[deps.CSRF_HEADER]},
         {"Origin": f"{ORIGIN}.evil.example", deps.CSRF_HEADER: VALID[deps.CSRF_HEADER]},
+        # No ASCII: compare_digest(str) lanzaría TypeError y la respuesta sería 500.
+        {"Origin": "https://caf\u00e9.example", deps.CSRF_HEADER: VALID[deps.CSRF_HEADER]},
+        {"Origin": ORIGIN, deps.CSRF_HEADER: "t\u00fcken-no-ascii"},
     ],
-    ids=["no-token", "forged-token", "no-origin", "foreign-origin", "suffix-origin"],
+    ids=[
+        "no-token", "forged-token", "no-origin", "foreign-origin", "suffix-origin",
+        "non-ascii-origin", "non-ascii-token",
+    ],
 )
 @pytest.mark.parametrize(("method", "path"), [("POST", "/thing"), ("PUT", "/thing/content")])
 async def test_mutation_without_valid_csrf_or_origin_is_rejected(

@@ -51,7 +51,10 @@ CurrentSession = Annotated[Session, Depends(current_session)]
 def _origin_allowed(request: Request) -> bool:
     origin = request.headers.get("origin")
     # Sin Origin se rechaza: los navegadores lo envían en toda mutación same-origin.
-    return origin is not None and hmac.compare_digest(origin, settings.allowed_origin)
+    # Bytes: un Origin con caracteres no ASCII debe dar 403, no un TypeError (500).
+    return origin is not None and hmac.compare_digest(
+        origin.encode("utf-8", "surrogatepass"), settings.allowed_origin.encode()
+    )
 
 
 async def require_mutation(request: Request, session: CurrentSession) -> Session:

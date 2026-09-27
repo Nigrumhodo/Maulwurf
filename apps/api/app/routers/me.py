@@ -27,7 +27,7 @@ async def get_me(
 ) -> MeResponse:
     response.headers["Cache-Control"] = "no-store"
     user = await db.get(User, session.user_id)
-    if user is None or user.status != "active":
+    if user is None:  # current_session ya exige usuario activo
         raise auth_required()
     return MeResponse(
         id=str(user.id),

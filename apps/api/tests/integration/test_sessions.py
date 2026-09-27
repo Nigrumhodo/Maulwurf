@@ -9,8 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_session
 from app.core.deps import COOKIE_NAME
+from app.core.errors import ApiError
 from app.main import app
-from app.models import User
+from app.models import Session, User
 from app.services import sessions
 
 pytestmark = pytest.mark.integration
@@ -100,3 +101,41 @@ async def test_get_me_without_valid_session_is_401(
         response = await client.get("/me", cookies=cookies)
         assert response.status_code == 401
         assert response.json()["error"]["code"] == "auth_required"
+
+
+async def test_concurrent_rotation_yields_a_single_successor(db_session: AsyncSession) -> None:
+    first = await sessions.create_session(db_session, (await _user(db_session)).id)
+    stale = await db_session.get(Session, first.session.id)
+    assert stale is not None
+    await sessions.rotate_session(db_session, first.session)
+
+    # Otra petición con la misma fila ya leída intenta rotar: no debe crear un 2.º sucesor.
+    with pytest.raises(ApiError) as excinfo:
+        await sessions.rotate_session(db_session, stale)
+    assert excinfo.value.code == "session_conflict"
+
+    alive = await db_session.scalar(
+        text("SELECT count(*) FROM sessions WHERE user_id = :u AND revoked_at IS NULL"),
+        {"u": first.session.user_id},
+    )
+    assert alive == 1
+
+
+async def test_logout_revocation_is_idempotent(db_session: AsyncSession) -> None:
+    issued = await sessions.create_session(db_session, (await _user(db_session)).id)
+
+    assert await sessions.revoke_session(db_session, issued.session) is True
+    assert await sessions.revoke_session(db_session, issued.session) is False
+
+
+async def test_session_of_inactive_user_is_rejected(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    user = await _user(db_session)
+    issued = await sessions.create_session(db_session, user.id)
+    user.status = "deleting"
+    await db_session.flush()
+
+    assert await sessions.resolve_session(db_session, issued.cookie_token) is None
+    response = await client.get("/me", cookies={COOKIE_NAME: issued.cookie_token})
+    assert response.status_code == 401
