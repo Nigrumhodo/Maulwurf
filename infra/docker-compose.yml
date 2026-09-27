@@ -8,6 +8,8 @@ x-api-env: &api-env
   MAULWURF_ENV: local
   MAULWURF_DATABASE_URL: postgresql+asyncpg://maulwurf:${POSTGRES_PASSWORD:-maulwurf}@postgres:5432/maulwurf
   MAULWURF_REDIS_URL: redis://redis:6379/0
+  # Origin exacto que ve el navegador (CSRF, A1.4); el 443 por defecto se normaliza.
+  MAULWURF_PUBLIC_ORIGIN: https://localhost:${CADDY_HTTPS_PORT:-443}
 
 services:
   postgres:
