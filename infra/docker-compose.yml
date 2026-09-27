@@ -82,45 +82,63 @@ services:
     networks: [edge, data]
     restart: unless-stopped
 
-  # J1.5 pendiente: sin entrypoint ARQ todavía, worker/scheduler corren un
-  # placeholder sin efectos. Su healthcheck acredita que el proceso sigue vivo.
+  # J1.5: procesos ARQ con colas separadas. El healthcheck `arq ... --check` exige
+  # la clave de salud en Redis (TTL ~31 s), así que prueba proceso vivo Y conectado.
   worker:
     image: maulwurf-api:local
-    command: ["python", "-c", "import time; time.sleep(10**9)"]
+    command: ["arq", "app.workers.arq_app.WorkerSettings"]
     env_file:
       - path: ../.env
         required: false
     environment: *api-env
+    # Solo Redis (y Postgres para el dispatcher): un fallo de la API no debe dejar la
+    # cola sin drenar.
     depends_on:
-      api:
-        condition: service_started
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
+    # La imagen ya corre como 10001; sin capacidades ni escalada de privilegios.
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
     healthcheck:
-      test: ["CMD", "python", "-c", "pass"]
+      test: ["CMD", "arq", "app.workers.arq_app.WorkerSettings", "--check"]
       interval: 15s
-      timeout: 5s
+      # `--check` arranca un intérprete que importa la app: margen para arranque en frío.
+      timeout: 10s
       retries: 5
+      start_period: 30s
     networks: [data]
     restart: unless-stopped
 
   scheduler:
     image: maulwurf-api:local
-    command: ["python", "-c", "import time; time.sleep(10**9)"]
+    command: ["arq", "app.workers.arq_app.SchedulerSettings"]
     env_file:
       - path: ../.env
         required: false
     environment: *api-env
+    # Solo Redis (y Postgres para el dispatcher): un fallo de la API no debe dejar la
+    # cola sin drenar.
     depends_on:
-      api:
-        condition: service_started
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
+    # La imagen ya corre como 10001; sin capacidades ni escalada de privilegios.
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
     healthcheck:
-      test: ["CMD", "python", "-c", "pass"]
+      test: ["CMD", "arq", "app.workers.arq_app.SchedulerSettings", "--check"]
       interval: 15s
-      timeout: 5s
+      # `--check` arranca un intérprete que importa la app: margen para arranque en frío.
+      timeout: 10s
       retries: 5
+      start_period: 30s
     networks: [data]
     restart: unless-stopped
 
