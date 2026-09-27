@@ -59,7 +59,8 @@ class WorkerSettings:
 
 
 class SchedulerSettings:
-    cron_jobs: ClassVar[list[CronJob]] = [cron(dispatch_outbox, run_at_startup=True)]
+    # Cada minuto en el segundo 0: latencia máxima de despacho ~60 s.
+    cron_jobs: ClassVar[list[CronJob]] = [cron(dispatch_outbox, second=0, run_at_startup=True)]
     queue_name = SCHEDULER_QUEUE
     redis_settings = _REDIS
     health_check_interval = HEALTH_CHECK_INTERVAL_S

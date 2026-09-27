@@ -5,7 +5,7 @@ los jobs; al final borra esa cola y los jobs que creó.
 """
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from arq import create_pool
@@ -132,7 +132,8 @@ async def test_events_without_s1_consumer_stay_pending(
 
     report = await dispatch_pending(db_session, pool, queue_name=queue)
 
-    assert report[Outcome.NO_CONSUMER] == 1
+    # Ni siquiera entran al lote: siguen pendientes hasta que exista su consumidor.
+    assert sum(report.values()) == 0
     assert event.status == "pending"
     assert await pool.queued_jobs(queue_name=queue) == []
 
@@ -150,3 +151,83 @@ async def test_second_cycle_does_not_republish(
 
     assert sum(second.values()) == 0
     assert len(await pool.queued_jobs(queue_name=queue)) == 1
+
+
+async def test_unknown_type_is_skipped_once(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    pool, queue = redis
+    user, audio = await _audio(db_session, "verified")
+    event = _event(user, audio, "index.requested")  # typo de tipo: nunca publicable
+    db_session.add(event)
+    await db_session.flush()
+
+    first = await dispatch_pending(db_session, pool, queue_name=queue)
+    second = await dispatch_pending(db_session, pool, queue_name=queue)
+
+    assert first[Outcome.UNKNOWN_TYPE] == 1
+    assert event.status == "skipped" and event.published_at is None
+    assert sum(second.values()) == 0  # ya no ocupa hueco en el lote
+    assert await pool.queued_jobs(queue_name=queue) == []
+
+
+async def test_gated_event_on_non_audio_resource_is_skipped(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    pool, queue = redis
+    user, audio = await _audio(db_session, "verified")
+    event = _event(user, audio, "index_requested")
+    event.resource_type = "task"
+    db_session.add(event)
+    await db_session.flush()
+
+    report = await dispatch_pending(db_session, pool, queue_name=queue)
+
+    assert report[Outcome.UNKNOWN_TYPE] == 1
+    assert event.status == "skipped"
+    assert await pool.queued_jobs(queue_name=queue) == []
+
+
+async def test_backlog_without_consumer_does_not_starve_index(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    # Eventos viejos sin consumidor no deben llenar el lote y bloquear un index nuevo.
+    pool, queue = redis
+    user, audio = await _audio(db_session, "verified")
+    for n in range(3):
+        backlog = _event(user, audio, "notify")
+        backlog.dedupe_key = f"reminder-{n}"
+        db_session.add(backlog)
+    await db_session.flush()
+    index = _event(user, audio, "index_requested")
+    db_session.add(index)
+    await db_session.flush()
+
+    report = await dispatch_pending(db_session, pool, queue_name=queue, batch_size=1)
+
+    assert report[Outcome.PUBLISH] == 1
+    assert index.status == "dispatched"
+
+
+async def test_latest_attempt_decides_the_gate(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    # Un intento viejo verificado no habilita el index si el más reciente aún no limpió.
+    pool, queue = redis
+    user, audio = await _audio(db_session, "verified")
+    db_session.add(
+        IngestionAttempt(
+            user_id=user.id, audio_id=audio.id, privacy_notice_version="v1",
+            cloud_processing_accepted_at=NOW, third_party_voice_acknowledged_at=NOW,
+            declared_providers={}, status="transcript_committed_cleanup_pending",
+            owner_instance="ingest-test", fencing_token=2, cleanup_status="pending",
+            created_at=datetime.now(UTC) + timedelta(seconds=5),
+        )
+    )
+    db_session.add(_event(user, audio, "index_requested"))
+    await db_session.flush()
+
+    report = await dispatch_pending(db_session, pool, queue_name=queue)
+
+    assert report[Outcome.CLEANUP_PENDING] == 1
+    assert await pool.queued_jobs(queue_name=queue) == []
