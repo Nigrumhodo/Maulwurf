@@ -7,6 +7,7 @@ import asyncio
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 
 import pytest
@@ -109,8 +110,17 @@ def test_concurrent_upgrades_serialize_without_errors(empty_schema: str) -> None
         )
         for _ in range(4)
     ]
+    deadline = time.monotonic() + 90  # presupuesto TOTAL, no 90 s por réplica
     for replica in replicas:
-        _, stderr = replica.communicate(timeout=90)
+        try:
+            _, stderr = replica.communicate(timeout=max(1.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            # Sin matarlas, una réplica colgada retendría el advisory lock y el `finally`
+            # del fixture (`upgrade head`) esperaría hasta el lock_timeout.
+            for pending in replicas:
+                pending.kill()
+                pending.communicate()
+            raise
         assert replica.returncode == 0, stderr.decode()[-500:]
 
     assert _state(empty_schema) == (S1_TABLES, [_head(empty_schema)])
