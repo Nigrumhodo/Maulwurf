@@ -84,6 +84,14 @@ def test_writable_disk_bind_mount_fails() -> None:
     assert check(_facts(mountinfo)) == ["disk_backed_writable_mount:/data"]
 
 
+def test_writable_cgroup_v1_mount_is_ram_backed() -> None:
+    mountinfo = CONTAINER_MOUNTINFO + (
+        "1999 1842 0:36 /memory /sys/fs/cgroup/memory rw,nosuid,nodev,noexec,relatime"
+        " - cgroup cgroup rw,memory\n"
+    )
+    assert check(_facts(mountinfo)) == []
+
+
 @pytest.mark.parametrize(
     ("override", "code"),
     [

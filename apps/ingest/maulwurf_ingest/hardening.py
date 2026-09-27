@@ -13,6 +13,10 @@ Garantías comprobadas:
 - `RLIMIT_CORE` es 0 (soft y hard): sin core dumps aunque el host los capture.
 - `memory.swap.max` del cgroup es 0: la memoria del contenedor no puede ir a swap.
 
+`memory.swap.max` solo existe en cgroup v2: en v1 no hay garantía forzada de swap cero
+(`memsw` acota memoria+swap y `swappiness` es orientativo), así que ahí falla cerrado con
+`swap_unknown`; admitir hosts v1 es una decisión pendiente de J4.x.
+
 El host (swap global, `core_pattern`) no se modifica desde aquí; se valida en el
 despliegue (J4.x) y queda registrado como excepción en la bitácora.
 """
@@ -29,7 +33,9 @@ MOUNTINFO = Path("/proc/self/mountinfo")
 SWAP_MAX = Path("/sys/fs/cgroup/memory.swap.max")
 
 # Sistemas de archivos sin respaldo en disco: escribir en ellos no deja nada durable.
-RAM_BACKED_FS = frozenset({"tmpfs", "ramfs", "proc", "sysfs", "cgroup2", "devpts", "mqueue"})
+RAM_BACKED_FS = frozenset(
+    {"tmpfs", "ramfs", "proc", "sysfs", "cgroup", "cgroup2", "devpts", "mqueue"}
+)
 TMP_REQUIRED_OPTIONS = frozenset({"noexec", "nosuid", "nodev"})
 
 _OCTAL_ESCAPE = re.compile(r"\\([0-7]{3})")

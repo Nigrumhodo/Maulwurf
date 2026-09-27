@@ -35,6 +35,10 @@ def enforce_hardening() -> None:
     failures = hardening.check(hardening.collect())
     if not failures:
         logger.info("hardening.ok")
+        # En enforce el DSN no es opcional: sin él el contenedor quedaría not_ready
+        # para siempre y el log de /readyz (a propósito) no explica la causa.
+        if settings.ingest_hardening == "enforce" and not settings.database_url:
+            raise HardeningError("MAULWURF_DATABASE_URL sin definir")
         return
     logger.error("hardening.failed checks=%s", ",".join(failures))
     if settings.ingest_hardening == "enforce":
@@ -65,15 +69,21 @@ async def check_tmpfs() -> None:
         pass
 
 
+# /readyz no está autenticado y cada sonda abre una conexión nueva: el semáforo global
+# acota las conexiones simultáneas a Postgres aunque llegue una ráfaga de sondas.
+_PG_CHECK_GATE = asyncio.Semaphore(2)
+
+
 async def check_postgres() -> None:
     if not settings.database_url:
         raise RuntimeError("MAULWURF_DATABASE_URL sin definir")
     dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
-    conn = await asyncpg.connect(dsn, timeout=CHECK_TIMEOUT_S)
-    try:
-        await conn.execute("SELECT 1")
-    finally:
-        await conn.close()
+    async with _PG_CHECK_GATE:
+        conn = await asyncpg.connect(dsn, timeout=CHECK_TIMEOUT_S)
+        try:
+            await conn.execute("SELECT 1")
+        finally:
+            await conn.close()
 
 
 CHECKS: dict[str, Callable[[], Awaitable[None]]] = {
