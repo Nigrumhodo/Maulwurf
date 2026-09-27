@@ -125,7 +125,11 @@ def test_public_origin_rejects_path_and_query(origin: str) -> None:
 
 
 @pytest.mark.parametrize("field", ["database_url", "redis_url", "public_origin"])
-def test_dev_defaults_rejected_outside_local(field: str) -> None:
+def test_dev_defaults_rejected_outside_local(
+    field: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # La suite de integración exporta las URLs de servicios; aquí deben faltar.
+    monkeypatch.delenv(f"MAULWURF_{field.upper()}", raising=False)
     urls = {k: v for k, v in PROD_URLS.items() if k != field}
 
     with pytest.raises(ValidationError, match=f"{field} conserva el valor de desarrollo"):
