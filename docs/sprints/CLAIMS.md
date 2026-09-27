@@ -1,6 +1,6 @@
 # Registro canónico de claims — Maulwurf
 
-> Estado: **S1 abierto**. Revisión: 2026-09-23.
+> Estado: **S1 abierto**. Revisión: 2026-09-27.
 >
 > Este archivo es la única fuente de verdad para la propiedad de tickets. Las bitácoras
 > personales conservan evidencia, bloqueos y notas, pero una fila allí no asigna un ticket
@@ -66,6 +66,16 @@ de este PR de planificación.
 | claim | J1.4 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | CI + plantilla de PR (ADR-0004); pipeline verde; mergeado en #16 |
 | claim | J1.6 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | ADR-0005 y política Redis; mergeado en #17 |
 | claim | J1.7 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | Runbook de desarrollo; verificado desde clon limpio; mergeado en #18 |
+| claim | J1.5 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área A | Plan en `docs/plan/tickets/J1.5.md`; bloqueado por A1.8 y tabla `outbox_events` |
+| claim | L1.6 | jpinillaz | en curso | 2026-09-27 | no aplica | — / arquitectura | Congela §1.1–§1.5 de `docs/plan/S1.md`; bloquea A1.8 |
+| claim | A1.1 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área A | Inicio del camino crítico A1.x → J1.5 |
+| claim | A1.2 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área A | Desbloquea A1.3, A1.4, A1.8; incluye engine async compartido |
+| claim | A1.5 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área A, seguridad | Desbloquea A1.6, A1.7, A1.9 |
+| claim | A1.4 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área A, seguridad | Desbloquea A1.8 y el cliente CSRF de Web |
+| claim | A1.7 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área A | Completa la sección de migraciones pendiente en J1.7 |
+| claim | A1.8 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área A, Web | Depende de A1.4 y L1.6; desbloquea J1.5 |
+| claim | S1.B1 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área S | Desbloquea S1.B2 y S1.B3 |
+| claim | S1.B3 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área S | Desbloquea S1.B4, S1.B5, S1.B6 |
 
 ## 4. Historial de cambios
 
@@ -78,3 +88,4 @@ de este PR de planificación.
 | 2026-09-24 | Se reclama S1.A5. La serie de tres llamadas queda observada; estado `hecho`. 200 MiB y 3 h no se aprueban. Elegibilidad cloud `pendiente`. | Este cambio |
 | 2026-09-25 | Se reclaman J1.1–J1.4 y J1.6–J1.8 (J1.5 queda pendiente en S1). Trabajo y evidencia registrados antes del merge; estado `en curso` hasta review. | Este PR |
 | 2026-09-26 | Se cierran J1.1–J1.4 y J1.6–J1.8 como `hecho` tras fusionar #12–#18 en `develop` (pipeline de calidad verde en `4aa8ced`). J1.5 sigue pendiente en S1. | Este PR |
+| 2026-09-27 | Se reclaman J1.5, L1.6, A1.1, A1.2, A1.4, A1.5, A1.7, A1.8, S1.B1 y S1.B3 (camino crítico y tickets con más dependientes). Quedan libres A1.3, A1.6, A1.9, L1.4, L1.5, L1.7 y S1.B2, S1.B4–B6; S1.A6–A9 siguen con su owner en Plane. | Este PR |

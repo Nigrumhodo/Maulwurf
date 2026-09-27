@@ -19,8 +19,15 @@ npm-debug.log*
 .env
 .env.local
 .env.*.local
+.env.plane.local
 *.pem
 *.key
+
+# --- Plane local (credenciales y guía operativa, no versionar) ---
+docs/PLANE_MCP.md
+
+# --- Configuración local de Kiro (editor/agentes) ---
+.kiro/
 
 # --- Datos locales ---
 *.db
