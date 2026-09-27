@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     # Opcionales hasta A1.3 (OAuth); declararlos evita que extra="forbid" rechace el .env.
     google_client_id: str | None = None
     google_client_secret: SecretStr | None = None
+    # Vida máxima de la sesión opaca (A1.4); el logout la revoca antes.
+    session_ttl_hours: int = Field(default=168, ge=1, le=720)
     # Único Origin aceptado en mutaciones (A1.4): el que sirve Caddy, same-origin.
     public_origin: AnyHttpUrl = cast(AnyHttpUrl, "https://localhost")
     # cast: pydantic valida el DSN en runtime; mypy no relaja el tipo del default.
