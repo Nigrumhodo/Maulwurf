@@ -11,6 +11,10 @@ ingesta. De cada candidato se leen como máximo 12 bytes para ver magia (`RIFF`,
 
 S1 no exporta trazas: `traces_configured` queda en falso y el conteo de marcadores
 en cero salvo que el llamador pase texto de traza.
+
+Los árboles de infraestructura (`/usr`, `/opt`, `/snap`, `/mnt`, Docker) no se
+recorren: en CI, como root, agotan el presupuesto. `infra_pruned` cuenta cuántos
+se omitieron. `clear` no exige que ese conteo sea cero.
 """
 from __future__ import annotations
 
@@ -69,6 +73,8 @@ class AbsenceReport:
     traces_configured: bool
     scan_complete: bool
     redis_ok: bool = field(default=True)
+    # Árboles de infraestructura no recorridos. No incluye rutas.
+    infra_pruned: int = 0
 
     @property
     def clear(self) -> bool:
@@ -123,7 +129,20 @@ def _note(counts: _Counts, budget: int) -> bool:
     return True
 
 
-def _walk(root: Path, counts: _Counts, *, suffixes: bool, budget: int, prune: set[str]) -> None:
+def _matching_infra(path: str) -> str | None:
+    """Prefijo de infraestructura que cubre `path`, o None."""
+    norm = os.path.normpath(path)
+    for raw in _INFRA_PREFIXES:
+        prefix = os.path.normpath(raw)
+        if norm == prefix or norm.startswith(prefix + "/"):
+            return prefix
+    return None
+
+
+def _walk(
+    root: Path, counts: _Counts, *, suffixes: bool, budget: int, prune: set[str],
+    omitted: set[str] | None = None,
+) -> None:
     root_n = os.path.normpath(root)
 
     def _onerror(_err: OSError) -> None:
@@ -138,6 +157,9 @@ def _walk(root: Path, counts: _Counts, *, suffixes: bool, budget: int, prune: se
             for name in dirnames:
                 child = os.path.normpath(os.path.join(dirpath, name))
                 if child in prune and child != root_n:
+                    prefix = _matching_infra(child)
+                    if prefix is not None and omitted is not None:
+                        omitted.add(prefix)
                     continue
                 kept.append(name)
             dirnames[:] = kept
@@ -347,9 +369,14 @@ def sweep(
     counts = _Counts()
     info = mountinfo if mountinfo is not None else _read_mountinfo()
     points = scannable_mount_points(info) if info is not None else []
+    # La misma política en la raíz del mount y en los hijos: si /mnt es un
+    # punto de montaje, no se recorre por ser la raíz del walk.
+    skipped = [point for point in points if _matching_infra(point) is not None]
+    walked = [point for point in points if _matching_infra(point) is None]
     prune = {os.path.normpath(mount.mount_point) for mount in hardening.parse_mountinfo(info or "")}
     prune.update(os.path.normpath(prefix) for prefix in _INFRA_PREFIXES)
-    for point in points:
+    omitted: set[str] = set()
+    for point in walked:
         if not counts.complete:
             break
         root = Path(point)
@@ -359,7 +386,9 @@ def sweep(
             counts.unreadable_directories += 1
             continue
         if is_dir:
-            _walk(root, counts, suffixes=False, budget=budget, prune=prune)
+            _walk(root, counts, suffixes=False, budget=budget, prune=prune, omitted=omitted)
+    skipped_prefixes = {_matching_infra(point) for point in skipped}
+    infra_pruned = len(skipped) + len(omitted - skipped_prefixes)
 
     cache_counts = _Counts()
     for root in default_cache_roots() if cache_roots is None else cache_roots:
@@ -395,7 +424,8 @@ def sweep(
         audio_files=audio_files,
         magic_matches=magic,
         unreadable_directories=unreadable,
-        mounts_scanned=len(points),
+        mounts_scanned=len(walked),
+        infra_pruned=infra_pruned,
         cache_audio_files=cache_counts.audio_files,
         redis_audio_markers=redis_markers,
         redis_checked=redis_checked,

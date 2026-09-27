@@ -82,6 +82,23 @@ def test_pruned_infra_child_is_not_scanned(tmp_path: Path) -> None:
     assert counts.complete is True
 
 
+def test_infra_mount_is_counted_and_not_walked(tmp_path: Path) -> None:
+    (tmp_path / "converted.wav").write_bytes(b"RIFFxxxxWAVE")
+    mountinfo = "\n".join([
+        f"1 0 0:1 / {tmp_path} rw - tmpfs tmpfs rw,size=1m",
+        "2 1 8:1 / /mnt/ci rw - ext4 /dev/sdb rw",
+    ])
+    try:
+        report = sweep(mountinfo=mountinfo, cache_roots=[], redis_url=None)
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+    assert report.audio_files == 1
+    assert report.mounts_scanned == 1
+    assert report.infra_pruned == 1
+    assert "mnt" not in json.dumps(report.as_json())
+
+
 def test_scannable_mounts_skip_pseudo_and_foreign_disks() -> None:
     points = scannable_mount_points(_MOUNTINFO)
 
@@ -99,6 +116,7 @@ def test_sweep_of_a_mount_sees_artifacts_without_dumping_them(tmp_path: Path) ->
     assert report.audio_files == 1
     assert report.magic_matches == 1
     assert report.mounts_scanned == 1
+    assert report.infra_pruned == 0
     assert "OggS" not in json.dumps(report.as_json())
     assert str(tmp_path) not in json.dumps(report.as_json())
 
