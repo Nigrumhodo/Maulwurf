@@ -340,7 +340,7 @@ versioned or retained as a CI artifact. Persist only non-sensitive metrics and e
   Calendar, and notifications. Outbox messages may contain IDs and non-sensitive
   configuration only, never audio or tokens.
 - **Configuration:** `.env.example` names the current environment variables (`MAULWURF_*`,
-  `GOOGLE_CLIENT_ID/SECRET`, `NVIDIA_API_KEY`, `RIVA_*`, provisional `INGEST_*`).
+  `MAULWURF_GOOGLE_CLIENT_ID/SECRET`, `NVIDIA_API_KEY`, `RIVA_*`, provisional `INGEST_*`).
   `app/core/config.py` currently loads only the `MAULWURF_*` backend settings; `> TODO:`
   extend the settings schema (without exposing secrets) as tickets land.
 - **Feature progression:** the documented phases gate indexing/chat (F1), analysis and
