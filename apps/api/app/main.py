@@ -6,7 +6,8 @@ from importlib.metadata import PackageNotFoundError, version
 from fastapi import FastAPI
 
 from app.core.db import engine
-from app.routers import health
+from app.core.errors import install_error_handlers
+from app.routers import health, me
 
 try:
     __version__ = version("maulwurf-api")
@@ -23,4 +24,6 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Maulwurf API", version=__version__, lifespan=lifespan)
+install_error_handlers(app)
 app.include_router(health.router)
+app.include_router(me.router)
