@@ -40,7 +40,7 @@ async def _expect_integrity_error(session: AsyncSession, row: object) -> None:
 async def test_google_tokens_are_stored_encrypted(db_session: AsyncSession) -> None:
     user = await _user(db_session, "sub-crypto")
     token = "ya29.plaintext-must-not-reach-db"
-    blob, version = crypto.encrypt(token, user_id=user.id, field="access_token")
+    blob, version = crypto.encrypt(token, user_id=user.id, field="google_credentials.access_token")
     db_session.add(GoogleCredential(user_id=user.id, access_token_enc=blob, key_version=version))
     await db_session.flush()
 
@@ -54,7 +54,7 @@ async def test_google_tokens_are_stored_encrypted(db_session: AsyncSession) -> N
     assert stored is not None
     assert crypto.decrypt(
         stored.access_token_enc, key_version=stored.key_version, user_id=user.id,
-        field="access_token",
+        field="google_credentials.access_token",
     ) == token
 
 

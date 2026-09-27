@@ -9,7 +9,7 @@ from app.core.config import settings
 USER_A = uuid.uuid4()
 USER_B = uuid.uuid4()
 TOKEN = "ya29.fake-access-token-for-tests"
-FIELD = "google_credentials.access_token"
+FIELD: crypto.CryptoField = "google_credentials.access_token"
 
 
 def test_roundtrip_returns_plaintext_and_current_key_version() -> None:
@@ -39,7 +39,9 @@ def test_each_encryption_uses_a_fresh_nonce() -> None:
     [(USER_B, FIELD), (USER_A, "google_credentials.refresh_token")],
     ids=["other-user", "other-field"],
 )
-def test_blob_is_bound_to_its_user_and_field(user_id: uuid.UUID, field: str) -> None:
+def test_blob_is_bound_to_its_user_and_field(
+    user_id: uuid.UUID, field: crypto.CryptoField
+) -> None:
     blob, version = crypto.encrypt(TOKEN, user_id=USER_A, field=FIELD)
 
     with pytest.raises(crypto.DecryptionError):

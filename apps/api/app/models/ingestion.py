@@ -36,7 +36,14 @@ INGESTION_STATES = (
     "rejected",
     "cancelled",
 )
-ACTIVE_INGESTION_STATES = INGESTION_STATES[:4]
+# Explícito, no un slice: alimenta el índice parcial `attempts_one_active` (literal en la
+# migración 0001), y reordenar INGESTION_STATES no debe cambiarlo en silencio.
+ACTIVE_INGESTION_STATES = (
+    "awaiting_upload",
+    "receiving",
+    "transcribing",
+    "transcript_committed_cleanup_pending",
+)
 CLEANUP_STATES = ("pending", "verified", "failed")
 # Solo estos tipos nacen bloqueados hasta cleanup verificado (S1.md §1.3).
 CLEANUP_GATED_EVENT_TYPES = ("index_requested", "analyze_requested")
@@ -114,7 +121,7 @@ class IngestionAttempt(TenantOwned, Base):
     third_party_voice_acknowledged_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-    declared_providers: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    declared_providers: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     owner_instance: Mapped[str] = mapped_column(Text, nullable=False)
     fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -129,7 +136,7 @@ class IngestionAttempt(TenantOwned, Base):
     fragments_total: Mapped[int | None] = mapped_column(Integer)
     cleanup_status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
     cleanup_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    cleanup_evidence: Mapped[Any] = mapped_column(
+    cleanup_evidence: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'")
     )
     audio_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -170,7 +177,10 @@ class OutboxEvent(TenantOwned, Base):
     resource_type: Mapped[str] = mapped_column(Text, nullable=False)
     resource_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     resource_version: Mapped[int | None] = mapped_column(Integer)
-    payload: Mapped[Any] = mapped_column(JSONB, nullable=False, server_default=text("'{}'"))
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    # Sin default a propósito: quien emite decide y el CHECK `cleanup_gate` lo valida.
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     blocked_reason: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
