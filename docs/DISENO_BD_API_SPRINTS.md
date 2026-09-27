@@ -1030,6 +1030,7 @@ Códigos tipados (sin PII ni contenido sensible):
 | `invalid_transition` | 409 | Estado destino no permitido |
 | `transcript_unavailable` | 409 | Sin transcript utilizable (reupload); 404 si el recurso no existe para el tenant |
 | `srt_unavailable` | 409 | Timestamps inválidos para SRT |
+| `session_conflict` | 409 | La sesión ya fue rotada o revocada por otra petición; repetir `GET /me` |
 | `evidence_invalid` | 422 | Span/cita no reconstruible desde BD |
 | `context_exceeded` | 422 | Historial + evidencia no caben tras recorte determinista |
 | `date_unresolved` | 422 | Confirmar exige fecha válida |
