@@ -152,7 +152,15 @@ jobs:
             output=$(sudo -E env "PATH=$PATH" uv run pytest -m integration -q 2>&1)
             code=$?
             printf '%s\n' "$output"
-            passed=$(printf '%s\n' "$output" | sed -n 's/.* \([0-9][0-9]*\) passed.*/\1/p' | tail -n 1)
+            passed=$(printf '%s\n' "$output" | awk '{
+              for (i = 1; i < NF; i++) {
+                n = $i
+                w = $(i + 1)
+                gsub(/,/, "", n)
+                gsub(/,/, "", w)
+                if (n ~ /^[0-9]+$/ && w == "passed") { print n; exit }
+              }
+            }')
             if [ "$code" -ne 0 ] || [ -z "$passed" ] || [ "$passed" -eq 0 ]; then
               exit 1
             fi
