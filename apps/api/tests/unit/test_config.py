@@ -1,9 +1,9 @@
 """A1.2: configuración fail-fast y sin secretos expuestos."""
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
-from pydantic import ValidationError
+from pydantic import Field, RedisDsn, ValidationError
 
 from app.core.config import Settings
 
@@ -166,3 +166,19 @@ def test_unknown_key_scan_follows_the_effective_env_file(
     monkeypatch.chdir(tmp_path)
 
     assert _settings().env == "local"  # _env_file=None: ese .env no participa
+
+
+def test_dev_default_guard_also_covers_default_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Si un campo pasa a default_factory, el guard debe seguir detectando el valor.
+    monkeypatch.delenv("MAULWURF_REDIS_URL", raising=False)
+
+    class FactorySettings(Settings):
+        redis_url: RedisDsn = Field(
+            default_factory=lambda: cast(RedisDsn, "redis://localhost:6379/0")
+        )
+
+    urls = {k: v for k, v in PROD_URLS.items() if k != "redis_url"}
+    with pytest.raises(ValidationError, match="redis_url conserva el valor de desarrollo"):
+        FactorySettings(_env_file=None, env="prod", **{**SECRETS, **urls})

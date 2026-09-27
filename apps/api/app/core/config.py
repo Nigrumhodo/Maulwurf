@@ -134,7 +134,11 @@ class Settings(BaseSettings):
             raise ValueError(f"public_origin debe usar https en env={self.env}")
         for name in _DEV_DEFAULT_FIELDS:
             field = type(self).model_fields[name]
-            default: object = TypeAdapter(field.annotation).validate_python(field.get_default())
+            # call_default_factory: con default_factory, get_default() devolvería la factoría
+            # y el guard dejaría de detectar el valor de desarrollo (fail-open).
+            default: object = TypeAdapter(field.annotation).validate_python(
+                field.get_default(call_default_factory=True)
+            )
             if str(getattr(self, name)) == str(default):
                 raise ValueError(f"{name} conserva el valor de desarrollo en env={self.env}")
         return self
