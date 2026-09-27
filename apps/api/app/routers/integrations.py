@@ -5,7 +5,7 @@ Solo metadatos: estado, scopes concedidos y frescura. Nunca tokens ni su forma c
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 from pydantic import BaseModel
 
 from app.core.deps import CurrentSession, DbSession
@@ -26,7 +26,11 @@ class IntegrationsStatus(BaseModel):
 
 
 @router.get("/integrations/status")
-async def integrations_status(session: CurrentSession, db: DbSession) -> IntegrationsStatus:
+async def integrations_status(
+    response: Response, session: CurrentSession, db: DbSession
+) -> IntegrationsStatus:
+    # Estado de conexión y scopes cambian con el tiempo: nunca servirlos desde caché.
+    response.headers["Cache-Control"] = "no-store"
     credential = await db.get(GoogleCredential, session.user_id)
     if credential is None:
         google = GoogleStatus(

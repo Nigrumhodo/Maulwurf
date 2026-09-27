@@ -235,6 +235,25 @@ async def test_put_declared_too_large_is_413_without_reading(
     assert response.json()["error"]["code"] == "payload_too_large"
 
 
+async def test_put_chunked_without_content_length_is_still_503(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    # Fija el comportamiento de S1 antes de que S2 cuente bytes durante el streaming.
+    actor = await _actor(db_session)
+    reserved = await _reserved(client, db_session, actor)
+
+    async def chunks() -> AsyncIterator[bytes]:
+        yield b"RIFF"
+        yield b"\x00" * 60
+
+    response = await client.put(
+        reserved["upload_url"], cookies=actor.cookies, headers=actor.headers, content=chunks()
+    )
+
+    assert "content-length" not in response.request.headers
+    assert response.status_code == 503
+
+
 async def test_put_on_expired_attempt_is_410(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
@@ -336,6 +355,7 @@ async def test_integrations_status_without_and_with_google(
         "status": "disconnected", "scopes": [], "token_expires_at": None,
         "last_refresh_at": None,
     }
+    assert after.headers["cache-control"] == "no-store"
     assert after.json()["google"]["status"] == "connected"
     assert after.json()["google"]["scopes"] == ["openid", "email"]
     assert "access_token" not in after.text
@@ -349,6 +369,9 @@ async def test_openapi_exposes_contract_without_secrets(client: AsyncClient) -> 
             "/integrations/status"} <= set(paths)
     for marker in ("NVIDIA_API_KEY", "Bearer", "secret_key", "encryption_key"):
         assert marker not in response.text
+    put = paths["/audios/{audio_id}/content"]["put"]["responses"]
+    assert "202" not in put
+    assert {"401", "403", "404", "409", "410", "413", "503"} <= set(put)
 
 
 async def test_writes_persist_through_real_sessions(migrated_database_url: str) -> None:

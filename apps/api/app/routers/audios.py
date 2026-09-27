@@ -9,7 +9,6 @@ haber aceptado un audio que se descarta. No hay dedupe: el hash solo se conoce e
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Header, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -17,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.core.config import settings
 from app.core.deps import DbSession, MutationSession
 from app.core.errors import ApiError, not_found
+from app.core.validation import is_iana_timezone
 from app.models import Audio, IngestionAttempt, Subject
 from app.services.tenant import get_owned
 
@@ -26,14 +26,6 @@ router = APIRouter(tags=["audios"])
 DECLARED_PROVIDERS = {"asr": "nvidia-riva/whisper-large-v3"}
 # Quién posee la reserva hasta que S2 asigne una instancia de `ingest`.
 UNASSIGNED_OWNER = "api:unassigned"
-
-
-def is_iana_timezone(value: str) -> bool:
-    try:
-        ZoneInfo(value)
-    except (ZoneInfoNotFoundError, ValueError):
-        return False
-    return True
 
 
 class AudioCreate(BaseModel):
@@ -132,7 +124,22 @@ async def create_audio(body: AudioCreate, session: MutationSession, db: DbSessio
     return created
 
 
-@router.put("/audios/{audio_id}/content", status_code=202, response_model=None)
+@router.put(
+    "/audios/{audio_id}/content",
+    # En S1 la única salida con todo válido es 503: OpenAPI no debe prometer un 202 que no
+    # puede ocurrir. S2 vuelve a 202 al implementar la recepción efímera.
+    status_code=503,
+    response_model=None,
+    responses={
+        401: {"description": "Sin sesión (auth_required)"},
+        403: {"description": "CSRF u Origin inválido (csrf_invalid)"},
+        404: {"description": "Audio o intento inexistente o ajeno (not_found)"},
+        409: {"description": "El intento ya no está activo (attempt_not_active)"},
+        410: {"description": "La subida expiró (upload_expired)"},
+        413: {"description": "Content-Length declarado supera el máximo (payload_too_large)"},
+        503: {"description": "Recepción efímera no disponible en S1 (capacity_unavailable)"},
+    },
+)
 async def upload_content(
     audio_id: uuid.UUID,
     attempt_id: Annotated[uuid.UUID, Query()],
@@ -150,7 +157,9 @@ async def upload_content(
         raise ApiError(409, "attempt_not_active", "Este intento de subida ya no está activo.")
     if attempt.upload_expires_at is None or attempt.upload_expires_at <= datetime.now(UTC):
         raise ApiError(410, "upload_expired", "La subida expiró; vuelve a crear la clase.")
-    # Se decide por la cabecera, sin leer bytes: el cuerpo nunca se consume en S1.
+    # Se decide por la cabecera, sin leer bytes: el cuerpo nunca se consume en S1. Es solo
+    # un pre-filtro: una subida chunked no declara Content-Length, así que en S2 el límite
+    # real se impone contando los bytes recibidos durante el streaming.
     if content_length is not None and content_length > settings.upload_max_bytes:
         raise ApiError(
             413,

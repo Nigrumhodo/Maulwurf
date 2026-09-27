@@ -9,9 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.deps import COOKIE_NAME, CurrentSession, DbSession, MutationSession
 from app.core.errors import auth_required
+from app.core.validation import is_iana_timezone
 from app.models import Session as SessionRow
 from app.models import User
-from app.routers.audios import is_iana_timezone
 from app.services.sessions import csrf_token_for
 
 router = APIRouter(tags=["me"])

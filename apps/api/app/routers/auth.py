@@ -9,7 +9,8 @@ router = APIRouter(tags=["auth"])
 
 @router.post("/auth/logout", status_code=204, response_model=None)
 async def logout(response: Response, session: MutationSession, db: DbSession) -> Response:
-    # Revocación inmediata e idempotente: la cookie deja de valer en la siguiente petición.
+    # Revocación inmediata: la cookie deja de valer en la siguiente petición. Un segundo
+    # logout con esa cookie ya no tiene sesión y recibe 401 (fail closed).
     await revoke_session(db, session)
     await db.commit()
     response.status_code = 204
