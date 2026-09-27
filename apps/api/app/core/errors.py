@@ -5,6 +5,7 @@ Los mensajes y detalles nunca llevan PII, tokens ni contenido de clases.
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 
@@ -33,5 +34,26 @@ async def _handle(_: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content=body)
 
 
+def not_found() -> ApiError:
+    # Inexistente y ajeno responden igual: no se revela si el recurso existe (ADR-0006).
+    return ApiError(404, "not_found", "Recurso no encontrado.")
+
+
+def validation_failed(fields: dict[str, str]) -> ApiError:
+    return ApiError(422, "validation_failed", "Hay campos inválidos.", {"fields": fields})
+
+
+async def _handle_validation(_: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, RequestValidationError)  # noqa: S101 - registrado solo para ella
+    # Solo ubicación y mensaje por campo: nunca el valor recibido (puede traer PII).
+    fields: dict[str, str] = {}
+    for error in exc.errors():
+        name = ".".join(str(part) for part in error["loc"][1:]) or "body"
+        # Un campo puede fallar por varios motivos: se conservan todos, no solo el último.
+        fields[name] = f"{fields[name]}; {error['msg']}" if name in fields else error["msg"]
+    return await _handle(_, validation_failed(fields))
+
+
 def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(ApiError, _handle)
+    app.add_exception_handler(RequestValidationError, _handle_validation)

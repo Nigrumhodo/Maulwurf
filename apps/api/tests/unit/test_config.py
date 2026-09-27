@@ -182,3 +182,8 @@ def test_dev_default_guard_also_covers_default_factory(
     urls = {k: v for k, v in PROD_URLS.items() if k != "redis_url"}
     with pytest.raises(ValidationError, match="redis_url conserva el valor de desarrollo"):
         FactorySettings(_env_file=None, env="prod", **{**SECRETS, **urls})
+
+
+def test_empty_language_allowlist_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="ingest_languages"):
+        _settings(ingest_languages=())
