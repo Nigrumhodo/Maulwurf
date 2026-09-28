@@ -1,6 +1,6 @@
 # Registro canónico de claims — Maulwurf
 
-> Estado: **S1 abierto**. Revisión: 2026-09-27.
+> Estado: **S1 abierto**. Revisión: 2026-09-28.
 >
 > Este archivo es la única fuente de verdad para la propiedad de tickets. Las bitácoras
 > personales conservan evidencia, bloqueos y notas, pero una fila allí no asigna un ticket
@@ -71,7 +71,7 @@ de este PR de planificación.
 | claim | J1.6 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | ADR-0005 y política Redis; mergeado en #17 |
 | claim | J1.7 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | Runbook de desarrollo; verificado desde clon limpio; mergeado en #18 |
 | claim | J1.5 | jpinillaz | hecho | 2026-09-27 | no aplica | — / área A | Worker/scheduler ARQ en #25; dispatcher con gate de cleanup (U-S1-JF-04) en #30. Ack/reintentos pasan a J2.1 |
-| claim | L1.6 | jpinillaz | en curso | 2026-09-27 | no aplica | — / arquitectura | Congelación `S1-v1` de §1.1–§1.5 de `docs/plan/S1.md`; PR `s1/l1.6-freeze` en revisión |
+| claim | L1.6 | jpinillaz | hecho | 2026-09-27 | no aplica | — / arquitectura | Congelación `S1-v1` de §1.1–§1.5 de `docs/plan/S1.md`; mergeado en #38 |
 | claim | A1.1 | jpinillaz | hecho | 2026-09-27 | no aplica | — / área A | Router de salud y base de tests; mergeado en #21 |
 | claim | A1.2 | jpinillaz | hecho | 2026-09-27 | no aplica | — / área A | Settings fail-fast; mergeado en #23 y #26 |
 | claim | A1.5 | jpinillaz | hecho | 2026-09-27 | no aplica | — / área A, seguridad | Esquema núcleo, shape S1 de ingesta/outbox, AES-GCM, ADR-0006; mergeado en #24 |
@@ -105,3 +105,4 @@ de este PR de planificación.
 | 2026-09-27 | Se reclaman S1.B5 y S1.B6 (`en curso`). | Este cambio |
 | 2026-09-27 | S1.B5 y S1.B6 pasan a `hecho`. I-S1-SG-06: 9 passed en ingest. I-S1-SG-05: el gate de outbox, 1 passed. En el WSL el éxito no queda `verified` por `unreadable_processes`. | Este cambio |
 | 2026-09-28 | A1.2, A1.4, A1.7, A1.8, J1.5, S1.B1 y S1.B3 pasan a `hecho` tras fusionar #22, #23, #26, #28–#30, #33 y #34 en `develop`. L1.6 sigue `en curso` hasta que se fusione su PR. | Este PR |
+| 2026-09-28 | L1.6 pasa a `hecho`: el PR `s1/l1.6-freeze` (#38) se fusionó en `develop` (35e4d70) tras #39/#40. La congelación `S1-v1` está publicada en `docs/plan/S1.md`. | Este PR |
