@@ -42,7 +42,7 @@ Los 8 servicios (`web`, `api`, `ingest`, `worker`, `scheduler`, `postgres`,
 ## 3. Healthchecks
 
 ```bash
-curl -k -o /dev/null -w '%{http_code}\n' https://localhost/          # web (404 hasta D1.x)
+curl -k -o /dev/null -w '%{http_code}\n' https://localhost/          # web (200: placeholder)
 curl -k https://localhost/readyz                                     # api: 200 con Postgres y Redis, 503 si falta uno
 docker compose exec api    python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8000/healthz').status)"
 docker compose exec ingest python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8000/healthz').status)"
@@ -108,6 +108,11 @@ docker run -d --rm --name mw-test-pg -e POSTGRES_USER=maulwurf \
   -e POSTGRES_PASSWORD=maulwurf -e POSTGRES_DB=maulwurf -p 127.0.0.1:55432:5432 \
   pgvector/pgvector:pg16
 cd apps/api
+MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@127.0.0.1:55432/maulwurf \
+  uv run pytest -m integration
+# Ingesta: misma variable (crea una BD `maulwurf_ingest_test_*`); necesita `ffmpeg` en el
+# PATH y, para los tests de audio sintético, `espeak-ng` (la CI los instala).
+cd ../ingest
 MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@127.0.0.1:55432/maulwurf \
   uv run pytest -m integration
 docker stop mw-test-pg
