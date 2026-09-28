@@ -1,8 +1,8 @@
 # Versiones de runtime (L1.1)
 
 Pins de entorno para instalaciones reproducibles y para que J1.1/J1.4 copien las
-mismas cifras. Decisión formal: [ADR-0002](adr/ADR-0002-versiones.md). Compose y CI
-aún no existen.
+mismas cifras. Decisión formal: [ADR-0002](adr/ADR-0002-versiones.md). Las mismas cifras
+las usan `infra/docker-compose.yml` y `.github/workflows/quality.yml`.
 
 | Runtime | Pin | Dónde |
 |---|---|---|
@@ -13,9 +13,16 @@ aún no existen.
 | Redis | 7.4-alpine, fijado por digest (`--save "" --appendonly no`) | `infra/docker-compose.yml`, [ADR-0005](adr/ADR-0005-redis.md) |
 | Caddy | 2.8-alpine, fijado por digest | `infra/docker-compose.yml`, `infra/Caddyfile` |
 | Cliente Riva | `nvidia-riva-client==2.27.0` | `apps/ingest/pyproject.toml`, `requirements-riva.txt` |
+| ffmpeg/ffprobe | `7:7.1.5-0+deb13u1` (J1.8) | `apps/ingest/Dockerfile` |
+| Imagen base Python | `python:3.12-slim`, por digest | `apps/api/Dockerfile`, `apps/ingest/Dockerfile` |
+| Imagen base Node | `node:22-alpine`, por digest | `apps/web/Dockerfile` |
+| uv | 0.12.18 | Dockerfiles de api/ingest, `.github/workflows/quality.yml` |
 
 Lockfiles que deben instalarse sin resolver a ciegas: `apps/api/uv.lock`,
 `apps/ingest/uv.lock`, `apps/web/package-lock.json`.
+
+`espeak-ng` (requerido por los tests de audio sintético, S1.A1) lo instala la CI sin pin
+y no forma parte de las imágenes: queda fuera de la tabla hasta que se fije.
 
 ## Verificación L1.1
 
