@@ -70,17 +70,17 @@ de este PR de planificación.
 | claim | J1.4 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | CI + plantilla de PR (ADR-0004); pipeline verde; mergeado en #16 |
 | claim | J1.6 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | ADR-0005 y política Redis; mergeado en #17 |
 | claim | J1.7 | jpinillaz | hecho | 2026-09-25 | no aplica | — / líder | Runbook de desarrollo; verificado desde clon limpio; mergeado en #18 |
-| claim | J1.5 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área A | Parcial mergeado en #25 (worker/scheduler ARQ, `/readyz` real); falta el dispatcher con gate (U-S1-JF-04), bloqueado por A1.8 |
-| claim | L1.6 | jpinillaz | en curso | 2026-09-27 | no aplica | — / arquitectura | Congela §1.1–§1.5 de `docs/plan/S1.md`; bloquea A1.8 |
+| claim | J1.5 | jpinillaz | hecho | 2026-09-27 | no aplica | — / área A | Worker/scheduler ARQ en #25; dispatcher con gate de cleanup (U-S1-JF-04) en #30. Ack/reintentos pasan a J2.1 |
+| claim | L1.6 | jpinillaz | en curso | 2026-09-27 | no aplica | — / arquitectura | Congelación `S1-v1` de §1.1–§1.5 de `docs/plan/S1.md`; PR `s1/l1.6-freeze` en revisión |
 | claim | A1.1 | jpinillaz | hecho | 2026-09-27 | no aplica | — / área A | Router de salud y base de tests; mergeado en #21 |
-| claim | A1.2 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área A | Base mergeada vía #24; PR propio con la 2.ª/3.ª ronda de QA en revisión |
+| claim | A1.2 | jpinillaz | hecho | 2026-09-27 | no aplica | — / área A | Settings fail-fast; mergeado en #23 y #26 |
 | claim | A1.5 | jpinillaz | hecho | 2026-09-27 | no aplica | — / área A, seguridad | Esquema núcleo, shape S1 de ingesta/outbox, AES-GCM, ADR-0006; mergeado en #24 |
-| claim | A1.4 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área A, seguridad | Sesión opaca, CSRF y `GET /me`; PR en revisión, desbloquea A1.8 y el cliente CSRF de Web |
-| claim | A1.7 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área A | Completa la sección de migraciones pendiente en J1.7 |
-| claim | A1.8 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área A, Web | Depende de A1.4 y L1.6; desbloquea J1.5 |
-| claim | S1.B1 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área S | Desbloquea S1.B2 y S1.B3 |
+| claim | A1.4 | jpinillaz | hecho | 2026-09-27 | no aplica | — / área A, seguridad | Sesión opaca, CSRF y `GET /me`; mergeado en #22 |
+| claim | A1.7 | jpinillaz | hecho | 2026-09-27 | no aplica | — / área A | Migraciones en compose y sección del runbook; mergeado en #28 |
+| claim | A1.8 | jpinillaz | hecho | 2026-09-27 | no aplica | — / área A, Web | Contrato §1.2 (`PUT` responde 503 en S1); mergeado en #29. El 429 por usuario espera D4 |
+| claim | S1.B1 | jpinillaz | hecho | 2026-09-27 | no aplica | — / área S | Autochequeo de endurecimiento y I-S1-SG-06 (parte B1); mergeado en #33. Host de desarrollo sin modificar (excepción) |
 | claim | S1.B2 | satnovaOG | hecho | 2026-09-27 | no aplica | — / líder | Tabla `docs/spike/F0.2-capacidad-slot.md`. Dos slots no caben en el tmpfs de 256 MiB. 200 MiB y 3 h no aprobados. |
-| claim | S1.B3 | jpinillaz | en curso | 2026-09-27 | no aplica | — / área S | Desbloquea S1.B4, S1.B5, S1.B6 |
+| claim | S1.B3 | jpinillaz | hecho | 2026-09-27 | no aplica | — / área S | Lease, fencing y cleanup verificado con ffmpeg real; mergeado en #34. `verified` solo en contenedor (L1.6, excepción 5) |
 | claim | S1.B4 | satnovaOG | hecho | 2026-09-27 | no aplica | — / líder | Matriz I-S1-SG-04: 10 passed en contenedor Ubuntu (PID propio). En el WSL del host, `unreadable_processes` de root impide `verified`. |
 | claim | S1.B5 | satnovaOG | hecho | 2026-09-27 | no aplica | — / área S | I-S1-SG-06: 9 passed en WSL. Barrido en cero. En este host el éxito no queda `verified` por `unreadable_processes` (igual que S1.B4). |
 | claim | S1.B6 | satnovaOG | hecho | 2026-09-27 | no aplica | — / área S | I-S1-SG-05: lease `pending` no cierra admisión; cleanup `failed` alerta y la cierra. Outbox: 1 passed. |
@@ -104,3 +104,4 @@ de este PR de planificación.
 | 2026-09-27 | Se reclaman S1.B2 (hecho) y S1.B4. La matriz pasa en contenedor (10 passed). En el host WSL no, por procesos root ilegibles. S1.B1 y S1.B3 siguen `en curso` de jpinillaz. | Este cambio |
 | 2026-09-27 | Se reclaman S1.B5 y S1.B6 (`en curso`). | Este cambio |
 | 2026-09-27 | S1.B5 y S1.B6 pasan a `hecho`. I-S1-SG-06: 9 passed en ingest. I-S1-SG-05: el gate de outbox, 1 passed. En el WSL el éxito no queda `verified` por `unreadable_processes`. | Este cambio |
+| 2026-09-28 | A1.2, A1.4, A1.7, A1.8, J1.5, S1.B1 y S1.B3 pasan a `hecho` tras fusionar #22, #23, #26, #28–#30, #33 y #34 en `develop`. L1.6 sigue `en curso` hasta que se fusione su PR. | Este PR |
