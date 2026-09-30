@@ -1,7 +1,7 @@
 # ADR-0005 — Política de Redis
 
 - Fecha UTC: 2026-09-25
-- Estado: Propuesto (pasa a Aceptado al fusionar el PR de J1.6 con review)
+- Estado: Aceptado (fusionado en #17 con review; J1.6)
 - Ticket: J1.6
 - Relacionado: [../ESPECIFICACION.md](../ESPECIFICACION.md) §3.1 y §8,
   [../PLAN_IMPLEMENTACION.md](../PLAN_IMPLEMENTACION.md) (G1, G5-F1),

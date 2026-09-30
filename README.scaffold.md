@@ -4,6 +4,11 @@ Este árbol fue creado por `scripts/scaffold_monorepo.sh` (tarea L1.1 del líder
 Corresponde a la estructura §3.3 de `docs/ESPECIFICACION.md`.
 Las versiones de runtime pinneadas están en [docs/VERSIONES.md](docs/VERSIONES.md).
 
+> **Documento histórico (2026-09).** Describe el árbol que dejó el scaffold antes del
+> sprint S1. El estado actual vive en [README.md](README.md),
+> [docs/RUNBOOK-dev.md](docs/RUNBOOK-dev.md) y [docs/sprints/CLAIMS.md](docs/sprints/CLAIMS.md);
+> los «Próximos pasos» de abajo ya aterrizaron (alembic, spike F0, compose/Caddy/CI, ADRs).
+
 ## Áreas del backlog (plan de sprints, §0.2 del plan maestro)
 
 La letra designa el **área**, no a una persona: los tickets se reclaman cada lunes según

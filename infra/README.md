@@ -16,9 +16,9 @@ Estado: `docker-compose.yml` (J1.1), el endurecimiento de `ingest` (J1.2), el
 | Servicio | Imagen | Notas |
 |---|---|---|
 | `web` | `maulwurf-web:local` (build `apps/web`) | Next.js 22-alpine, usuario no root |
-| `api` | `maulwurf-api:local` (build `apps/api`) | FastAPI; `/readyz` aún placeholder (J1.5) |
+| `api` | `maulwurf-api:local` (build `apps/api`) | FastAPI; `/readyz` real: 200 con Postgres y Redis, 503 si falta uno |
 | `ingest` | `maulwurf-ingest:local` (build `apps/ingest`, target `runtime`) | Endurecido: ver abajo |
-| `worker` / `scheduler` | `maulwurf-api:local` | Placeholder sin efectos hasta J1.5 (ARQ) |
+| `worker` / `scheduler` | `maulwurf-api:local` | Procesos ARQ reales (J1.5) con healthcheck `arq --check`; jobs noop hasta S2 (ack/reintentos → J2.1) |
 | `postgres` | `pgvector/pgvector:pg16` por digest | Único durable: volumen `pgdata` |
 | `redis` | `redis:7.4-alpine` por digest | Sin persistencia, `noeviction` ([ADR-0005](../docs/adr/ADR-0005-redis.md)) |
 | `caddy` | `caddy:2.8-alpine` por digest | `admin off`; access log JSON sin bodies |
@@ -71,9 +71,11 @@ Healthchecks, TLS, tests y cierre: [docs/RUNBOOK-dev.md](../docs/RUNBOOK-dev.md)
 
 ## Pendiente en esta área
 
-- **J1.5:** worker/scheduler reales (ARQ + dispatcher de outbox); hoy son placeholders.
-- **Migraciones:** `alembic upgrade head` se documentará cuando A1.7 entregue
-  `alembic.ini`.
+- **J2.1:** ack/reintentos del dispatcher de outbox (J1.5 entregó worker/scheduler ARQ y
+  el gate de cleanup).
+- **Migraciones:** el contenedor `api` aplica `alembic upgrade head` al arrancar (A1.7);
+  comandos manuales en el [runbook](../docs/RUNBOOK-dev.md) (§5).
 - **Verificación del host (J1.2):** `zram` activo y `core_pattern` a systemd-coredump
   quedaron como pendiente de operación en la bitácora.
-- **SSE y upload real:** el smoke end-to-end llega con A1.8/S2.
+- **SSE y upload real:** A1.8 entregó el contrato de ingesta (`PUT` responde 503 en S1);
+  el upload real y el SSE llegan en S2.

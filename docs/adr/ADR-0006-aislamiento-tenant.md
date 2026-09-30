@@ -1,7 +1,7 @@
 # ADR-0006 — Aislamiento por tenant en S1
 
 - Fecha UTC: 2026-09-27
-- Estado: Propuesto (pasa a Aceptado al fusionar el PR de A1.5 con review)
+- Estado: Aceptado (fusionado en #24 con review; A1.5)
 - Ticket: A1.5 (lo verifica A1.9)
 - Relacionado: [../ESPECIFICACION.md](../ESPECIFICACION.md) §6,
   [../plan/S1.md](../plan/S1.md) §3 (A1.5, A1.9),

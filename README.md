@@ -6,12 +6,14 @@
 *Maulwurf* means “mole” in German: the project is intended to dig through class recordings
 and build connections between notes, a calendar, and reminders.
 
-> **Project status — foundation under construction.** The repository contains the minimal
-> monorepo scaffold, a local Docker Compose stack (8 services, S1/J1.1), initial unit and
-> integration tests, and a quality CI workflow (S1/J1.4), but **no end-to-end feature yet**:
-> authentication, migrations, upload/transcription, provider contracts, and deployment
-> manifests are still pending. Planned services and roadmap gates must not be read as
-> implemented features.
+> **Project status — foundation under construction.** The repository contains the monorepo
+> with its S1 foundation: a local Docker Compose stack (8 services, S1/J1.1), the core
+> schema migration (A1.7), opaque sessions with CSRF (A1.4), the S1 ingestion contract
+> (A1.8, `PUT` answers 503 until S2), unit and integration test suites, and a quality CI
+> workflow (S1/J1.4). There is still **no end-to-end feature**: Google login (A1.3),
+> subject CRUD (A1.6), real upload/transcription (S2), provider contracts (F0 gates open)
+> and deployment manifests are pending. Planned services and roadmap gates must not be
+> read as implemented features.
 
 ## Product vision
 
@@ -84,8 +86,9 @@ The following are explicitly outside the current MVP/v1 scope:
 
 ## Proposed architecture
 
-The following architecture is proposed by the specification; these services do not exist in the
-current repository.
+The following architecture is the target design from the specification. Sprint S1 provides
+its foundation as local Compose services (`web`, `api`, `ingest`, `worker`, `scheduler`,
+`postgres`, `redis`, `caddy`), but the end-to-end flow below is not implemented yet.
 
 ```mermaid
 flowchart TD
@@ -204,28 +207,18 @@ complete.
 
 ```text
 .
-├── .kiro/                         # Workspace/editor configuration
-├── docs/
-│   ├── ESPECIFICACION.md          # Functional and technical source of truth
-│   ├── NVIDIA_RIVA.md             # Riva client audit and reference invocation
-│   └── PLAN_IMPLEMENTACION.md     # Phases, gates, tests, and delivery plan
+├── .github/workflows/             # quality.yml (CI) and the external QA webhook
+├── apps/
+│   ├── api/                       # FastAPI: routers, core, models, workers, alembic, tests
+│   ├── ingest/                    # Ingestion: admission, lease, cleanup, hardening, tests
+│   └── web/                       # Next.js scaffold (area D- unclaimed)
+├── docs/                          # Specification, plans, ADRs, F0 spike, runbook, sprints
+├── infra/                         # docker-compose.yml (8 services) and Caddyfile
+├── scripts/                       # scaffold (historical), provider/ (Riva spike), load/ helpers
 ├── AGENTS.md                      # Repository guidance for coding agents
 ├── LICENSE                        # GNU GPL v3
 ├── README.md
-└── requirements-riva.txt         # Pinned Riva client dependency
-```
-
-### Proposed application layout
-
-This layout is described by the specification but has not been created:
-
-```text
-maulwurf/
-├── apps/
-│   ├── api/                       # FastAPI, services, workers, models, migrations
-│   └── web/                       # Next.js application
-├── infra/                         # Compose, reverse proxy, and deployment configuration
-└── docs/
+└── requirements-riva.txt          # Pinned Riva client dependency
 ```
 
 ## Local setup
@@ -259,10 +252,10 @@ See [docs/RUNBOOK-dev.md](docs/RUNBOOK-dev.md) for the reproducible commands. Su
 | --- | --- |
 | Install dependencies | `uv sync --extra dev` per Python app; `npm ci` in `apps/web` |
 | Run the stack | `docker compose up -d --build --wait` in `infra/` (8 services) |
-| Tests | pytest (api/ingest) and Vitest (web); initial suites only |
+| Tests | pytest (api/ingest: unit + integration suites); Vitest (web, no tests yet) |
 | Lint and formatting | Ruff (Python) and ESLint (web), configured |
 | Type checking | mypy strict (Python) and `tsc --noEmit` (web), configured |
-| Migrations | Pending A1.7 (`alembic upgrade head` documented in the runbook) |
+| Migrations | Merged (A1.7): the `api` container runs `alembic upgrade head` on boot (runbook §5) |
 | Deployment | No deployment manifests exist yet (S4/J4.x) |
 
 CI is defined in `.github/workflows/quality.yml` (lint, types, unit and integration tests,

@@ -30,13 +30,17 @@ evidencia cada tarea es [../PLAN_TESTS.md](../PLAN_TESTS.md); la fuente de contr
 
 ## Bitácoras del equipo
 
-| Persona | Perfil sugerido (no ownership) | Bitácora |
-|---|---|---|
-| José Leonardo Pinilla Zamora | Liderazgo técnico · RAG | [jose-leonardo.md](jose-leonardo.md) |
-| Andres Felipe | API · Base de datos | [andres.md](andres.md) |
-| Santiago Montealegre | Ingesta · Audio · ASR | [santiago.md](santiago.md) |
-| Jefferson Figueroa | Infra · Workers · Integraciones | [jefferson.md](jefferson.md) |
-| Daniel Samaca | Web · UX | [daniel.md](daniel.md) |
+| Persona | Perfil sugerido (no ownership) | Bitácora | Handle en CLAIMS |
+|---|---|---|---|
+| José Leonardo Pinilla Zamora | Liderazgo técnico · RAG | [jose-leonardo.md](jose-leonardo.md) | `jpinillaz` |
+| Andres Felipe | API · Base de datos | [andres.md](andres.md) | sin claims aún |
+| Santiago Montealegre | Ingesta · Audio · ASR | [santiago.md](santiago.md) | `satnovaOG` |
+| Jefferson Figueroa | Infra · Workers · Integraciones | [jefferson.md](jefferson.md) | sin claims aún |
+| Daniel Samaca | Web · UX | [daniel.md](daniel.md) | sin claims aún |
+
+Correspondencia persona↔handle observada en el historial del repositorio (autoría de
+`santiago.md` por `satnovaOG`; ramas `s1/*-jpinillaz` que editan `jose-leonardo.md`).
+Corregirla en un PR si cambia.
 
 El ownership vigente se consulta exclusivamente en [CLAIMS.md](CLAIMS.md).
 
