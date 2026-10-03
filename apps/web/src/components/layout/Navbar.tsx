@@ -1,33 +1,33 @@
-import { NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { NavLink } from "react-router-dom";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 const pages = [
-  { path: '/', label: '01.home' },
-  { path: '/cards', label: '02.cards' },
-  { path: '/sprites', label: '03.sprites' },
-]
+  { path: "/", label: "01.home" },
+  { path: "/biblioteca", label: "02.biblioteca" },
+  { path: "/chat", label: "03.chat" },
+  { path: "/materias", label: "04.materias" },
+  { path: "/settings", label: "05.settings" },
+];
 
 export function Navbar() {
-  const { pathname } = useLocation()
-  const navigate = useNavigate()
-  const idx = pages.findIndex((p) => p.path === pathname)
-  const prev = pages[(idx - 1 + pages.length) % pages.length]
-  const next = pages[(idx + 1) % pages.length]
+  const { logout } = useAuth();
 
   return (
     <nav className="sticky top-0 z-50 border-b-2 border-pure-black bg-dark">
-      <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-4 py-3">
+      <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-3">
         <NavLink to="/" className="lowercase text-xl text-mint">
           maulwurf<span className="text-lavender">@lab</span>
         </NavLink>
 
-        <div className="flex items-center gap-1">
+        <div className="flex flex-wrap items-center gap-1">
           {pages.map((p) => (
             <NavLink
               key={p.path}
               to={p.path}
+              end={p.path === "/"}
               className={({ isActive }) =>
                 `lowercase px-3 py-1 text-lavender hover:text-mint ${
-                  isActive ? 'bg-mint text-on-accent' : ''
+                  isActive ? "bg-mint text-on-accent" : ""
                 }`
               }
             >
@@ -36,25 +36,14 @@ export function Navbar() {
           ))}
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => navigate(prev.path)}
-            aria-label={`previous: ${prev.label}`}
-            className="border-2 border-pure-black px-2 py-1 text-xl leading-none text-mint hover:bg-mint hover:text-on-accent active:translate-x-[1px] active:translate-y-[1px]"
-          >
-            ‹
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate(next.path)}
-            aria-label={`next: ${next.label}`}
-            className="border-2 border-pure-black px-2 py-1 text-xl leading-none text-mint hover:bg-mint hover:text-on-accent active:translate-x-[1px] active:translate-y-[1px]"
-          >
-            ›
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => void logout()}
+          className="lowercase font-pixel border-2 border-pure-black px-3 py-1 text-lavender hover:text-mint active:translate-x-[1px] active:translate-y-[1px]"
+        >
+          salir
+        </button>
       </div>
     </nav>
-  )
+  );
 }
