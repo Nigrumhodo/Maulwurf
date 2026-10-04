@@ -84,6 +84,9 @@ de este PR de planificación.
 | claim | S1.B4 | satnovaOG | hecho | 2026-09-27 | no aplica | — / líder | Matriz I-S1-SG-04: 10 passed en contenedor Ubuntu (PID propio). En el WSL del host, `unreadable_processes` de root impide `verified`. |
 | claim | S1.B5 | satnovaOG | hecho | 2026-09-27 | no aplica | — / área S | I-S1-SG-06: 9 passed en WSL. Barrido en cero. En este host el éxito no queda `verified` por `unreadable_processes` (igual que S1.B4). |
 | claim | S1.B6 | satnovaOG | hecho | 2026-09-27 | no aplica | — / área S | I-S1-SG-05: lease `pending` no cierra admisión; cleanup `failed` alerta y la cierra. Outbox: 1 passed. |
+| claim | A1.9 | jpinillaz | en curso | 2026-10-04 | no aplica | — / área A | Suite I-S1-AN-05 (G3) contra Postgres real; libre según §4 2026-09-27 |
+| claim | L1.4 | jpinillaz | en curso | 2026-10-04 | no aplica | — / líder | Borradores Pydantic §M4/§M6 (U-S1-JL-01/02); sin llamadas a LLM |
+| claim | L1.5 | jpinillaz | en curso | 2026-10-04 | no aplica | — / líder | Formato + validador dataset G4 (U-S1-JL-03); sin contenido real |
 
 ## 4. Historial de cambios
 
@@ -106,3 +109,4 @@ de este PR de planificación.
 | 2026-09-27 | S1.B5 y S1.B6 pasan a `hecho`. I-S1-SG-06: 9 passed en ingest. I-S1-SG-05: el gate de outbox, 1 passed. En el WSL el éxito no queda `verified` por `unreadable_processes`. | Este cambio |
 | 2026-09-28 | A1.2, A1.4, A1.7, A1.8, J1.5, S1.B1 y S1.B3 pasan a `hecho` tras fusionar #22, #23, #26, #28–#30, #33 y #34 en `develop`. L1.6 sigue `en curso` hasta que se fusione su PR. | Este PR |
 | 2026-09-28 | L1.6 pasa a `hecho`: el PR `s1/l1.6-freeze` (#38) se fusionó en `develop` (35e4d70) tras #39/#40. La congelación `S1-v1` está publicada en `docs/plan/S1.md`. | Este PR |
+| 2026-10-04 | Se reclaman A1.9, L1.4 y L1.5 (libres desde 2026-09-27). | Este PR |
