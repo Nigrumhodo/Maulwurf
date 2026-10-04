@@ -68,6 +68,12 @@ def test_multi_segment_chunk_is_valid() -> None:
     chunk.check_against({SEG_A: UNICODE_TEXT, SEG_B: "y otra"})
 
 
+def test_text_is_kept_verbatim() -> None:
+    chunk = Chunk.model_validate(_chunk(text="  con espacios \n"))
+
+    assert chunk.text == "  con espacios \n"
+
+
 def test_without_timestamps_is_valid() -> None:
     Chunk.model_validate(_chunk(t_start=None, t_end=None))
 

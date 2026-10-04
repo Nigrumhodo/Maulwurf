@@ -9,7 +9,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-_STRICT = ConfigDict(extra="forbid", str_strip_whitespace=True)
+# Sin `str_strip_whitespace`: recortar `text` desplazaría los offsets respecto al segmento.
+_STRICT = ConfigDict(extra="forbid")
 
 
 class ChunkSegmentLink(BaseModel):
