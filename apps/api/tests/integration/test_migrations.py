@@ -86,6 +86,11 @@ S2_INDEX_FRAGMENTS = {
 }
 
 
+def _normalized_constraint(definition: str) -> str:
+    """Normaliza diferencias de espaciado entre versiones de PostgreSQL."""
+    return " ".join(definition.split()).replace(" (", "(")
+
+
 def _head(url: str) -> str:
     head = ScriptDirectory.from_config(alembic_config(url)).get_current_head()
     assert head is not None
@@ -194,7 +199,12 @@ def test_s2_catalog_has_composite_fks_indexes_and_no_audio_storage_key(
     foreign_keys, indexes, audio_columns = _s2_catalog(migrated_database_url)
 
     for table_name, expected in S2_COMPOSITE_FOREIGN_KEYS.items():
-        assert expected <= foreign_keys.get(table_name, set())
+        normalized_expected = {_normalized_constraint(definition) for definition in expected}
+        normalized_actual = {
+            _normalized_constraint(definition)
+            for definition in foreign_keys.get(table_name, set())
+        }
+        assert normalized_expected <= normalized_actual
     for index_name, fragment in S2_INDEX_FRAGMENTS.items():
         assert fragment in indexes[index_name]
     assert "storage_key" not in audio_columns

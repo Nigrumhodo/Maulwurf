@@ -100,9 +100,13 @@ async def test_i_s2_an_11_chat_scope_idempotency_and_cascade_sources(
         with pytest.raises(IntegrityError):
             await db_session.flush()
 
+    source_id = source.id
     await db_session.delete(conversation)
     await db_session.flush()
-    assert await db_session.get(MessageSource, source.id) is None
+    # El cascade se ejecuta en PostgreSQL; expirar la identidad evita que `get()` devuelva
+    # la instancia ya cargada en vez de consultar la fila efectivamente eliminada.
+    db_session.expire_all()
+    assert await db_session.get(MessageSource, source_id) is None
 
     foreign_subject = await make_subject(db_session, await make_actor(db_session))
     async with db_session.begin_nested():

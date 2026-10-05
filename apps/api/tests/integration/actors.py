@@ -31,6 +31,7 @@ from app.models import (
     Subject,
     Transcript,
     User,
+    VariantConfirmationToken,
 )
 from app.models.base import TenantOwned
 from app.services import sessions
@@ -113,6 +114,28 @@ async def make_attempt(
     db.add(attempt)
     await db.flush()
     return attempt
+
+
+async def make_variant_confirmation_token(
+    db: AsyncSession, actor: Actor
+) -> VariantConfirmationToken:
+    """Token de confirmación ligado al audio canónico del mismo tenant."""
+    canonical_audio = await make_audio(db, actor)
+    token = VariantConfirmationToken(
+        user_id=actor.user_id,
+        token_hash=f"hash-{uuid.uuid4().hex}",
+        canonical_audio_id=canonical_audio.id,
+        content_sha256="a" * 64,
+        subject_id=canonical_audio.subject_id,
+        class_date=canonical_audio.class_date,
+        class_timezone=canonical_audio.class_timezone,
+        language_code=canonical_audio.language_code,
+        metadata_digest="b" * 64,
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    db.add(token)
+    await db.flush()
+    return token
 
 
 async def make_outbox_event(db: AsyncSession, actor: Actor) -> OutboxEvent:
@@ -268,5 +291,6 @@ FACTORIES: dict[type[TenantOwned], Factory] = {
     Message: make_message,
     MessageSource: make_message_source,
     IngestionAttempt: make_attempt,
+    VariantConfirmationToken: make_variant_confirmation_token,
     OutboxEvent: make_outbox_event,
 }
