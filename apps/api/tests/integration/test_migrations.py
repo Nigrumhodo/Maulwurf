@@ -87,8 +87,11 @@ S2_INDEX_FRAGMENTS = {
 
 
 def _normalized_constraint(definition: str) -> str:
-    """Normaliza diferencias de espaciado entre versiones de PostgreSQL."""
-    return " ".join(definition.split()).replace(" (", "(")
+    """Devuelve la firma de una FK, independiente del formato y acciones del servidor."""
+    normalized = " ".join(definition.split()).replace(" (", "(")
+    for action in (" ON DELETE ", " ON UPDATE "):
+        normalized = normalized.split(action, maxsplit=1)[0]
+    return normalized
 
 
 def _head(url: str) -> str:
