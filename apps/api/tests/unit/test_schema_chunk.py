@@ -44,7 +44,7 @@ def test_offsets_are_unicode_code_points_not_utf16() -> None:
     chunk.check_against({SEG_A: UNICODE_TEXT})
 
 
-def test_span_past_the_end_fails_reconstruction() -> None:
+def test_span_past_the_end_fails_check_against() -> None:
     chunk = Chunk.model_validate(
         _chunk(segments=[_link(SEG_A, 0, 0, len(UNICODE_TEXT) + 1)])
     )
@@ -53,11 +53,19 @@ def test_span_past_the_end_fails_reconstruction() -> None:
         chunk.check_against({SEG_A: UNICODE_TEXT})
 
 
-def test_unknown_segment_fails_reconstruction() -> None:
+def test_unknown_segment_fails_check_against() -> None:
     chunk = Chunk.model_validate(_chunk())
 
     with pytest.raises(ValueError, match="desconocido"):
         chunk.check_against({SEG_B: UNICODE_TEXT})
+
+
+def test_check_against_validates_bounds_not_concatenation() -> None:
+    # Decisión congelada (QA H2): la concatenación `text` ↔ slices la define L2.1;
+    # aquí solo se validan límites por enlace.
+    chunk = Chunk.model_validate(_chunk(text="texto ajeno a los enlaces"))
+
+    chunk.check_against({SEG_A: UNICODE_TEXT})
 
 
 def test_multi_segment_chunk_is_valid() -> None:

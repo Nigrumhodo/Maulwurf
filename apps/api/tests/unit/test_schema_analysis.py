@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.analysis import AnalysisResult, DateStatus, ProposedItem
+from app.schemas.errors import validation_errors_redacted
 
 SEGMENT = "3f1c9a52-7d4e-4b8a-9c1e-2a6b5d8e0f11"
 OTHER_SEGMENT = "9b2e4c71-1a3f-4d6e-8b5c-7e0a2f9d4c33"
@@ -152,5 +153,24 @@ def test_errors_do_not_echo_input(field: str, value: str) -> None:
     with pytest.raises(ValidationError) as exc:
         ProposedItem.model_validate(_item(**{field: value}))
 
-    errors = exc.value.errors(include_input=False, include_url=False)
+    errors = validation_errors_redacted(exc.value)
     assert "SECRETO-INPUT" not in json.dumps(errors, default=str)
+
+
+def test_default_serialization_echoes_input() -> None:
+    # Pydantic incluye `input_value` por defecto (QA H1): por eso la norma es
+    # serializar siempre con `validation_errors_redacted` y nunca `str(exc)`.
+    with pytest.raises(ValidationError) as exc:
+        ProposedItem.model_validate(_item(tipo="SECRETO-INPUT"))
+
+    assert "SECRETO-INPUT" in str(exc.value)
+    assert "SECRETO-INPUT" in json.dumps(exc.value.errors(), default=str)
+
+
+def test_redacted_errors_keep_the_reason() -> None:
+    with pytest.raises(ValidationError) as exc:
+        ProposedItem.model_validate(_item(tipo="SECRETO-INPUT", timezone="Zona/SECRETO-INPUT"))
+
+    errors = validation_errors_redacted(exc.value)
+
+    assert {error["loc"][0] for error in errors} == {"tipo", "timezone"}

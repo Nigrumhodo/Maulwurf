@@ -1,7 +1,9 @@
 """Borrador de congelación L1.4 (S1) de la salida de análisis §M4. Contrato final en L3.2.
 
 `confidence_score` es una señal no calibrada, no una probabilidad ni permiso de agendar.
-Los mensajes de error nunca incluyen el valor recibido: el transcript es dato no confiable.
+Los errores de validación se serializan sin eco del valor recibido (el transcript es dato
+no confiable): siempre con `app.schemas.errors.validation_errors_redacted`, nunca con
+`str(exc)` ni `errors()` por defecto, que sí incluyen `input_value`.
 """
 from datetime import date
 from enum import StrEnum

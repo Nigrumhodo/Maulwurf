@@ -62,7 +62,12 @@ class Chunk(BaseModel):
         return self
 
     def check_against(self, segment_texts: Mapping[UUID, str]) -> None:
-        """Comprueba que cada enlace es reconstruible desde el texto de su segmento.
+        """Comprueba los límites de cada enlace contra el texto de su segmento.
+
+        Valida que el segmento exista en el mapa y que `fin_char` no exceda su
+        longitud. NO reconstruye `text` ni exige rangos contiguos: la regla de
+        concatenación la define L2.1; prometer reconstrucción aquí inflaría la
+        garantía que se congela en L3.2.
 
         :raises ValueError: si un segmento no existe en el mapa o el rango excede su texto.
         """
