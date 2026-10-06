@@ -90,9 +90,8 @@ async def update_subject(
     subject = await subject_service.get_active(db, session.user_id, subject_id)
     if subject is None:  # inexistente, ajena o borrada: misma respuesta (ADR-0006)
         raise not_found()
-    for field in body.model_fields_set:
-        setattr(subject, field, getattr(body, field))
-    await db.flush()
+    changes = {field: getattr(body, field) for field in body.model_fields_set}
+    await subject_service.apply_changes(db, subject, changes)
     count = await subject_service.count_active_classes(db, session.user_id, subject_id)
     out = _to_out(subject, count)
     await db.commit()
@@ -129,11 +128,9 @@ async def delete_subject(
 async def create_subject(
     body: SubjectCreate, session: MutationSession, db: DbSession
 ) -> SubjectOut:
-    subject = Subject(
-        user_id=session.user_id, name=body.name, color=body.color, teacher=body.teacher
+    subject = await subject_service.create(
+        db, session.user_id, name=body.name, color=body.color, teacher=body.teacher
     )
-    db.add(subject)
-    await db.flush()  # la BD asigna el id; aún no es definitivo hasta el commit
     out = _to_out(subject, class_count=0)  # una materia recién creada no tiene clases
     await db.commit()
     return out

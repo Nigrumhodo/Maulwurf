@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -328,3 +328,81 @@ async def test_delete_subject_rejects_unknown_body_fields(
     )
 
     assert response.status_code == 422
+
+
+# --- Nombre duplicado (409 subject_name_taken) ----------------------------------------
+
+
+async def _post(client: AsyncClient, actor: Actor, name: str) -> Response:
+    return await client.post(
+        "/subjects", json={"name": name}, cookies=actor.cookies, headers=actor.headers
+    )
+
+
+async def test_post_subject_with_a_duplicate_name_is_409_ignoring_case_and_spaces(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    first = await _post(client, alice, "Física")
+
+    second = await _post(client, alice, "  FÍSICA ")
+
+    assert first.status_code == 201
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "subject_name_taken"
+    listing = await client.get("/subjects", cookies=alice.cookies)
+    assert [i["name"] for i in listing.json()["items"]] == ["Física"]
+
+
+async def test_the_same_name_is_allowed_for_another_user_and_after_deleting(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    bob = await _actor(db_session)
+    created = await _post(client, alice, "Historia")
+
+    by_bob = await _post(client, bob, "Historia")  # el nombre es único por usuario
+    await client.delete(
+        f"/subjects/{created.json()['id']}", cookies=alice.cookies, headers=alice.headers
+    )
+    again = await _post(client, alice, "Historia")  # tras borrar, el nombre queda libre
+
+    assert (by_bob.status_code, again.status_code) == (201, 201)
+
+
+async def test_patch_subject_to_a_name_already_in_use_is_409_and_changes_nothing(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    await _subject(db_session, alice, "Álgebra")
+    other = await _subject(db_session, alice, "Cálculo")
+    other_id = other.id
+
+    response = await client.patch(
+        f"/subjects/{other_id}",
+        json={"name": "álgebra"},
+        cookies=alice.cookies,
+        headers=alice.headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "subject_name_taken"
+    row = await db_session.get(Subject, other_id)
+    assert row is not None and row.name == "Cálculo"
+
+
+async def test_patch_subject_may_change_only_the_case_of_its_own_name(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    subject = await _subject(db_session, alice, "fisica")
+
+    response = await client.patch(
+        f"/subjects/{subject.id}",
+        json={"name": "Física"},
+        cookies=alice.cookies,
+        headers=alice.headers,
+    )
+
+    assert response.status_code == 200  # no choca consigo misma
+    assert response.json()["name"] == "Física"
