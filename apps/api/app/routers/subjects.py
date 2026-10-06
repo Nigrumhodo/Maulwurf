@@ -4,12 +4,13 @@ El dueño de cada materia sale siempre de `session.user_id` (estado del servidor
 de la petición nunca lleva `user_id` (`extra="forbid"` lo rechaza con 422).
 """
 import uuid
+from datetime import UTC, datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.deps import CurrentSession, DbSession, MutationSession
-from app.core.errors import not_found
+from app.core.errors import ApiError, not_found
 from app.models import Subject
 from app.services import subjects as subject_service
 
@@ -44,6 +45,14 @@ class SubjectUpdate(BaseModel):
             if required in self.model_fields_set and getattr(self, required) is None:
                 raise ValueError(f"{required} no puede ser null")
         return self
+
+
+class SubjectDelete(BaseModel):
+    """Cuerpo opcional del `DELETE`. `force` se acepta por contrato pero no tiene efecto en S1."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    force: bool = False
 
 
 class SubjectOut(BaseModel):
@@ -88,6 +97,32 @@ async def update_subject(
     out = _to_out(subject, count)
     await db.commit()
     return out
+
+
+@router.delete("/subjects/{subject_id}", status_code=204)
+async def delete_subject(
+    subject_id: uuid.UUID,
+    session: MutationSession,
+    db: DbSession,
+    body: SubjectDelete | None = None,  # se valida el cuerpo; `force` aún no cambia nada
+) -> Response:
+    subject = await subject_service.get_active(db, session.user_id, subject_id)
+    if subject is None:
+        raise not_found()
+    class_count = await subject_service.count_active_classes(db, session.user_id, subject_id)
+    if class_count > 0:
+        # Nunca se borra en cascada en silencio (S1.md A1.6). `force` queda diferido a S2:
+        # borrar clases exige el tombstone completo de `DELETE /audios/{id}`.
+        raise ApiError(
+            409,
+            "subject_has_active_audios",
+            "La materia tiene clases activas. Elimina las clases primero; "
+            "borrarlas junto con la materia estará disponible más adelante.",
+            {"class_count": class_count},
+        )
+    subject.deleted_at = datetime.now(UTC)  # soft delete: libera el nombre y conserva la fila
+    await db.commit()
+    return Response(status_code=204)
 
 
 @router.post("/subjects", status_code=201)

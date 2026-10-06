@@ -198,3 +198,133 @@ async def test_patch_subject_rejects_invalid_bodies(
     )
 
     assert response.status_code == 422
+
+
+# --- DELETE /subjects/{id} ------------------------------------------------------------
+
+
+async def test_delete_subject_without_classes_is_a_soft_delete(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    subject = await _subject(db_session, alice, "Vacía")
+    subject_id = subject.id
+
+    response = await client.delete(
+        f"/subjects/{subject_id}", cookies=alice.cookies, headers=alice.headers
+    )
+
+    assert response.status_code == 204
+    row = await db_session.get(Subject, subject_id)
+    assert row is not None and row.deleted_at is not None  # la fila se conserva (tombstone)
+    listing = await client.get("/subjects", cookies=alice.cookies)
+    assert listing.json()["items"] == []
+
+
+async def test_delete_subject_with_active_classes_is_rejected_with_409(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    subject = await _subject(db_session, alice, "Con clases")
+    await _audio(db_session, alice, subject)
+    await _audio(db_session, alice, subject)
+    subject_id = subject.id
+
+    response = await client.delete(
+        f"/subjects/{subject_id}", cookies=alice.cookies, headers=alice.headers
+    )
+
+    assert response.status_code == 409
+    error = response.json()["error"]
+    assert error["code"] == "subject_has_active_audios"
+    assert error["details"] == {"class_count": 2}
+    assert "clases" in error["message"]  # mensaje accionable, no solo un código
+    row = await db_session.get(Subject, subject_id)
+    assert row is not None and row.deleted_at is None  # nada se borró
+
+
+async def test_delete_subject_with_force_is_still_rejected_in_s1(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    # `force` queda diferido a S2: borrar clases exige el tombstone real de `DELETE /audios/{id}`.
+    alice = await _actor(db_session)
+    subject = await _subject(db_session, alice, "Con clases")
+    await _audio(db_session, alice, subject)
+    subject_id = subject.id
+
+    response = await client.request(
+        "DELETE",
+        f"/subjects/{subject_id}",
+        json={"force": True},
+        cookies=alice.cookies,
+        headers=alice.headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "subject_has_active_audios"
+    row = await db_session.get(Subject, subject_id)
+    assert row is not None and row.deleted_at is None
+
+
+async def test_delete_subject_ignores_already_deleted_classes(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    subject = await _subject(db_session, alice, "Solo borradas")
+    await _audio(db_session, alice, subject, deleted=True)
+
+    response = await client.delete(
+        f"/subjects/{subject.id}", cookies=alice.cookies, headers=alice.headers
+    )
+
+    assert response.status_code == 204
+
+
+async def test_delete_subject_of_another_user_is_404_and_changes_nothing(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    bob = await _actor(db_session)
+    subject = await _subject(db_session, alice, "De Alice")
+    subject_id = subject.id
+
+    response = await client.delete(
+        f"/subjects/{subject_id}", cookies=bob.cookies, headers=bob.headers
+    )
+
+    assert response.status_code == 404
+    row = await db_session.get(Subject, subject_id)
+    assert row is not None and row.deleted_at is None
+
+
+async def test_delete_subject_twice_is_404(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    subject_id = (await _subject(db_session, alice, "Una vez")).id
+    first = await client.delete(
+        f"/subjects/{subject_id}", cookies=alice.cookies, headers=alice.headers
+    )
+
+    second = await client.delete(
+        f"/subjects/{subject_id}", cookies=alice.cookies, headers=alice.headers
+    )
+
+    assert (first.status_code, second.status_code) == (204, 404)
+
+
+async def test_delete_subject_rejects_unknown_body_fields(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    subject = await _subject(db_session, alice, "Estricta")
+
+    response = await client.request(
+        "DELETE",
+        f"/subjects/{subject.id}",
+        json={"user_id": "otro"},
+        cookies=alice.cookies,
+        headers=alice.headers,
+    )
+
+    assert response.status_code == 422
