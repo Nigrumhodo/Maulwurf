@@ -8,7 +8,30 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Audio, Subject
-from app.services.tenant import owned_by
+from app.services.tenant import get_owned, owned_by
+
+
+async def get_active(db: AsyncSession, user_id: uuid.UUID, subject_id: uuid.UUID) -> Subject | None:
+    """Materia activa del usuario; `None` si no existe, es ajena o está borrada.
+
+    Los tres casos son indistinguibles a propósito (ADR-0006): la API responde 404 en todos.
+    """
+    subject = await get_owned(db, Subject, user_id, subject_id)
+    if subject is None or subject.deleted_at is not None:
+        return None
+    return subject
+
+
+async def count_active_classes(db: AsyncSession, user_id: uuid.UUID, subject_id: uuid.UUID) -> int:
+    """Clases (audios) no borradas de una materia del usuario."""
+    total = await db.scalar(
+        select(func.count()).where(
+            Audio.user_id == user_id,
+            Audio.subject_id == subject_id,
+            Audio.deleted_at.is_(None),
+        )
+    )
+    return int(total or 0)
 
 
 async def list_active_with_class_count(

@@ -128,3 +128,73 @@ async def test_get_subjects_requires_a_session(client: AsyncClient) -> None:
     response = await client.get("/subjects")
 
     assert response.status_code == 401
+
+
+# --- PATCH /subjects/{id} -------------------------------------------------------------
+
+
+async def test_patch_subject_updates_only_the_sent_fields(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    subject = await _subject(db_session, alice, "Física")
+    subject_id = subject.id
+
+    response = await client.patch(
+        f"/subjects/{subject_id}",
+        json={"name": "  Física II ", "teacher": "Prof. Noether"},
+        cookies=alice.cookies,
+        headers=alice.headers,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["name"] == "Física II"  # se recortan los espacios
+    assert data["teacher"] == "Prof. Noether"
+    assert data["color"] == "#6366f1"  # lo que no se envió no cambia
+    assert data["id"] == str(subject_id)
+
+
+async def test_patch_subject_of_another_user_is_404_and_changes_nothing(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    bob = await _actor(db_session)
+    subject = await _subject(db_session, alice, "Original")
+    subject_id = subject.id
+
+    response = await client.patch(
+        f"/subjects/{subject_id}",
+        json={"name": "Hackeada"},
+        cookies=bob.cookies,
+        headers=bob.headers,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
+    row = await db_session.get(Subject, subject_id)
+    assert row is not None and row.name == "Original"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},  # nada que cambiar
+        {"name": "   "},  # vacío tras recortar espacios
+        {"name": "x" * 101},  # demasiado largo
+        {"color": "rojo"},  # no es #rrggbb
+        {"user_id": "otro"},  # campo que el cliente nunca puede enviar
+    ],
+    ids=["vacio", "nombre-en-blanco", "nombre-largo", "color-invalido", "user_id-ajeno"],
+)
+async def test_patch_subject_rejects_invalid_bodies(
+    client: AsyncClient, db_session: AsyncSession, body: dict[str, str]
+) -> None:
+    alice = await _actor(db_session)
+    subject = await _subject(db_session, alice, "Estable")
+
+    response = await client.patch(
+        f"/subjects/{subject.id}", json=body, cookies=alice.cookies, headers=alice.headers
+    )
+
+    assert response.status_code == 422
