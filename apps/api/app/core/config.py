@@ -12,7 +12,9 @@ Fuera de `local`, los valores de desarrollo (DSN de localhost, Origin de localho
 aceptan: una variable olvidada en staging/prod debe fallar al arrancar, no en la primera
 consulta.
 
-Los límites de ingesta se añaden cuando el spike F0 publique los valores medidos (A2.2).
+Las capabilities de ingesta se reciben como una configuración JSON publicada a partir del
+spike F0 (A2.2). Los valores provisionales del contrato S1 no se exponen como límites
+efectivos.
 """
 import os
 from contextvars import ContextVar
@@ -30,6 +32,8 @@ from pydantic import (
     model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.schemas.ingestion import IngestionCapabilities
 
 ENV_PREFIX = "MAULWURF_"
 ENV_FILES = ("../../.env", ".env")
@@ -81,6 +85,10 @@ class Settings(BaseSettings):
     ingest_languages: tuple[str, ...] = Field(default=("es", "en", "fr"), min_length=1)
     upload_max_bytes: int = Field(default=209_715_200, ge=1)
     upload_ttl_minutes: int = Field(default=15, ge=1, le=120)
+    # Configuración no sensible, publicada y versionada por el spike. Pydantic Settings
+    # la lee de MAULWURF_INGESTION_CAPABILITIES como un objeto JSON; sin ella el endpoint
+    # devuelve el shape seguro sin límites aprobados.
+    ingestion_capabilities: IngestionCapabilities = Field(default_factory=IngestionCapabilities)
     # Único Origin aceptado en mutaciones (A1.4): el que sirve Caddy, same-origin.
     public_origin: AnyHttpUrl = cast(AnyHttpUrl, "https://localhost")
     # cast: pydantic valida los DSN en runtime; mypy no relaja el tipo del default.

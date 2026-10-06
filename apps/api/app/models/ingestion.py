@@ -3,6 +3,7 @@
 No hay columna de almacenamiento de audio: el audio nunca es durable. A2.1 completa el
 esquema en S2 (tokens de variante, transcripts, segmentos).
 """
+
 import uuid
 from datetime import date, datetime
 from typing import Any
@@ -61,16 +62,26 @@ class Audio(TenantOwned, Base):
         ForeignKeyConstraint(["user_id", "subject_id"], ["subjects.user_id", "subjects.id"]),
         Index(
             "audios_dedupe_identity",
-            "user_id", "sha256", "language_code", "subject_id", "class_date", "class_timezone",
+            "user_id",
+            "sha256",
+            "language_code",
+            "subject_id",
+            "class_date",
+            "class_timezone",
             unique=True,
             postgresql_where=text("deleted_at IS NULL AND sha256 IS NOT NULL"),
         ),
         Index(
-            "audios_variant_lookup", "user_id", "sha256",
+            "audios_variant_lookup",
+            "user_id",
+            "sha256",
             postgresql_where=text("deleted_at IS NULL AND sha256 IS NOT NULL"),
         ),
         Index(
-            "audios_library", "user_id", "subject_id", text("class_date DESC"),
+            "audios_library",
+            "user_id",
+            "subject_id",
+            text("class_date DESC"),
             postgresql_where=text("deleted_at IS NULL"),
         ),
     )
@@ -105,7 +116,8 @@ class IngestionAttempt(TenantOwned, Base):
         CheckConstraint(_in("cleanup_status", CLEANUP_STATES), name="cleanup_status"),
         # Un único intento activo por clase; cleanup pendiente sigue siendo trabajo activo.
         Index(
-            "attempts_one_active", "audio_id",
+            "attempts_one_active",
+            "audio_id",
             unique=True,
             postgresql_where=text(_in("status", ACTIVE_INGESTION_STATES)),
         ),
@@ -145,6 +157,39 @@ class IngestionAttempt(TenantOwned, Base):
     updated_at: Mapped[datetime] = updated_at()
 
 
+class VariantConfirmationToken(TenantOwned, Base):
+    """Token opaco de confirmación de variante; solo se persiste su hash."""
+
+    __tablename__ = "variant_confirmation_tokens"
+    __table_args__ = (
+        UniqueConstraint("token_hash"),
+        ForeignKeyConstraint(
+            ["user_id", "canonical_audio_id"], ["audios.user_id", "audios.id"], ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(["user_id", "subject_id"], ["subjects.user_id", "subjects.id"]),
+        ForeignKeyConstraint(["user_id", "reserved_audio_id"], ["audios.user_id", "audios.id"]),
+        CheckConstraint(
+            "consumed_at IS NULL OR reserved_audio_id IS NOT NULL", name="consumed_has_reservation"
+        ),
+        Index("variant_tokens_expiry", "expires_at", postgresql_where=text("consumed_at IS NULL")),
+        Index("variant_tokens_by_canonical", "user_id", "canonical_audio_id"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    canonical_audio_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    content_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    class_date: Mapped[date] = mapped_column(Date, nullable=False)
+    class_timezone: Mapped[str] = mapped_column(Text, nullable=False)
+    language_code: Mapped[str] = mapped_column(Text, nullable=False)
+    metadata_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reserved_audio_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = created_at()
+
+
 class OutboxEvent(TenantOwned, Base):
     """Evento durable: solo IDs y configuración no sensible, jamás audio ni tokens."""
 
@@ -162,11 +207,16 @@ class OutboxEvent(TenantOwned, Base):
             name="cleanup_gate",
         ),
         UniqueConstraint(
-            "type", "resource_id", "resource_version", "dedupe_key",
+            "type",
+            "resource_id",
+            "resource_version",
+            "dedupe_key",
             postgresql_nulls_not_distinct=True,
         ),
         Index(
-            "outbox_pending", "status", "next_attempt_at",
+            "outbox_pending",
+            "status",
+            "next_attempt_at",
             postgresql_where=text("enabled AND status = 'pending'"),
         ),
         Index("outbox_by_user", "user_id", postgresql_where=text("status <> 'completed'")),
