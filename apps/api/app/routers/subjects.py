@@ -6,8 +6,9 @@ de la petición nunca lleva `user_id` (`extra="forbid"` lo rechaza con 422).
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.core.deps import DbSession, MutationSession
+from app.core.deps import CurrentSession, DbSession, MutationSession
 from app.models import Subject
+from app.services import subjects as subject_service
 
 router = APIRouter(tags=["subjects"])
 
@@ -31,6 +32,10 @@ class SubjectOut(BaseModel):
     class_count: int
 
 
+class SubjectList(BaseModel):
+    items: list[SubjectOut]
+
+
 def _to_out(subject: Subject, class_count: int) -> SubjectOut:
     return SubjectOut(
         id=str(subject.id),
@@ -39,6 +44,12 @@ def _to_out(subject: Subject, class_count: int) -> SubjectOut:
         teacher=subject.teacher,
         class_count=class_count,
     )
+
+
+@router.get("/subjects")
+async def list_subjects(session: CurrentSession, db: DbSession) -> SubjectList:
+    rows = await subject_service.list_active_with_class_count(db, session.user_id)
+    return SubjectList(items=[_to_out(subject, count) for subject, count in rows])
 
 
 @router.post("/subjects", status_code=201)
