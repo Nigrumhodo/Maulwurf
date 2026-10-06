@@ -87,6 +87,8 @@ de este PR de planificación.
 | claim | A1.9 | jpinillaz | en curso | 2026-10-04 | no aplica | — / área A | Suite I-S1-AN-05 (G3) contra Postgres real; libre según §4 2026-09-27 |
 | claim | L1.4 | jpinillaz | en curso | 2026-10-04 | no aplica | — / líder | Borradores Pydantic §M4/§M6 (U-S1-JL-01/02); sin llamadas a LLM |
 | claim | L1.5 | jpinillaz | en curso | 2026-10-04 | no aplica | — / líder | Formato + validador dataset G4 (U-S1-JL-03); sin contenido real |
+| claim | A1.6 | <danielsam171> | en curso | 2026-10-06| no aplica | — / área A | CRUD de materias (I-S1-AN-07); force diferido a S2 |
+
 
 ## 4. Historial de cambios
 
@@ -110,3 +112,6 @@ de este PR de planificación.
 | 2026-09-28 | A1.2, A1.4, A1.7, A1.8, J1.5, S1.B1 y S1.B3 pasan a `hecho` tras fusionar #22, #23, #26, #28–#30, #33 y #34 en `develop`. L1.6 sigue `en curso` hasta que se fusione su PR. | Este PR |
 | 2026-09-28 | L1.6 pasa a `hecho`: el PR `s1/l1.6-freeze` (#38) se fusionó en `develop` (35e4d70) tras #39/#40. La congelación `S1-v1` está publicada en `docs/plan/S1.md`. | Este PR |
 | 2026-10-04 | Se reclaman A1.9, L1.4 y L1.5 (libres desde 2026-09-27). | Este PR |
+
+| 2026-10-05 | Se reclama A1.6 (libre desde 2026-09-27). | Este PR |
+
