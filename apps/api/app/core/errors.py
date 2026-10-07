@@ -2,6 +2,7 @@
 
 Los mensajes y detalles nunca llevan PII, tokens ni contenido de clases.
 """
+from collections.abc import Sequence
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -11,13 +12,20 @@ from fastapi.responses import JSONResponse
 
 class ApiError(Exception):
     def __init__(
-        self, status_code: int, code: str, message: str, details: dict[str, Any] | None = None
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        details: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(code)
         self.status_code = status_code
         self.code = code
         self.message = message
         self.details = details or {}
+        # Cabeceras de contrato, p. ej. `Retry-After` en 429/503 (DISENO §3.1).
+        self.headers = headers or {}
 
 
 def auth_required() -> ApiError:
@@ -31,12 +39,32 @@ def csrf_invalid() -> ApiError:
 async def _handle(_: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, ApiError)  # noqa: S101 - registrado solo para ApiError
     body = {"error": {"code": exc.code, "message": exc.message, "details": exc.details}}
-    return JSONResponse(status_code=exc.status_code, content=body)
+    return JSONResponse(status_code=exc.status_code, content=body, headers=exc.headers or None)
 
 
 def not_found() -> ApiError:
     # Inexistente y ajeno responden igual: no se revela si el recurso existe (ADR-0006).
     return ApiError(404, "not_found", "Recurso no encontrado.")
+
+
+def consent_required(privacy_notice_version: str) -> ApiError:
+    # Solo la versión vigente: la enviada por el cliente está obsoleta y no aporta nada.
+    return ApiError(
+        422,
+        "consent_required",
+        "Acepta el aviso de privacidad vigente y el procesamiento en la nube para continuar.",
+        {"privacy_notice_version": privacy_notice_version},
+    )
+
+
+def language_not_allowed(allowed: Sequence[str]) -> ApiError:
+    # `allowed` es la allowlist publicada (D3), no la que pidió el cliente.
+    return ApiError(
+        422,
+        "language_not_allowed",
+        "Idioma no disponible para transcripción.",
+        {"allowed": list(allowed)},
+    )
 
 
 def validation_failed(fields: dict[str, str]) -> ApiError:
