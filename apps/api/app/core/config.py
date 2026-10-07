@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     ingest_languages: tuple[str, ...] = Field(default=("es", "en", "fr"), min_length=1)
     upload_max_bytes: int = Field(default=209_715_200, ge=1)
     upload_ttl_minutes: int = Field(default=15, ge=1, le=120)
+    # Token de confirmación de variante del `409 duplicate_variant` (A2.4, punto C4): M2
+    # pide «expiración corta» sin publicar un número, así que es provisional como el resto
+    # del contrato S1. Corto a propósito: es de un solo uso y solo se persiste su hash.
+    variant_token_ttl_minutes: int = Field(default=5, ge=1, le=60)
     # Configuración no sensible, publicada y versionada por el spike. Pydantic Settings
     # la lee de MAULWURF_INGESTION_CAPABILITIES como un objeto JSON; sin ella el endpoint
     # devuelve el shape seguro sin límites aprobados.

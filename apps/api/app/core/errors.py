@@ -1,8 +1,14 @@
 """Envelope de error tipado de la API (DISENO §3.2): `{"error": {code, message, details}}`.
 
-Los mensajes y detalles nunca llevan PII, tokens ni contenido de clases.
+Los mensajes y detalles nunca llevan PII ni contenido de clases. Única excepción
+documentada (plan A2.4, punto C7): el `409 duplicate_variant` lleva el
+`variant_confirmation_token` PLANO en `details`, porque DISENO §3.5 exige que el cliente
+pueda presentarlo en el segundo `POST`; igual que el `csrf_token` de `GET /me`, solo viaja
+en esa respuesta y nunca a logs ni a otros endpoints.
 """
+import uuid
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -69,6 +75,33 @@ def language_not_allowed(allowed: Sequence[str]) -> ApiError:
 
 def validation_failed(fields: dict[str, str]) -> ApiError:
     return ApiError(422, "validation_failed", "Hay campos inválidos.", {"fields": fields})
+
+
+def duplicate_variant(existing_audio_id: uuid.UUID, token: str, expires_at: datetime) -> ApiError:
+    """`409` con el token opaco de un solo uso y su expiración (DISENO §3.5, M2/A2.4).
+
+    Ver docstring del módulo: es el ÚNICO error cuyo `details` lleva un token, y en plano
+    porque el segundo `POST` lo necesita; en BD solo se persiste su SHA-256.
+    """
+    return ApiError(
+        409,
+        "duplicate_variant",
+        "Existe una clase con el mismo contenido y otro contexto; confirma para continuar.",
+        {
+            "existing_audio_id": str(existing_audio_id),
+            "variant_confirmation_token": token,
+            "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
+        },
+    )
+
+
+def variant_hash_mismatch() -> ApiError:
+    # El segundo PUT fallido deja su intento `rejected` con este código (S2.md §A2.5).
+    return ApiError(
+        422,
+        "variant_hash_mismatch",
+        "El contenido no coincide con la clase confirmada; vuelve a subir el archivo original.",
+    )
 
 
 async def _handle_validation(_: Request, exc: Exception) -> JSONResponse:
