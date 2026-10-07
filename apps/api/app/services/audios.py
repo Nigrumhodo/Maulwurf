@@ -53,7 +53,9 @@ def allowed_languages() -> tuple[str, ...]:
     return settings.ingest_languages
 
 
-def _token_hash(presented: str) -> str:
+def token_hash(presented: str) -> str:
+    """SHA-256 hex de un token opaco: público desde A2.4 para que emisión y consumo (A2.3)
+    compartan UN solo convenio; en BD solo vive el hash, jamás el valor presentado."""
     # Mismo convenio que `app.services.sessions._sha256`: en BD solo vive el SHA-256 hex.
     return hashlib.sha256(presented.encode("utf-8", "surrogatepass")).hexdigest()
 
@@ -123,7 +125,7 @@ async def consume_variant_token(
         select(VariantConfirmationToken)
         .where(
             VariantConfirmationToken.user_id == user_id,
-            VariantConfirmationToken.token_hash == _token_hash(presented),
+            VariantConfirmationToken.token_hash == token_hash(presented),
         )
         .with_for_update()
     )

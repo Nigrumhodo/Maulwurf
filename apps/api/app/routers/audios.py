@@ -1,4 +1,4 @@
-"""Reserva de ingesta (A2.3, S2.md §A2.3 sobre `ESPECIFICACION.md` M2).
+"""Reserva de ingesta (A2.3, S2.md §A2.3 sobre `ESPECIFICACION.md` M2) y `PUT` (A2.4).
 
 `POST /audios` valida la forma del body, el consentimiento versionado, el idioma de la
 allowlist, el token de variante opcional, la materia del tenant, la cuota y el slot ANTES
@@ -6,16 +6,20 @@ de reservar nada, y crea el intento en `awaiting_upload` con una URL relativa de
 No hay dedupe: el hash no existe hasta el `PUT`, así que este POST responde `201`, `422`,
 `429` o `503` (más `401`/`403`/`404`/`409` de contrato).
 
-`PUT /audios/{id}/content` valida sesión, CSRF, Origin, propiedad, estado, expiración y
-tamaño declarado, pero la recepción efímera es de S2: con todo válido responde
-`503 capacity_unavailable` SIN leer el cuerpo. Responder 202 afirmaría haber aceptado un
-audio que se descarta.
+`PUT /audios/{id}/content` (A2.4) valida sesión, CSRF, Origin, propiedad, estado,
+expiración y tamaño declarado SIN leer el cuerpo, y delega la recepción en
+`services/uploads.receive_content`: streaming sin spool, SHA-256 incremental, corte por
+límite en caliente y dedupe resuelto DESPUÉS de limpiar (`200 duplicate_exact` /
+`409 duplicate_variant`); `202` solo para contenido admitido por el sink de ingesta. El
+sink por defecto aún no está disponible (contrato interno con S2.1 pendiente, punto C2):
+responde `503 capacity_unavailable` antes de leer un byte, igual que en A1.8.
 """
 import uuid
 from datetime import UTC, date, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Query, Response
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.config import settings
@@ -31,6 +35,12 @@ from app.services.audios import (
     reserve_slot,
 )
 from app.services.tenant import get_owned
+from app.services.uploads import (
+    ReceptionSink,
+    effective_upload_limit,
+    get_reception_sink,
+    receive_content,
+)
 
 router = APIRouter(tags=["audios"])
 
@@ -147,27 +157,39 @@ async def create_audio(
 
 @router.put(
     "/audios/{audio_id}/content",
-    # En S1 la única salida con todo válido es 503: OpenAPI no debe prometer un 202 que no
-    # puede ocurrir. S2 vuelve a 202 al implementar la recepción efímera.
-    status_code=503,
+    # A2.4: la recepción real está implementada; `202` es la salida por defecto con todo
+    # válido y el sink de ingesta admitiendo el contenido (S2.md §A2.4).
+    status_code=202,
     response_model=None,
     responses={
+        200: {"description": "duplicate_exact: la clase canónica ya existe (tras cleanup)"},
+        202: {"description": "Contenido nuevo admitido por el sink de ingesta"},
         401: {"description": "Sin sesión (auth_required)"},
         403: {"description": "CSRF u Origin inválido (csrf_invalid)"},
         404: {"description": "Audio o intento inexistente o ajeno (not_found)"},
-        409: {"description": "El intento ya no está activo (attempt_not_active)"},
+        409: {"description": "attempt_not_active | duplicate_variant (con token de variante)"},
         410: {"description": "La subida expiró (upload_expired)"},
-        413: {"description": "Content-Length declarado supera el máximo (payload_too_large)"},
-        503: {"description": "Recepción efímera no disponible en S1 (capacity_unavailable)"},
+        413: {"description": "Tamaño superado, declarado o en streaming (payload_too_large)"},
+        415: {"description": "unsupported_format: contenido vacío o rechazo de la ingesta"},
+        422: {"description": "variant_hash_mismatch en el segundo PUT"},
+        503: {"description": "capacity_unavailable (sink/caudal), con Retry-After"},
     },
 )
 async def upload_content(
     audio_id: uuid.UUID,
     attempt_id: Annotated[uuid.UUID, Query()],
+    request: Request,
     session: MutationSession,
     db: DbSession,
+    sink: Annotated[ReceptionSink, Depends(get_reception_sink)],
     content_length: Annotated[int | None, Header()] = None,
 ) -> Response:
+    """A2.4: recibe el binario en streaming sin spool y devuelve 200/202 (o un error tipado).
+
+    Todas las validaciones de abajo ocurren ANTES de leer un byte; la recepción, el SHA-256,
+    el corte en caliente, el dedupe y la compensación viven en `services/uploads` (el router
+    no hace SQL ni toca el cuerpo, guardia ADR-0006).
+    """
     audio = await get_owned(db, Audio, session.user_id, audio_id)
     if audio is None or audio.deleted_at is not None:
         raise not_found()
@@ -181,19 +203,23 @@ async def upload_content(
         raise ApiError(409, "attempt_not_active", "Este intento de subida ya no está activo.")
     if attempt.upload_expires_at <= datetime.now(UTC):
         raise ApiError(410, "upload_expired", "La subida expiró; vuelve a crear la clase.")
-    # Se decide por la cabecera, sin leer bytes: el cuerpo nunca se consume en S1. Es solo
-    # un pre-filtro: una subida chunked no declara Content-Length, así que en S2 el límite
-    # real se impone contando los bytes recibidos durante el streaming.
-    if content_length is not None and content_length > settings.upload_max_bytes:
+    # Pre-filtro por cabecera, sin leer bytes: el límite real se impone contando los bytes
+    # durante el streaming (una subida chunked no declara Content-Length).
+    limit = effective_upload_limit()
+    if content_length is not None and content_length > limit:
         raise ApiError(
             413,
             "payload_too_large",
             "El archivo supera el tamaño máximo permitido.",
-            {"max_bytes": settings.upload_max_bytes},
+            {"max_bytes": limit},
         )
-    raise ApiError(
-        503,
-        "capacity_unavailable",
-        "La recepción de audio aún no está disponible.",
-        {"retryable": False},
+    outcome = await receive_content(
+        db,
+        request,
+        sink,
+        user_id=session.user_id,
+        audio=audio,
+        attempt=attempt,
+        content_length=content_length,
     )
+    return JSONResponse(status_code=outcome.status_code, content=outcome.payload)

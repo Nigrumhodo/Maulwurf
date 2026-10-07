@@ -1,7 +1,9 @@
 """A1.8 contra PostgreSQL real: contrato HTTP de ingesta S1, perfil, logout e integraciones.
 
 Matriz de verificación de S1.md §3 (A1.8): códigos, cabeceras, envelope y ausencia de
-secretos. Los flujos completos (recepción real, dedupe) los cubre S2.
+secretos. En `PUT /audios/{id}/content` fija el contrato previo a A2.4 —con el sink por
+defecto aún no disponible—; los flujos completos (recepción con sink inyectado, dedupe)
+los cubre `test_put_content_dedupe.py` (I-S2-AN-05).
 """
 import uuid
 from collections.abc import AsyncIterator
@@ -195,9 +197,12 @@ async def _put(
                             headers=headers)
 
 
-async def test_put_with_valid_contract_is_503_until_s2(
+async def test_put_with_valid_contract_is_503_without_reception_sink(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
+    # A2.4: el contrato de recepción interno con S2.1 aún no está congelado (C2), así que el
+    # sink por defecto responde 503 ANTES de leer el cuerpo (precedente honesto de A1.8).
+    # El flujo completo con un sink inyectado lo cubre I-S2-AN-05.
     actor = await _actor(db_session)
     reserved = await _reserved(client, db_session, actor)
 
@@ -236,10 +241,12 @@ async def test_put_declared_too_large_is_413_without_reading(
     assert response.json()["error"]["code"] == "payload_too_large"
 
 
-async def test_put_chunked_without_content_length_is_still_503(
+async def test_put_chunked_without_content_length_is_503_until_sink_available(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    # Fija el comportamiento de S1 antes de que S2 cuente bytes durante el streaming.
+    # A2.4: sin Content-Length no hay pre-filtro posible; se llega al sink y, mientras el
+    # contrato interno no exista (C2), responde 503 sin leer. El corte en caliente del
+    # límite lo cubre I-S2-AN-05 con un sink inyectado.
     actor = await _actor(db_session)
     reserved = await _reserved(client, db_session, actor)
 
@@ -271,7 +278,9 @@ async def test_post_audios_normalizes_language_case(
 async def test_put_at_exact_size_limit_is_not_413(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    # El límite es inclusivo: exactamente upload_max_bytes no es "demasiado grande".
+    # El límite es inclusivo: exactamente upload_max_bytes no es "demasiado grande" — el
+    # pre-filtro no dispara — y el flujo sigue hasta el sink, que aquí responde 503. La
+    # verificación real del límite (contando bytes en streaming) la hace I-S2-AN-05.
     actor = await _actor(db_session)
     reserved = await _reserved(client, db_session, actor)
     headers = {**actor.headers, "Content-Length": str(settings.upload_max_bytes)}
@@ -415,8 +424,11 @@ async def test_openapi_exposes_contract_without_secrets(client: AsyncClient) -> 
     for marker in ("NVIDIA_API_KEY", "Bearer", "secret_key", "encryption_key"):
         assert marker not in response.text
     put = paths["/audios/{audio_id}/content"]["put"]["responses"]
-    assert "202" not in put
-    assert {"401", "403", "404", "409", "410", "413", "503"} <= set(put)
+    # A2.4: el PUT ya tiene recepción real; OpenAPI promete 200/202 y todo el catálogo de
+    # errores de contrato (DISENO §3.5). `500 internal_error` no se declara: es el
+    # fallback genérico de todo error inesperado.
+    assert {"200", "202"} <= set(put)
+    assert {"401", "403", "404", "409", "410", "413", "415", "422", "503"} <= set(put)
 
 
 async def test_writes_persist_through_real_sessions(migrated_database_url: str) -> None:
