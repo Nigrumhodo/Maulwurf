@@ -1,13 +1,18 @@
-"""Esqueleto de ingesta (A1.8, contrato S1.md §1.2).
+"""Reserva de ingesta (A2.3, S2.md §A2.3 sobre `ESPECIFICACION.md` M2).
 
-`POST /audios` valida metadatos y consentimiento ANTES de reservar nada y crea el intento en
-`awaiting_upload`. `PUT /audios/{id}/content` valida sesión, CSRF, Origin, propiedad,
-estado, expiración y tamaño declarado, pero en S1 no existe la recepción efímera (S2): con
-todo válido responde `503 capacity_unavailable` SIN leer el cuerpo. Responder 202 afirmaría
-haber aceptado un audio que se descarta. No hay dedupe: el hash solo se conoce en S2.
+`POST /audios` valida la forma del body, el consentimiento versionado, el idioma de la
+allowlist, el token de variante opcional, la materia del tenant, la cuota y el slot ANTES
+de reservar nada, y crea el intento en `awaiting_upload` con una URL relativa de carga.
+No hay dedupe: el hash no existe hasta el `PUT`, así que este POST responde `201`, `422`,
+`429` o `503` (más `401`/`403`/`404`/`409` de contrato).
+
+`PUT /audios/{id}/content` valida sesión, CSRF, Origin, propiedad, estado, expiración y
+tamaño declarado, pero la recepción efímera es de S2: con todo válido responde
+`503 capacity_unavailable` SIN leer el cuerpo. Responder 202 afirmaría haber aceptado un
+audio que se descarta.
 """
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Query, Response
@@ -15,17 +20,19 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.config import settings
 from app.core.deps import DbSession, MutationSession
-from app.core.errors import ApiError, not_found
+from app.core.errors import ApiError, consent_required, language_not_allowed, not_found
 from app.core.validation import is_iana_timezone
 from app.models import Audio, IngestionAttempt, Subject
+from app.services.audios import (
+    allowed_languages,
+    check_quota,
+    consume_variant_token,
+    create_reservation,
+    reserve_slot,
+)
 from app.services.tenant import get_owned
 
 router = APIRouter(tags=["audios"])
-
-# Proveedores que el aviso de privacidad declara al usuario (se registran con el intento).
-DECLARED_PROVIDERS = {"asr": "nvidia-riva/whisper-large-v3"}
-# Quién posee la reserva hasta que S2 asigne una instancia de `ingest`.
-UNASSIGNED_OWNER = "api:unassigned"
 
 
 class AudioCreate(BaseModel):
@@ -40,6 +47,9 @@ class AudioCreate(BaseModel):
     privacy_notice_version: str = Field(min_length=1, max_length=64)
     cloud_processing_accepted: bool
     third_party_voice_acknowledged: bool
+    # Opaco: solo puede venir de un `409 duplicate_variant` previo (A2.5); se valida y
+    # consume aquí, nunca viaja a logs ni a los mensajes de error.
+    variant_confirmation_token: str | None = Field(default=None, min_length=1, max_length=256)
 
     @field_validator("language_code")
     @classmethod
@@ -64,40 +74,54 @@ class AudioCreated(BaseModel):
     outcome: str = "new"
 
 
-def _consent_required() -> ApiError:
-    return ApiError(
-        422,
-        "consent_required",
-        "Acepta el aviso de privacidad vigente y el procesamiento en la nube para continuar.",
-        {"privacy_notice_version": settings.privacy_notice_version},
-    )
-
-
-@router.post("/audios", status_code=201)
+@router.post(
+    "/audios",
+    status_code=201,
+    responses={
+        401: {"description": "Sin sesión (auth_required)"},
+        403: {"description": "CSRF u Origin inválido (csrf_invalid)"},
+        404: {"description": "Materia inexistente o de otro tenant (not_found)"},
+        409: {"description": "Token de variante ya consumido (invalid_transition)"},
+        422: {"description": "consent_required | language_not_allowed | validation_failed"},
+        429: {"description": "Cuota por usuario (rate_limited), con Retry-After"},
+        503: {"description": "Sin slot de ingesta (capacity_unavailable), con Retry-After"},
+    },
+)
 async def create_audio(
     body: AudioCreate, response: Response, session: MutationSession, db: DbSession
 ) -> AudioCreated:
-    # Consentimiento e idioma se rechazan antes de tocar la BD o reservar capacidad.
+    # Consentimiento versionado ANTES de tocar la BD: ausencia o versión obsoleta no
+    # reserva capacidad ni acepta bytes (M2, U-S2-AN-01).
     if (
         not body.cloud_processing_accepted
         or not body.third_party_voice_acknowledged
         or body.privacy_notice_version != settings.privacy_notice_version
     ):
-        raise _consent_required()
-    if body.language_code not in settings.ingest_languages:
-        raise ApiError(
-            422,
-            "language_not_allowed",
-            "Idioma no disponible para transcripción.",
-            {"allowed": list(settings.ingest_languages)},
+        raise consent_required(settings.privacy_notice_version)
+    allowed = allowed_languages()
+    # `multi` queda fuera de MVP/v1 aunque lo publicaran: la política es selección explícita.
+    if body.language_code == "multi" or body.language_code not in allowed:
+        raise language_not_allowed(allowed)
+    token = None
+    if body.variant_confirmation_token is not None:
+        token = await consume_variant_token(
+            db,
+            user_id=session.user_id,
+            presented=body.variant_confirmation_token,
+            subject_id=body.subject_id,
+            class_date=body.class_date,
+            class_timezone=body.class_timezone,
+            language_code=body.language_code,
         )
+    # Materia del tenant: inexistente y ajeno responden 404 por igual (ADR-0006).
     subject = await get_owned(db, Subject, session.user_id, body.subject_id)
     if subject is None or subject.deleted_at is not None:
         raise not_found()
-
-    now = datetime.now(UTC)
-    expires_at = now + timedelta(minutes=settings.upload_ttl_minutes)
-    audio = Audio(
+    # Cuota y slot se comprueban sin escribir: un 404 o un 422 no deben consumir capacidad.
+    await check_quota(db, session.user_id)
+    await reserve_slot(db)
+    reservation = await create_reservation(
+        db,
         user_id=session.user_id,
         subject_id=subject.id,
         title=body.title,
@@ -105,29 +129,16 @@ async def create_audio(
         class_date=body.class_date,
         class_timezone=body.class_timezone,
         language_code=body.language_code,
-    )
-    db.add(audio)
-    await db.flush()
-    attempt = IngestionAttempt(
-        user_id=session.user_id,
-        audio_id=audio.id,
         privacy_notice_version=body.privacy_notice_version,
-        cloud_processing_accepted_at=now,
-        third_party_voice_acknowledged_at=now,
-        declared_providers=DECLARED_PROVIDERS,
-        status="awaiting_upload",
-        owner_instance=UNASSIGNED_OWNER,
-        fencing_token=1,
-        upload_expires_at=expires_at,
+        token=token,
     )
-    db.add(attempt)
-    await db.flush()
-    # Valores leídos antes del commit: no dependen de que la sesión expire o no los objetos.
+    upload_url = f"/audios/{reservation.audio_id}/content?attempt_id={reservation.attempt_id}"
+    # Valores leídos antes del commit: los atributos ORM expiran al confirmar.
     created = AudioCreated(
-        audio_id=audio.id,
-        attempt_id=attempt.id,
-        upload_url=f"/audios/{audio.id}/content?attempt_id={attempt.id}",
-        upload_expires_at=expires_at,
+        audio_id=reservation.audio_id,
+        attempt_id=reservation.attempt_id,
+        upload_url=upload_url,
+        upload_expires_at=reservation.upload_expires_at,
     )
     await db.commit()
     response.headers["Location"] = created.upload_url
