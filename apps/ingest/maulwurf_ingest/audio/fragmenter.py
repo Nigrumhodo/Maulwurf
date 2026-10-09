@@ -126,23 +126,6 @@ def fragment_argv(
     return bounded_argv(operation, output=str(dest), limits=limits)
 
 
-def write_fragments(
-    source: Path,
-    workdir: Path,
-    spans: Sequence[FragmentSpan],
-    *,
-    limits: FfmpegLimits,
-    realtime: bool = False,
-) -> list[Path]:
-    """Extrae cada tramo a `frag-NNNN.wav`. No borra los anteriores; el pipeline sí."""
-    written: list[Path] = []
-    for index, span in enumerate(spans):
-        dest = workdir / f"frag-{index:04d}.wav"
-        run(fragment_argv(source, dest, span, limits=limits, realtime=realtime), limits=limits)
-        written.append(dest)
-    return written
-
-
 def wav_duration_s(path: Path) -> float:
     with wave.open(str(path), "rb") as reader:
         rate = reader.getframerate()

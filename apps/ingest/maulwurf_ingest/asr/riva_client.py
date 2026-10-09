@@ -88,6 +88,8 @@ class NvidiaRivaTranscriptionService:
         self._clock = clock
         self._jitter = jitter
         self._cancel = threading.Event() if cancel is None else cancel
+        self._call_lock = threading.Lock()
+        self._inflight: RecognizeCall | None = None
 
     def transcribe(self, wav: bytes, *, language_code: str, deadline_s: float) -> Transcript:
         _reject_language(language_code)
@@ -98,23 +100,42 @@ class NvidiaRivaTranscriptionService:
             self._ensure_running(deadline)
             remaining = deadline - self._clock()
             call = self._transport.start(wav, language_code=language_code, deadline_s=remaining)
-            if self._cancel.is_set():
-                call.cancel()
-                raise AsrReupload("requires_reupload")
+            with self._call_lock:
+                if self._cancel.is_set():
+                    call.cancel()
+                    raise AsrReupload("requires_reupload")
+                self._inflight = call
             try:
-                return call.result(timeout=remaining)
-            except TransportError as exc:
-                self._raise_terminal(exc)
-                if attempt >= MAX_ATTEMPTS or not self._pause(attempt, deadline):
-                    raise AsrReupload("requires_reupload") from exc
+                try:
+                    return call.result(timeout=remaining)
+                except TransportError as exc:
+                    self._raise_terminal(exc)
+                    if attempt >= MAX_ATTEMPTS or not self._pause(attempt, deadline):
+                        raise AsrReupload("requires_reupload") from exc
+            finally:
+                with self._call_lock:
+                    if self._inflight is call:
+                        self._inflight = None
         raise AsrReupload("requires_reupload")
 
     async def transcribe_async(
         self, wav: bytes, *, language_code: str, deadline_s: float
     ) -> Transcript:
-        return await asyncio.to_thread(
-            self.transcribe, wav, language_code=language_code, deadline_s=deadline_s
-        )
+        try:
+            return await asyncio.to_thread(
+                self.transcribe, wav, language_code=language_code, deadline_s=deadline_s
+            )
+        except asyncio.CancelledError:
+            self.cancel_nowait()
+            raise
+
+    def cancel_nowait(self) -> None:
+        """Corta el RPC en vuelo. `to_thread` no interrumpe el hilo por sí solo."""
+        self._cancel.set()
+        with self._call_lock:
+            call = self._inflight
+        if call is not None:
+            call.cancel()
 
     def _ensure_running(self, deadline: float) -> None:
         if self._cancel.is_set() or self._clock() >= deadline:
@@ -123,8 +144,10 @@ class NvidiaRivaTranscriptionService:
     def _raise_terminal(self, exc: TransportError) -> None:
         if exc.code == "CANCELLED":
             raise AsrReupload("requires_reupload") from exc
-        if exc.code in _AUTH or exc.code in _INVALID or exc.code not in _TRANSIENT:
+        if exc.code in _AUTH or exc.code in _INVALID:
             raise AsrRejected(exc.code) from exc
+        if exc.code not in _TRANSIENT:
+            raise AsrReupload("requires_reupload") from exc
 
     def _pause(self, attempt: int, deadline: float) -> bool:
         delay = _backoff(attempt, self._jitter)
@@ -152,17 +175,42 @@ def _backoff(attempt: int, jitter: Callable[[], float]) -> float:
 
 
 class GrpcRivaTransport:
-    """Canal TLS real. Las pruebas no lo construyen."""
+    """Un canal TLS para todo el transporte. Las pruebas no lo abren contra NVIDIA."""
 
     def __init__(self, *, api_key: str, server: str, function_id: str) -> None:
         self._api_key = api_key
         self._server = server
         self._function_id = function_id
+        self._auth: object | None = None
+        self._asr: object | None = None
 
     def __repr__(self) -> str:
         return "GrpcRivaTransport()"
 
     def start(self, wav: bytes, *, language_code: str, deadline_s: float) -> RecognizeCall:
+        import riva.client
+
+        config = riva.client.RecognitionConfig(
+            language_code=language_code,
+            max_alternatives=1,
+            profanity_filter=False,
+            enable_automatic_punctuation=False,
+            verbatim_transcripts=True,
+            enable_word_time_offsets=True,
+        )
+        call = self._service().offline_recognize(wav, config, future=True)  # type: ignore[attr-defined]
+        return _GrpcCall(call, deadline_s)
+
+    def close(self) -> None:
+        auth = self._auth
+        self._auth = None
+        self._asr = None
+        if auth is not None:
+            _close_channel(auth)
+
+    def _service(self) -> object:
+        if self._asr is not None:
+            return self._asr
         import riva.client
 
         auth = riva.client.Auth(
@@ -178,27 +226,21 @@ class GrpcRivaTransport:
             ],
         )
         try:
-            config = riva.client.RecognitionConfig(
-                language_code=language_code,
-                max_alternatives=1,
-                profanity_filter=False,
-                enable_automatic_punctuation=False,
-                verbatim_transcripts=True,
-                enable_word_time_offsets=True,
-            )
-            call = riva.client.ASRService(auth).offline_recognize(wav, config, future=True)
+            asr = riva.client.ASRService(auth)
         except Exception:
             _close_channel(auth)
             raise
-        return _GrpcCall(call, auth, deadline_s)
+        self._auth = auth
+        self._asr = asr
+        return asr
 
 
 class _GrpcCall:
-    def __init__(self, call: object, auth: object, deadline_s: float) -> None:
+    """Una llamada. No cierra el canal: lo reutiliza el transporte."""
+
+    def __init__(self, call: object, deadline_s: float) -> None:
         self._call = call
-        self._auth = auth
         self._deadline_s = deadline_s
-        self._closed = False
 
     def result(self, timeout: float) -> Transcript:
         import grpc
@@ -217,20 +259,11 @@ class _GrpcCall:
             raise TransportError("DEADLINE_EXCEEDED") from None
         else:
             return _transcript_from(response)
-        finally:
-            self._close()
 
     def cancel(self) -> None:
         cancel = getattr(self._call, "cancel", None)
         if callable(cancel):
             cancel()
-        self._close()
-
-    def _close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        _close_channel(self._auth)
 
 
 def riva_transport_from_env() -> GrpcRivaTransport:
@@ -280,9 +313,10 @@ def _transcript_from(response: object) -> Transcript:
             parsed = _word_from(word)
             if parsed is not None:
                 words.append(parsed)
+    text = " ".join(part.strip() for part in text_parts if part.strip())
     if not words:
-        return Transcript("".join(text_parts), (), "none")
-    return Transcript("".join(text_parts), tuple(words), "word")
+        return Transcript(text, (), "none")
+    return Transcript(text, tuple(words), "word")
 
 
 def _word_from(word: object) -> LocalWord | None:

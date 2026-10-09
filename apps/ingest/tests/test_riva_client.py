@@ -11,9 +11,11 @@ import pytest
 from maulwurf_ingest.asr.riva_client import (
     AsrRejected,
     AsrReupload,
+    GrpcRivaTransport,
     NvidiaRivaTranscriptionService,
     Transcript,
     TransportError,
+    _transcript_from,
     riva_transport_from_env,
 )
 
@@ -197,6 +199,112 @@ async def test_blocking_recognize_stays_off_the_event_loop() -> None:
     assert result.text == "ok"
     assert seen["thread"] != threading.main_thread().name
     assert len(ticks) >= 2
+
+
+@pytest.mark.parametrize("code", ["INTERNAL", "UNKNOWN"])
+def test_unknown_service_codes_ask_for_reupload(code: str) -> None:
+    script = _Script([TransportError(code), TransportError("UNAVAILABLE")])
+    service, _clock = _service(script)
+    with pytest.raises(AsrReupload, match="requires_reupload"):
+        service.transcribe(_WAV, language_code="es", deadline_s=30.0)
+    assert len(script.calls) == 1
+
+
+def test_transcript_separates_result_blocks() -> None:
+    class _Word:
+        word = "hoy"
+        start_time = 0
+        end_time = 100
+
+    class _Alt:
+        def __init__(self, text: str, words: list[object]) -> None:
+            self.transcript = text
+            self.words = words
+
+    class _Result:
+        def __init__(self, text: str, words: list[object]) -> None:
+            self.alternatives = [_Alt(text, words)]
+
+    class _Response:
+        results = [_Result("hoy", [_Word()]), _Result("clase", [])]
+
+    transcript = _transcript_from(_Response())
+    assert transcript.text == "hoy clase"
+    assert transcript.precision == "word"
+    assert transcript.words[0].text == "hoy"
+
+
+async def test_cancelling_the_task_cancels_the_inflight_call() -> None:
+    started = threading.Event()
+    released = threading.Event()
+
+    class _Blocking:
+        def result(self, timeout: float) -> Transcript:
+            started.set()
+            released.wait(timeout=2)
+            raise TransportError("CANCELLED")
+
+        def cancel(self) -> None:
+            released.set()
+
+    class _Slow:
+        def start(self, wav: bytes, *, language_code: str, deadline_s: float) -> _Blocking:
+            return _Blocking()
+
+    service = NvidiaRivaTranscriptionService(_Slow(), jitter=lambda: 0.0)
+    task = asyncio.create_task(service.transcribe_async(_WAV, language_code="es", deadline_s=30.0))
+    assert await asyncio.to_thread(started.wait, 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert released.is_set()
+
+
+def test_transport_reuses_one_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    import riva.client as riva_client
+
+    opened: list[str] = []
+
+    class _Channel:
+        def close(self) -> None:
+            opened.append("closed")
+
+    class _Auth:
+        def __init__(self, **_kwargs: object) -> None:
+            opened.append("auth")
+            self.channel = _Channel()
+
+    class _Call:
+        def cancel(self) -> None:
+            return None
+
+    class _Asr:
+        def __init__(self, _auth: object) -> None:
+            opened.append("asr")
+
+        def offline_recognize(self, wav: bytes, config: object, future: bool = True) -> _Call:
+            opened.append("recognize")
+            return _Call()
+
+    class _Config:
+        def __init__(self, **_kwargs: object) -> None:
+            return None
+
+    monkeypatch.setattr(riva_client, "Auth", _Auth)
+    monkeypatch.setattr(riva_client, "ASRService", _Asr)
+    monkeypatch.setattr(riva_client, "RecognitionConfig", _Config)
+    transport = GrpcRivaTransport(
+        api_key="not-a-real-key", server="grpc.example:443", function_id="fn"
+    )
+    transport.start(b"a", language_code="es", deadline_s=1.0)
+    transport.start(b"b", language_code="es", deadline_s=1.0)
+    assert opened.count("auth") == 1
+    assert opened.count("asr") == 1
+    assert opened.count("recognize") == 2
+    transport.close()
+    assert opened.count("closed") == 1
+    transport.close()
+    assert opened.count("closed") == 1
 
 
 def test_factory_refuses_a_missing_key(monkeypatch: pytest.MonkeyPatch) -> None:
