@@ -8,6 +8,7 @@ del proceso. stderr no se registra.
 
 from __future__ import annotations
 
+import math
 import os
 import shutil
 import subprocess
@@ -133,6 +134,32 @@ def _resolve(argv: Sequence[str]) -> list[str]:
         raise RuntimeError("ffmpeg_unavailable")
     resolved[0] = found
     return resolved
+
+
+# s16 mono al sample rate candidato. El margen cubre la cabecera RIFF.
+_PCM_BYTES_PER_SECOND = CANDIDATE_SAMPLE_RATE_HZ * 2
+_HEADER_BYTES = 4096
+
+
+def ensure_pcm_fits(duration_s: float, output_bytes: int) -> None:
+    """`-fs` trunca con código 0. Si el PCM no cabe, hay que fallar antes de convertir."""
+    if not math.isfinite(duration_s) or duration_s <= 0 or output_bytes < 1:
+        raise RuntimeError("normalization_duration_unknown")
+    expected = math.ceil(duration_s * _PCM_BYTES_PER_SECOND) + _HEADER_BYTES
+    if expected > output_bytes:
+        raise RuntimeError("normalization_output_overflow")
+
+
+def ensure_conversion_complete(source_s: float, converted_s: float) -> None:
+    """El WAV escrito no puede quedar corto respecto de la duración pedida.
+
+    Un segundo, o el 1 % si el tramo es más largo, absorbe el error de un VBR
+    sin cabecera. Un corte de `-fs` es mucho mayor y no pasa.
+    """
+    if not math.isfinite(source_s) or not math.isfinite(converted_s) or source_s <= 0:
+        raise RuntimeError("normalization_duration_unknown")
+    if converted_s + max(1.0, 0.01 * source_s) < source_s:
+        raise RuntimeError("normalization_truncated")
 
 
 def _limit_child(limits: FfmpegLimits) -> Callable[[], None]:

@@ -33,6 +33,18 @@
 | S1.B5 | S | hecho | 2026-09-27 UTC, WSL. Postgres y Redis en `127.0.0.1`. `cd apps/ingest && uv run pytest tests/test_no_audio_persistence.py tests/test_cleanup_admission.py -q` → 9 passed en 7.48 s. I-S1-SG-06: mounts, Redis, logs, trazas y cachés en cero, sin dumps. En este host el éxito del supervisor no queda `verified` por `unreadable_processes` (igual que S1.B4); el directorio del intento ya no está. |
 | S1.B6 | S | hecho | 2026-09-27 UTC, WSL. Los 9 passed de ingest cubren I-S1-SG-05: lease vencido deja `pending` y la admisión sigue abierta; cleanup `failed` la cierra y emite `cleanup_failed` sin rutas. `cd apps/api && uv run pytest tests/integration/test_cleanup_gate.py -q` → 1 passed en 1.97 s. `index_requested` sigue `pending`. |
 
+### Semana 2 (S2) — Conocimiento
+
+> Ownership en [CLAIMS.md](CLAIMS.md). S2.3 y S2.4 siguen `en curso`: la matriz de
+> integración del supervisor no corrió (hace falta Postgres) y `P-S2-SG-12` no se ejecutó.
+
+| Ticket | Área | Estado | Evidencia (comando, fecha, entorno, resultado) |
+|---|---|---|---|
+| S2.1 | S | hecho | 2026-10-09 UTC. Merge #54. Recepción a tmpfs, SHA-256 y ffprobe. Cubierto por la suite de abajo. |
+| S2.2 | S | hecho | 2026-10-09 UTC. Merge #54. ffmpeg acotado y fragmentación a 30 s. Un corte de `-fs` no queda como éxito. |
+| S2.3 | S | en curso | 2026-10-09 UTC, WSL, `apps/ingest/.venv`. Un fragmento activo, `-ss` antes de `-i`. `ruff check .` y `mypy .` limpios. `pytest -m "not integration and not provider and not load"` → 126 passed, 33 deselected. |
+| S2.4 | S | en curso | 2026-10-09 UTC, mismo entorno. Cliente aislado del event loop; reintentos clasificados con doble, sin canal NVIDIA. `P-S2-SG-12` no se ejecuta. Cloud `pendiente`. |
+
 ## Bloqueos y dependencias
 
 - (el lunes de cada semana: anotar de quién esperas contrato congelado §6 o código real, y qué día)
