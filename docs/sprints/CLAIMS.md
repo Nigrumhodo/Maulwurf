@@ -1,6 +1,6 @@
 # Registro canónico de claims — Maulwurf
 
-> Estado: **S1 abierto**. Revisión: 2026-09-28.
+> Estado: **S2 abierto**. Revisión: 2026-10-09.
 >
 > Este archivo es la única fuente de verdad para la propiedad de tickets. Las bitácoras
 > personales conservan evidencia, bloqueos y notas, pero una fila allí no asigna un ticket
@@ -40,8 +40,9 @@ ticket (ver regla 6) y las acciones de la tabla se registran como eventos con fe
 
 ## 3. Sprint activo
 
-**S1 está abierto.** S2–S4 siguen cerrados. La apertura queda registrada en el historial
-de este PR de planificación.
+**S2 está abierto.** En S1 solo A1.6 sigue `en curso`: #49 reclama el CRUD y el código no
+está en `develop`. A1.3 y L1.7 no están implementados. S3 y S4 siguen cerrados. D2 y D6
+siguen `pending`; D3-Audio y D4 siguen `blocked`.
 
 ### S1 — Fundación + spike F0
 
@@ -84,11 +85,23 @@ de este PR de planificación.
 | claim | S1.B4 | satnovaOG | hecho | 2026-09-27 | no aplica | — / líder | Matriz I-S1-SG-04: 10 passed en contenedor Ubuntu (PID propio). En el WSL del host, `unreadable_processes` de root impide `verified`. |
 | claim | S1.B5 | satnovaOG | hecho | 2026-09-27 | no aplica | — / área S | I-S1-SG-06: 9 passed en WSL. Barrido en cero. En este host el éxito no queda `verified` por `unreadable_processes` (igual que S1.B4). |
 | claim | S1.B6 | satnovaOG | hecho | 2026-09-27 | no aplica | — / área S | I-S1-SG-05: lease `pending` no cierra admisión; cleanup `failed` alerta y la cierra. Outbox: 1 passed. |
-| claim | A1.9 | jpinillaz | en curso | 2026-10-04 | no aplica | — / área A | Suite I-S1-AN-05 (G3) contra Postgres real; libre según §4 2026-09-27 |
-| claim | L1.4 | jpinillaz | en curso | 2026-10-04 | no aplica | — / líder | Borradores Pydantic §M4/§M6 (U-S1-JL-01/02); sin llamadas a LLM |
-| claim | L1.5 | jpinillaz | en curso | 2026-10-04 | no aplica | — / líder | Formato + validador dataset G4 (U-S1-JL-03); sin contenido real |
+| claim | A1.9 | jpinillaz | hecho | 2026-10-04 | no aplica | — / área A | Suite I-S1-AN-05 contra Postgres; mergeado en #44. Las rutas de A1.6 y A1.3 quedan fuera de la matriz. |
+| claim | L1.4 | jpinillaz | hecho | 2026-10-04 | no aplica | — / líder | Borradores Pydantic §M4/§M6 (U-S1-JL-01/02); mergeado en #43. Sin llamadas a LLM. |
+| claim | L1.5 | jpinillaz | hecho | 2026-10-04 | no aplica | — / líder | Formato y validador del dataset G4 (U-S1-JL-03); mergeado en #45. Sin contenido real. |
 | claim | A1.6 | <danielsam171> | en curso | 2026-10-06| no aplica | — / área A | CRUD de materias (I-S1-AN-07); force diferido a S2 |
 
+### S2 — Conocimiento
+
+| Acción | Ticket | Owner | Estado | Claimed at (UTC) | Elegibilidad cloud | Contributors / reviewers | Motivo, evidencia o PR |
+|---|---|---|---|---|---|---|---|
+| claim | A2.1 | angalindog | hecho | 2026-10-05 | no aplica | — / área A | Migración `0002_s2_schema`; mergeado en #48 |
+| claim | A2.2 | angalindog | hecho | 2026-10-05 | no aplica | — / área A | `GET /ingestion/capabilities`; mergeado en #47 |
+| claim | A2.3 | angalindog | hecho | 2026-10-07 | no aplica | — / área A | `POST /audios` con consentimiento y slot; mergeado en #51 |
+| claim | A2.4 | angalindog | hecho | 2026-10-07 | no aplica | — / área A | `PUT` streaming, SHA-256 y dedupe; mergeado en #52. El sink por defecto sigue en 503 (C2). |
+| claim | S2.1 | satnovaOG | hecho | 2026-10-09 | no aplica | — / líder | Recepción y ffprobe; mergeado en #54 |
+| claim | S2.2 | satnovaOG | hecho | 2026-10-09 | no aplica | — / líder | ffmpeg acotado y fragmentación a 30 s; mergeado en #54 |
+| claim | S2.3 | satnovaOG | en curso | 2026-10-09 | no aplica | — / líder | Backpressure y reconciliación de fronteras (U-S2-SG-04) |
+| claim | S2.4 | satnovaOG | en curso | 2026-10-09 | pendiente | — / líder | Cliente Riva aislado. `P-S2-SG-12` no se ejecuta. Cloud sin revisor. |
 
 ## 4. Historial de cambios
 
@@ -112,6 +125,7 @@ de este PR de planificación.
 | 2026-09-28 | A1.2, A1.4, A1.7, A1.8, J1.5, S1.B1 y S1.B3 pasan a `hecho` tras fusionar #22, #23, #26, #28–#30, #33 y #34 en `develop`. L1.6 sigue `en curso` hasta que se fusione su PR. | Este PR |
 | 2026-09-28 | L1.6 pasa a `hecho`: el PR `s1/l1.6-freeze` (#38) se fusionó en `develop` (35e4d70) tras #39/#40. La congelación `S1-v1` está publicada en `docs/plan/S1.md`. | Este PR |
 | 2026-10-04 | Se reclaman A1.9, L1.4 y L1.5 (libres desde 2026-09-27). | Este PR |
-
 | 2026-10-05 | Se reclama A1.6 (libre desde 2026-09-27). | Este PR |
+| 2026-10-09 | Se abre S2. Se reclaman S2.1 y S2.2 (`hecho`, #54) y S2.3 y S2.4 (`en curso`). D2 y D6 siguen `pending`; D3-Audio y D4 siguen `blocked`. S2.4 queda con cloud `pendiente`: `P-S2-SG-12` no se corre. A1.6, A1.9, L1.4 y L1.5 siguen `en curso` en S1. | Este PR |
+| 2026-10-09 | A1.9 (#44), L1.4 (#43) y L1.5 (#45) pasan a `hecho`. A1.6 sigue `en curso`: #49 solo reclama y el CRUD no está en `develop`. A1.3 y L1.7 no están implementados. Se reclaman A2.1 (#48), A2.2 (#47), A2.3 (#51) y A2.4 (#52) como `hecho` (`angalindog`). A2.5 sigue abierto. | Este cambio |
 

@@ -43,6 +43,10 @@ from maulwurf_ingest.receiver import PayloadTooLarge, iter_bytes, receive
 logger = logging.getLogger(__name__)
 
 
+def _default_fragment_seconds() -> int:
+    return settings.fragment_seconds
+
+
 class Outcome(StrEnum):
     SUCCEEDED = "succeeded"
     NOT_ACQUIRED = "not_acquired"  # otro propietario tiene un lease vigente
@@ -62,7 +66,8 @@ class SupervisorConfig:
     asr_timeout_s: float = 600.0
     tmp_dir: str | None = None  # None = TMPDIR (el tmpfs del contenedor)
     realtime: bool = False  # solo pruebas: ffmpeg a velocidad real
-    fragment_seconds: int = 1  # stub de S1; afinar con límites reales antes del ASR de S2
+    # Defecto: INGEST_FRAGMENT_SECONDS (30). effective_fragment_seconds lo recorta al piso.
+    fragment_seconds: int = field(default_factory=_default_fragment_seconds)
 
 
 @dataclass

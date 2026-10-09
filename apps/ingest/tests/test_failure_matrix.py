@@ -28,7 +28,7 @@ from test_supervisor import (  # noqa: E402
 )
 
 from maulwurf_ingest import lease
-from maulwurf_ingest.asr_job import CONVERTED
+from maulwurf_ingest.asr_job import ACTIVE_FRAGMENT
 from maulwurf_ingest.supervisor import Outcome, SupervisorConfig, run_attempt
 
 pytestmark = [
@@ -151,7 +151,7 @@ async def test_scenario_6_ffmpeg_and_invalid_lease(
         on_child=lambda _pid, workdir: started.put_nowait(workdir),
     ))
     workdir = await started.get()
-    await _wait_for(workdir / CONVERTED)
+    await _wait_for(workdir / ACTIVE_FRAGMENT)
     await pool.execute(
         "UPDATE ingestion_attempts SET lease_expires_at = now() - interval '1 second'"
         " WHERE id = $1",
@@ -181,7 +181,7 @@ async def test_scenario_7_sigkill_during_transcription(
         on_child=lambda pid, workdir: started.put_nowait((pid, workdir)),
     ))
     pid, workdir = await started.get()
-    await _wait_for(workdir / CONVERTED)
+    await _wait_for(workdir / ACTIVE_FRAGMENT)
     os.kill(pid, signal.SIGKILL)
     result = await run
     row = await _row(pool, attempt)

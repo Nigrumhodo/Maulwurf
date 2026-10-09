@@ -9,13 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from maulwurf_ingest.asr_job import (
-    ORIGINAL,
+from maulwurf_ingest.asr_job import ORIGINAL, run
+from maulwurf_ingest.audio.ffmpeg import (
+    DEFAULT_LIMITS,
     ensure_conversion_complete,
     ensure_pcm_fits,
-    run,
 )
-from maulwurf_ingest.audio.ffmpeg import DEFAULT_LIMITS
 
 _FFPROBE = shutil.which("ffprobe")
 

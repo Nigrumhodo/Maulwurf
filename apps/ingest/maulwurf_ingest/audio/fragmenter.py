@@ -94,38 +94,51 @@ def detect_silences(path: Path, *, limits: FfmpegLimits) -> list[tuple[float, fl
     return pairs
 
 
+def fragment_argv(
+    source: Path,
+    dest: Path,
+    span: FragmentSpan,
+    *,
+    limits: FfmpegLimits,
+    realtime: bool = False,
+) -> list[str]:
+    """Seek de entrada y duración del tramo. `-ss` va antes de `-i`; no se usa `-to`."""
+    duration_s = span.end_s - span.start_s
+    operation: list[str] = ["-re"] if realtime else []
+    operation.extend(
+        [
+            "-ss",
+            f"{span.start_s:.6f}",
+            "-i",
+            str(source),
+            "-t",
+            f"{duration_s:.6f}",
+            "-ac",
+            "1",
+            "-ar",
+            str(CANDIDATE_SAMPLE_RATE_HZ),
+            "-c:a",
+            "pcm_s16le",
+            "-f",
+            "wav",
+        ]
+    )
+    return bounded_argv(operation, output=str(dest), limits=limits)
+
+
 def write_fragments(
     source: Path,
     workdir: Path,
     spans: Sequence[FragmentSpan],
     *,
     limits: FfmpegLimits,
+    realtime: bool = False,
 ) -> list[Path]:
-    """Extrae cada tramo a `frag-NNNN.wav` dentro del tmpfs del intento."""
+    """Extrae cada tramo a `frag-NNNN.wav`. No borra los anteriores; el pipeline sí."""
     written: list[Path] = []
     for index, span in enumerate(spans):
         dest = workdir / f"frag-{index:04d}.wav"
-        argv = bounded_argv(
-            [
-                "-i",
-                str(source),
-                "-ss",
-                f"{span.start_s:.6f}",
-                "-to",
-                f"{span.end_s:.6f}",
-                "-ac",
-                "1",
-                "-ar",
-                str(CANDIDATE_SAMPLE_RATE_HZ),
-                "-c:a",
-                "pcm_s16le",
-                "-f",
-                "wav",
-            ],
-            output=str(dest),
-            limits=limits,
-        )
-        run(argv, limits=limits)
+        run(fragment_argv(source, dest, span, limits=limits, realtime=realtime), limits=limits)
         written.append(dest)
     return written
 
