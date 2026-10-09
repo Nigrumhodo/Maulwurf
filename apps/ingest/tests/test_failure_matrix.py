@@ -72,8 +72,8 @@ async def test_scenario_2_truncated_upload_is_rejected(
         audio=audio[:32], config=_config(tmpfs_dir),
     )
     row = await _row(pool, attempt)
-    assert result.outcome is Outcome.ASR_FAILED
-    assert (row["status"], row["error_code"]) == ("requires_reupload", "asr_failed")
+    assert result.outcome is Outcome.REJECTED
+    assert (row["status"], row["error_code"]) == ("rejected", "malformed")
     assert row["cleanup_status"] == "verified"
     _gone(tmpfs_dir, None)
 
@@ -87,8 +87,8 @@ async def test_scenario_3_rejected_container(
         audio=b"this-is-not-a-media-container", config=_config(tmpfs_dir),
     )
     row = await _row(pool, attempt)
-    assert result.outcome is Outcome.ASR_FAILED
-    assert row["status"] == "requires_reupload"
+    assert result.outcome is Outcome.REJECTED
+    assert (row["status"], row["error_code"]) == ("rejected", "malformed")
     assert row["cleanup_status"] == "verified"
     _gone(tmpfs_dir, None)
 
@@ -131,14 +131,15 @@ async def test_scenario_5_explicit_cancel(
 async def test_scenario_6_ffmpeg_and_invalid_lease(
     pool: asyncpg.Pool, audio: bytes, tmpfs_dir: Path
 ) -> None:
-    """ffmpeg failure cleans up. An expired lease cannot publish the commit."""
+    """Un contenedor inválido queda rejected y limpio. Un lease vencido no publica el commit."""
     broken = await _seed(pool)
     failed = await run_attempt(
         pool, user_id=broken.user_id, attempt_id=broken.attempt_id,
         audio=b"not-ffmpeg-input", config=_config(tmpfs_dir),
     )
     failed_row = await _row(pool, broken)
-    assert failed.outcome is Outcome.ASR_FAILED
+    assert failed.outcome is Outcome.REJECTED
+    assert (failed_row["status"], failed_row["error_code"]) == ("rejected", "malformed")
     assert failed_row["cleanup_status"] == "verified"
     _gone(tmpfs_dir, None)
 

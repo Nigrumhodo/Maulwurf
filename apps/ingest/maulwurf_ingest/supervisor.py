@@ -36,6 +36,9 @@ import asyncpg
 from maulwurf_ingest import admission, cleanup
 from maulwurf_ingest import lease as leases
 from maulwurf_ingest.asr_job import ORIGINAL
+from maulwurf_ingest.audio.validate import probe_file
+from maulwurf_ingest.config import settings
+from maulwurf_ingest.receiver import PayloadTooLarge, iter_bytes, receive
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +48,7 @@ class Outcome(StrEnum):
     NOT_ACQUIRED = "not_acquired"  # otro propietario tiene un lease vigente
     LEASE_LOST = "lease_lost"  # fenced: no se publicó nada después de perderlo
     ASR_FAILED = "asr_failed"
+    REJECTED = "rejected"
     TIMEOUT = "asr_timeout"
     CLEANUP_FAILED = "cleanup_failed"
     SUPERVISOR_ERROR = "supervisor_error"  # fallo imprevisto del propio supervisor
@@ -66,6 +70,8 @@ class RunResult:
     outcome: Outcome
     fencing_token: int | None = None
     fragments: int | None = None
+    sha256: str | None = None
+    duration_s: float | None = None
     evidence: dict[str, object] = field(default_factory=dict)
 
 
@@ -174,9 +180,33 @@ async def run_attempt(
             pool, lease, from_status="awaiting_upload", to_status="receiving"
         ):
             return result
-        # Hasta upload_max_bytes (200 MiB): fuera del event loop, como destroy_and_verify.
-        await asyncio.to_thread(cleanup.write_private, workdir / ORIGINAL, audio)
+        # El tope es el provisional de recepción, no un máximo aprobado. El hash sale
+        # de los bytes escritos; ffprobe, no un Content-Length, decide duración y formato.
+        try:
+            received = await receive(
+                iter_bytes(audio), workdir / ORIGINAL, max_bytes=settings.max_upload_bytes
+            )
+        except PayloadTooLarge:
+            owned_audio = True
+            result.outcome = Outcome.REJECTED
+            if not await leases.transition(
+                pool, lease, from_status="receiving", to_status="rejected",
+                error_code="payload_too_large",
+            ):
+                result.outcome = Outcome.LEASE_LOST
+            return result
         owned_audio = True
+        result.sha256 = received.sha256
+        decision = await asyncio.to_thread(probe_file, workdir / ORIGINAL)
+        if decision.decision == "reject":
+            result.outcome = Outcome.REJECTED
+            if not await leases.transition(
+                pool, lease, from_status="receiving", to_status="rejected",
+                error_code=decision.reason,
+            ):
+                result.outcome = Outcome.LEASE_LOST
+            return result
+        result.duration_s = decision.duration_s
         if not await leases.transition(
             pool, lease, from_status="receiving", to_status="transcribing"
         ):
