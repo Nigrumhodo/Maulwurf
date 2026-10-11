@@ -52,12 +52,16 @@ async def apply_changes(db: AsyncSession, subject: Subject, changes: dict[str, A
         raise
 
 
-async def get_active(db: AsyncSession, user_id: uuid.UUID, subject_id: uuid.UUID) -> Subject | None:
+async def get_active(
+    db: AsyncSession, user_id: uuid.UUID, subject_id: uuid.UUID, *, for_update: bool = False
+) -> Subject | None:
     """Materia activa del usuario; `None` si no existe, es ajena o está borrada.
 
     Los tres casos son indistinguibles a propósito (ADR-0006): la API responde 404 en todos.
     """
-    subject = await get_owned(db, Subject, user_id, subject_id)
+    subject = await get_owned(
+        db, Subject, user_id, subject_id, lock="update" if for_update else None
+    )
     if subject is None or subject.deleted_at is not None:
         return None
     return subject

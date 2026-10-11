@@ -105,7 +105,9 @@ async def delete_subject(
     db: DbSession,
     body: SubjectDelete | None = None,  # se valida el cuerpo; `force` aún no cambia nada
 ) -> Response:
-    subject = await subject_service.get_active(db, session.user_id, subject_id)
+    # The row lock serializes this check-then-delete with `POST /audios`, which takes a share
+    # lock on the subject: no class can be created between the count and the tombstone.
+    subject = await subject_service.get_active(db, session.user_id, subject_id, for_update=True)
     if subject is None:
         raise not_found()
     class_count = await subject_service.count_active_classes(db, session.user_id, subject_id)

@@ -406,3 +406,75 @@ async def test_patch_subject_may_change_only_the_case_of_its_own_name(
 
     assert response.status_code == 200  # no choca consigo misma
     assert response.json()["name"] == "Física"
+
+
+# --- DELETE vs POST /audios race -----------------------------------------------------
+
+
+async def test_subject_delete_lock_conflicts_with_the_audio_share_lock(
+    migrated_database_url: str,
+) -> None:
+    """The two locks really conflict, so a class cannot slip in between count and tombstone.
+
+    Uses its own committed rows and two connections: the per-test rolled-back session cannot
+    show a lock held by another transaction.
+    """
+    from sqlalchemy import delete, text
+    from sqlalchemy.exc import DBAPIError
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from app.services import subjects as subject_service
+    from app.services.tenant import get_owned
+
+    engine = create_async_engine(migrated_database_url)
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as setup:
+            user = User(google_sub=f"sub-{uuid.uuid4()}", email="race@example.test")
+            setup.add(user)
+            await setup.flush()
+            subject = Subject(user_id=user.id, name="Race")
+            setup.add(subject)
+            await setup.commit()
+
+        async with AsyncSession(engine) as uploader, AsyncSession(engine) as deleter:
+            # `POST /audios` holds its share lock until it commits the reservation.
+            assert await get_owned(uploader, Subject, user.id, subject.id, lock="share")
+            await deleter.execute(text("SET LOCAL lock_timeout = '200ms'"))
+            with pytest.raises(DBAPIError, match="lock timeout"):
+                await subject_service.get_active(deleter, user.id, subject.id, for_update=True)
+            await deleter.rollback()
+            await uploader.rollback()
+    finally:
+        async with AsyncSession(engine) as cleanup:
+            await cleanup.execute(delete(Subject).where(Subject.name == "Race"))
+            await cleanup.execute(delete(User).where(User.email == "race@example.test"))
+            await cleanup.commit()
+        await engine.dispose()
+
+
+async def test_delete_subject_takes_the_subject_row_lock(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    from sqlalchemy import event
+
+    actor = await _actor(db_session)
+    subject = Subject(user_id=actor.user.id, name="Locked")
+    db_session.add(subject)
+    await db_session.flush()
+    statements: list[str] = []
+
+    def capture(_conn: object, _cursor: object, statement: str, *_args: object) -> None:
+        if "FROM subjects" in statement:
+            statements.append(statement)
+
+    sync_engine = db_session.bind.sync_engine
+    event.listen(sync_engine, "before_cursor_execute", capture)
+    try:
+        response = await client.delete(
+            f"/subjects/{subject.id}", cookies=actor.cookies, headers=actor.headers
+        )
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", capture)
+
+    assert response.status_code == 204
+    assert any("FOR UPDATE" in s for s in statements)

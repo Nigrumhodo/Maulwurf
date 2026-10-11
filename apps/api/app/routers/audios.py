@@ -124,7 +124,8 @@ async def create_audio(
             language_code=body.language_code,
         )
     # Materia del tenant: inexistente y ajeno responden 404 por igual (ADR-0006).
-    subject = await get_owned(db, Subject, session.user_id, body.subject_id)
+    # Share lock: `DELETE /subjects/{id}` cannot tombstone the subject until this commits.
+    subject = await get_owned(db, Subject, session.user_id, body.subject_id, lock="share")
     if subject is None or subject.deleted_at is not None:
         raise not_found()
     # Cuota y slot se comprueban sin escribir: un 404 o un 422 no deben consumir capacidad.
