@@ -42,7 +42,8 @@ explicit Definition of Done. See "Sprint Model" below.
 - `apps/web/` — Next.js 15 scaffold (placeholder landing page is out of scope; area `D-`
   owns the real routes): `package.json` (Vitest, ESLint, Tailwind), `tsconfig.json`, empty
   `lib/`, `components/`, `tests/{unit,e2e}/`.
-- `docs/` — Spanish-language product, architecture, provider, and delivery documentation.
+- `docs/` — English-language product, architecture, provider, and delivery documentation
+  (the original Spanish sources are archived under `docs/es/`).
   - `docs/ESPECIFICACION.md` — Source of truth for contracts (M1–M9), data model, security.
   - `docs/PLAN_IMPLEMENTACION.md` — Phases F0–F3, gates (G1, G2-T/G2-X, G3, G4, G5-F1/G5-F2,
   G6, G7-CAL/G7-MAIL, G8), decisions D1–D8 (D3 and D7 split per provider) and closure matrix.
@@ -178,9 +179,10 @@ application and has not been run against NVIDIA from this repository.
 - Configuration uses Pydantic Settings with env prefix `MAULWURF_` and `extra="forbid"`;
   secrets come only from the environment (see `.env.example`), never from code.
 - Documentation uses ATX headings, fenced code blocks, tables where useful, Mermaid
-  diagrams, and relative links. Keep edits concise, preserve the existing Spanish technical
-  vocabulary in the source documents, and do not present proposals as completed work. Keep
-  new Markdown near 100 characters per line where practical.
+  diagrams, and relative links. Canonical documentation is in English; the original Spanish
+  sources are archived under `docs/es/` and are no longer edited. Keep edits concise, do not
+  present proposals as completed work, and keep new Markdown near 100 characters per line
+  where practical.
 - `docs/ESPECIFICACION.md` is the stated source of functional and technical contracts.
   Changes to phases, states, APIs, or guarantees must update the specification and
   `docs/PLAN_IMPLEMENTACION.md` in the same revision.
