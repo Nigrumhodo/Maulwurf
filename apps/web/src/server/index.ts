@@ -16,7 +16,33 @@ const port = 3000;
 
 const app = express();
 
+// Security headers for the shell and static assets. The CSP allows only this origin plus the
+// Google Fonts stylesheet and files that index.html loads; login goes to Google by navigation,
+// which the CSP does not restrict.
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' https://fonts.googleapis.com",
+  "font-src https://fonts.gstatic.com",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
 app.disable("x-powered-by");
+app.use((_req, res, next) => {
+  res.set({
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "same-origin",
+    "Permissions-Policy": "camera=(), geolocation=(), microphone=()",
+  });
+  next();
+});
 app.use(express.static(publicDir, { index: false }));
 
 // Fallback de la SPA: cualquier ruta de cliente (/biblioteca, /chat, …) devuelve
@@ -26,6 +52,14 @@ app.use((_req, res) => {
   res.sendFile("index.html", { root: publicDir });
 });
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`maulwurf-web escuchando en http://127.0.0.1:${port}`);
 });
+
+// As PID 1, Node ignores SIGTERM unless it is handled: without this, `docker compose stop`
+// waits for its timeout and then sends SIGKILL.
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.on(signal, () => {
+    server.close(() => process.exit(0));
+  });
+}
