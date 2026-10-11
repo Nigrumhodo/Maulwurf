@@ -1,38 +1,38 @@
-# ADR-0004 — Formato de commit/PR y reviews
+# ADR-0004 — Commit/PR format and reviews
 
-- Fecha UTC: 2026-09-23
-- Estado: Aceptado
+- Date (UTC): 2026-09-23
+- Status: Accepted
 - Ticket: L1.2
-- Relacionado: [docs/sprints/README.md](../sprints/README.md)
+- Related: [docs/sprints/README.md](../sprints/README.md)
 
-## Contexto
+## Context
 
-No había plantilla de commit ni hook. AGENTS.md pedía definir el formato
-antes de imponerlo. Las reglas de PR ya existen en el modelo de sprints.
+There was no commit template or hook. AGENTS.md asked to define the format
+before enforcing it. PR rules already exist in the sprint model.
 
-## Decisión
+## Decision
 
 ### Commits
 
-- Asunto imperativo (inglés o español), cerca de 72 caracteres.
-- Cuerpo: el **por qué**, no el listado de archivos, si no es obvio.
-- Incluir el ID de ticket (`L1.2`, `S1.A1`, …) cuando el cambio cierra o
-  avanza un ticket.
-- No `--no-verify` ni saltar hooks salvo petición explícita del autor.
-- No hay commit-lint ni husky en este ticket: la norma es documental.
+- Imperative subject (English or Spanish), around 72 characters.
+- Body: the **why**, not the file listing, when it is not obvious.
+- Include the ticket ID (`L1.2`, `S1.A1`, …) when the change closes or
+  advances a ticket.
+- No `--no-verify` or skipped hooks except by explicit author request.
+- No commit-lint or husky in this ticket: the rule is documentation only.
 
 ### Pull requests
 
 - Base: `develop`.
-- Cuerpo: resumen (1–3 puntos) y test plan o checklist de verificación.
-- Mínimo **una** review antes de merge.
-- Si el diff cruza área, revisa quien tenga claim activo en esa carpeta, o
-  el líder si no hay claim.
-- Un PR de claim toca **solo** su fila en `docs/sprints/CLAIMS.md`.
-- No mergear secretos, `.env`, audio, transcripts privados ni payloads de
-  proveedor.
+- Body: summary (1–3 points) and a test plan or verification checklist.
+- At least **one** review before merge.
+- If the diff crosses an area, review by whoever holds an active claim in that
+  folder, or by the lead if there is no claim.
+- A claim PR touches **only** its row in `docs/sprints/CLAIMS.md`.
+- Do not merge secrets, `.env`, audio, private transcripts, or provider
+  payloads.
 
-## Consecuencias
+## Consequences
 
-J1.4 puede añadir checks de CI después, sin cambiar esta norma. Reviews de
-privacidad/proveedor/despliegue de AGENTS.md siguen siendo puertas aparte.
+J1.4 can add CI checks later without changing this rule. The AGENTS.md
+privacy/provider/deployment reviews remain separate gates.

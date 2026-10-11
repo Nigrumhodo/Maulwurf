@@ -1,0 +1,160 @@
+@import "tailwindcss";
+
+/*
+ * Maulwurf — sistema de diseño retro (terminal / CRT), dos temas:
+ *   - oscuro (por defecto): mint #7cf5c2 + lavender #b7a6ff sobre negro.
+ *   - claro  (clase `.light` en <html>): fondo #e4e4e7, mint #4a5565, lavender #18181b.
+ *
+ * Los colores son variables CSS que se sobreescriben bajo `:root.light`; los
+ * utilities de Tailwind referencian `var(--color-*)`, así que cambiar la clase
+ * de `<html>` basta para conmutar todo el árbol.
+ *
+ * Semántica de los tokens:
+ *   --color-dark        → superficie principal / fondo de página.
+ *   --color-pure-black  → tinta / bordes / sombras (siempre oscuro).
+ *   --color-pure-white  → papel / texto sobre superficies oscuras.
+ *   --color-mint        → acento primario (también se usa como texto).
+ *   --color-lavender    → acento/texto secundario.
+ *   --color-on-accent   → texto sobre fondos `mint`/`lavender` (invierte).
+ *   --color-surface     → fondo de inputs (oscuro en dark, papel en light).
+ */
+@theme {
+  /* Color */
+  --color-pure-black: #0a0a12;
+  --color-dark: #141422;
+  --color-pure-white: #f0ede4;
+  --color-mint: #7cf5c2;
+  --color-lavender: #b7a6ff;
+  --color-on-accent: #0a0a12;
+  --color-surface: #0a0a12;
+
+  /* Tipografía */
+  --font-pixel: "VT323", "Courier New", monospace;
+  --font-code: "Fira Code", "Courier New", monospace;
+
+  /* Sombras "bloque" (estética de botón oprimido) */
+  --shadow-block: 4px 4px 0 0 var(--color-pure-black);
+  --shadow-block-sm: 2px 2px 0 0 var(--color-pure-black);
+  --shadow-block-black: 4px 4px 0 0 var(--color-pure-white);
+  --shadow-block-sm-black: 2px 2px 0 0 var(--color-pure-white);
+
+  /* Animaciones */
+  --animate-caret: caret 1s steps(1, end) infinite;
+  --animate-blink: blink 1s steps(1, end) infinite;
+  --animate-flicker: flicker 2.6s steps(1, end) infinite;
+
+  @keyframes caret {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0;
+    }
+  }
+
+  @keyframes blink {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0;
+    }
+  }
+
+  @keyframes flicker {
+    0% {
+      opacity: 1;
+    }
+    8% {
+      opacity: 0.4;
+    }
+    14% {
+      opacity: 1;
+    }
+    38% {
+      opacity: 0.65;
+    }
+    46% {
+      opacity: 1;
+    }
+    62% {
+      opacity: 0.3;
+    }
+    70% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 1;
+    }
+  }
+}
+
+/* Tema claro: sobrescribe las mismas variables. */
+:root.light {
+  --color-pure-black: #18181b;
+  --color-dark: #e4e4e7;
+  --color-pure-white: #ffffff;
+  --color-mint: #4a5565;
+  --color-lavender: #18181b;
+  --color-on-accent: #ffffff;
+  --color-surface: #ffffff;
+}
+
+/*
+ * Keyframes usados por estilos inline (SpriteAnimator), disponibles siempre.
+ */
+@keyframes sprite-move {
+  from {
+    background-position: 0 var(--sprite-y, 0);
+  }
+  to {
+    background-position: var(--sprite-end, 0) var(--sprite-y, 0);
+  }
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  :root.light {
+    color-scheme: light;
+  }
+
+  body {
+    background-color: var(--color-dark);
+    color: var(--color-mint);
+    font-family: var(--font-pixel);
+    -webkit-font-smoothing: none;
+  }
+
+  ::selection {
+    background-color: var(--color-mint);
+    color: var(--color-on-accent);
+  }
+}
+
+@layer utilities {
+  /* Superposición CRT: scanlines + viñeta, para páginas de auth. */
+  .crt-overlay {
+    pointer-events: none;
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    background:
+      repeating-linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0) 0,
+        rgba(0, 0, 0, 0) 2px,
+        rgba(0, 0, 0, 0.18) 3px,
+        rgba(0, 0, 0, 0) 4px
+      ),
+      radial-gradient(
+        ellipse at center,
+        rgba(0, 0, 0, 0) 55%,
+        rgba(0, 0, 0, 0.35) 100%
+      );
+  }
+}

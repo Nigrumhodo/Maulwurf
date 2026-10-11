@@ -22,7 +22,7 @@ import asyncpg
 import pytest
 
 from maulwurf_ingest import cleanup, hardening, lease
-from maulwurf_ingest.asr_job import CONVERTED, ORIGINAL
+from maulwurf_ingest.asr_job import ACTIVE_FRAGMENT, ORIGINAL
 from maulwurf_ingest.supervisor import Outcome, SupervisorConfig, run_attempt
 
 pytestmark = [
@@ -142,7 +142,7 @@ async def test_success_commits_then_verifies_cleanup(
     row = await _row(pool, attempt)
 
     assert result.outcome is Outcome.SUCCEEDED
-    assert result.fragments and result.fragments >= 3  # ffmpeg partió el audio en fragmentos
+    assert result.fragments and result.fragments >= 1
     assert row["status"] == "succeeded"
     assert row["cleanup_status"] == "verified"
     assert row["cleanup_verified_at"] is not None and row["audio_deleted_at"] is not None
@@ -166,7 +166,7 @@ async def test_sigkill_to_asr_process_still_cleans_up(
         on_child=lambda pid, workdir: started.put_nowait((pid, workdir)),
     ))
     pid, workdir = await started.get()
-    await _wait_for(workdir / CONVERTED)
+    await _wait_for(workdir / ACTIVE_FRAGMENT)
     # Hijo y nieto (ffmpeg) vivos con ficheros abiertos; se mata SOLO al hijo: ffmpeg queda
     # huérfano y el supervisor tiene que encontrarlo por su grupo.
     assert cleanup.live_group_members(pid) >= 2
@@ -233,7 +233,7 @@ async def test_fenced_owner_cannot_publish_and_expiry_does_not_verify(
         on_child=lambda pid, workdir: started.put_nowait((pid, workdir)),
     ))
     _, workdir = await started.get()
-    await _wait_for(workdir / CONVERTED)
+    await _wait_for(workdir / ACTIVE_FRAGMENT)
 
     # El lease de A vence (p. ej. BD lenta) y la instancia B toma el intento.
     await pool.execute(

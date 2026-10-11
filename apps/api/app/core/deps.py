@@ -16,6 +16,8 @@ from app.models import Session
 from app.services import sessions
 
 COOKIE_NAME = "mw_session"
+# Cookie de estado efímero del login OAuth (A1.3): firma state/nonce/code_verifier.
+OAUTH_COOKIE_NAME = "mw_oauth"
 CSRF_HEADER = "X-CSRF-Token"
 MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
@@ -36,6 +38,24 @@ def set_session_cookie(response: Response, cookie_token: str) -> None:
 
 def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(COOKIE_NAME, path="/", secure=True, httponly=True, samesite="lax")
+
+
+def set_oauth_state_cookie(response: Response, token: str, max_age: int) -> None:
+    response.set_cookie(
+        OAUTH_COOKIE_NAME,
+        token,
+        max_age=max_age,
+        path="/auth/google",
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+def clear_oauth_state_cookie(response: Response) -> None:
+    response.delete_cookie(
+        OAUTH_COOKIE_NAME, path="/auth/google", secure=True, httponly=True, samesite="lax"
+    )
 
 
 async def current_session(request: Request, db: DbSession) -> Session:

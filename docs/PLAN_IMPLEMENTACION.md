@@ -1,195 +1,341 @@
-# Maulwurf — Plan de implementación y validación
+# Maulwurf — Implementation and validation plan
 
-> Estado: plan normativo pendiente de ejecución. Revisión: 2026-09-19.
-> Contratos funcionales y técnicos: [ESPECIFICACION.md](ESPECIFICACION.md). Este plan define dependencias, entregables y puertas de salida; no sustituye esos contratos.
+> Status: normative plan pending execution. Revision: 2026-09-19.
+> Functional and technical contracts: [ESPECIFICACION.md](ESPECIFICACION.md). This plan
+> defines dependencies, deliverables, and exit gates; it does not replace those contracts.
 
-## 1. Objetivo y decisiones invariables
+## 1. Objective and invariant decisions
 
-Construir una web Next.js con backend FastAPI para convertir clases en conocimiento consultable y propuestas de actividades, sin conservar audio de forma persistente.
+Build a React web app (Vite SPA, ADR-0007) with a FastAPI backend to turn classes into queryable knowledge and
+activity proposals, without persistently storing audio.
 
-- Audio únicamente en memoria/tmpfs durante recepción, validación, conversión y ASR; eliminación comprobada antes de publicar trabajos de texto. Incluye copias, fragmentos, buffers, proxy, host y observabilidad.
-- Idioma elegido explícitamente antes de subir; allowlist validada con NVIDIA. Sin autodetección `multi`, traducción ni fallback oculto.
-- ASR: `nvidia-riva-client`, Whisper large-v3, gRPC TLS a `grpc.nvcf.nvidia.com:443`, function-id `b702f636-f60c-4a3d-a6f4-f3568c13bd7d`. Bearer solo en servidor. Valores sujetos a prueba del endpoint, nunca credenciales en frontend.
-- Perder audio antes de persistir un transcript completo requiere nueva subida. ARQ solo reintenta análisis/índice e integraciones desde datos durables, nunca ASR desde una ruta temporal.
-- Citas a texto, no reproductor. Tiempos únicamente provenientes de offsets comprobados; una cita correcta no demuestra exactitud acústica de ASR.
-- Confirmación humana antes de toda escritura de agenda, incluidas revisiones de tareas; chat no escribe Calendar ni envía correo.
-- Retención cloud de audio/texto requiere revisión contractual. El borrado propio no garantiza borrado en NVIDIA, LLM, Google ni dispositivos del usuario.
+- Audio only in memory/tmpfs during reception, validation, conversion, and ASR; verified
+  deletion before publishing text jobs. This includes copies, fragments, buffers, proxy,
+  host, and observability.
+- Language chosen explicitly before uploading; allowlist validated with NVIDIA. No `multi`
+  autodetection, translation, or hidden fallback.
+- ASR: `nvidia-riva-client`, Whisper large-v3, gRPC TLS to `grpc.nvcf.nvidia.com:443`,
+  function-id `b702f636-f60c-4a3d-a6f4-f3568c13bd7d`. Bearer only on the server. Values subject to endpoint
+  testing, never credentials in the frontend.
+- Losing audio before a complete transcript is persisted requires a new upload. ARQ only
+  retries analysis/indexing and integrations from durable data, never ASR from a temporary path.
+- Citations to text, not a player. Times only from verified offsets; a correct citation does
+  not demonstrate ASR acoustic accuracy.
+- Human confirmation before every calendar write, including task revisions; chat does not
+  write Calendar or send email.
+- Cloud retention of audio/text requires contractual review. Own-side deletion does not
+  guarantee deletion at NVIDIA, the LLM, Google, or the user's devices.
 
-## 2. Situación de partida y alcance por entrega
+## 2. Starting point and scope per delivery
 
-El repositorio contiene documentación y un esqueleto mínimo: API FastAPI con health checks, paquetes de ingesta/web y manifests, pero no compose, migraciones, funcionalidades ni suites de tests. Las fases y sus casillas están **pendientes**; un placeholder o contrato escrito no demuestra implementación.
+The repository contains documentation and a minimal skeleton: a FastAPI API with health
+checks, ingestion/web packages, and manifests, but no compose, migrations, features, or test
+suites. The phases and their checkboxes are **pending**; a placeholder or a written contract
+does not demonstrate implementation.
 
-| Entrega | Alcance utilizable | Dependencias |
+| Delivery | Usable scope | Dependencies |
 |---|---|---|
-| F0 | Viabilidad, contratos, base técnica segura | Credenciales de prueba, infraestructura RAM segura y decisiones de privacidad |
-| F1 | Biblioteca, transcript, búsqueda híbrida y chat con citas | Todas las puertas F0; timestamps validados o cambio explícitamente aceptado |
-| F2 | Extracción, revisión humana, Calendar, agenda y tools limitadas | F1; contrato Google y evaluación de extracción |
-| F3 | Gmail opt-in, recordatorios/digests, dashboard completo y Ctrl+K | F2; contrato Gmail y política de entrega incierta |
-| F4 | Backlog exploratorio sin compromiso | Priorización posterior independiente |
+| F0 | Feasibility, contracts, secure technical foundation | Test credentials, secure RAM infrastructure, and privacy decisions |
+| F1 | Library, transcript, hybrid search, and chat with citations | All F0 gates; validated timestamps or an explicitly accepted change |
+| F2 | Extraction, human review, Calendar, agenda, and limited tools | F1; Google contract and extraction evaluation |
+| F3 | Opt-in Gmail, reminders/digests, full dashboard, and Ctrl+K | F2; Gmail contract and the uncertain-delivery policy |
+| F4 | Uncommitted exploratory backlog | Independent later prioritization |
 
-F1 es la primera entrega de conocimiento, no el producto de acción completo. MVP de conocimiento + acción = F1/F2; v1 añade F3. PWA instalable y capacidades exploratorias de §13 no se activan por aparecer en el stack.
+F1 is the first knowledge delivery, not the complete action product. Knowledge + action
+MVP = F1/F2; v1 adds F3. The installable PWA and the exploratory capabilities of §13 are
+not activated by appearing in the stack.
 
-### Reglas de coordinación
+### Coordination rules
 
-1. La especificación es la fuente de contratos; cambios en fases, estados, API o garantías actualizan ambos documentos en la misma revisión.
-2. Cada puerta exige evidencia: comando real, versión, fecha, entorno, resultado y métricas redactadas. Un mock no valida proveedor, ni un test unitario valida infraestructura.
-3. Bloqueo de proveedor/herramientas se registra como **NO VERIFICADO**, nunca como aprobado. No usar clases reales mientras privacidad esté bloqueada.
-4. S1–S4 son una secuencia de planificación y no una promesa de calendario. Solo el sprint activo se abre a claiming; el siguiente se abre después de revisar capacidad, puerta previa y disponibilidad del equipo. Se puede construir auth/esquema en paralelo al spike, pero no habilitar ingesta real antes de F0.
+1. The specification is the source of contracts; changes to phases, states, API, or
+   guarantees update both documents in the same revision.
+2. Every gate requires evidence: real command, version, date, environment, result, and
+   redacted metrics. A mock does not validate a provider, nor does a unit test validate
+   infrastructure.
+3. A provider/tool blockage is recorded as **`NO VERIFICADO`** ("not verified"), never as approved. Do not use
+   real classes while privacy is blocked.
+4. S1–S4 are a planning sequence, not a calendar promise. Only the active sprint opens for
+   claiming; the next one opens after reviewing capacity, the previous gate, and team
+   availability. Auth/schema can be built in parallel with the spike, but real ingestion
+   must not be enabled before F0.
 
-## 3. F0 — Viabilidad y fundación
+## 3. F0 — Feasibility and foundation
 
-### F0.1 Contrato NVIDIA y privacidad (bloqueante)
+### F0.1 NVIDIA contract and privacy (blocking)
 
-- [ ] Revisar términos de retención/tratamiento, regiones, subprocesadores y consentimiento para voces de terceros. Resolver D3-Audio antes de clases reales; registrar D3-Texto por separado para cada proveedor/modelo de embeddings o LLM antes de enviar transcripts reales.
-- [ ] Crear spike mínimo con cliente oficial y audio sintético generado en RAM, con texto esperado conocido. La generación debe producir voz inteligible, no solo tonos para probar ASR. No conservar audio ni publicarlo como artefacto CI.
-- [ ] Ejecutar transcripción, no traducción, con cada idioma candidato; probar código inválido, ausencia de idioma e idioma incorrecto. No inferir soporte de español ni de otros idiomas del ejemplo `en`/`fr`.
-- [ ] Verificar formato normalizado mono PCM 16-bit WAV y sample rate efectivo. Probar formatos UI con ffprobe/ffmpeg reales, distinguiéndolos de lo que recibe Riva.
-- [ ] Medir límites efectivos de payload/duración, cuotas, concurrencia, deadlines, cancelación y errores gRPC dentro del presupuesto autorizado. No hacer pruebas de saturación del proveedor sin autorización.
-- [ ] Pedir offsets y verificar semántica/unidades/orden/rango y precisión en frases conocidas, silencios y fronteras. Elegir `word|segment|none` según evidencia; no asumir alineación forzada disponible.
-- [ ] Medir latencia, memoria del SDK, expansión PCM, overlap y costo. Fijar tamaño de fragmento, solapamiento, límites de entrada y deadlines a partir de resultados.
+- [ ] Review retention/processing terms, regions, subprocessors, and consent for third-party
+  voices. Resolve D3-Audio before real classes; record D3-Text separately for each
+  embeddings/LLM provider/model before sending real transcripts.
+- [ ] Create a minimal spike with the official client and synthetic audio generated in RAM,
+  with known expected text. Generation must produce intelligible speech, not just tones, to
+  test ASR. Do not retain audio or publish it as a CI artifact.
+- [ ] Run transcription, not translation, for each candidate language; test an invalid code,
+  a missing language, and the wrong language. Do not infer support for Spanish or other
+  languages from the `en`/`fr` example.
+- [ ] Verify the normalized 16-bit mono PCM WAV format and effective sample rate. Test UI
+  formats with real ffprobe/ffmpeg, distinguishing them from what Riva receives.
+- [ ] Measure effective payload/duration limits, quotas, concurrency, deadlines, cancellation,
+  and gRPC errors within the authorized budget. Do not run provider saturation tests without
+  authorization.
+- [ ] Request offsets and verify semantics/units/order/range and precision on known phrases,
+  silences, and boundaries. Choose `word|segment|none` based on evidence; do not assume
+  forced alignment is available.
+- [ ] Measure latency, SDK memory, PCM expansion, overlap, and cost. Set fragment size,
+  overlap, input limits, and deadlines from the results.
 
-**Entregable:** informe de contrato con versiones, llamadas/esquemas redactados, idiomas habilitados, formatos, límites medidos, timestamps y restricciones conocidas. No publicar API keys, metadata Authorization, voz ni transcripciones privadas.
+**Deliverable:** contract report with versions, redacted calls/schemas, enabled languages,
+formats, measured limits, timestamps, and known restrictions. Do not publish API keys,
+Authorization metadata, voice, or private transcripts.
 
-**Salida:** D2, D3-Audio y D4 resueltas para el despliegue seleccionado. Si no hay timestamps fiables, aprobar explícitamente G2-X/D6 (producto textual) o validar alineación efímera para G2-T; actualizar spec, API y UI en la misma revisión. Sin fallback silencioso.
+**Exit:** D2, D3-Audio, and D4 resolved for the selected deployment. If there are no
+reliable timestamps, explicitly approve G2-X/D6 (text-only product) or validate ephemeral
+alignment for G2-T; update spec, API, and UI in the same revision. No silent fallback.
 
-### F0.2 Prueba de no persistencia y recuperación (bloqueante)
+### F0.2 Non-persistence and recovery test (blocking)
 
-- [ ] Un proceso de ingesta con filesystem raíz read-only, tmpfs acotado, usuario no root, sin swap/core dumps/snapshots/hibernación persistentes. Verificar configuración del host, no solo Compose.
-- [ ] Proxy real sin buffering/caché/captura de bodies a disco; ruta binaria directa a FastAPI, sin Server Actions ni spooling por defecto de `UploadFile`.
-- [ ] Medir reserva RAM por slot: original + fragmentos activos + buffers SDK/ffmpeg + margen de seguridad. Objetivo 200 MiB/3 h no es límite aprobado hasta superar prueba; reducir y publicar capacidad si no cabe.
-- [ ] Prototipo de supervisor, lease, fencing y limpieza independiente del proceso ASR; comprobar descriptores/procesos/mount, no solo borrar nombres de archivo.
-- [ ] Probar éxito, upload incompleto, rechazo, timeout, cancelación, error de ffmpeg/Riva/BD, SIGKILL del proceso y reinicio de contenedor/host. Inyectar fallo durante y después del commit del transcript.
-- [ ] Verificar original, convertidos y fragmentos ausentes; sin bytes de audio en disco, Redis, logs, trazas, cachés ni artefactos. Persistir evidencia de inspección sin audio.
-- [ ] Comprobar que expiración de lease no marca cleanup verificado. Ante falta de evidencia, bloquear outbox; ante fallo de limpieza, detener admisión local y alertar.
+- [ ] An ingestion process with a read-only root filesystem, bounded tmpfs, non-root user,
+  no persistent swap/core dumps/snapshots/hibernation. Verify the host configuration, not
+  only Compose.
+- [ ] Real proxy without buffering/caching/capturing bodies to disk; direct binary path to
+  FastAPI, with a `fetch` streaming `PUT` and without the default `UploadFile` spooling.
+- [ ] Measure RAM reservation per slot: original + active fragments + SDK/ffmpeg buffers +
+  safety margin. The 200 MiB/3 h target is not an approved limit until the test is passed;
+  reduce and publish capacity if it does not fit.
+- [ ] Prototype supervisor, lease, fencing, and cleanup independent of the ASR process;
+  check descriptors/processes/mount, not just deleting file names.
+- [ ] Test success, incomplete upload, rejection, timeout, cancellation, ffmpeg/Riva/DB error,
+  process SIGKILL, and container/host restart. Inject failure during and after the transcript
+  commit.
+- [ ] Verify the original, converted files, and fragments are absent; no audio bytes on disk,
+  Redis, logs, traces, caches, or artifacts. Persist inspection evidence without audio.
+- [ ] Check that lease expiration does not mark cleanup as verified. Without evidence, block
+  the outbox; on cleanup failure, stop local admission and alert.
 
-**Salida:** limpieza normal inmediata y recuperación por supervisor demostradas; límites/TTL publicados. Sweeper objetivo cada 60 s, no promesa de borrado instantáneo ante host inaccesible. Cualquier persistencia detectada bloquea la entrega.
+**Exit:** immediate normal cleanup and supervisor recovery demonstrated; limits/TTL
+published. Sweeper target every 60 s, not an instant-deletion promise when the host is
+unreachable. Any detected persistence blocks the delivery.
 
-### F0.3 Base de aplicación
+### F0.3 Application foundation
 
-- [ ] Monorepo de §3, versiones soportadas fijadas y lockfiles. FastAPI/Pydantic/SQLAlchemy async, Next.js/TypeScript, PostgreSQL/pgvector, Redis/ARQ y ffmpeg.
-- [ ] Servicios `web`, `api`, `ingest`, `worker`, `scheduler`, `postgres`, `redis`, `caddy`; sin almacenamiento de audio. Ingesta inicial de una instancia; escalado con afinidad de reserva queda pendiente de diseño/prueba.
-- [ ] OAuth Google en backend, sesión opaca, scopes incrementales, cifrado/rotación, `GET /me` como bootstrap CSRF no-cacheable, CSRF/Origin en toda mutación y cierre/revocación. No condicionar chat a scopes Calendar/Gmail.
-- [ ] Migraciones tenant-aware y CRUD de materias. RLS, FKs compuestas y pruebas de pool/worker. Modelo completo para intentos, transcript/segmentos, versiones de índice/análisis y outbox; tablas posteriores pueden entregarse en su fase.
-- [ ] CI: lint, tipos, tests, integración y builds reales según §9. Tests cloud protegidos, separados de MRs no confiables. Añadir instrucciones reproducibles al README.
+- [ ] Monorepo from §3, pinned supported versions, and lockfiles. FastAPI/Pydantic/SQLAlchemy
+  async, React/Vite/TypeScript (ADR-0007), PostgreSQL/pgvector, Redis/ARQ, and ffmpeg.
+- [ ] Services `web`, `api`, `ingest`, `worker`, `scheduler`, `postgres`, `redis`, `caddy`;
+  no audio storage. Initial single-instance ingestion; scaling with reservation affinity
+  remains pending design/testing.
+- [ ] Google OAuth in the backend, opaque session, incremental scopes, encryption/rotation,
+  `GET /me` as a non-cacheable CSRF bootstrap, CSRF/Origin on every mutation, and
+  logout/revocation. Do not condition chat on Calendar/Gmail scopes.
+- [ ] Tenant-aware migrations and subject CRUD. RLS, composite FKs, and pool/worker tests.
+  Full model for attempts, transcript/segments, index/analysis versions, and outbox; later
+  tables may be delivered in their phase.
+- [ ] CI: lint, types, tests, integration, and real builds per §9. Protected cloud tests,
+  separated from untrusted MRs. Add reproducible instructions to the README.
 
-**Salida:** sesión/aislamiento y CRUD funcionan, migraciones desde vacío y actualización pasan, tests y builds observados en entorno de referencia. Nada de esto se considera implementado por existir este plan.
+**Exit:** session/isolation and CRUD work, migrations from empty and upgrade pass, tests
+and builds observed in the reference environment. None of this is considered implemented
+because this plan exists.
 
-## 4. F1 — Conocimiento: corte vertical completo
+## 4. F1 — Knowledge: complete vertical slice
 
-### F1.1 Ingesta, texto y biblioteca
+### F1.1 Ingestion, text, and library
 
-- [ ] Implementar `/ingestion/capabilities` con idioma/formatos/límites/TTL efectivos. Formulario sin idioma preseleccionado, metadatos requeridos y consentimiento.
-- [ ] `POST /audios` registra consentimiento versionado y reserva slot + intento; no promete dedupe antes de conocer el hash. `PUT` autenticado calcula SHA-256 y responde 202 solo tras recepción/admisión, o 200/409 de dedupe siempre después de cleanup. Compensar reservas si falla BD.
-- [ ] Deduplicación por identidad exacta en el `PUT`; una variante devuelve token opaco de un solo uso, exige segundo `POST` y reupload, y verifica nuevamente el hash. No conservar audio mientras se espera confirmación. Probar concurrencia, expiración/reuso del token y separación entre usuarios.
-- [ ] Transcribir fragmentos secuenciales con backpressure; reconciliar fronteras y offsets sin duplicar overlap. Empty/silencio y texto de mala calidad no se presentan como transcripción fiable.
-- [ ] Commit atómico de transcript completo/segmentos/outbox deshabilitada; cleanup comprobado; habilitar **solo índice en F1**. Recuperación después del commit no pide retranscripción.
-- [ ] Cancelación, tombstone, fencing y protección contra commits tardíos. Cerrar pestaña tras 202 no cancela; desconexión durante recepción sí. Reupload solo sin transcript utilizable.
-- [ ] Biblioteca con lector, export TXT y SRT condicionado a offsets válidos; progreso SSE GET con snapshot/polling. No reproductor, descarga de audio ni caché privada del service worker.
+- [ ] Implement `/ingestion/capabilities` with effective language/formats/limits/TTL. Form
+  without a preselected language, required metadata, and consent.
+- [ ] `POST /audios` records versioned consent and reserves slot + attempt; it does not
+  promise deduplication before knowing the hash. Authenticated `PUT` computes SHA-256 and
+  answers 202 only after reception/admission, or 200/409 from dedup, always after cleanup.
+  Compensate reservations if the DB fails.
+- [ ] Exact-identity deduplication in the `PUT`; a variant returns an opaque single-use
+  token, requires a second `POST` and re-upload, and verifies the hash again. Do not retain
+  audio while waiting for confirmation. Test concurrency, token expiration/reuse, and
+  separation between users.
+- [ ] Transcribe sequential fragments with backpressure; reconcile boundaries and offsets
+  without double-counting overlap. Empty/silence and poor-quality text are not presented as
+  reliable transcription.
+- [ ] Atomic commit of full transcript/segments/disabled outbox; verified cleanup; enable
+  **index only in F1**. Recovery after the commit does not ask for retranscription.
+- [ ] Cancellation, tombstone, fencing, and protection against late commits. Closing the tab
+  after the 202 does not cancel; disconnection during reception does. Re-upload only without
+  a usable transcript.
+- [ ] Library with reader, TXT export, and SRT conditioned on valid offsets; SSE GET progress
+  with snapshot/polling. No player, audio download, or service-worker private cache.
 
-### F1.2 Recuperación y chat
+### F1.2 Retrieval and chat
 
-- [ ] Chunking por tokens y spans trazables; embeddings versionados, HNSW coseno y FTS por idioma con RRF. Filtros tenant/versión/tombstone en ambas ramas.
-- [ ] Publicar índice completo atómicamente; reintentos idempotentes desde texto y reconstrucción por outbox si Redis se pierde. Evaluar recall de HNSW con filtros selectivos frente a búsqueda exacta.
-- [ ] Chat `fetch` + SSE POST con snapshot, IDs monotónicos y un terminal `done|error`; presupuesto de contexto, `client_message_id` idempotente, cancelación y estados parciales. Reconectar consulta el resultado persistido y no reejecuta. Citas de registro permitido, Markdown seguro y enlaces solo tras validación.
-- [ ] Persistir procedencia de todas las fuentes del contexto e historial; borrar/invalidate respuestas derivadas y bloquear publicación tardía cuando se elimina una fuente.
-- [ ] Dataset textual versionado por idioma habilitado: preguntas respondibles/no respondibles, materias similares, fechas, términos técnicos y ataques de instrucciones incrustadas.
+- [ ] Token-based chunking with traceable spans; versioned embeddings, HNSW cosine, and
+  per-language FTS with RRF. Tenant/version/tombstone filters in both branches.
+- [ ] Publish the complete index atomically; idempotent retries from text and outbox-based
+  reconstruction if Redis is lost. Evaluate HNSW recall with selective filters against exact
+  search.
+- [ ] Chat `fetch` + SSE POST with snapshot, monotonic IDs, and one terminal `done|error`;
+  context budget, idempotent `client_message_id`, cancellation, and partial states.
+  Reconnection consults the persisted result and does not re-execute. Citations from the
+  allowed registry, safe Markdown, and links only after validation.
+- [ ] Persist provenance for all sources from context and history; delete/invalidate derived
+  responses and block late publication when a source is removed.
+- [ ] Versioned text dataset per enabled language: answerable/unanswerable questions, similar
+  subjects, dates, technical terms, and embedded-instruction attacks.
 
-**Salida:** E2E real a través del proxy y servicios de una clase sintética de 1 h y del límite efectivo publicado. Si no se demuestra al menos 1 h, se requiere aprobación explícita para reducir el caso de uso. Audio ausente antes de indexación; lector/chat funcionan sin análisis ni resumen (`not_requested`). Pasan G1, una variante de G2 (G2-T o G2-X), G3, G4 y G5-F1. Integración ASR real sigue siendo obligatoria aunque los escenarios deterministas usen servidor gRPC de prueba.
+**Exit:** real E2E through the proxy and services for a 1 h synthetic class and the
+published effective limit. If at least 1 h is not demonstrated, explicit approval is
+required to reduce the use case. Audio absent before indexing; reader/chat work without
+analysis or summary (`not_requested`). G1, one variant of G2 (G2-T or G2-X), G3, G4, and
+G5-F1 pass. Real ASR integration remains mandatory even though deterministic scenarios use
+a test gRPC server.
 
-## 5. F2 — Acción: extracción y Calendar
+## 5. F2 — Action: extraction and Calendar
 
-- [ ] Análisis por ventanas, esquema Pydantic, agregación/dedupe y revisión activa atómica. Extracción basada en fecha/zona de clase; spans Unicode por segmento y comprobación literal de evidencia.
-- [ ] Nuevas clases requieren análisis e índice independientes. Backfill explícito sobre texto para clases F1; no reupload. Fallo de análisis permite chat si índice válido, y viceversa para revisión de tareas.
-- [ ] Bandeja de revisión y resúmenes/temas; fechas ambiguas o calidad dudosa obligan a revisión. Nada de auto-confirmación por score. Reanálisis no sobrescribe tareas editadas/confirmadas.
-- [ ] Separar vencimiento de intervalo Calendar, all-day de instantes, `task_sources`, revisión pendiente de cambios y estado de sincronización del ciclo de vida de tarea. Una edición confirmada no muta campos activos; confirmar promueve `revision_id` con control de versión y outbox atómicos.
-- [ ] Validar scopes reales y creación del calendario secundario; reconexión/refresh coordinados. Probar rechazo de scopes sin romper biblioteca/chat.
-- [ ] ID determinista de evento, timeout/409 reconciliados, jobs obsoletos descartados y ETag para conflictos externos. Edición local requiere reconfirmar antes de escribir Google. Reconectar Calendar reactiva solo versiones vigentes `blocked` y crea/reutiliza la outbox.
-- [ ] Lectura paginada completa de ventana -7/+60 días, recurrencias/eliminaciones, publicación atómica y cobertura/frescura visibles. No combinar filtros incompatibles con syncToken.
-- [ ] Dashboard de tareas/agenda sin duplicar evento vinculado; tools de lectura y `propose_task`, nunca escritura directa. Conflicto horario distinto de concentración de entregas por día.
-- [ ] Completar/descartar cancela recordatorios futuros; evento conservado salvo eliminación explícita. Operaciones de borrado remoto sobreviven a la purga local sin perder autorización ni IDs necesarios.
+- [ ] Windowed analysis, Pydantic schema, aggregation/dedupe, and atomic active review.
+  Extraction based on class date/timezone; Unicode spans per segment and literal evidence
+  checking.
+- [ ] New classes require independent analysis and index. Explicit backfill over text for F1
+  classes; no re-upload. Analysis failure allows chat if the index is valid, and vice versa
+  for task review.
+- [ ] Review inbox and summaries/topics; ambiguous dates or doubtful quality force review.
+  No score-based auto-confirmation. Re-analysis does not overwrite edited/confirmed tasks.
+- [ ] Separate the due date from the Calendar interval, all-day from instants, `task_sources`,
+  pending revision of changes, and the sync status from the task lifecycle. A confirmed edit
+  does not mutate active fields; confirming promotes `revision_id` with version control and
+  an atomic outbox.
+- [ ] Validate real scopes and secondary calendar creation; coordinated reconnect/refresh.
+  Test scope rejection without breaking library/chat.
+- [ ] Deterministic event ID, reconciled timeout/409, stale jobs discarded, and ETag for
+  external conflicts. Local editing requires reconfirming before writing to Google.
+  Reconnecting Calendar reactivates only current `blocked` versions and creates/reuses the
+  outbox.
+- [ ] Complete paginated reading of the -7/+60 day window, recurrences/deletions, atomic
+  publication, and visible coverage/freshness. Do not combine filters incompatible with
+  syncToken.
+- [ ] Task/agenda dashboard without duplicating the linked event; reading tools and
+  `propose_task`, never direct writing. Time conflict distinct from per-day deadline
+  concentration.
+- [ ] Completing/dismissing cancels future reminders; the event is kept unless explicitly
+  deleted. Remote deletion operations survive local purging without losing authorization or
+  the IDs needed.
 
-**Salida:** E2E con una cuenta Google de prueba: propuesta → revisión → confirmación → un evento; lectura y edición confirmada. Evidencia de ninguna escritura previa a confirmar. Pruebas de doble clic, fallo de respuesta, reintentos concurrentes, DST/all-day, revocación y cambios externos; G5-F2, G6 y G7-CAL aprobadas. Pruebas remotas crean solo recursos autorizados y los limpian al finalizar.
+**Exit:** E2E with a Google test account: proposal → review → confirmation → one event;
+reading and confirmed editing. Evidence of no writes before confirmation. Tests for
+double-click, response failure, concurrent retries, DST/all-day, revocation, and external
+changes; G5-F2, G6, and G7-CAL approved. Remote tests create only authorized resources and
+clean them up at the end.
 
-## 6. F3 — Recordatorios y cierre de v1
+## 6. F3 — Reminders and v1 close-out
 
-- [ ] Gmail incremental/opt-in; destinatario fijo al email verificado. Templates escapados con enlaces autenticados; ningún GET de correo muta tareas.
-- [ ] Scheduler ARQ único con reclamo atómico/leases y dedupe persistente. T-48/T-24/T-2 h para instantes; T-3d/T-1d a hora local para all-day; sin ráfaga retrospectiva.
-- [ ] Digests por fecha local; DST, cambios de vencimiento/preferencias y cancelación de ocurrencias obsoletas. Confirmar borrado/completado de tarea inmediatamente antes de reclamar un envío.
-- [ ] Fallo ambiguo de Gmail o lease `sending` vencido → `delivery_unknown`, no reintento ciego. Informar que no puede retirarse un correo ya enviado/en vuelo al borrar una tarea.
-- [ ] Panel de entregas/sincronizaciones fallidas con reenvío manual advertido, preferencias, estadísticas y Ctrl+K. Re-ranker solo mediante experimento comparativo con calidad/costo/latencia.
-- [ ] Runbooks de cleanup, caída de proveedor, presupuesto, tokens revocados, restauración y borrado de cuenta. D8 ya debe estar aprobada antes de datos no sintéticos; F3 comprueba restore, expiración y reaplicación de borrados.
+- [ ] Incremental/opt-in Gmail; recipient fixed to the verified email. Escaped templates with
+  authenticated links; no email GET mutates tasks.
+- [ ] Single ARQ scheduler with atomic claim/leases and persistent dedupe. T-48/T-24/T-2 h for
+  instants; T-3d/T-1d at local time for all-day; no retrospective burst.
+- [ ] Digests by local date; DST, due-date/preference changes, and cancellation of stale
+  occurrences. Confirm task deletion/completion immediately before claiming a send.
+- [ ] Ambiguous Gmail failure or expired `sending` lease → `delivery_unknown`, no blind
+  retry. State that an already sent/in-flight email cannot be recalled when deleting a task.
+- [ ] Delivery/failed-sync panel with warned manual resend, preferences, statistics, and
+  Ctrl+K. Re-ranker only through a comparative experiment with quality/cost/latency.
+- [ ] Runbooks for cleanup, provider outage, budget, revoked tokens, restore, and account
+  deletion. D8 must already be approved before non-synthetic data; F3 checks restore,
+  expiration, and reapplied deletions.
 
-**Salida:** envío real de prueba observado y G7-MAIL/G8 aprobadas; entrega incierta visible, no garantía de exactamente una entrega. Restauración comprobada sin reintroducir fuentes borradas. Revisión de seguridad y costos antes de producción.
+**Exit:** real test send observed and G7-MAIL/G8 approved; uncertain delivery visible, not
+an exactly-once guarantee. Restore verified without reintroducing deleted sources. Security
+and cost review before production.
 
-## 7. Matriz de aceptación y evidencia
+## 7. Acceptance matrix and evidence
 
-Los umbrales siguientes son **puertas propuestas**, no resultados. Acordarlos antes de ejecutar evaluación; no rebajarlos a posteriori para ocultar un fallo. Publicar numerador/denominador por idioma y slices difíciles, no solo un promedio global.
+The following thresholds are **proposed gates**, not results. Agree on them before running
+evaluation; do not lower them a posteriori to hide a failure. Publish numerator/denominator
+per language and difficult slices, not only a global average.
 
-| ID | Prueba/criterio | Entorno mínimo |
+| ID | Test/criterion | Minimum environment |
 |---|---|---|
-| G1 Privacidad | Cero persistencia de audio observada en todos los caminos de F0.2; cleanup confirmado antes de salida de jobs de texto; incidentes bloquean admisión | Proxy, ffmpeg, procesos, contenedores y host reales; inspección de escritura/logs/Redis/cachés |
-| G2-T ASR temporal | Idioma/formato/límites probados; offsets solicitados ordenados, en rango y con precisión aceptada; cero tiempos inventados | Riva real + voz sintética por idioma; frases, silencios y fronteras anotadas |
-| G2-X ASR textual | Decisión D6 aprobada; `timestamp_precision=none`, tiempos null, SRT y enlaces temporales deshabilitados; citas solo por segmento | Riva real para texto + API/UI/E2E que demuestran ausencia de tiempos inventados |
-| G3 Aislamiento | Cero accesos cruzados, incluidos IDs adivinados, búsqueda híbrida, SSE, tools, jobs y borrado concurrente | Dos usuarios mínimo, BD/cola reales y E2E |
-| G4 RAG | Al menos 50 preguntas por idioma (mínimo 15 sin respuesta); Recall@8 de evidencia ≥ 0.85 en respondibles; precisión de citas revisadas ≥ 0.95; abstención correcta ≥ 0.90 en no respondibles; cero IDs de cita no autorizados | Embeddings/LLM seleccionados reales, dataset anotado y revisión humana; registrar tamaño pequeño y limitación estadística |
-| G5-F1 Recuperación de conocimiento | Sin transcripts/índices/mensajes parciales activos ni duplicados; borrar fuente impide respuestas/jobs tardíos; crash antes/después de commit se recupera | Fault injection con Postgres/Redis/procesos y E2E F1 |
-| G5-F2 Recuperación de acción | Sin análisis/revisiones/outbox Calendar parciales; versiones obsoletas no publican ni se reactivan | Fault injection sobre análisis, confirmación, reconnect y Calendar F2 |
-| G6 Extracción | Al menos 50 actividades anotadas por idioma con ambigüedades/DST; precisión de propuestas ≥ 0.95 y recall ≥ 0.85; fecha normalizada exacta ≥ 0.95 en resolubles; todos los casos ambiguos del set van a revisión; evidencia validada en 100% de propuestas publicadas | LLM real, fixtures temporales deterministas y evaluación humana; score del modelo no sustituye estas métricas |
-| G7-CAL Calendar | Ninguna escritura sin confirmación; evento único ante retries; all-day/instantes, scopes, ETag, reconnect y reconciliación comprobados | Calendar real en cuenta protegida + fallos deterministas |
-| G7-MAIL Gmail | Opt-in y destinatario verificado; `delivery_unknown` visible y sin reintento ciego; reenvío manual advertido | Gmail real en cuenta protegida + fallos deterministas |
-| G8 Operación | Builds/tests de API/ingest/web aprobados; restore probado; recordatorios reclamados/enviados dentro de objetivo 15 min con dependencias saludables; presupuesto/alertas activos | Despliegue de referencia y carga documentada |
+| G1 Privacy | Zero audio persistence observed in all F0.2 paths; cleanup confirmed before text jobs exit; incidents block admission | Real proxy, ffmpeg, processes, containers, and host; inspection of writes/logs/Redis/caches |
+| G2-T ASR timing | Language/format/limits tested; requested offsets ordered, in range, and with accepted precision; zero invented times | Real Riva + synthetic voice per language; annotated phrases, silences, and boundaries |
+| G2-X ASR text-only | D6 decision approved; `timestamp_precision=none`, null times, SRT and temporal links disabled; citations only by segment | Real Riva for text + API/UI/E2E demonstrating absence of invented times |
+| G3 Isolation | Zero cross-tenant access, including guessed IDs, hybrid search, SSE, tools, jobs, and concurrent deletion | Two users minimum, real DB/queue, and E2E |
+| G4 RAG | At least 50 questions per language (minimum 15 unanswerable); evidence Recall@8 ≥ 0.85 on answerables; reviewed-citation precision ≥ 0.95; correct abstention ≥ 0.90 on unanswerables; zero unauthorized citation IDs | Real selected embeddings/LLM, annotated dataset, and human review; record the small size and statistical limitation |
+| G5-F1 Knowledge retrieval | No partial/duplicate active transcripts/indexes/messages; deleting a source prevents late responses/jobs; crash before/after commit is recovered | Fault injection with real Postgres/Redis/processes and F1 E2E |
+| G5-F2 Action retrieval | No partial analysis/revisions/Calendar outbox; stale versions neither publish nor reactivate | Fault injection over analysis, confirmation, reconnect, and F2 Calendar |
+| G6 Extraction | At least 50 annotated activities per language with ambiguities/DST; proposal precision ≥ 0.95 and recall ≥ 0.85; exact normalized date ≥ 0.95 on resolvable ones; every ambiguous case in the set goes to review; validated evidence in 100% of published proposals | Real LLM, deterministic temporal fixtures, and human evaluation; the model's score does not replace these metrics |
+| G7-CAL Calendar | No write without confirmation; single event under retries; all-day/instants, scopes, ETag, reconnect, and reconciliation checked | Real Calendar on a protected account + deterministic failures |
+| G7-MAIL Gmail | Opt-in and verified recipient; visible `delivery_unknown` and no blind retry; manual resend warned | Real Gmail on a protected account + deterministic failures |
+| G8 Operation | API/ingest/web builds/tests approved; restore tested; reminders claimed/sent within the 15 min objective with healthy dependencies; budget/alerts active | Reference deployment and documented load |
 
-### 7.1 Protocolo reproducible de métricas
+### 7.1 Reproducible metrics protocol
 
-G4 y G6 usan datasets versionados con particiones `development` y `test` congelado. Antes de ejecutar se publica: unidad de emparejamiento, fórmula, micro/macro promedio, tolerancias, tratamiento de múltiples respuestas válidas y procedimiento de adjudicación humana. Cada idioma habilitado debe aprobar por separado; un promedio global no compensa un idioma fallido y no se ajustan prompts contra `test`. Una cita cuenta como correcta solo si su fuente pertenece al tenant/versión, el span reconstruye texto literal relevante y responde la afirmación asociada. Una propuesta se empareja por tipo, fecha normalizada y evidencia, no solo por similitud de título.
+G4 and G6 use versioned datasets with `development` and frozen `test` partitions. Before
+running, publish: matching unit, formula, micro/macro average, tolerances, handling of
+multiple valid answers, and the human adjudication procedure. Each enabled language must
+pass separately; a global average does not compensate a failed language and prompts are not
+tuned against `test`. A citation counts as correct only if its source belongs to the
+tenant/version, the span reconstructs relevant literal text, and it answers the associated
+claim. A proposal is matched by type, normalized date, and evidence, not only by title
+similarity.
 
-Performance: medir recuperación p95 ≤ 500 ms y primer token de chat p95 ≤ 5 s con corpus, concurrencia y condiciones frías/calientes publicados. Son objetivos de §8, no garantías mientras falte benchmark. Para ASR no fijar SLA ni límite productivo sin F0. No asumir precisión acústica a partir de pruebas con voz sintética: antes de ampliar uso real, evaluar material representativo consentido con anotaciones y audio igualmente efímero; una evaluación solo sintética deja esa generalización no verificada.
+Performance: measure retrieval p95 ≤ 500 ms and chat first token p95 ≤ 5 s with published
+corpus, concurrency, and cold/warm conditions. These are §8 objectives, not guarantees while
+the benchmark is missing. For ASR, do not set an SLA or production limit without F0. Do not
+assume acoustic precision from synthetic-voice tests: before expanding real usage, evaluate
+representative consented material with annotations and equally ephemeral audio; a
+synthetic-only evaluation leaves that generalization unverified.
 
-### Capas de pruebas (todas necesarias)
+### Test layers (all required)
 
-1. **Unidad:** fechas/DST, offsets Unicode (incluidos emoji/acentos), overlap, evidencia, chunking, RRF, estados, dedupe y recordatorios.
-2. **Integración local:** Postgres/pgvector/Redis y ffmpeg reales, proxy, auth/CSRF, outbox, tombstone/fencing, reinicios y pérdida de respuestas. Dobles de proveedor solo para fallos controlados.
-3. **Contrato cloud:** Riva, LLM/embeddings y Google reales con permisos/presupuesto de prueba. Registrar capacidades observadas, no afirmar soporte basándose en documentación o mocks.
-4. **E2E y carga:** navegador → proxy → servicios → BD/proveedor, con fallos por etapa, combinaciones de filtros/contexto y límites efectivos. Medir recursos y no persistencia también bajo carga.
-5. **Build/entrega:** lint, tipos, suites y builds de todas las apps/imágenes; migraciones y restore. Registrar comandos exactos una vez exista el scaffold, sin inventar comandos que hoy no existen.
+1. **Unit:** dates/DST, Unicode offsets (including emoji/accents), overlap, evidence,
+   chunking, RRF, states, dedupe, and reminders.
+2. **Local integration:** real Postgres/pgvector/Redis and ffmpeg, proxy, auth/CSRF, outbox,
+   tombstone/fencing, restarts, and lost responses. Provider doubles only for controlled
+   failures.
+3. **Cloud contract:** real Riva, LLM/embeddings, and Google with test permissions/budget.
+   Record observed capabilities; do not claim support based on documentation or mocks.
+4. **E2E and load:** browser → proxy → services → DB/provider, with per-stage failures,
+   filter/context combinations, and effective limits. Measure resources and non-persistence
+   under load too.
+5. **Build/delivery:** lint, types, suites, and builds of all apps/images; migrations and
+   restore. Record exact commands once the scaffold exists, without inventing commands that
+   do not exist today.
 
-## 8. Riesgos y decisiones de cierre
+## 8. Risks and closing decisions
 
-### 8.1 Matriz de cierre D1–D8
+### 8.1 D1–D8 closing matrix
 
-| Decisión | Límite | Gate/artefacto requerido |
+| Decision | Limit | Required gate/artifact |
 |---|---|---|
-| D1 Audiencia/despliegue | Antes de abrir acceso a terceros | Revisión de privacidad, OAuth consent y modelo tenant aprobados |
-| D2 Contrato Riva | F0 | Informe provider-contract versionado |
-| D3-Audio | Antes de audio real | Términos, región, retención y consentimiento aprobados |
-| D3-Texto | Antes de transcript real a cada LLM/embedding | Ficha por proveedor/modelo; cambiar proveedor reabre la decisión |
-| D4 Capacidad | F0 | Benchmark RAM/tmpfs, límites y deadlines publicados |
-| D5 Calidad/costo | RAG en F1; extracción en F2 | G4 y G6 por idioma + presupuesto |
-| D6 Temporalidad | F0/F1 | Aprobar exactamente G2-T o G2-X y reflejarlo en API/UI |
-| D7-CAL | Antes de F2 | Contrato Calendar y scopes reales |
-| D7-MAIL | Antes de F3 | Contrato Gmail, opt-in y entrega incierta |
-| D8 Retención local | Antes de datos no sintéticos | Política activa/backups/borrado; restore se valida en F3 |
+| D1 Audience/deployment | Before opening access to third parties | Approved privacy review, OAuth consent, and tenant model |
+| D2 Riva contract | F0 | Versioned provider-contract report |
+| D3-Audio | Before real audio | Approved terms, region, retention, and consent |
+| D3-Text | Before real transcript to each LLM/embedding | Sheet per provider/model; changing provider reopens the decision |
+| D4 Capacity | F0 | RAM/tmpfs benchmark, published limits and deadlines |
+| D5 Quality/cost | RAG in F1; extraction in F2 | G4 and G6 per language + budget |
+| D6 Temporal alignment | F0/F1 | Approve exactly G2-T or G2-X and reflect it in API/UI |
+| D7-CAL | Before F2 | Calendar contract and real scopes |
+| D7-MAIL | Before F3 | Gmail contract, opt-in, and uncertain delivery |
+| D8 Local retention | Before non-synthetic data | Active policy/backups/deletion; restore validated in F3 |
 
-Una decisión se registra con estado `pending|approved|blocked`, responsable del cierre, fecha,
-evidencia y consecuencias. `blocked` no equivale a aprobado y detiene el uso real afectado.
+A decision is recorded with state `pending|approved|blocked`, the closure owner, date,
+evidence, and consequences. `blocked` does not equal approved and stops the affected real
+usage.
 
-| Riesgo | Respuesta / bloqueo |
+| Risk | Response / blocker |
 |---|---|
-| NVIDIA sin garantía de retención requerida | Bloquear audio real; decidir proveedor/despliegue con el usuario (D3) |
-| Timestamps insuficientes | Bloquear promesa temporal; decidir alineación efímera o cambio de producto (D6) |
-| 200 MiB/3 h supera memoria/deadline/cuota | Reducir límites efectivos con aprobación y UI coherente; no introducir disco como workaround (D4) |
-| Host perdido sin evidencia de cleanup | Estado pendiente, outbox bloqueada y procedimiento de infraestructura; TTL no equivale a borrado |
-| ASR confunde fechas o términos técnicos | Evidencia visible, revisión humana, evaluación por idioma y advertencias; no confianza automática |
-| API cloud cambia, token Testing caduca o cuota se agota | Contratos programados, reconexión y errores tipados; no prometer proveedor intercambiable sin pruebas |
-| Texto eliminado reaparece vía historial, índice o backup | Procedencia transitiva, tombstone, control de versión y borrados reaplicados al restaurar |
-| Ambigüedad en Gmail | `delivery_unknown`; no exactamente-una-vez ni reintento automático |
+| NVIDIA without the required retention guarantee | Block real audio; decide provider/deployment with the user (D3) |
+| Insufficient timestamps | Block the temporal promise; decide ephemeral alignment or a product change (D6) |
+| 200 MiB/3 h exceeds memory/deadline/quota | Reduce effective limits with approval and a consistent UI; do not introduce disk as a workaround (D4) |
+| Lost host without cleanup evidence | Pending state, blocked outbox, and an infrastructure procedure; TTL is not deletion |
+| ASR confuses dates or technical terms | Visible evidence, human review, per-language evaluation, and warnings; no automatic trust |
+| Cloud API changes, Testing token expires, or quota runs out | Scheduled contracts, reconnection, and typed errors; do not promise a swappable provider without tests |
+| Deleted text reappears via history, index, or backup | Transitive provenance, tombstone, version control, and deletions reapplied on restore |
+| Gmail ambiguity | `delivery_unknown`; no exactly-once and no automatic retry |
 
-## 9. Checklist de consistencia para cada revisión
+## 9. Consistency checklist for every revision
 
-- [ ] ESPECIFICACION y PLAN enlazan archivos existentes; fases F0–F3, variantes de gates y decisiones D1–D8 coinciden.
-- [ ] Ningún flujo nuevo requiere audio tras cleanup, ni introduce storage/reproductor/retranscripción sin reupload.
-- [ ] Idioma obligatorio antes de bytes; formatos/límites UI iguales a capabilities validadas.
-- [ ] Estados ASR, cleanup, análisis, índice, tarea, Calendar y notificación siguen separados; F1 no depende de análisis F2.
-- [ ] Esquema soporta cada contrato API: dedupe decidido en PUT, consentimiento versionado, spans/task_sources, agenda inicio/fin, revisiones, versiones y borrado rastreable.
-- [ ] Consentimiento, aislamiento y confirmación humana se aplican también a jobs, tools y cambios posteriores.
-- [ ] Todas las puertas pendientes o bloqueadas se reportan; ninguna prueba documental se presenta como validación de aplicación/proveedor.
+- [ ] ESPECIFICACION and PLAN link existing files; phases F0–F3, gate variants, and
+  decisions D1–D8 match.
+- [ ] No new flow requires audio after cleanup, or introduces storage/player/retranscription
+  without re-upload.
+- [ ] Mandatory language before bytes; UI formats/limits equal to validated capabilities.
+- [ ] ASR, cleanup, analysis, index, task, Calendar, and notification states remain separate;
+  F1 does not depend on F2 analysis.
+- [ ] The schema supports every API contract: dedupe decided in the PUT, versioned consent,
+  spans/task_sources, agenda start/end, revisions, versions, and traceable deletion.
+- [ ] Consent, isolation, and human confirmation also apply to jobs, tools, and later changes.
+- [ ] All pending or blocked gates are reported; no documentary test is presented as
+  application/provider validation.

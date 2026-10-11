@@ -11,6 +11,7 @@ __pycache__/
 node_modules/
 .next/
 out/
+dist/
 npm-debug.log*
 *.tsbuildinfo
 .eslintcache
@@ -59,3 +60,5 @@ pgdata/
 Thumbs.db
 .idea/
 .vscode/
+A2.3_CONTEXT.md
+A2.4_CONTEXT.md
