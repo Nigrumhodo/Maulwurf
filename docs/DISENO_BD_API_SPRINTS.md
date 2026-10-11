@@ -1683,6 +1683,28 @@ Plan B: if by Thursday there are <3 real classes, annotated synthetic class tran
 G1 and G5-F1 with evidence (crash before/after commit resolved; no partial versions or
 duplicates after retries); G4 with per-language numbers; measured retrieval p95.
 
+#### Implementation-gap tickets (added after the QA review of 2026-10-11)
+
+These tickets close gaps between the code and the contracts above that no ticket owned. They
+have no day in the suggested sequence: they are claimed like any other ticket and prioritized
+by the lead. The full text, evidence and priorities are in [plan/S2.md](plan/S2.md) §10.
+
+| Ticket | Area | Task | Priority |
+|---|---|---|---|
+| A2.13 · S2.11 | API · Ingestion | API↔ingest reception contract and the streaming endpoint in `ingest` | P0 |
+| S2.10 | Ingestion | Wire the pipeline to the Riva client; empty text is `rejected` | P0 |
+| J2.8 | Infra | Compose/env wiring for `ingest` | P0 |
+| L2.10 | RAG · lead | ADR: web stack | P0 |
+| A2.14 | API | Reservation lifecycle and `PUT` concurrency (§2.4 states, §3.5 `409`) | P1 |
+| A2.16 | API | Fail-closed settings | P1 |
+| A2.17 | API | RLS with `SET LOCAL app.user_id` (§2.1) | P1 |
+| A2.18 | API | Supporting FK indexes (§2.1.8), version invariants, drift test | P1 |
+| A2.19 | API | Contract conformance (§3.2, §3.3, §3.5) | P1 |
+| S2.12 · S2.13 | Ingestion | Admission latch, heartbeat, ffprobe limits; error-code catalog (§3.2) | P1 |
+| L2.9 | RAG | Align the §M6 `Chunk` contract with §2.5 | P1 |
+| J2.10 | Infra | Ingress upload limit and Caddy limits (Cloudflare Tunnel is no longer planned) | P1 |
+| A2.15 · J2.9 · L2.11 | API · Infra · lead | Error envelope; CI hygiene; documentation reconciliation | P2 |
+
 ### 4.3 S3 — Action: extraction and Calendar (F2)
 
 **Objective:** proposal → review → confirmation → **a single event**; agenda reading and

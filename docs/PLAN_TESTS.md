@@ -160,6 +160,10 @@ These associations complete the backlog references without changing the stable I
 | I-S2-SG-10 | I | Cancellation: disconnection during reception cancels+cleans; after 202 it continues under lease; closing the tab does not cancel; cancelling after commit → 409 | M2 |
 | E-S2-SG-11 | E | 1 h synthetic class (generated in RAM) transcribed end to end via the proxy; demonstrates `word\|segment` for G2-T or `none` with the temporal UI/SRT disabled for G2-X | G1/G2-T or G2-X/F1 |
 | P-S2-SG-12 | P | Minimal regression against real Riva after blocking client changes: contract, cancellation, deadlines and error classification with a fixed budget and protected suite | F0.1/G2-T or G2-X |
+| I-S2-SG-13 | I | Pipeline calls the Riva client through a test double: text reaches the commit hook; silence or empty text ends `rejected` with `no_usable_text`, never `succeeded`; losing the lease mid-call cancels the RPC | M2/G2-T or G2-X |
+| I-S2-SG-14 | I | Streaming reception endpoint in `ingest`: peak RSS does not grow with upload size (two sizes recorded), the limit cuts the stream and runs cleanup, a client disconnect cancels the attempt | M2/G1 |
+| I-S2-SG-15 | I | Persisted admission latch stays closed after a restart with `cleanup_status=failed`; any heartbeat error marks the lease lost and cancels the job; ffprobe runs under CPU/memory limits and is killed with its children | G1/S1.B6 |
+| U-S2-SG-16 | U | Every `error_code` the ingest service can write is in the catalog and has an API mapping; an infrastructure fault ends `requires_reupload`, not `rejected` | M2/§3.2 |
 
 ### 2.2 API/data — M2 schema and endpoints
 
@@ -176,6 +180,13 @@ These associations complete the backlog references without changing the stable I
 | I-S2-AN-09 | I | Export `transcript.txt` always; `transcript.srt` **only** with valid times; `?segment=` filters by owner | M2/M9 |
 | I-S2-AN-10 | I | `index_requested`/`analyze_requested` outbox stays disabled until `cleanup_status=verified`; the gate is not blocked by an error in the Calendar, notification or deletion outbox created by their transactions | M3/G5-F1/G5-F2 |
 | I-S2-AN-11 | I | M7 chat: conversation CRUD with all/subject/class modes isolated by tenant; idempotent `client_message_id`; stream cancellation leaves a `cancelled` partial; deleting a conversation purges sources | M7/G3 |
+| I-S2-AN-12 | I | API→ingest reception contract: 200 MiB stream with no spool, equal SHA-256 on both sides, sink errors mapped through the catalog, client disconnect cancels and leaves no temporaries | M2/G1 |
+| I-S2-AN-13 | I | 20 concurrent `POST /audios` never exceed `active_slots`/`per_user_active_limit`; two `PUT`s on one attempt reach the sink exactly once (`409 attempt_not_active`); abandoned and failed reservations free their slot | M2/G5-F1 |
+| U-S2-AN-14 | U | 404, 405 and an injected unhandled exception use `{"error": {code, message, details}}` and the 500 body carries no exception text | §3.2 |
+| U-S2-AN-15 | U | Startup without `MAULWURF_ENV` fails; weak or mutually equal secrets are rejected outside `local` | M1/security |
+| I-S2-AN-16 | I | RLS enabled: the A1.9 suite passes, a query without `app.user_id` fails (fail-closed), the table owner is also subject to the policies (`FORCE`), pooled connections do not leak the setting, one test shows the barrier works without the application filter | G3/ADR-0006 |
+| I-S2-AN-17 | I | Every composite FK has a non-partial covering index; `index_version` and dimension invariants rejected by the database; blank transcript text rejected (if confirmed by the lead); `alembic check` drift test; `0003` upgrades and downgrades | G3/§2.1.8 |
+| U-S2-AN-18 | U | One contract test per conformance item: capabilities TTL, language normalization, variant-token codes, `GET`/`PATCH /me`, single upload-limit source, consistent `503` headers | M1/M2 |
 
 ### 2.3 Retrieval/RAG — chunking, index and chat
 
@@ -191,6 +202,9 @@ These associations complete the backlog references without changing the stable I
 | I-S2-JL-08 | I | `message_sources` contains **all** sources given to the model, not only the cited ones | M7 |
 | E-S2-JL-09 | E | Question from the browser → answer with a clickable citation that opens the reader at the segment | G4/F1 |
 | P-S2-JL-10 | P | Embedding/LLM provider: real contract, dimensions and quotas (protected) — feeds D5 | D5 |
+| U-S2-JL-11 | U | A `Chunk` (§M6) persists into `chunks`/`chunk_segments` with no extra mapping; every `NOT NULL` column is derivable; `overlap_span` shape validated | M6 |
+| C-S2-JL-12 | C | Checklist: web stack ADR published, `ARCH.md` §7 row closed, PR #42 merged, rebased or closed | ARCH |
+| C-S2-JL-13 | C | Checklist: `scripts/docs/check_refs.py` passes in CI; `AGENTS.md`/`README.md` status matches `CLAIMS.md`; corrected `CLAIMS.md` rows | docs |
 
 **G4 criterion (weekly, reproducible script):** Recall@8 ≥ 0.85 (answerables, with tenant/version
 filters active), citation precision
@@ -209,6 +223,9 @@ published per the PLAN_IMPLEMENTACION §7.1 protocol.
 | I-S2-JF-05 | I | Injected crash before and after the commit between ingestion and API: outcome per contract | G5-F1 |
 | E-S2-JF-06 | E | Pipeline E2E smoke: upload → transcript → cleanup → index → question with citation | G4/G5-F1 |
 | C-S2-JF-10 | C | Minimal observability: drafted alert for failed cleanup, failure panel per stage, and no sensitive payload in metrics | G1/G8 |
+| I-S2-JF-11 | I | `docker compose config`: `ingest` has the Riva and `INGEST_*` variable names and none of the API secrets; no default for `NVIDIA_API_KEY`; `ingest` still runs as UID 10001; `.env` can override `MAULWURF_PUBLIC_ORIGIN` | M2/G1 |
+| C-S2-JF-12 | C | Checklist: CI fails on a seeded fake secret and on an emptied suite; CI Redis has `maxmemory` and `noeviction`; license report published | G8/ADR-0005 |
+| C-S2-JF-13 | C | Checklist: ingress decided; its effective upload limit, timeouts and buffering measured or documented (date, environment, status codes); Caddy body and timeout limits set | D4/M2 |
 
 ### 2.5 Web/UX — upload, library and chat
 
@@ -356,12 +373,12 @@ approval per language, not by global average.
 
 | Gate | Brief definition | Planned main evidence | Area/Claimed owner |
 |---|---|---|---|
-| G1 | No audio persistence + F0/F1 recovery | I-S1-SG-04/05/06, I-S1-JF-02/03, I-S2-SG-06/07/08/09/10, E-S2-SG-11, C-S2-DA-07, L-S4-SG-01 | Ingestion and privacy / per claiming |
+| G1 | No audio persistence + F0/F1 recovery | I-S1-SG-04/05/06, I-S1-JF-02/03, I-S2-SG-06/07/08/09/10, I-S2-SG-14/15, I-S2-AN-12, E-S2-SG-11, C-S2-DA-07, L-S4-SG-01 | Ingestion and privacy / per claiming |
 | G2-T | ASR with reliable, in-range time offsets | U-S1-SG-03, P-S1-SG-07, U-S2-SG-04, I-S2-SG-06, E-S2-SG-11, I-S2-AN-09 | Temporal ASR contract / per claiming |
 | G2-X | Approved textual product, no invented times nor temporal SRT/links | P-S1-SG-07, I-S2-SG-06, I-S2-AN-09, U-S2-JL-05, C-S2-DA-04/05, E-S2-SG-11 | Textual ASR contract / per claiming |
-| G3 | Complete tenant isolation | I-S1-AN-05, U-S2-JL-04, I-S2-AN-05/06/07, I-S4-AN-04/06/07 | API, data and security / per claiming |
+| G3 | Complete tenant isolation | I-S1-AN-05, U-S2-JL-04, I-S2-AN-05/06/07, I-S2-AN-16/17, I-S4-AN-04/06/07 | API, data and security / per claiming |
 | G4 | RAG quality (published metrics) | U-S2-JL-01/03/04/05, I-S2-JL-06/07/08, E-S2-JL-09, R-S4-JL-01 | Retrieval/RAG / per claiming |
-| G5-F1 | Durable recovery of transcript, index and chat | U-S1-JF-04, I-S2-AN-10, I-S2-JF-02/03/04/05, E-S2-JF-06 | Durable work F1 / per claiming |
+| G5-F1 | Durable recovery of transcript, index and chat | U-S1-JF-04, I-S2-AN-10, I-S2-AN-13, I-S2-JF-02/03/04/05, E-S2-JF-06 | Durable work F1 / per claiming |
 | G5-F2 | Durable recovery of analysis, revisions and Calendar outbox | U-S3-JL-05, I-S3-AN-03/04/06, I-S3-JF-03/06, E-S3-DA-05 | Durable work F2 / per claiming |
 | G6 | Extraction with validated evidence | U-S3-JL-01/02/03/05, U-S3-SG-05, R-S3-JL-06, P-S3-JL-07, I-S3-AN-05 | Analysis/evidence / per claiming |
 | G7-CAL | Idempotent Calendar, reconciliation, scopes and reconnect | I-S3-AN-03, P-S3-JF-01/02, I-S3-JF-03/04/05/06, E-S3-DA-05, C-S3-DA-08 | Calendar integration / per claiming |
