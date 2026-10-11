@@ -73,7 +73,7 @@ explicit Definition of Done. See "Sprint Model" below.
   `P-*` provider runs) and `scripts/load/` the proxy no-buffering test helpers.
 - `.env.example` — Template for `MAULWURF_*`, Google OAuth, NVIDIA, and provisional ingest
   limit variables; copy to `.env` (never commit `.env`).
-- `.gitignore`, `AGENTS.md`, `LICENSE` (GPL-3.0), `README.md`, `README.scaffold.md`
+- `.gitignore`, `AGENTS.md`, `LICENSE` (AGPL-3.0), `README.md`, `README.scaffold.md`
   (historical scaffold notes), `requirements-riva.txt` (`nvidia-riva-client==2.27.0`).
 
 ## Sprint Model (planning conventions)
@@ -291,8 +291,9 @@ versioned or retained as a CI artifact. Persist only non-sensitive metrics and e
   jitter; do not invent numeric limits before the F0 capacity and contract tests establish
   them. The provisional ingest limits in `.env.example` (200 MiB, 2 slots, 256 MiB tmpfs)
   are placeholders pending the F0 spike.
-- **Compliance and licensing:** the repository is licensed under GPL-3.0 in `LICENSE`.
-  Review every future dependency and provider term for GPL compatibility, attribution, data
+- **Compliance and licensing:** the repository is licensed under AGPL-3.0 in `LICENSE`.
+  Any deployment of a modified version must offer its source to network users (§13).
+  Review every future dependency and provider term for AGPL compatibility, attribution, data
   processing, retention, and consent requirements. NVIDIA/cloud retention conditions remain
   an explicit unresolved gate before real class recordings are accepted.
 
@@ -389,7 +390,7 @@ versioned or retained as a CI artifact. Persist only non-sensitive metrics and e
   and limits that still require real endpoint validation.
 - [`docs/spike/F0.1-protocolo.md`](docs/spike/F0.1-protocolo.md) — F0.1 contract-spike
   protocol (unique format for the S1.A8 report).
-- [`LICENSE`](LICENSE) — GNU General Public License, version 3.
+- [`LICENSE`](LICENSE) — GNU Affero General Public License, version 3.
 - `> TODO:` add `docs/ARCH.md` and production runbooks when tickets S4.1 and J4.8 land;
   the development runbook is [`docs/RUNBOOK-dev.md`](docs/RUNBOOK-dev.md); L1.2 ADRs are
   in `docs/adr/`.
