@@ -54,7 +54,7 @@ flowchart LR
     GOO["Google<br/>OAuth · Calendar · Gmail"]:::ext
 
     U -->|"HTTPS, same origin:<br/>upload, search,<br/>chat, review"| SYS
-    SYS <-.->|"ephemeral audio in<br/>chunks<br/>text and offsets"| RIVA
+    SYS <-.->|"ephemeral audio in<br/>fragments<br/>text and offsets"| RIVA
     SYS -.->|"text chunks<br/>and questions"| LLM
     SYS <-.->|"OAuth, events after<br/>confirmation<br/>mail only with<br/>opt-in"| GOO
 
@@ -69,7 +69,7 @@ Google appears only as configuration and status read from the database.
 | System | What it exchanges | Guarantees and limits | Status |
 |---|---|---|---|
 | Student | Uploads audio with chosen language and consent; consults, reviews and confirms | Every Calendar write requires explicit confirmation | API partial; the web is a scaffold |
-| NVIDIA Riva | Receives audio in chunks and returns text and offsets | `grpc.nvcf.nvidia.com:443`, `whisper-large-v3`, transcription only (never `task:translate`). Retention and region unverified: D3-Audio `blocked`; D2 contract `pending` | Isolated client (S2.4 in progress), not wired |
+| NVIDIA Riva | Receives audio in fragments and returns text and offsets | `grpc.nvcf.nvidia.com:443`, `whisper-large-v3`, transcription only (never `task:translate`). Retention and region unverified: D3-Audio `blocked`; D2 contract `pending` | Isolated client (S2.4 in progress), not wired |
 | LLM and embeddings | Receive text chunks and questions | Provisional: `gpt-4o-mini` via LiteLLM and `text-embedding-3-small` (1536 dimensions). D3-Text is closed per provider and model before the first real transcript | Planned (S2–S3) |
 | Google | OAuth login, Calendar events, mail via Gmail | Tokens only in the backend, encrypted with AES-GCM. Gmail is opt-in and only writes to the verified email | Configuration and status only; no login (A1.3) |
 
@@ -272,7 +272,7 @@ flowchart TB
         cln["cleanup<br/>kills the group, deletes<br/>and verifies in /proc"]:::parcial
         aus["audio_absence<br/>audio-absence sweep:<br/>tests only"]:::parcial
         job["asr_job<br/>subprocess in its own group<br/>stub: does not call Riva"]:::parcial
-        pip["pipeline<br/>one active chunk at a time"]:::parcial
+        pip["pipeline<br/>one active fragment at a time"]:::parcial
         ffm["audio/ffmpeg + fragmenter<br/>no shell nor network · 30 s ·<br/>overlap 0.25 s"]:::parcial
         rcl["audio/reconcile + timestamps<br/>boundaries and global offsets"]:::parcial
         riv["asr/riva_client<br/>gRPC TLS · up to 3 attempts<br/>asr_job does not use it yet"]:::parcial
@@ -305,8 +305,8 @@ flowchart TB
 | `admission`, `lease` | Instance admission latch; lease, heartbeat and fencing of `ingestion_attempts` | Library |
 | `receiver` | Streaming reception into a private file for the attempt; SHA-256 per chunk; cuts and deletes when the cap is exceeded | Library |
 | `audio/validate` | ffprobe: decides to accept, normalize or reject by container, duration and streams | Library; `m4a` is listed as unverified |
-| `audio/ffmpeg`, `audio/fragmenter` | ffmpeg with no shell nor network and with CPU, memory and output limits; chunks of up to 30 s with 0.25 s overlap | Library |
-| `pipeline`, `asr_job` | One active chunk at a time; `asr_job` runs as a subprocess and is today a stub without provider calls | Library (stub) |
+| `audio/ffmpeg`, `audio/fragmenter` | ffmpeg with no shell nor network and with CPU, memory and output limits; fragments of up to 30 s with 0.25 s overlap | Library |
+| `pipeline`, `asr_job` | One active fragment at a time; `asr_job` runs as a subprocess and is today a stub without provider calls | Library (stub) |
 | `audio/reconcile`, `audio/timestamps` | Boundary and overlap reconciliation; global offsets | Library |
 | `asr/riva_client` | Isolated gRPC TLS client; up to 3 attempts with backoff for transient errors | Library; `asr_job` does not use it |
 | `cleanup` | Ephemeral directory per attempt and cleanup verification in `/proc`: descriptors, group processes and mounts | Library; used by the `supervisor` |
@@ -332,7 +332,7 @@ flowchart LR
         orig["Original file<br/>student's local copy"]:::ext
     end
     subgraph Z1["Ingestion: 256 MiB tmpfs, no swap"]
-        aud["Received audio, normalized<br/>WAV<br/>and chunks: they are deleted and<br/>verified<br/>before enabling the outbox"]:::efimero
+        aud["Received audio, normalized<br/>WAV<br/>and fragments: they are deleted and<br/>verified<br/>before enabling the outbox"]:::efimero
     end
     subgraph Z2["Owned stores"]
         direction TB
@@ -342,13 +342,13 @@ flowchart LR
     end
     subgraph Z4["Third parties outside our control"]
         direction TB
-        riva["NVIDIA Riva<br/>receives the audio in<br/>chunks"]:::ext
+        riva["NVIDIA Riva<br/>receives the audio in<br/>fragments"]:::ext
         llm["LLM and embeddings<br/>receive text chunks"]:::ext
         goo["Google<br/>OAuth tokens, events and<br/>mail"]:::ext
     end
 
     orig -->|"streaming PUT,<br/>TLS"| aud
-    aud <-.->|"gRPC TLS: chunks<br/>and text with offsets"| riva
+    aud <-.->|"gRPC TLS: fragments<br/>and text with offsets"| riva
     aud -.->|"atomic commit:<br/>transcript and<br/>segments"| pg
     pg -->|"IDs"| rd
     pg -.->|"text"| llm
@@ -367,7 +367,7 @@ flowchart LR
 
 | Data | Where it may exist | Where it never does | Third party that receives it |
 |---|---|---|---|
-| Audio: original, normalized WAV and chunks | `ingest` tmpfs (RAM, no swap) while it is received, validated, converted and transcribed | Disk, S3 or MinIO, Postgres, Redis, logs, traces, caches, backups, CI artifacts | NVIDIA Riva receives the chunks; its retention is unverified (D3-Audio `blocked`) |
+| Audio: original, normalized WAV and fragments | `ingest` tmpfs (RAM, no swap) while it is received, validated, converted and transcribed | Disk, S3 or MinIO, Postgres, Redis, logs, traces, caches, backups, CI artifacts | NVIDIA Riva receives the chunks; its retention is unverified (D3-Audio `blocked`) |
 | Transcript and segments | Postgres and encrypted backups | Logs, traces, Redis, CI | LLM and embeddings, depending on the process (D3-Text) |
 | Chunks, embeddings, chat and tasks | Postgres (pgvector, versioned) | Redis, logs | LLM and embeddings; Google only receives the event of a confirmed task |
 | Google tokens | Postgres, encrypted with AES-GCM and `key_version` | Browser, logs, Redis | Google |

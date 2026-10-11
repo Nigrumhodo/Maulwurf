@@ -217,20 +217,20 @@ flowchart LR
         i2["ffprobe validates container,<br/>duration and streams. Bounded<br/>ffmpeg normalizes to mono WAV"]:::parcial
         d1{"Valid format?"}:::parcial
         r1(["rejected: invalid format"]):::err
-        i3["Splits into chunks of up to<br/>30 s with 0.25 s overlap,<br/>one active chunk at a time"]:::parcial
+        i3["Splits into fragments of up to<br/>30 s with 0.25 s overlap,<br/>one active fragment at a time"]:::parcial
         in0 --> i1
         i1 --> i2
         i2 --> d1
         d1 -->|"no"| r1
         d1 -->|"yes"| i3
     end
-    subgraph B["Transcription<br/>by chunks"]
+    subgraph B["Transcription<br/>by fragments"]
         direction TB
-        i4["Sends the chunk to Riva<br/>over gRPC TLS with the chosen<br/>language, never translate"]:::parcial
+        i4["Sends the fragment to Riva<br/>over gRPC TLS with the chosen<br/>language, never translate"]:::parcial
         d2{"Response?"}:::parcial
         d3{"Transient, with attempts and<br/>deadline?"}:::parcial
         r2(["requires_reupload: without audio<br/>there is no retranscription"]):::err
-        d4{"Chunks remaining?"}:::parcial
+        d4{"Fragments remaining?"}:::parcial
         i6["Reconciles boundaries and<br/>overlap: global offsets and<br/>timestamp_precision"]:::parcial
         d5{"Usable text?"}:::parcial
         r3(["rejected: no_usable_text<br/>(silence or empty)"]):::err
@@ -249,7 +249,7 @@ flowchart LR
     subgraph C["Commit and close<br/>closing always runs, also after rejected, requires_reupload or cancelled"]
         direction TB
         c1["Atomic commit: transcript,<br/>segments, language, model,<br/>version and precision, plus<br/>index and analyze events<br/>disabled with<br/>cleanup_pending. Attempt:<br/>transcript_committed_cleanup_pending.<br/>Today it only changes the status and<br/>stores counts"]:::parcial
-        k1["Closes buffers and clients,<br/>kills the process group and<br/>deletes original, converted<br/>files and chunks"]:::parcial
+        k1["Closes buffers and clients,<br/>kills the process group and<br/>deletes original, converted<br/>files and fragments"]:::parcial
         k2["Verifies in /proc<br/>descriptors, processes and<br/>mounts, and that the path no<br/>longer exists: cleanup_status =<br/>verified"]:::parcial
         d6{"Cleanup verified?"}:::parcial
         ok(["succeeded: the supervisor already<br/>writes it. Enabling the<br/>outbox (index and, from F2,<br/>analyze) is pending<br/>(S2.5 and S2.6)"]):::parcial

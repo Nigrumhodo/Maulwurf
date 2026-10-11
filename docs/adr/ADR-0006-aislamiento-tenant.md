@@ -13,7 +13,7 @@ A1.5 asks for "base RLS or mandatory filtering by `user_id` in all queries (deci
 documented in an ADR)". Both routes prevent user B from reading or mutating A's resources:
 
 - **Application-level filtering:** every query on an owned table carries
-  `WHERE user_id = :usuario_de_la_sesión`.
+  `WHERE user_id = :session_user_id`.
 - **PostgreSQL RLS:** per-table policies that hide rows belonging to others even if the
   query does not filter, with the user set per connection (`SET LOCAL app.user_id`).
 

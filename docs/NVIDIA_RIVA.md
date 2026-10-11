@@ -163,19 +163,19 @@ Verified locally:
 On 2026-09-24 (WSL) `scripts/provider/riva_spike.py` ran an offline `Recognize` with
 synthetic audio from S1.A1. The endpoint answered gRPC `OK`. The observed client was
 `nvidia-riva-client==2.27.0`, `grpcio==1.84.0`, `protobuf==6.33.5`. The metadata carried no
-server version: it remains `NOT VERIFIED`.
+server version: it remains `NO VERIFICADO`.
 
 The same day, S1.A3 proposed the allowlist `es`, `en`, `fr` (gRPC `OK`, expected sentence
 not matching). `zz` and the missing language answered `INVALID_ARGUMENT`. S1.A4 accepted
 WAV PCM s16 mono locally. With ffmpeg/ffprobe 8.0.1, mp3, ogg, opus, flac, and webm are
-normalized by pipe to WAV PCM s16 mono; m4a by pipe remains `NOT VERIFIED`. 16 kHz also
+normalized by pipe to WAV PCM s16 mono; m4a by pipe remains `NO VERIFICADO`. 16 kHz also
 answered `OK` and is not an approved limit; 22050 Hz is the S1.A2 observation.
 
 S1.A5 measured three calls in series, without retries. A local 0.05 s wait resulted in
-`DEADLINE_EXCEEDED` and is not a server deadline (`NOT VERIFIED`). An immediate cancellation
+`DEADLINE_EXCEEDED` and is not a server deadline (`NO VERIFICADO`). An immediate cancellation
 answered `CANCELLED`. A 30.0 s WAV at 16 kHz (960044 bytes) answered `OK`: it is an observed
 minimum, not the maximum. 200 MiB and 3 h are not approved. Quota, concurrency, and the
-effective 1 GiB limit remain `NOT VERIFIED`. The redacted evidence is in Santiago's logbook.
+effective 1 GiB limit remain `NO VERIFICADO`. The redacted evidence is in Santiago's logbook.
 
 On 2026-09-27 (WSL) S1.A6 requested offsets with `enable_word_time_offsets` in two calls in
 series, without retries. The installed client documents milliseconds (`Start (ms)` and
@@ -187,10 +187,10 @@ close G2-T or G2-X.
 The same day S1.A7 (`P-S1-SG-08`) measured three calls in series. Short `es`, 3.948 s:
 latency 1.037 s, gRPC `OK`. The `es` 30.0 s baseline at 16 kHz, 960044 bytes: latency
 1.692 s, gRPC `OK`. Short `en`, 3.231 s, 142510 bytes, 22050 Hz: latency 1.054 s, gRPC `OK`.
-`en` at 30 s and `fr` remain `NOT VERIFIED`. `VmRSS` when importing `riva.client`:
+`en` at 30 s and `fr` remain `NO VERIFICADO`. `VmRSS` when importing `riva.client`:
 20742144 bytes before and 36171776 after. The 3 h PCM at 16 kHz mono s16 is 345600000 bytes
 (329.59 MiB); it was reserved in RAM and not uploaded. RSS before 36175872, peak 381779968,
-delta 345604096. Cost per minute and per hour `NOT VERIFIED`. 200 MiB and 3 h are not
+delta 345604096. Cost per minute and per hour `NO VERIFICADO`. 200 MiB and 3 h are not
 approved. Observed audio 37.178 s.
 
 The S1.A8 report is in [spike/F0.1-informe-riva.md](spike/F0.1-informe-riva.md). The S1.A9

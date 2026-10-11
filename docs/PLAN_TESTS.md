@@ -94,10 +94,10 @@ These associations complete the backlog references without changing the stable I
 |---|---|---|---|
 | U-S1-SG-01 | U | In-RAM synthetic audio generator produces known expected text (intelligible voice, not tones); deterministic with a seed | F0.1, fixture rule |
 | U-S1-SG-02 | U | Format validator: accepts WAV PCM s16 mono; rejection decision table (playlist, URL, unexpected container, multi-channel) | M2 |
-| U-S1-SG-03 | U | Boundary math: global timestamp = chunk offset + local time, without duplicating overlap | M2/§6 |
+| U-S1-SG-03 | U | Boundary math: global timestamp = fragment offset + local time, without duplicating overlap | M2/§6 |
 | I-S1-SG-04 | I | Complete failure matrix: success, incomplete upload, rejection, timeout, cancellation, ffmpeg/Riva/DB error, SIGKILL, container and host restart; injected failure during and after the commit | F0.2, G1 |
 | I-S1-SG-05 | I | Lease expiration does **not** mark verified cleanup; without cleanup evidence the outbox stays blocked | F0.2, G1 |
-| I-S1-SG-06 | I | Absence of original/converted/chunks on disk, Redis, logs, traces and caches; inspection of descriptors/processes/mounts, not only file names | G1 |
+| I-S1-SG-06 | I | Absence of original/converted/fragments on disk, Redis, logs, traces and caches; inspection of descriptors/processes/mounts, not only file names | G1 |
 | P-S1-SG-07 | P | NVIDIA contract spike: enabled languages, formats, sample rate, payload/duration limits, quotas, deadlines, offset precision (`word/segment/none`) | F0.1, D2/D4/D6 |
 | P-S1-SG-08 | P | Latency per duration/language and SDK memory within the authorized budget | F0.1, G8 |
 
@@ -171,7 +171,7 @@ These associations complete the backlog references without changing the stable I
 | U-S2-AN-04 | U | Tombstone/fencing: token invalidated; late commit rejected | M2 |
 | I-S2-AN-05 | I | Concurrent dedupe on `PUT`: simultaneous exacts converge on the canonical; variant cleans up before the 409, rejects an expired/reused/foreign token or a different hash on the second `PUT`, and **never retains audio** while awaiting a decision | M2/G3 |
 | I-S2-AN-06 | I | `DELETE /audios/{id}` purges derivatives; deleting while ASR runs produces a clean cancellation without orphans | G3 |
-| I-S2-AN-07 | I | SSE `GET /audios/{id}/progress`: reconnectable snapshot from the DB; owner only; shows real bytes and chunks | M2/G3 |
+| I-S2-AN-07 | I | SSE `GET /audios/{id}/progress`: reconnectable snapshot from the DB; owner only; shows real bytes and fragments | M2/G3 |
 | I-S2-AN-08 | I | `retry` vs `reupload` matrix: retry only for analysis/index; reupload only without usable transcript; correct error messages in each case | M2 |
 | I-S2-AN-09 | I | Export `transcript.txt` always; `transcript.srt` **only** with valid times; `?segment=` filters by owner | M2/M9 |
 | I-S2-AN-10 | I | `index_requested`/`analyze_requested` outbox stays disabled until `cleanup_status=verified`; the gate is not blocked by an error in the Calendar, notification or deletion outbox created by their transactions | M3/G5-F1/G5-F2 |
@@ -216,7 +216,7 @@ published per the PLAN_IMPLEMENTACION §7.1 protocol.
 |---|---|---|---|
 | U-S2-DA-01 | U | Form: language without preselection and current notice version, cloud acceptance and voice acknowledgment mandatory before creating a reservation or starting the `PUT`; a stale version error forces reviewing and accepting again | M2/M9 |
 | U-S2-DA-02 | U | Cancelling the upload cancels the attempt (API call + releasing `File`/object URLs) | M9/G1 |
-| U-S2-DA-03 | U | Progress: real bytes and completed/total chunks; **zero** invented percentages; optional polling fallback | M9 |
+| U-S2-DA-03 | U | Progress: real bytes and completed/total fragments; **zero** invented percentages; optional polling fallback | M9 |
 | C-S2-DA-04 | C | Reader: `?segment=` anchor highlights; timestamps only when valid; conditional export; empty summary if `not_requested` | M9 |
 | C-S2-DA-05 | C | Citations `[Subject · Class · mm:ss]` → correct route; without times → "segment N"; sanitized Markdown | M7/M9 |
 | E-S2-DA-06 | E | Browser E2E path of the week, including the `partial` state distinguishing the failed stage | F1 |

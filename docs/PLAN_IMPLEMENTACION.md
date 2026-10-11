@@ -52,7 +52,7 @@ not activated by appearing in the stack.
 2. Every gate requires evidence: real command, version, date, environment, result, and
    redacted metrics. A mock does not validate a provider, nor does a unit test validate
    infrastructure.
-3. A provider/tool blockage is recorded as **NOT VERIFIED**, never as approved. Do not use
+3. A provider/tool blockage is recorded as **`NO VERIFICADO`** ("not verified"), never as approved. Do not use
    real classes while privacy is blocked.
 4. S1–S4 are a planning sequence, not a calendar promise. Only the active sprint opens for
    claiming; the next one opens after reviewing capacity, the previous gate, and team
@@ -80,7 +80,7 @@ not activated by appearing in the stack.
 - [ ] Request offsets and verify semantics/units/order/range and precision on known phrases,
   silences, and boundaries. Choose `word|segment|none` based on evidence; do not assume
   forced alignment is available.
-- [ ] Measure latency, SDK memory, PCM expansion, overlap, and cost. Set chunk size,
+- [ ] Measure latency, SDK memory, PCM expansion, overlap, and cost. Set fragment size,
   overlap, input limits, and deadlines from the results.
 
 **Deliverable:** contract report with versions, redacted calls/schemas, enabled languages,

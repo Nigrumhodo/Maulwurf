@@ -109,12 +109,12 @@ docker run -d --rm --name mw-test-pg -e POSTGRES_USER=maulwurf \
   -e POSTGRES_PASSWORD=maulwurf -e POSTGRES_DB=maulwurf -p 127.0.0.1:55432:5432 \
   pgvector/pgvector:pg16
 cd apps/api
-MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:********@127.0.0.1:55432/maulwurf \
+MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@127.0.0.1:55432/maulwurf \
   uv run pytest -m integration
 # Ingest: same variable (creates a `maulwurf_ingest_test_*` DB); it needs `ffmpeg` on the
 # PATH and, for the synthetic-audio tests, `espeak-ng` (CI installs them).
 cd ../ingest
-MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:********@127.0.0.1:55432/maulwurf \
+MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@127.0.0.1:55432/maulwurf \
   uv run pytest -m integration
 docker stop mw-test-pg
 ```
