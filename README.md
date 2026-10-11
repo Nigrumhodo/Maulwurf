@@ -92,7 +92,7 @@ its foundation as local Compose services (`web`, `api`, `ingest`, `worker`, `sch
 
 ```mermaid
 flowchart TD
-    U[Student] --> WEB[Next.js PWA]
+    U[Student] --> WEB[React SPA, Vite]
     WEB -->|Same-origin REST and SSE| API[FastAPI API]
     API -->|Backend-owned OAuth and session| GO[Google OAuth]
     API --> PG[(PostgreSQL + pgvector)]
@@ -113,7 +113,7 @@ flowchart TD
 
 | Layer | Planned choice | Purpose |
 | --- | --- | --- |
-| Frontend | Next.js App Router, TypeScript, Tailwind, shadcn/ui | Web UI and installable PWA path |
+| Frontend | Vite, React, React Router, TypeScript, Tailwind ([ADR-0007](docs/adr/ADR-0007-web-stack.md)) | Web UI and optional PWA path |
 | Backend | FastAPI, Pydantic v2, SQLAlchemy 2 async | API, authentication, and orchestration |
 | Database | PostgreSQL 16 | Tenant data, transcripts, outbox, and metadata |
 | Vector search | pgvector with cosine HNSW indexes | Versioned semantic retrieval |
@@ -211,7 +211,7 @@ complete.
 ├── apps/
 │   ├── api/                       # FastAPI: routers, core, models, workers, alembic, tests
 │   ├── ingest/                    # Ingestion: admission, lease, cleanup, hardening, tests
-│   └── web/                       # Next.js scaffold (area D- unclaimed)
+│   └── web/                       # React SPA (Vite): login, base routes, theme (D1.1–D1.3)
 ├── docs/                          # Specification, plans, ADRs, F0 spike, runbook, sprints
 ├── infra/                         # docker-compose.yml (8 services) and Caddyfile
 ├── scripts/                       # scaffold (historical), provider/ (Riva spike), load/ helpers

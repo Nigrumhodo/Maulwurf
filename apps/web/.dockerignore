@@ -1,6 +1,6 @@
-# Contexto de build: apps/web. node_modules y .next se regeneran en la imagen.
+# Contexto de build: apps/web. node_modules y dist se regeneran en la imagen.
 node_modules/
-.next/
+dist/
 __pycache__/
 tests/
 .env

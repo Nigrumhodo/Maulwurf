@@ -39,9 +39,9 @@ explicit Definition of Done. See "Sprint Model" below.
   supervisor, lease/fencing, cleanup, capacity, hardening, audio validation, synthetic
   generator and timestamps, ASR job, and main; real test suite (synthetic-audio tests need
   `espeak-ng` on PATH). Pinned `nvidia-riva-client==2.27.0`; lockfile `uv.lock`.
-- `apps/web/` — Next.js 15 scaffold (placeholder landing page is out of scope; area `D-`
-  owns the real routes): `package.json` (Vitest, ESLint, Tailwind), `tsconfig.json`, empty
-  `lib/`, `components/`, `tests/{unit,e2e}/`.
+- `apps/web/` — React SPA built with Vite (ADR-0007; area `D-`): `src/pages/` (React Router
+  routes), `src/components/`, `src/lib/`, and `src/server/` (Express serving only static files
+  and the SPA fallback); `package.json` (Vitest, ESLint, Tailwind 4), `tsconfig.json`.
 - `docs/` — English-language product, architecture, provider, and delivery documentation
   (the original Spanish sources are archived under `docs/es/`).
   - `docs/ESPECIFICACION.md` — Source of truth for contracts (M1–M9), data model, security.
@@ -175,7 +175,8 @@ application and has not been run against NVIDIA from this repository.
 - Python: FastAPI + Pydantic v2 + SQLAlchemy 2 async. Ruff (`line-length = 100`, rules
   `E,F,I,UP,B,S`) and mypy `strict` are configured in `apps/api/pyproject.toml`; follow
   them for new Python code in `apps/`.
-- Web: Next.js App Router + TypeScript + Tailwind; ESLint via `eslint.config.mjs`.
+- Web: Vite + React + React Router + TypeScript + Tailwind (ADR-0007); ESLint via
+  `eslint.config.mjs`. No SSR: private data is fetched from the API, never rendered server-side.
 - Configuration uses Pydantic Settings with env prefix `MAULWURF_` and `extra="forbid"`;
   secrets come only from the environment (see `.env.example`), never from code.
 - Documentation uses ATX headings, fenced code blocks, tables where useful, Mermaid
@@ -207,7 +208,7 @@ currently present in this repository.
 
 ```mermaid
 flowchart TD
-    U[Student] --> WEB[Next.js PWA]
+    U[Student] --> WEB[React SPA, Vite]
     WEB -->|Same-origin REST and SSE| API[FastAPI API]
     API -->|OAuth and opaque session| GO[Google OAuth]
     API --> PG[(PostgreSQL plus pgvector)]

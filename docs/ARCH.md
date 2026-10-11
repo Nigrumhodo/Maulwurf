@@ -90,7 +90,7 @@ flowchart TB
     B(["Browser"]):::ext
     subgraph HOST["Host running Docker Compose"]
         CD["caddy 2.8 · edge network<br/>:80 and :443, internal TLS"]:::impl
-        WEB["web · edge network<br/>Next.js :3000, scaffold"]:::parcial
+        WEB["web · edge network<br/>React SPA (Vite) :3000"]:::parcial
         API["api · edge and data networks<br/>FastAPI :8000<br/>Alembic + Uvicorn"]:::impl
         ING["ingest · edge and data networks<br/>FastAPI :8000, only /healthz<br/>and /readyz<br/>rootfs ro, tmpfs 256 MiB, 1<br/>GiB without swap"]:::parcial
         PG[("postgres · data network<br/>pgvector pg16")]:::impl
@@ -124,7 +124,7 @@ flowchart TB
 | Service | Image or build | Networks | Exposed | Limits and hardening | Runs |
 |---|---|---|---|---|---|
 | `caddy` | `caddy:2.8-alpine` (pinned digest) | edge | 80 and 443 on the host (configurable) | Read-only Caddyfile, admin API disabled; no healthcheck | Reverse proxy with internal TLS (`https://localhost`) |
-| `web` | `apps/web` → `maulwurf-web:local` | edge | 3000, internal only | `USER node` | `npm run start` (Next.js 15, scaffold) |
+| `web` | `apps/web` → `maulwurf-web:local` | edge | 3000, internal only | `USER node` | `node dist/server/index.js` (Express serving the Vite build, ADR-0007) |
 | `api` | `apps/api` → `maulwurf-api:local` | edge, data | 8000, internal only | UID 10001 in the Dockerfile; compose adds no `read_only` nor `cap_drop` | Alembic migration and Uvicorn |
 | `ingest` | `apps/ingest`, target `runtime` | edge, data | 8000, internal only | UID 10001, `read_only` rootfs, 256 MiB tmpfs at `/work/tmp` (`noexec,nosuid,nodev`), `cap_drop: ALL`, `no-new-privileges`, 1 GiB of RAM without swap, 2 CPU, 128 PIDs | Uvicorn `maulwurf_ingest.main:app` |
 | `worker` | `api` image | data | — | `cap_drop: ALL`, `no-new-privileges`, 128 PIDs | `arq app.workers.arq_app.WorkerSettings` |
@@ -413,7 +413,7 @@ flowchart LR
 | D6 Temporality | `pending` (proposal `none`) | Decides `timestamp_precision`, the citation format and SRT | F0.1 minutes |
 | D8 Retention and backups | The spec lists it as pending; `plan/S4.md` treats it as approved | Text and chat retention, and backup policy | ESPECIFICACION §12, `plan/S4.md` |
 | `PUT` route (C2) | Open | Today `api` receives and the sink responds 503; the spec draws the `PUT` towards `ingest`. The internal contract between them is missing | `infra/Caddyfile`, `services/uploads.py`; tickets A2.13 and S2.11 |
-| Web framework | Open | Next.js (specification, ADR-0001 and scaffold) versus Vite and Express (PR #42) | PR #42; ticket L2.10 |
+| Web framework | Closed 2026-10-11 | Vite + React SPA served by Express, decided by the lead | [ADR-0007](adr/ADR-0007-web-stack.md); PR #42; ticket L2.10 |
 | Ingress and upload limit | Not defined | Cloudflare Tunnel is no longer planned and the documents do not say what replaces it. Any ingress in front of Caddy has its own request-body limit and timeouts and may buffer, so the effective limit against the 200 MiB target is unknown; ticket J2.10 | `infra/Caddyfile` (no body limit nor timeouts), [PROPUESTA_PROYECTO_FINAL.md](PROPUESTA_PROYECTO_FINAL.md) |
 
 ## 8. Maintenance

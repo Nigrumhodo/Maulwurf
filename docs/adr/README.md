@@ -13,6 +13,7 @@ already resolved by J1.x and are kept as decision context.
 | [ADR-0004](ADR-0004-commits-pr.md) | Commit/PR format and reviews | Accepted |
 | [ADR-0005](ADR-0005-redis.md) | Redis policy | Accepted |
 | [ADR-0006](ADR-0006-aislamiento-tenant.md) | Tenant isolation in S1 (filtering; RLS in S2) | Accepted |
+| [ADR-0007](ADR-0007-web-stack.md) | Web stack: Vite + React SPA instead of Next.js | Accepted |
 
 ## L1.2 verification
 
