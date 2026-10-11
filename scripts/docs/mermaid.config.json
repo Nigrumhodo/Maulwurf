@@ -1,0 +1,15 @@
+{
+  "theme": "default",
+  "htmlLabels": false,
+  "flowchart": {
+    "htmlLabels": false,
+    "useMaxWidth": false,
+    "curve": "basis",
+    "wrappingWidth": 420,
+    "nodeSpacing": 30,
+    "rankSpacing": 38
+  },
+  "sequence": {
+    "useMaxWidth": false
+  }
+}
