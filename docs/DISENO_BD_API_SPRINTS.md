@@ -1031,6 +1031,8 @@ Códigos tipados (sin PII ni contenido sensible):
 | `transcript_unavailable` | 409 | Sin transcript utilizable (reupload); 404 si el recurso no existe para el tenant |
 | `srt_unavailable` | 409 | Timestamps inválidos para SRT |
 | `session_conflict` | 409 | La sesión ya fue rotada o revocada por otra petición; repetir `GET /me` |
+| `subject_name_taken` | 409 | Ya existe una materia activa del usuario con ese nombre (sin distinguir mayúsculas) |
+| `subject_has_active_audios` | 409 | La materia tiene clases activas; `details.class_count` indica cuántas |
 | `evidence_invalid` | 422 | Span/cita no reconstruible desde BD |
 | `context_exceeded` | 422 | Historial + evidencia no caben tras recorte determinista |
 | `date_unresolved` | 422 | Confirmar exige fecha válida |
@@ -1086,9 +1088,12 @@ Rechazar permisos de Calendar/Gmail **no** impide transcribir ni chatear.
 | Método | Ruta | Descripción | Respuestas |
 |---|---|---|---|
 | `GET` | `/subjects` | Lista del tenant | `200` `{items:[{id,name,color,teacher,class_count}]}` |
-| `POST` | `/subjects` | Crea (`name`, `color`, `teacher` opcional) | `201` · `422` · `409` duplicado |
-| `PATCH` | `/subjects/{id}` | Edita | `200` · `404` · `403` |
-| `DELETE` | `/subjects/{id}` | Elimina; `409 subject_has_active_audios` si hay clases activas; `{"force": true}` exige confirmación explícita y tombstone de sus clases | `204` · `409` |
+| `POST` | `/subjects` | Crea (`name`, `color`, `teacher` opcional) | `201` · `422` · `409 subject_name_taken` |
+| `PATCH` | `/subjects/{id}` | Edita solo los campos enviados; una materia ajena, inexistente o borrada responde `404` (ADR-0006, no `403`) | `200` · `404` · `422` · `409 subject_name_taken` |
+| `DELETE` | `/subjects/{id}` | Elimina (tombstone `deleted_at`); `409 subject_has_active_audios` si hay clases activas. `{"force": true}` se acepta por contrato pero **en S1 no tiene efecto**: borrar las clases junto con la materia queda diferido a S2, con el tombstone de `DELETE /audios/{id}` | `204` · `404` · `409 subject_has_active_audios` |
+
+El nombre de una materia es único por usuario entre las materias no borradas, sin distinguir
+mayúsculas ni espacios en los extremos; borrar una materia libera su nombre.
 
 ### 3.5 M2b — Ingesta y audios (esqueleto S1; completo S2)
 

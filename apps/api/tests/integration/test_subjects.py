@@ -1,0 +1,408 @@
+"""A1.6 contra PostgreSQL real: CRUD de materias por tenant (I-S1-AN-07)."""
+import uuid
+from collections.abc import AsyncIterator
+from datetime import UTC, date, datetime
+
+import pytest
+from httpx import ASGITransport, AsyncClient, Response
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
+from app.core.db import get_session
+from app.core.deps import COOKIE_NAME, CSRF_HEADER
+from app.main import app
+from app.models import Audio, Subject, User
+from app.services import sessions
+
+pytestmark = pytest.mark.integration
+
+
+class Actor:
+    """Usuario con sesión válida y las cabeceras que enviaría su navegador."""
+
+    def __init__(self, user: User, issued: sessions.IssuedSession) -> None:
+        self.user = user
+        self.cookies = {COOKIE_NAME: issued.cookie_token}
+        self.headers = {"Origin": settings.allowed_origin, CSRF_HEADER: issued.csrf_token}
+
+
+@pytest.fixture
+async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
+    async def override() -> AsyncIterator[AsyncSession]:
+        yield db_session
+
+    app.dependency_overrides[get_session] = override
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=settings.allowed_origin
+    ) as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+async def _actor(db: AsyncSession) -> Actor:
+    user = User(google_sub=f"sub-{uuid.uuid4()}", email="student@example.test")
+    db.add(user)
+    await db.flush()
+    return Actor(user, await sessions.create_session(db, user.id))
+
+
+# --- POST /subjects -------------------------------------------------------------------
+
+
+async def test_post_subject_creates_it_for_the_session_user(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await _actor(db_session)
+    # El commit del handler "vence" los objetos de la sesión compartida: guardamos el id antes.
+    user_id = actor.user.id
+
+    response = await client.post(
+        "/subjects",
+        json={"name": "Cálculo", "color": "#112233", "teacher": "Prof. Gauss"},
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["name"] == "Cálculo"
+    assert data["color"] == "#112233"
+    assert data["teacher"] == "Prof. Gauss"
+    assert data["class_count"] == 0
+    row = await db_session.get(Subject, uuid.UUID(data["id"]))
+    assert row is not None
+    assert row.user_id == user_id  # el dueño sale de la sesión, no del cuerpo
+
+
+# --- GET /subjects --------------------------------------------------------------------
+
+
+async def _subject(
+    db: AsyncSession, actor: Actor, name: str, *, deleted: bool = False
+) -> Subject:
+    subject = Subject(
+        user_id=actor.user.id, name=name, deleted_at=datetime.now(UTC) if deleted else None
+    )
+    db.add(subject)
+    await db.flush()
+    return subject
+
+
+async def _audio(
+    db: AsyncSession, actor: Actor, subject: Subject, *, deleted: bool = False
+) -> None:
+    db.add(
+        Audio(
+            user_id=actor.user.id,
+            subject_id=subject.id,
+            class_date=date(2026, 9, 21),
+            class_timezone="America/Bogota",
+            language_code="es",
+            deleted_at=datetime.now(UTC) if deleted else None,
+        )
+    )
+    await db.flush()
+
+
+async def test_get_subjects_lists_only_own_active_subjects_with_class_count(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    bob = await _actor(db_session)
+    biologia = await _subject(db_session, alice, "Biología")
+    await _subject(db_session, alice, "cálculo")  # minúscula: el orden ignora mayúsculas
+    await _subject(db_session, alice, "Vieja", deleted=True)  # borrada: no se lista
+    await _subject(db_session, bob, "Ajena")  # de otro usuario: no se lista
+    await _audio(db_session, alice, biologia)
+    await _audio(db_session, alice, biologia)
+    await _audio(db_session, alice, biologia, deleted=True)  # clase borrada: no cuenta
+
+    response = await client.get("/subjects", cookies=alice.cookies)
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert [(i["name"], i["class_count"]) for i in items] == [("Biología", 2), ("cálculo", 0)]
+
+
+async def test_get_subjects_requires_a_session(client: AsyncClient) -> None:
+    response = await client.get("/subjects")
+
+    assert response.status_code == 401
+
+
+# --- PATCH /subjects/{id} -------------------------------------------------------------
+
+
+async def test_patch_subject_updates_only_the_sent_fields(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    subject = await _subject(db_session, alice, "Física")
+    subject_id = subject.id
+
+    response = await client.patch(
+        f"/subjects/{subject_id}",
+        json={"name": "  Física II ", "teacher": "Prof. Noether"},
+        cookies=alice.cookies,
+        headers=alice.headers,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["name"] == "Física II"  # se recortan los espacios
+    assert data["teacher"] == "Prof. Noether"
+    assert data["color"] == "#6366f1"  # lo que no se envió no cambia
+    assert data["id"] == str(subject_id)
+
+
+async def test_patch_subject_of_another_user_is_404_and_changes_nothing(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    bob = await _actor(db_session)
+    subject = await _subject(db_session, alice, "Original")
+    subject_id = subject.id
+
+    response = await client.patch(
+        f"/subjects/{subject_id}",
+        json={"name": "Hackeada"},
+        cookies=bob.cookies,
+        headers=bob.headers,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
+    row = await db_session.get(Subject, subject_id)
+    assert row is not None and row.name == "Original"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},  # nada que cambiar
+        {"name": "   "},  # vacío tras recortar espacios
+        {"name": "x" * 101},  # demasiado largo
+        {"color": "rojo"},  # no es #rrggbb
+        {"user_id": "otro"},  # campo que el cliente nunca puede enviar
+    ],
+    ids=["vacio", "nombre-en-blanco", "nombre-largo", "color-invalido", "user_id-ajeno"],
+)
+async def test_patch_subject_rejects_invalid_bodies(
+    client: AsyncClient, db_session: AsyncSession, body: dict[str, str]
+) -> None:
+    alice = await _actor(db_session)
+    subject = await _subject(db_session, alice, "Estable")
+
+    response = await client.patch(
+        f"/subjects/{subject.id}", json=body, cookies=alice.cookies, headers=alice.headers
+    )
+
+    assert response.status_code == 422
+
+
+# --- DELETE /subjects/{id} ------------------------------------------------------------
+
+
+async def test_delete_subject_without_classes_is_a_soft_delete(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    subject = await _subject(db_session, alice, "Vacía")
+    subject_id = subject.id
+
+    response = await client.delete(
+        f"/subjects/{subject_id}", cookies=alice.cookies, headers=alice.headers
+    )
+
+    assert response.status_code == 204
+    row = await db_session.get(Subject, subject_id)
+    assert row is not None and row.deleted_at is not None  # la fila se conserva (tombstone)
+    listing = await client.get("/subjects", cookies=alice.cookies)
+    assert listing.json()["items"] == []
+
+
+async def test_delete_subject_with_active_classes_is_rejected_with_409(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    subject = await _subject(db_session, alice, "Con clases")
+    await _audio(db_session, alice, subject)
+    await _audio(db_session, alice, subject)
+    subject_id = subject.id
+
+    response = await client.delete(
+        f"/subjects/{subject_id}", cookies=alice.cookies, headers=alice.headers
+    )
+
+    assert response.status_code == 409
+    error = response.json()["error"]
+    assert error["code"] == "subject_has_active_audios"
+    assert error["details"] == {"class_count": 2}
+    assert "clases" in error["message"]  # mensaje accionable, no solo un código
+    row = await db_session.get(Subject, subject_id)
+    assert row is not None and row.deleted_at is None  # nada se borró
+
+
+async def test_delete_subject_with_force_is_still_rejected_in_s1(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    # `force` queda diferido a S2: borrar clases exige el tombstone real de `DELETE /audios/{id}`.
+    alice = await _actor(db_session)
+    subject = await _subject(db_session, alice, "Con clases")
+    await _audio(db_session, alice, subject)
+    subject_id = subject.id
+
+    response = await client.request(
+        "DELETE",
+        f"/subjects/{subject_id}",
+        json={"force": True},
+        cookies=alice.cookies,
+        headers=alice.headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "subject_has_active_audios"
+    row = await db_session.get(Subject, subject_id)
+    assert row is not None and row.deleted_at is None
+
+
+async def test_delete_subject_ignores_already_deleted_classes(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    subject = await _subject(db_session, alice, "Solo borradas")
+    await _audio(db_session, alice, subject, deleted=True)
+
+    response = await client.delete(
+        f"/subjects/{subject.id}", cookies=alice.cookies, headers=alice.headers
+    )
+
+    assert response.status_code == 204
+
+
+async def test_delete_subject_of_another_user_is_404_and_changes_nothing(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    bob = await _actor(db_session)
+    subject = await _subject(db_session, alice, "De Alice")
+    subject_id = subject.id
+
+    response = await client.delete(
+        f"/subjects/{subject_id}", cookies=bob.cookies, headers=bob.headers
+    )
+
+    assert response.status_code == 404
+    row = await db_session.get(Subject, subject_id)
+    assert row is not None and row.deleted_at is None
+
+
+async def test_delete_subject_twice_is_404(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    subject_id = (await _subject(db_session, alice, "Una vez")).id
+    first = await client.delete(
+        f"/subjects/{subject_id}", cookies=alice.cookies, headers=alice.headers
+    )
+
+    second = await client.delete(
+        f"/subjects/{subject_id}", cookies=alice.cookies, headers=alice.headers
+    )
+
+    assert (first.status_code, second.status_code) == (204, 404)
+
+
+async def test_delete_subject_rejects_unknown_body_fields(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    subject = await _subject(db_session, alice, "Estricta")
+
+    response = await client.request(
+        "DELETE",
+        f"/subjects/{subject.id}",
+        json={"user_id": "otro"},
+        cookies=alice.cookies,
+        headers=alice.headers,
+    )
+
+    assert response.status_code == 422
+
+
+# --- Nombre duplicado (409 subject_name_taken) ----------------------------------------
+
+
+async def _post(client: AsyncClient, actor: Actor, name: str) -> Response:
+    return await client.post(
+        "/subjects", json={"name": name}, cookies=actor.cookies, headers=actor.headers
+    )
+
+
+async def test_post_subject_with_a_duplicate_name_is_409_ignoring_case_and_spaces(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    first = await _post(client, alice, "Física")
+
+    second = await _post(client, alice, "  FÍSICA ")
+
+    assert first.status_code == 201
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "subject_name_taken"
+    listing = await client.get("/subjects", cookies=alice.cookies)
+    assert [i["name"] for i in listing.json()["items"]] == ["Física"]
+
+
+async def test_the_same_name_is_allowed_for_another_user_and_after_deleting(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    bob = await _actor(db_session)
+    created = await _post(client, alice, "Historia")
+
+    by_bob = await _post(client, bob, "Historia")  # el nombre es único por usuario
+    await client.delete(
+        f"/subjects/{created.json()['id']}", cookies=alice.cookies, headers=alice.headers
+    )
+    again = await _post(client, alice, "Historia")  # tras borrar, el nombre queda libre
+
+    assert (by_bob.status_code, again.status_code) == (201, 201)
+
+
+async def test_patch_subject_to_a_name_already_in_use_is_409_and_changes_nothing(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    await _subject(db_session, alice, "Álgebra")
+    other = await _subject(db_session, alice, "Cálculo")
+    other_id = other.id
+
+    response = await client.patch(
+        f"/subjects/{other_id}",
+        json={"name": "álgebra"},
+        cookies=alice.cookies,
+        headers=alice.headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "subject_name_taken"
+    row = await db_session.get(Subject, other_id)
+    assert row is not None and row.name == "Cálculo"
+
+
+async def test_patch_subject_may_change_only_the_case_of_its_own_name(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await _actor(db_session)
+    subject = await _subject(db_session, alice, "fisica")
+
+    response = await client.patch(
+        f"/subjects/{subject.id}",
+        json={"name": "Física"},
+        cookies=alice.cookies,
+        headers=alice.headers,
+    )
+
+    assert response.status_code == 200  # no choca consigo misma
+    assert response.json()["name"] == "Física"
