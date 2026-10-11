@@ -2,11 +2,11 @@
 
 Este árbol fue creado por `scripts/scaffold_monorepo.sh` (tarea L1.1 del líder).
 Corresponde a la estructura §3.3 de `docs/ESPECIFICACION.md`.
-Las versiones de runtime pinneadas están en [docs/VERSIONES.md](docs/VERSIONES.md).
+Las versiones de runtime pinneadas están en [docs/VERSIONES.md](VERSIONES.md).
 
 > **Documento histórico (2026-09).** Describe el árbol que dejó el scaffold antes del
-> sprint S1. El estado actual vive en [README.md](README.md),
-> [docs/RUNBOOK-dev.md](docs/RUNBOOK-dev.md) y [docs/sprints/CLAIMS.md](docs/sprints/CLAIMS.md);
+> sprint S1. El estado actual vive en [README.md](../../README.md),
+> [docs/RUNBOOK-dev.md](RUNBOOK-dev.md) y [docs/sprints/CLAIMS.md](sprints/CLAIMS.md);
 > los «Próximos pasos» de abajo ya aterrizaron (alembic, spike F0, compose/Caddy/CI, ADRs).
 
 ## Áreas del backlog (plan de sprints, §0.2 del plan maestro)
@@ -31,7 +31,7 @@ La letra designa el **área**, no a una persona: los tickets se reclaman cada lu
    luego `npx shadcn@latest init`.
 3. **`S1.x` (Ingesta/ASR):** spike F0 con `requirements-riva.txt`; prototipo efímero.
 4. **`J1.x` (Infra):** `infra/docker-compose.yml` + `Caddyfile` + CI.
-5. **`L1.x` (RAG/liderazgo):** ADRs en [docs/adr/](docs/adr/README.md).
+5. **`L1.x` (RAG/liderazgo):** ADRs en [docs/adr/](adr/README.md).
 
 > Regla: nada aquí está implementado. Los TODOs marcan trabajo pendiente; los responsables
 > se reclaman cada semana, no están preasignados.

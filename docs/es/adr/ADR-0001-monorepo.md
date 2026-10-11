@@ -4,7 +4,7 @@
 - Estado: Aceptado
 - Ticket: L1.2
 - Relacionado: [ESPECIFICACION.md](../ESPECIFICACION.md) §3.1 y §3.3,
-  [README.scaffold.md](../../README.scaffold.md)
+  [README.scaffold.md](../README.scaffold.md)
 
 ## Contexto
 

@@ -169,7 +169,7 @@ desaparecen al recrear el contenedor.
 
 ## Enlaces
 
-- [../README.md](../README.md) — visión y estado del repositorio.
+- [../README.md](../../README.md) — visión y estado del repositorio.
 - [ESPECIFICACION.md](ESPECIFICACION.md) — contratos M1–M9 y seguridad.
 - [PLAN_SPRINTS.md](PLAN_SPRINTS.md) — backlog y DoD por sprint.
 - [adr/](adr/README.md) — decisiones de arquitectura.

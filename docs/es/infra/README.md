@@ -3,8 +3,8 @@
 Estado: `docker-compose.yml` (J1.1), el endurecimiento de `ingest` (J1.2), el
 `Caddyfile` sin buffering (J1.3) y la política de Redis (J1.6) están fusionados en
 `develop`. La propiedad de los tickets J1.x se registra en
-[docs/sprints/CLAIMS.md](../docs/sprints/CLAIMS.md); los comandos completos, en
-[docs/RUNBOOK-dev.md](../docs/RUNBOOK-dev.md).
+[docs/sprints/CLAIMS.md](../sprints/CLAIMS.md); los comandos completos, en
+[docs/RUNBOOK-dev.md](../RUNBOOK-dev.md).
 
 ## Contenido
 
@@ -20,7 +20,7 @@ Estado: `docker-compose.yml` (J1.1), el endurecimiento de `ingest` (J1.2), el
 | `ingest` | `maulwurf-ingest:local` (build `apps/ingest`, target `runtime`) | Endurecido: ver abajo |
 | `worker` / `scheduler` | `maulwurf-api:local` | Procesos ARQ reales (J1.5) con healthcheck `arq --check`; jobs noop hasta S2 (ack/reintentos → J2.1) |
 | `postgres` | `pgvector/pgvector:pg16` por digest | Único durable: volumen `pgdata` |
-| `redis` | `redis:7.4-alpine` por digest | Sin persistencia, `noeviction` ([ADR-0005](../docs/adr/ADR-0005-redis.md)) |
+| `redis` | `redis:7.4-alpine` por digest | Sin persistencia, `noeviction` ([ADR-0005](../adr/ADR-0005-redis.md)) |
 | `caddy` | `caddy:2.8-alpine` por digest | `admin off`; access log JSON sin bodies |
 
 ## Garantías del entorno local
@@ -67,14 +67,14 @@ Si 80/443 están ocupados en el host:
 CADDY_HTTP_PORT=8080 CADDY_HTTPS_PORT=8443 docker compose up -d --build --wait
 ```
 
-Healthchecks, TLS, tests y cierre: [docs/RUNBOOK-dev.md](../docs/RUNBOOK-dev.md).
+Healthchecks, TLS, tests y cierre: [docs/RUNBOOK-dev.md](../RUNBOOK-dev.md).
 
 ## Pendiente en esta área
 
 - **J2.1:** ack/reintentos del dispatcher de outbox (J1.5 entregó worker/scheduler ARQ y
   el gate de cleanup).
 - **Migraciones:** el contenedor `api` aplica `alembic upgrade head` al arrancar (A1.7);
-  comandos manuales en el [runbook](../docs/RUNBOOK-dev.md) (§5).
+  comandos manuales en el [runbook](../RUNBOOK-dev.md) (§5).
 - **Verificación del host (J1.2):** `zram` activo y `core_pattern` a systemd-coredump
   quedaron como pendiente de operación en la bitácora.
 - **SSE y upload real:** A1.8 entregó el contrato de ingesta (`PUT` responde 503 en S1);

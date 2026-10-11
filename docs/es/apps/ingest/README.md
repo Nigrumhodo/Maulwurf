@@ -4,7 +4,7 @@
   (`docs/NVIDIA_RIVA.md`). Nada de constantes duras hasta tener el informe.
 - tmpfs acotado por intento, cleanup en `finally`, lease/fencing, reconciliador post-commit.
 - `GET /ingestion/capabilities` expondrá solo los límites medidos (U-S2-SG-01).
-- Ownership por ticket en [docs/sprints/CLAIMS.md](../../docs/sprints/CLAIMS.md).
+- Ownership por ticket en [docs/sprints/CLAIMS.md](../../sprints/CLAIMS.md).
 - S1.A1 (generador sintético en RAM) requiere el binario de sistema `espeak-ng`
   (o `espeak`) en `PATH` para los tests. En Windows se puede usar WSL (`sudo apt
   install espeak-ng`). El WAV se genera por stdout y no se versiona ni se guarda

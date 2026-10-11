@@ -32,11 +32,11 @@ evidencia cada tarea es [../PLAN_TESTS.md](../PLAN_TESTS.md); la fuente de contr
 
 | Persona | Perfil sugerido (no ownership) | Bitácora | Handle en CLAIMS |
 |---|---|---|---|
-| José Leonardo Pinilla Zamora | Liderazgo técnico · RAG | [jose-leonardo.md](jose-leonardo.md) | `jpinillaz` |
-| Andres Felipe | API · Base de datos | [andres.md](andres.md) | sin claims aún |
-| Santiago Montealegre | Ingesta · Audio · ASR | [santiago.md](santiago.md) | `satnovaOG` |
-| Jefferson Figueroa | Infra · Workers · Integraciones | [jefferson.md](jefferson.md) | sin claims aún |
-| Daniel Samaca | Web · UX | [daniel.md](daniel.md) | sin claims aún |
+| José Leonardo Pinilla Zamora | Liderazgo técnico · RAG | [jose-leonardo.md](../../sprints/jose-leonardo.md) | `jpinillaz` |
+| Andres Felipe | API · Base de datos | [andres.md](../../sprints/andres.md) | sin claims aún |
+| Santiago Montealegre | Ingesta · Audio · ASR | [santiago.md](../../sprints/santiago.md) | `satnovaOG` |
+| Jefferson Figueroa | Infra · Workers · Integraciones | [jefferson.md](../../sprints/jefferson.md) | sin claims aún |
+| Daniel Samaca | Web · UX | [daniel.md](../../sprints/daniel.md) | sin claims aún |
 
 Correspondencia persona↔handle observada en el historial del repositorio (autoría de
 `santiago.md` por `satnovaOG`; ramas `s1/*-jpinillaz` que editan `jose-leonardo.md`).

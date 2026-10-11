@@ -575,6 +575,6 @@ Cruces aparentes resueltos (el patrón: primero el **contrato** congelado, despu
 - [NVIDIA_RIVA.md](NVIDIA_RIVA.md) — parámetros de conexión auditados para el spike S1.
 - [PROPUESTA_PROYECTO_FINAL.md](PROPUESTA_PROYECTO_FINAL.md) — visión y roles.
 - Bitácoras: [sprints/README.md](sprints/README.md) — reglas de claiming y plantilla ·
-  [sprints/jose-leonardo.md](sprints/jose-leonardo.md) · [sprints/andres.md](sprints/andres.md) ·
-  [sprints/santiago.md](sprints/santiago.md) · [sprints/jefferson.md](sprints/jefferson.md) ·
-  [sprints/daniel.md](sprints/daniel.md).
+  [sprints/jose-leonardo.md](../sprints/jose-leonardo.md) · [sprints/andres.md](../sprints/andres.md) ·
+  [sprints/santiago.md](../sprints/santiago.md) · [sprints/jefferson.md](../sprints/jefferson.md) ·
+  [sprints/daniel.md](../sprints/daniel.md).
