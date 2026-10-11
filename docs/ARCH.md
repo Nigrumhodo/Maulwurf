@@ -412,9 +412,9 @@ flowchart LR
 | D4 Capacity | `blocked` | Upload limits, RAM per slot and deadlines | F0.1 minutes |
 | D6 Temporality | `pending` (proposal `none`) | Decides `timestamp_precision`, the citation format and SRT | F0.1 minutes |
 | D8 Retention and backups | The spec lists it as pending; `plan/S4.md` treats it as approved | Text and chat retention, and backup policy | ESPECIFICACION §12, `plan/S4.md` |
-| `PUT` route (C2) | Open | Today `api` receives and the sink responds 503; the spec draws the `PUT` towards `ingest`. The internal contract between them is missing | `infra/Caddyfile`, `services/uploads.py` |
-| Web framework | Open | Next.js (specification, ADR-0001 and scaffold) versus Vite and Express (PR #42) | PR #42 |
-| Upload limit at the edge | Not analyzed | The proposal uses Cloudflare Tunnel; Cloudflare documents 100 MB (Free and Pro) and 200 MB (Business) per request, against the 200 MiB target. It remains to confirm whether it applies to Tunnel | [Cloudflare, error 413](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/4xx-client-error/error-413/) |
+| `PUT` route (C2) | Open | Today `api` receives and the sink responds 503; the spec draws the `PUT` towards `ingest`. The internal contract between them is missing | `infra/Caddyfile`, `services/uploads.py`; tickets A2.13 and S2.11 |
+| Web framework | Open | Next.js (specification, ADR-0001 and scaffold) versus Vite and Express (PR #42) | PR #42; ticket L2.10 |
+| Upload limit at the edge | Not analyzed | The proposal uses Cloudflare Tunnel; Cloudflare documents 100 MB (Free and Pro) and 200 MB (Business) per request, against the 200 MiB target. It remains to confirm whether it applies to Tunnel; ticket J2.10 | [Cloudflare, error 413](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/4xx-client-error/error-413/) |
 
 ## 8. Maintenance
 

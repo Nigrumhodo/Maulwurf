@@ -217,6 +217,12 @@ DISENO_BD_API_SPRINTS.md §4.2.
 job; chat SSE events `snapshot|delta|citation|done|error` with a monotonic ID and a single
 terminal event; citation format `[Subject · Class · mm:ss]`; paginated `/search` contract.
 
+**Implementation-gap tickets.** Rows marked *(gap, P0|P1|P2)* were added after the QA review of
+2026-10-11 to cover gaps between the code and the specification that no ticket owned (detail,
+evidence and priorities in [plan/S2.md](plan/S2.md) §10). They are claimed like any other ticket;
+the lead decides which `P1`/`P2` ones move to S3. `A1.3` (Google login) and `A1.6` (subject CRUD)
+remain open S1 tickets and the slice cannot run without them.
+
 ### S2 backlog — RAG (`L2.x`)
 
 | Ticket | Task (summary) | Depends on | Tests |
@@ -229,6 +235,9 @@ terminal event; citation format `[Subject · Class · mm:ss]`; paginated `/searc
 | L2.6 | Citations only to IDs validated in the DB; "segment N" without offsets; complete `message_sources` | L2.5 | U-S2-JL-05 |
 | L2.7 | G4 evaluation on the S1 dataset (Recall@8 with active filters ≥ 0.85, citations ≥ 0.95, abstention ≥ 0.90) | L2.1–L2.6 | G4 |
 | L2.8 | Retrieval p95 ≤ 500 ms and chat first token p95 ≤ 5 s, measured | L2.4 | G4 |
+| L2.9 | *(gap, P1)* Align the §M6 `Chunk` contract with the `chunks`/`chunk_segments` tables | L1.4; A2.1 | U-S2-JL-11 |
+| L2.10 | *(gap, P0)* ADR: web stack (Next.js vs the Vite/Express proposal of PR #42) | — | C-S2-JL-12 |
+| L2.11 | *(gap, P2)* Documentation reconciliation: stale status, missing paths, `CLAIMS.md` rows, reference checker | — | C-S2-JL-13 |
 
 ### S2 backlog — API/DB (`A2.x`)
 
@@ -246,6 +255,13 @@ terminal event; citation format `[Subject · Class · mm:ss]`; paginated `/searc
 | A2.10 | Atomic commit + `cleanup_pending` state; outbox gate only for index/analyze | S2.5 | I-S2-AN-10 |
 | A2.11 | `GET /search` (paired with L2.4) | L2.3 | I-S2-JL-06 |
 | A2.12 | `conversations`/`messages`/`message_sources` tables + M7 endpoints: conversation CRUD (all/subject/class modes), history, idempotent `client_message_id`, streaming cancellation | A2.1, L2.5 (contract) | I-S2-AN-11 |
+| A2.13 | *(gap, P0)* API↔ingest reception contract: ADR on where the `PUT` terminates, `ReceptionSink` client, internal credential (pairs with S2.11) | A2.4; S2.1 | I-S2-AN-12 |
+| A2.14 | *(gap, P1)* Reservation lifecycle and `PUT` concurrency: row lock and `receiving` transition, atomic quota/slot, stale-reservation expiry | A2.3, A2.4 | I-S2-AN-13 |
+| A2.15 | *(gap, P2)* Error envelope on 404, 405 and unhandled exceptions | A2.4 | U-S2-AN-14 |
+| A2.16 | *(gap, P1)* Fail-closed settings: `MAULWURF_ENV` required, secret strength and distinctness | A1.2 | U-S2-AN-15 |
+| A2.17 | *(gap, P1)* PostgreSQL RLS with `SET LOCAL app.user_id` (ADR-0006 second barrier) | A2.1; A1.9 | I-S2-AN-16 |
+| A2.18 | *(gap, P1)* Schema integrity follow-up (migration `0003`): FK indexes, version invariants, drift test | A2.1 | I-S2-AN-17 |
+| A2.19 | *(gap, P1)* Contract conformance of A1.8/A2.3/A2.4: TTL, language, token codes, `/me`, single limit source | A2.4 | U-S2-AN-18 |
 
 ### S2 backlog — Ingestion/ASR (`S2.x`)
 
@@ -255,11 +271,15 @@ terminal event; citation format `[Subject · Class · mm:ss]`; paginated `/searc
 | S2.2 | ffmpeg with no network or shell, with limits; WAV PCM normalization; fragmentation by real limits | S2.1 | U-S2-SG-03 |
 | S2.3 | Sequential processing with backpressure; boundary/overlap reconciliation | S2.2 | U-S2-SG-04 |
 | S2.4 | Blocking Riva client outside the event loop; classified retries | S2.2 | U-S2-SG-05, P-S2-SG-12 |
-| S2.5 | Atomic transcript+segments commit (contract shared with A2.10) | S2.3/S2.4 | I-S2-SG-06 |
+| S2.5 | Atomic transcript+segments commit (contract shared with A2.10) | S2.3/S2.4, S2.10 | I-S2-SG-06 |
 | S2.6 | Cleanup in `finally`; separate `cleanup_status`; outbox only after commit+cleanup | S2.5 | I-S2-SG-07 |
 | S2.7 | Post-commit reconciler (no retranscription); fencing token | S2.6 | I-S2-SG-08/09 |
 | S2.8 | Cancellation: disconnect/lease/tab/post-commit | A2.7 | I-S2-SG-10 |
-| S2.9 | E2E 1 h synthetic class with `word\|segment` (G2-T) or `none` with textual UI (G2-X) | S2.1–S2.8; D2.2/D2.3 | E-S2-SG-11 |
+| S2.9 | E2E 1 h synthetic class with `word\|segment` (G2-T) or `none` with textual UI (G2-X) | S2.1–S2.8, S2.10, S2.11; A2.13; J2.8; D2.2/D2.3 | E-S2-SG-11 |
+| S2.10 | *(gap, P0)* Wire the pipeline to the Riva client; silence or empty text is `rejected`, never `succeeded` | S2.3, S2.4 | I-S2-SG-13 |
+| S2.11 | *(gap, P0)* Streaming reception endpoint in `ingest`; remove the in-RAM audio buffer | A2.13; S2.1 | I-S2-SG-14 |
+| S2.12 | *(gap, P1)* Persisted admission latch, heartbeat failure handling and ffprobe containment | S1.B6, S1.B3, S2.1 | I-S2-SG-15 |
+| S2.13 | *(gap, P1)* Error-code catalog and outcome mapping between ingest and API | S2.1; A2.13 | U-S2-SG-16 |
 
 ### S2 backlog — Infra/Integrations (`J2.x`)
 
@@ -272,6 +292,9 @@ terminal event; citation format `[Subject · Class · mm:ss]`; paginated `/searc
 | J2.5 | Observability: JSON logs with IDs, RAM/tmpfs/slot metrics, cleanup alert | J2.1 | C-S2-JF-10 |
 | J2.6 | Automated E2E smoke in the pipeline | J2.2; S2.9; D2.2; D2.6 | E-S2-JF-06 |
 | J2.7 | Fault injection with the commit tickets (S2.5/A2.10) | S2.5, A2.10 | I-S2-JF-05 |
+| J2.8 | *(gap, P0)* Compose/env wiring for `ingest` (Riva credentials, `INGEST_*`, origin override, `INGEST_SLOTS`) | A2.13 | I-S2-JF-11 |
+| J2.9 | *(gap, P2)* CI hygiene: no empty-suite tolerance, Redis `maxmemory`, secret and license scan | J1.4 | C-S2-JF-12 |
+| J2.10 | *(gap, P1)* Edge upload limit (Cloudflare Tunnel) and Caddy body/timeouts limits | — | C-S2-JF-13 |
 
 ### S2 backlog — Web/UX (`D2.x`)
 
@@ -296,6 +319,10 @@ persistent history (conversations/messages, idempotent `client_message_id`).
 cleanup, fencing, reconciler); E2E smoke `E-S2-JF-06` on every MR;
 `E-S2-SG-11` with the 1 h class. G1, G2-T or G2-X, and G3 with evidence; G4 and G5-F1 complete
 (Recall@8, citations, per-language abstention with numerator/denominator).
+
+**Implementation gaps (proposed, needs the lead's approval):** the `P0` *(gap)* tickets are `done`,
+or the lead records a reason for deferring each one; `P1`/`P2` ones are done or explicitly moved
+to S3.
 
 **Documentation:** S2 frozen contracts unchanged; `timestamp_precision` decision
 documented; D3-Text closed for the embeddings/LLM provider before processing non-synthetic
