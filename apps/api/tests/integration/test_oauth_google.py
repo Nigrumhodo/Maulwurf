@@ -158,7 +158,11 @@ async def test_full_flow_creates_user_session_and_encrypts(
 
 
 def _fake_google(
-    monkeypatch: pytest.MonkeyPatch, *, sub: str, refresh_token: str | None
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    sub: str,
+    refresh_token: str | None,
+    email_verified: object = True,
 ) -> None:
     async def fake_exchange(code: str, code_verifier: str) -> dict[str, Any]:
         tokens: dict[str, Any] = {
@@ -171,7 +175,12 @@ def _fake_google(
         return tokens
 
     async def fake_verify_id_token(id_token: str, expected_nonce: str) -> dict[str, Any]:
-        return {"sub": sub, "email": "student@example.test", "nonce": expected_nonce}
+        return {
+            "sub": sub,
+            "email": "student@example.test",
+            "email_verified": email_verified,
+            "nonce": expected_nonce,
+        }
 
     monkeypatch.setattr(oauth_google, "exchange_code", fake_exchange)
     monkeypatch.setattr(oauth_google, "verify_id_token", fake_verify_id_token)
@@ -259,3 +268,25 @@ async def test_login_revokes_the_session_the_browser_already_had(
 
     assert _cookie_value(second, COOKIE_NAME) != first
     assert (await client.get("/me", cookies={COOKIE_NAME: first})).status_code == 401
+
+
+@pytest.mark.parametrize("email_verified", [False, None, "true"])
+async def test_unverified_email_gets_no_account(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    email_verified: object,
+) -> None:
+    _fake_google(
+        monkeypatch, sub="sub-unverified", refresh_token=None, email_verified=email_verified
+    )
+
+    response = await _login(client)
+
+    assert response.headers["location"] == "/login?error=oauth_failed"
+    users = (
+        await db_session.execute(
+            text("SELECT count(*) FROM users WHERE google_sub = 'sub-unverified'")
+        )
+    ).scalar_one()
+    assert users == 0

@@ -2,6 +2,7 @@
 
 The JWKS comes from a local RSA key; no network and no real Google.
 """
+import asyncio
 import json
 import time
 from typing import Any
@@ -30,6 +31,9 @@ def google(monkeypatch: pytest.MonkeyPatch, key: rsa.RSAPrivateKey) -> list[int]
     monkeypatch.setattr(settings, "google_client_id", CLIENT_ID)
     monkeypatch.setattr(settings, "google_client_secret", SecretStr("test-secret"))
     monkeypatch.setattr(oauth_google, "_jwks_cache", None)
+    monkeypatch.setattr(oauth_google, "_jwks_fetched_at", float("-inf"))
+    # One lock per test: each test runs on its own event loop.
+    monkeypatch.setattr(oauth_google, "_jwks_lock", asyncio.Lock())
     jwk = json.loads(RSAAlgorithm.to_jwk(key.public_key()))
     jwk.update(kid="k1", alg="RS256", use="sig")
     fetches: list[int] = []
@@ -42,7 +46,9 @@ def google(monkeypatch: pytest.MonkeyPatch, key: rsa.RSAPrivateKey) -> list[int]
     return fetches
 
 
-def _token(key: rsa.RSAPrivateKey, kid: str = "k1", **overrides: Any) -> str:
+def _token(
+    key: rsa.RSAPrivateKey, kid: str = "k1", drop: tuple[str, ...] = (), **overrides: Any
+) -> str:
     claims = {
         "iss": "https://accounts.google.com",
         "aud": CLIENT_ID,
@@ -52,6 +58,8 @@ def _token(key: rsa.RSAPrivateKey, kid: str = "k1", **overrides: Any) -> str:
         "exp": int(time.time()) + 300,
         **overrides,
     }
+    for name in drop:
+        del claims[name]
     return jwt.encode(claims, key, algorithm="RS256", headers={"kid": kid})
 
 
@@ -89,9 +97,18 @@ async def test_token_signed_by_another_key_is_rejected() -> None:
         await oauth_google.verify_id_token(_token(other), "n-1")
 
 
-async def test_keys_are_cached_and_unknown_kid_forces_one_reload(
-    key: rsa.RSAPrivateKey, google: list[int]
+@pytest.mark.parametrize("claim", ["exp", "iat", "sub", "iss", "aud"])
+async def test_token_without_a_required_claim_is_rejected(
+    key: rsa.RSAPrivateKey, claim: str
 ) -> None:
+    with pytest.raises(OAuthError, match="id_token_invalid"):
+        await oauth_google.verify_id_token(_token(key, drop=(claim,)), "n-1")
+
+
+async def test_keys_are_cached_and_unknown_kid_forces_one_reload(
+    key: rsa.RSAPrivateKey, google: list[int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(oauth_google, "JWKS_REFRESH_COOLDOWN_SECONDS", 0)
     await oauth_google.verify_id_token(_token(key), "n-1")
     await oauth_google.verify_id_token(_token(key), "n-1")
     assert len(google) == 1
@@ -99,3 +116,18 @@ async def test_keys_are_cached_and_unknown_kid_forces_one_reload(
     with pytest.raises(OAuthError):
         await oauth_google.verify_id_token(_token(key, kid="rotated"), "n-1")
     assert len(google) == 2
+
+
+async def test_burst_of_forged_kids_downloads_the_jwks_once(
+    key: rsa.RSAPrivateKey, google: list[int]
+) -> None:
+    await oauth_google.verify_id_token(_token(key), "n-1")
+
+    results = await asyncio.gather(
+        *(oauth_google.verify_id_token(_token(key, kid=f"forged-{i}"), "n-1") for i in range(20)),
+        return_exceptions=True,
+    )
+
+    assert all(isinstance(result, OAuthError) for result in results)
+    # The initial download only: the forged kids arrive inside the refresh cooldown.
+    assert len(google) == 1
