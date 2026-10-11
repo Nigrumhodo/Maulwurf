@@ -4,7 +4,7 @@ Toda lectura de una tabla de propiedad pasa por aquí con el `user_id` de la ses
 autenticada. Un ID ajeno se comporta igual que uno inexistente (404 en la API).
 """
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,9 +18,20 @@ def owned_by[T: TenantOwned](model: type[T], user_id: uuid.UUID) -> Select[tuple
 
 
 async def get_owned[T: TenantOwned](
-    session: AsyncSession, model: type[T], user_id: uuid.UUID, resource_id: Any
+    session: AsyncSession,
+    model: type[T],
+    user_id: uuid.UUID,
+    resource_id: Any,
+    *,
+    lock: Literal["update", "share"] | None = None,
 ) -> T | None:
-    """Recurso por ID solo si pertenece a `user_id`; `None` si no existe o es ajeno."""
+    """Recurso por ID solo si pertenece a `user_id`; `None` si no existe o es ajeno.
+
+    `lock` takes a row lock until the transaction ends, for check-then-write paths.
+    """
     pk = model.id  # type: ignore[attr-defined]
-    result = await session.execute(owned_by(model, user_id).where(pk == resource_id))
+    query = owned_by(model, user_id).where(pk == resource_id)
+    if lock is not None:
+        query = query.with_for_update(read=lock == "share")
+    result = await session.execute(query)
     return result.scalar_one_or_none()

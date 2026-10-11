@@ -1040,6 +1040,8 @@ Typed codes (no PII or sensitive content):
 | `transcript_unavailable` | 409 | No usable transcript (re-upload); 404 if the resource does not exist for the tenant |
 | `srt_unavailable` | 409 | Invalid timestamps for SRT |
 | `session_conflict` | 409 | The session was already rotated or revoked by another request; repeat `GET /me` |
+| `subject_name_taken` | 409 | The user already has an active subject with that name (case-insensitive) |
+| `subject_has_active_audios` | 409 | The subject has active classes; `details.class_count` says how many |
 | `evidence_invalid` | 422 | Span/quote not reconstructible from the DB |
 | `context_exceeded` | 422 | History + evidence do not fit after deterministic trimming |
 | `date_unresolved` | 422 | Confirming requires a valid date |
@@ -1095,9 +1097,12 @@ Declining Calendar/Gmail permissions does **not** prevent transcribing or chatti
 | Method | Route | Description | Responses |
 |---|---|---|---|
 | `GET` | `/subjects` | Tenant list | `200` `{items:[{id,name,color,teacher,class_count}]}` |
-| `POST` | `/subjects` | Creates (`name`, `color`, optional `teacher`) | `201` · `422` · `409` duplicate |
-| `PATCH` | `/subjects/{id}` | Edits | `200` · `404` · `403` |
-| `DELETE` | `/subjects/{id}` | Deletes; `409 subject_has_active_audios` if there are active classes; `{"force": true}` requires explicit confirmation and tombstones its classes | `204` · `409` |
+| `POST` | `/subjects` | Creates (`name`, `color`, optional `teacher`) | `201` · `422` · `409 subject_name_taken` |
+| `PATCH` | `/subjects/{id}` | Edits only the fields sent; a foreign, missing or deleted subject answers `404` (ADR-0006, not `403`) | `200` · `404` · `422` · `409 subject_name_taken` |
+| `DELETE` | `/subjects/{id}` | Deletes (tombstone `deleted_at`); `409 subject_has_active_audios` if there are active classes. `{"force": true}` is accepted by contract but **has no effect in S1**: deleting the classes with the subject is deferred to S2, with the `DELETE /audios/{id}` tombstone | `204` · `404` · `409 subject_has_active_audios` |
+
+A subject name is unique per user among non-deleted subjects, ignoring case and surrounding
+spaces; deleting a subject frees its name.
 
 ### 3.5 M2b — Ingestion and audios (S1 skeleton; S2 full)
 
