@@ -1,42 +1,42 @@
-# ADR-0002 — Versiones de runtime y proveedores
+# ADR-0002 — Runtime and provider versions
 
-- Fecha UTC: 2026-09-23
-- Estado: Aceptado
+- Date (UTC): 2026-09-23
+- Status: Accepted
 - Ticket: L1.2
-- Relacionado: [VERSIONES.md](../VERSIONES.md) (L1.1),
-  [ESPECIFICACION.md](../ESPECIFICACION.md) §3.2 y §9.2
+- Related: [VERSIONES.md](../VERSIONES.md) (L1.1),
+  [ESPECIFICACION.md](../ESPECIFICACION.md) §3.2 and §9.2
 
-## Contexto
+## Context
 
-L1.1 verificó instalaciones reproducibles. J1.1 y J1.4 deben copiar las
-mismas cifras. La spec declara stack y CI; F0 aún no cierra contratos de
-proveedor.
+L1.1 verified reproducible installations. J1.1 and J1.4 must copy the
+same figures. The spec declares stack and CI; F0 has not yet closed
+provider contracts.
 
-## Decisión
+## Decision
 
-Runtimes de desarrollo y de CI futuro:
+Development and future CI runtimes:
 
 | Runtime | Pin |
 |---|---|
 | Python | 3.12 (`requires-python = ">=3.12"`) |
 | Node.js | 22 (`engines.node` `>=22 <23`) |
 | PostgreSQL | 16 |
-| pgvector | imagen `pgvector/pgvector:pg16` |
-| Cliente Riva | `nvidia-riva-client==2.27.0` |
+| pgvector | image `pgvector/pgvector:pg16` |
+| Riva client | `nvidia-riva-client==2.27.0` |
 
-Archivos: `.python-version`, `.nvmrc`, `apps/*/pyproject.toml`,
+Files: `.python-version`, `.nvmrc`, `apps/*/pyproject.toml`,
 `apps/web/package.json`, `requirements-riva.txt`.
 
-CI: **GitHub Actions** (decisión de equipo 2026-09-20). Registry candidato:
-GitHub Container Registry. Runner e imagen exactos se confirman en J1.4;
-el workflow `trigger-hoplite-qa.yml` no es el pipeline de calidad.
+CI: **GitHub Actions** (team decision 2026-09-20). Candidate registry:
+GitHub Container Registry. The exact runner and image are confirmed in J1.4;
+the `trigger-hoplite-qa.yml` workflow is not the quality pipeline.
 
-Proveedores de producto (Whisper large-v3, LLM/embeddings de §3.2) siguen
-**provisionales** hasta F0 y D2/D3. Este ADR no fija cuotas, sample rate ni
-límites de payload.
+Product providers (Whisper large-v3, §3.2 LLM/embeddings) remain
+**provisional** until F0 and D2/D3. This ADR does not set quotas, sample
+rate, or payload limits.
 
-## Consecuencias
+## Consequences
 
-Cambiar Python, Node, PG o el pin de Riva actualiza `VERSIONES.md`,
-manifiestos y lockfiles en el mismo PR. Mezclar dimensiones o versiones de
-embedding exige índice nuevo (spec), no este ADR.
+Changing Python, Node, PG, or the Riva pin updates `VERSIONES.md`,
+manifests, and lockfiles in the same PR. Mixing embedding dimensions or
+versions requires a new index (spec), not this ADR.

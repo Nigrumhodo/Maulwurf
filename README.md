@@ -216,7 +216,7 @@ complete.
 ├── infra/                         # docker-compose.yml (8 services) and Caddyfile
 ├── scripts/                       # scaffold (historical), provider/ (Riva spike), load/ helpers
 ├── AGENTS.md                      # Repository guidance for coding agents
-├── LICENSE                        # GNU GPL v3
+├── LICENSE                        # GNU AGPL v3
 ├── README.md
 └── requirements-riva.txt          # Pinned Riva client dependency
 ```
@@ -343,6 +343,10 @@ must establish quotas, rate limits, alerts, retention policies, and provider ter
 ## Further documentation
 
 - [Functional and technical specification](docs/ESPECIFICACION.md)
+- [System architecture](docs/ARCH.md) — context, containers, components and trust zones, with
+  implementation status
+- [Process diagrams](docs/PROCESOS.md) — upload, transcription, search, chat, Calendar, reminders,
+  deletion and team workflow
 - [Development runbook](docs/RUNBOOK-dev.md) — local stack, healthchecks, tests, lint, migrations
 - [Implementation and validation plan](docs/PLAN_IMPLEMENTACION.md)
 - [Team sprint plan (S1–S4)](docs/PLAN_SPRINTS.md) — open weekly backlogs with ticket
@@ -357,4 +361,6 @@ must establish quotas, rate limits, alerts, retention policies, and provider ter
 
 ## License
 
-Maulwurf is distributed under the [GNU General Public License, version 3](LICENSE).
+Maulwurf is distributed under the [GNU Affero General Public License, version 3](LICENSE).
+If you run a modified version as a network service, you must offer its source code to the
+users who interact with it (AGPL-3.0 §13).

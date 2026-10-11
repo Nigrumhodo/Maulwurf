@@ -1,42 +1,42 @@
-# ADR-0006 — Aislamiento por tenant en S1
+# ADR-0006 — Tenant isolation in S1
 
-- Fecha UTC: 2026-09-27
-- Estado: Aceptado (fusionado en #24 con review; A1.5)
-- Ticket: A1.5 (lo verifica A1.9)
-- Relacionado: [../ESPECIFICACION.md](../ESPECIFICACION.md) §6,
+- Date (UTC): 2026-09-27
+- Status: Accepted (merged in #24 with review; A1.5)
+- Ticket: A1.5 (verified by A1.9)
+- Related: [../ESPECIFICACION.md](../ESPECIFICACION.md) §6,
   [../plan/S1.md](../plan/S1.md) §3 (A1.5, A1.9),
   [../PLAN_IMPLEMENTACION.md](../PLAN_IMPLEMENTACION.md) (G3)
 
-## Contexto
+## Context
 
-A1.5 pide «RLS base o filtrado obligatorio por `user_id` en todos los queries (decisión
-documentada en ADR)». Las dos vías impiden que el usuario B lea o mute recursos de A:
+A1.5 asks for "base RLS or mandatory filtering by `user_id` in all queries (decision
+documented in an ADR)". Both routes prevent user B from reading or mutating A's resources:
 
-- **Filtrado en la aplicación:** cada query de una tabla de propiedad lleva
-  `WHERE user_id = :usuario_de_la_sesión`.
-- **RLS de PostgreSQL:** políticas por tabla que ocultan filas ajenas aunque el query no
-  filtre, con el usuario fijado por conexión (`SET LOCAL app.user_id`).
+- **Application-level filtering:** every query on an owned table carries
+  `WHERE user_id = :session_user_id`.
+- **PostgreSQL RLS:** per-table policies that hide rows belonging to others even if the
+  query does not filter, with the user set per connection (`SET LOCAL app.user_id`).
 
-RLS exige un rol de BD sin propiedad de las tablas, fijar el usuario por transacción para
-que el pool no lo arrastre entre peticiones y roles separados para migraciones y workers.
-En S1 solo existen `users`, `sessions`, `google_credentials`, `subjects` y el shape S1 de
-ingesta/outbox.
+RLS requires a DB role that owns none of the tables, setting the user per transaction so
+the pool does not drag it across requests, and separate roles for migrations and workers.
+In S1 only `users`, `sessions`, `google_credentials`, `subjects`, and the S1
+ingestion/outbox shape exist.
 
-## Decisión
+## Decision
 
-| Tema | S1 | S2 |
+| Topic | S1 | S2 |
 |---|---|---|
-| Mecanismo | Filtrado obligatorio en la aplicación | Añadir RLS encima del filtrado |
-| Punto único | Capa de repositorio que recibe el `user_id` de la sesión autenticada; los routers no construyen queries | Igual, más `SET LOCAL app.user_id` por transacción |
-| Integridad | FKs compuestas `(user_id, id)` en toda fila de propiedad | Igual |
-| Origen del `user_id` | Solo la sesión del backend; nunca payload, ruta ni salida de LLM | Igual |
-| Recurso ajeno | `404` (no revelar existencia) | Igual |
-| Workers | Reciben IDs y releen el `user_id` de la fila en BD | Rol de BD propio con política explícita |
+| Mechanism | Mandatory application-level filtering | Add RLS on top of filtering |
+| Single point | Repository layer that receives the `user_id` from the authenticated session; routers do not build queries | Same, plus `SET LOCAL app.user_id` per transaction |
+| Integrity | Composite FKs `(user_id, id)` on every owned row | Same |
+| `user_id` origin | Only the backend session; never payload, path, or LLM output | Same |
+| Foreign resource | `404` (do not reveal existence) | Same |
+| Workers | Receive IDs and re-read the row's `user_id` from the DB | Own DB role with explicit policy |
 
-## Consecuencias
+## Consequences
 
-- Una query escrita fuera del repositorio puede saltarse el filtro: la review lo rechaza y
-  A1.9 (I-S1-AN-05) lo detecta adivinando IDs de A desde B.
-- Las FKs compuestas impiden enlazar recursos de dos usuarios aunque falle un filtro.
-- Pasar a RLS en S2 no cambia la API ni los tests de A1.9; añade una segunda barrera.
-- Cambiar esta decisión exige actualizar este ADR y `docs/plan/S1.md` en el mismo PR.
+- A query written outside the repository can bypass the filter: review rejects it and
+  A1.9 (I-S1-AN-05) detects it by guessing A's IDs from B.
+- Composite FKs prevent linking resources of two users even if a filter fails.
+- Moving to RLS in S2 does not change the API or A1.9's tests; it adds a second barrier.
+- Changing this decision requires updating this ADR and `docs/plan/S1.md` in the same PR.

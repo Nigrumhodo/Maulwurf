@@ -3,6 +3,7 @@
 Usa la BD aislada de la sesión: cada test la baja a `base` (esquema vacío) y la deja en
 `head` al terminar, así el resto de la suite sigue encontrando el esquema completo.
 """
+
 import asyncio
 import os
 import subprocess
@@ -29,6 +30,68 @@ S1_TABLES = {
     "subjects",
     "users",
 }
+
+S2_TABLES = S1_TABLES | {
+    "variant_confirmation_tokens",
+    "transcripts",
+    "segments",
+    "chunks",
+    "chunk_segments",
+    "embeddings",
+    "index_generations",
+    "processing_runs",
+    "conversations",
+    "messages",
+    "message_sources",
+}
+
+S2_COMPOSITE_FOREIGN_KEYS = {
+    "variant_confirmation_tokens": {
+        "FOREIGN KEY (user_id, canonical_audio_id) REFERENCES audios(user_id, id)",
+        "FOREIGN KEY (user_id, reserved_audio_id) REFERENCES audios(user_id, id)",
+        "FOREIGN KEY (user_id, subject_id) REFERENCES subjects(user_id, id)",
+    },
+    "transcripts": {"FOREIGN KEY (user_id, audio_id) REFERENCES audios(user_id, id)"},
+    "segments": {"FOREIGN KEY (user_id, transcript_id) REFERENCES transcripts(user_id, id)"},
+    "chunks": {
+        "FOREIGN KEY (user_id, audio_id) REFERENCES audios(user_id, id)",
+        "FOREIGN KEY (user_id, transcript_id) REFERENCES transcripts(user_id, id)",
+    },
+    "chunk_segments": {
+        "FOREIGN KEY (user_id, chunk_id) REFERENCES chunks(user_id, id)",
+        "FOREIGN KEY (user_id, segment_id) REFERENCES segments(user_id, id)",
+    },
+    "embeddings": {"FOREIGN KEY (user_id, chunk_id) REFERENCES chunks(user_id, id)"},
+    "processing_runs": {"FOREIGN KEY (user_id, audio_id) REFERENCES audios(user_id, id)"},
+    "conversations": {
+        "FOREIGN KEY (user_id, subject_id) REFERENCES subjects(user_id, id)",
+        "FOREIGN KEY (user_id, audio_id) REFERENCES audios(user_id, id)",
+    },
+    "messages": {"FOREIGN KEY (user_id, conversation_id) REFERENCES conversations(user_id, id)"},
+    "message_sources": {
+        "FOREIGN KEY (user_id, message_id) REFERENCES messages(user_id, id)",
+        "FOREIGN KEY (user_id, audio_id) REFERENCES audios(user_id, id)",
+        "FOREIGN KEY (user_id, transcript_id) REFERENCES transcripts(user_id, id)",
+        "FOREIGN KEY (user_id, chunk_id) REFERENCES chunks(user_id, id)",
+        "FOREIGN KEY (user_id, segment_id) REFERENCES segments(user_id, id)",
+    },
+}
+
+S2_INDEX_FRAGMENTS = {
+    "chunks_fts": "USING gin (tsv)",
+    "embeddings_hnsw": "USING hnsw (vector vector_cosine_ops)",
+    "variant_tokens_expiry": "WHERE (consumed_at IS NULL)",
+    "index_generations_one_active": "WHERE (status = 'active'::text)",
+    "messages_client_idem": "WHERE (client_message_id IS NOT NULL)",
+}
+
+
+def _normalized_constraint(definition: str) -> str:
+    """Devuelve la firma de una FK, independiente del formato y acciones del servidor."""
+    normalized = " ".join(definition.split()).replace(" (", "(")
+    for action in (" ON DELETE ", " ON UPDATE "):
+        normalized = normalized.split(action, maxsplit=1)[0]
+    return normalized
 
 
 def _head(url: str) -> str:
@@ -60,6 +123,41 @@ def _state(url: str) -> tuple[set[str], list[str]]:
     return asyncio.run(read())
 
 
+def _s2_catalog(url: str) -> tuple[dict[str, set[str]], dict[str, str], set[str]]:
+    """Constraints, índices y columnas reales; no depende de metadata ORM."""
+
+    async def read() -> tuple[dict[str, set[str]], dict[str, str], set[str]]:
+        engine = create_async_engine(url)
+        async with engine.connect() as conn:
+            constraints = await conn.execute(
+                text(
+                    "SELECT conrelid::regclass::text, pg_get_constraintdef(oid) "
+                    "FROM pg_constraint WHERE connamespace = 'public'::regnamespace"
+                )
+            )
+            indexes = await conn.execute(
+                text("SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public'")
+            )
+            audio_columns = await conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'audios'"
+                )
+            )
+        await engine.dispose()
+        foreign_keys: dict[str, set[str]] = {}
+        for table_name, definition in constraints:
+            if str(definition).startswith("FOREIGN KEY"):
+                foreign_keys.setdefault(str(table_name), set()).add(str(definition))
+        return (
+            foreign_keys,
+            {str(name): str(definition) for name, definition in indexes},
+            set(audio_columns.scalars()),
+        )
+
+    return asyncio.run(read())
+
+
 @pytest.fixture
 def empty_schema(migrated_database_url: str) -> Iterator[str]:
     """La BD de la sesión en `base`; al terminar vuelve a `head` pase lo que pase."""
@@ -76,7 +174,7 @@ def test_upgrade_from_empty_reaches_head(empty_schema: str) -> None:
 
     command.upgrade(alembic_config(empty_schema), "head")
 
-    assert _state(empty_schema) == (S1_TABLES, [_head(empty_schema)])
+    assert _state(empty_schema) == (S2_TABLES, [_head(empty_schema)])
 
 
 def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
@@ -84,10 +182,10 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     command.upgrade(cfg, "head")
 
     command.downgrade(cfg, "-1")
-    assert _state(empty_schema) == (set(), [])
+    assert _state(empty_schema) == (S1_TABLES, ["0001"])
 
     command.upgrade(cfg, "head")
-    assert _state(empty_schema)[0] == S1_TABLES
+    assert _state(empty_schema)[0] == S2_TABLES
 
 
 def test_upgrade_is_idempotent(empty_schema: str) -> None:
@@ -98,6 +196,23 @@ def test_upgrade_is_idempotent(empty_schema: str) -> None:
     assert _state(empty_schema)[1] == [_head(empty_schema)]
 
 
+def test_s2_catalog_has_composite_fks_indexes_and_no_audio_storage_key(
+    migrated_database_url: str,
+) -> None:
+    foreign_keys, indexes, audio_columns = _s2_catalog(migrated_database_url)
+
+    for table_name, expected in S2_COMPOSITE_FOREIGN_KEYS.items():
+        normalized_expected = {_normalized_constraint(definition) for definition in expected}
+        normalized_actual = {
+            _normalized_constraint(definition)
+            for definition in foreign_keys.get(table_name, set())
+        }
+        assert normalized_expected <= normalized_actual
+    for index_name, fragment in S2_INDEX_FRAGMENTS.items():
+        assert fragment in indexes[index_name]
+    assert "storage_key" not in audio_columns
+
+
 def test_concurrent_upgrades_serialize_without_errors(empty_schema: str) -> None:
     # Varias réplicas de la API migran al arrancar; el advisory lock las serializa. Se usan
     # procesos, no hilos: el `context` de Alembic es global al proceso y dos hilos se lo
@@ -106,7 +221,10 @@ def test_concurrent_upgrades_serialize_without_errors(empty_schema: str) -> None
     replicas = [
         subprocess.Popen(  # noqa: S603 - argumentos fijos, sin entrada externa
             [sys.executable, "-m", "alembic", "upgrade", "head"],
-            cwd=API_ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            cwd=API_ROOT,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
         for _ in range(4)
     ]
@@ -123,4 +241,4 @@ def test_concurrent_upgrades_serialize_without_errors(empty_schema: str) -> None
             raise
         assert replica.returncode == 0, stderr.decode()[-500:]
 
-    assert _state(empty_schema) == (S1_TABLES, [_head(empty_schema)])
+    assert _state(empty_schema) == (S2_TABLES, [_head(empty_schema)])

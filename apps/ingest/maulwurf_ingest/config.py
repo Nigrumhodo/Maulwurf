@@ -19,6 +19,18 @@ class Settings(BaseSettings):
     ingest_hardening: Literal["enforce", "report"] = Field(
         default="enforce", validation_alias="INGEST_HARDENING"
     )
+    # Tope de corte al recibir. Es el provisional de compose, no un máximo aprobado (D4).
+    max_upload_bytes: int = Field(
+        default=209_715_200, ge=1, validation_alias="INGEST_MAX_UPLOAD_BYTES"
+    )
+    # Solape local entre fragmentos. No es una medida de Riva.
+    fragment_overlap_s: float = Field(
+        default=0.25, gt=0, le=2, validation_alias="INGEST_FRAGMENT_OVERLAP_S"
+    )
+    # Piso que Riva aceptó en el spike. No es un máximo aprobado; el uso lo recorta a 30 s.
+    fragment_seconds: int = Field(
+        default=30, ge=1, validation_alias="INGEST_FRAGMENT_SECONDS"
+    )
 
 
 settings = Settings()

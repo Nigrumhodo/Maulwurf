@@ -1,37 +1,37 @@
 <!--
-Formato según ADR-0004 (docs/adr/ADR-0004-commits-pr.md).
-Base del PR: develop. Un PR = un ticket. Mínimo 1 review.
-Sin secretos, .env, audio, transcripts privados ni payloads de proveedor.
-Un PR de claim toca solo su fila en docs/sprints/CLAIMS.md.
+Format per ADR-0004 (docs/adr/ADR-0004-commits-pr.md).
+PR base: develop. One PR = one ticket. Minimum 1 review.
+No secrets, .env, private audio/transcripts, or provider payloads.
+A claim PR touches only its row in docs/sprints/CLAIMS.md.
 -->
 
-## Resumen
+## Summary
 
-<!-- 1–3 puntos: qué cambia y por qué. -->
+<!-- 1–3 points: what changes and why. -->
 
 -
 -
 
-## Ticket y claim
+## Ticket and claim
 
-- Ticket: <!-- p. ej. J1.1 -->
-- Claim vigente: <!-- fila de docs/sprints/CLAIMS.md o PR de claim -->
+- Ticket: <!-- e.g. J1.1 -->
+- Active claim: <!-- row in docs/sprints/CLAIMS.md or claim PR -->
 
-## Test plan / verificación
+## Test plan / verification
 
-<!-- Comandos exactos y resultado esperado. Evidencia: comando, fecha UTC, entorno y resultado. -->
+<!-- Exact commands and expected result. Evidence: command, UTC date, environment, and result. -->
 
 - [ ]
 - [ ]
 
-## Evidencia
+## Evidence
 
-<!-- Enlace a la bitácora y salidas redactadas; sin datos sensibles. -->
+<!-- Link to the logbook and redacted outputs; no sensitive data. -->
 
 ## Checklist
 
-- [ ] 1 review mínimo; si el diff cruza área, revisa quien tenga claim activo en esa carpeta o el líder
-- [ ] CI de calidad en verde (J1.4); `P-*` y `load` no se ejecutan en MR
-- [ ] Sin secretos, `.env`, audio, transcripts privados ni payloads de proveedor en el diff
-- [ ] `docs/ESPECIFICACION.md` y `docs/PLAN_IMPLEMENTACION.md` actualizados si cambió un contrato
-- [ ] Fila de `docs/sprints/CLAIMS.md` actualizada con la evidencia (o PR de claim separado)
+- [ ] At least 1 review; if the diff crosses areas, review by whoever holds an active claim in that folder or the lead
+- [ ] Quality CI green (J1.4); `P-*` and `load` never run in MRs
+- [ ] No secrets, `.env`, private audio/transcripts, or provider payloads in the diff
+- [ ] `docs/ESPECIFICACION.md` and `docs/PLAN_IMPLEMENTACION.md` updated if a contract changed
+- [ ] Row in `docs/sprints/CLAIMS.md` updated with the evidence (or separate claim PR)

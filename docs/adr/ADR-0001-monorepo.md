@@ -1,49 +1,49 @@
-# ADR-0001 — Estructura del monorepo y límites por área
+# ADR-0001 — Monorepo structure and area boundaries
 
-- Fecha UTC: 2026-09-23
-- Estado: Aceptado
+- Date (UTC): 2026-09-23
+- Status: Accepted
 - Ticket: L1.2
-- Relacionado: [ESPECIFICACION.md](../ESPECIFICACION.md) §3.1 y §3.3,
+- Related: [ESPECIFICACION.md](../ESPECIFICACION.md) §3.1 and §3.3,
   [README.scaffold.md](../../README.scaffold.md)
 
-## Contexto
+## Context
 
-El scaffold (`scripts/scaffold_monorepo.sh`) ya materializó el árbol. El
-diagrama §3.1 incluye un servicio de ingesta; el listado §3.3 no nombra
-`apps/ingest`. Hay que fijar límites de carpeta por área (letra del backlog,
-no persona) para reviews y claims.
+The scaffold (`scripts/scaffold_monorepo.sh`) already materialized the tree. The
+§3.1 diagram includes an ingestion service; the §3.3 listing does not name
+`apps/ingest`. Folder boundaries per area (backlog letter, not person) must be
+set for reviews and claims.
 
-## Decisión
+## Decision
 
-El monorepo tiene estas raíces de producto:
+The monorepo has these product roots:
 
 ```text
-apps/api/      FastAPI, modelos, Alembic, prompts versionados
-apps/ingest/   Ingesta efímera y ASR (incluido aunque falte en §3.3)
+apps/api/      FastAPI, models, Alembic, versioned prompts
+apps/ingest/   Ephemeral ingestion and ASR (included even though missing from §3.3)
 apps/web/      Next.js App Router
-infra/         Compose, Caddy, CI (J1.x; aún placeholder)
-scripts/       Scaffold, spikes y carga
-docs/          Contratos y planificación
+infra/         Compose, Caddy, CI (J1.x; still placeholder)
+scripts/       Scaffold, spikes, and load
+docs/          Contracts and planning
 ```
 
-Límites de área (claiming; la letra no asigna dueño):
+Area boundaries (claiming; the letter does not assign an owner):
 
-| Ruta | Área |
+| Path | Area |
 |---|---|
-| `apps/api/` salvo excepciones | `A-` API/BD |
+| `apps/api/` with exceptions | `A-` API/DB |
 | `apps/api/prompts/` | `L-` RAG |
 | `apps/api/app/workers/` | `J-` Infra |
-| `apps/ingest/` | `S-` Ingesta/ASR |
+| `apps/ingest/` | `S-` Ingestion/ASR |
 | `apps/web/` | `D-` Web/UX |
-| `infra/` | `J-` Infra/Integraciones |
-| `scripts/` de coordinación | liderazgo (`L-`) |
+| `infra/` | `J-` Infra/Integrations |
+| `scripts/` coordination | leadership (`L-`) |
 
-Un PR que edite otra área exige review de quien tenga claim activo allí, o
-del líder si no hay claim. No se inventan nombres de servicio paralelos a
-`TranscriptionService`, `SearchService`, `RAGService`,
+A PR that edits another area requires review from whoever holds an active claim
+there, or from the lead if there is no claim. Parallel service names are not
+invented for `TranscriptionService`, `SearchService`, `RAGService`,
 `GoogleCalendarService`.
 
-## Consecuencias
+## Consequences
 
-J1.1 coloca compose y Caddy solo en `infra/`. Contratos compartidos se
-congelan el lunes; un cambio de interfaz actualiza spec y plan juntos.
+J1.1 places compose and Caddy only in `infra/`. Shared contracts are frozen on
+Monday; an interface change updates the spec and the plan together.

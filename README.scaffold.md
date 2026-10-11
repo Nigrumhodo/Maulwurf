@@ -1,37 +1,37 @@
-# Scaffold Maulwurf — qué generó este script y qué falta
+# Maulwurf scaffold — what this script generated and what is missing
 
-Este árbol fue creado por `scripts/scaffold_monorepo.sh` (tarea L1.1 del líder).
-Corresponde a la estructura §3.3 de `docs/ESPECIFICACION.md`.
-Las versiones de runtime pinneadas están en [docs/VERSIONES.md](docs/VERSIONES.md).
+This tree was created by `scripts/scaffold_monorepo.sh` (the leader's L1.1 task).
+It corresponds to the §3.3 structure of `docs/ESPECIFICACION.md`.
+Pinned runtime versions are in [docs/VERSIONES.md](docs/VERSIONES.md).
 
-> **Documento histórico (2026-09).** Describe el árbol que dejó el scaffold antes del
-> sprint S1. El estado actual vive en [README.md](README.md),
-> [docs/RUNBOOK-dev.md](docs/RUNBOOK-dev.md) y [docs/sprints/CLAIMS.md](docs/sprints/CLAIMS.md);
-> los «Próximos pasos» de abajo ya aterrizaron (alembic, spike F0, compose/Caddy/CI, ADRs).
+> **Historical document (2026-09).** It describes the tree the scaffold left behind before
+> sprint S1. The current state lives in [README.md](README.md),
+> [docs/RUNBOOK-dev.md](docs/RUNBOOK-dev.md), and [docs/sprints/CLAIMS.md](docs/sprints/CLAIMS.md);
+> the "Next steps" below have already landed (alembic, F0 spike, compose/Caddy/CI, ADRs).
 
-## Áreas del backlog (plan de sprints, §0.2 del plan maestro)
+## Backlog areas (sprint plan, §0.2 of the master plan)
 
-La letra designa el **área**, no a una persona: los tickets se reclaman cada lunes según
-`docs/PLAN_SPRINTS.md` y se registran en las bitácoras de `docs/sprints/`.
+The letter designates the **area**, not a person: tickets are claimed every Monday per
+`docs/PLAN_SPRINTS.md` and recorded in the logbooks under `docs/sprints/`.
 
-| Ruta | Área típica |
+| Path | Typical area |
 |---|---|
-| `apps/api/` | `A-` API/BD (excepto `prompts/` → `L-` RAG, `app/workers/` → `J-` Infra) |
-| `apps/ingest/` | `S-` Ingesta/ASR |
+| `apps/api/` | `A-` API/DB (except `prompts/` → `L-` RAG, `app/workers/` → `J-` Infra) |
+| `apps/ingest/` | `S-` Ingestion/ASR |
 | `apps/web/` | `D-` Web/UX |
-| `infra/` | `J-` Infra/Integraciones |
-| `scripts/` | coordinación (líder) |
+| `infra/` | `J-` Infra/Integrations |
+| `scripts/` | coordination (leader) |
 | `apps/api/prompts/` | `L-` RAG |
 
-## Próximos pasos por ticket
+## Next steps per ticket
 
-1. **`A1.x` (API/BD):** `pip install fastapi "uvicorn[standard]" "pydantic-settings"` etc.;
-   `alembic init alembic`; auth Google + sesión opaca.
+1. **`A1.x` (API/DB):** `pip install fastapi "uvicorn[standard]" "pydantic-settings"` etc.;
+   `alembic init alembic`; Google auth + opaque session.
 2. **`D1.x` (Web):** `npx create-next-app@latest apps/web --typescript --tailwind --app`;
-   luego `npx shadcn@latest init`.
-3. **`S1.x` (Ingesta/ASR):** spike F0 con `requirements-riva.txt`; prototipo efímero.
+   then `npx shadcn@latest init`.
+3. **`S1.x` (Ingestion/ASR):** F0 spike with `requirements-riva.txt`; ephemeral prototype.
 4. **`J1.x` (Infra):** `infra/docker-compose.yml` + `Caddyfile` + CI.
-5. **`L1.x` (RAG/liderazgo):** ADRs en [docs/adr/](docs/adr/README.md).
+5. **`L1.x` (RAG/leadership):** ADRs in [docs/adr/](docs/adr/README.md).
 
-> Regla: nada aquí está implementado. Los TODOs marcan trabajo pendiente; los responsables
-> se reclaman cada semana, no están preasignados.
+> Rule: nothing here is implemented. TODOs mark pending work; owners are claimed every
+> week, they are not pre-assigned.
