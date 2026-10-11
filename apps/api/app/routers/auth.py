@@ -18,6 +18,7 @@ from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import RedirectResponse
 
 from app.core.deps import (
+    COOKIE_NAME,
     OAUTH_COOKIE_NAME,
     DbSession,
     MutationSession,
@@ -106,8 +107,13 @@ async def google_callback(
             raise OAuthError("token_exchange_incomplete")
         claims = await oauth_google.verify_id_token(id_token, nonce)
         user = await oauth_google.upsert_google_identity(db, claims, tokens)
+        # Session fixation: a session the browser already carried never survives a login.
+        previous = await sessions.resolve_session(db, request.cookies.get(COOKIE_NAME))
+        if previous is not None:
+            await sessions.revoke_session(db, previous)
         issued = await sessions.create_session(db, user.id)
     except OAuthError:
+        await db.rollback()
         return _login_error("oauth_failed")
 
     await db.commit()

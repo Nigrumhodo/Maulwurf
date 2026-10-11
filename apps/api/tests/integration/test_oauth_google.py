@@ -155,3 +155,107 @@ async def test_full_flow_creates_user_session_and_encrypts(
     assert credential.status == "connected"
     assert b"fake-access" not in credential.access_token_enc
     assert b"fake-refresh" not in credential.refresh_token_enc
+
+
+def _fake_google(
+    monkeypatch: pytest.MonkeyPatch, *, sub: str, refresh_token: str | None
+) -> None:
+    async def fake_exchange(code: str, code_verifier: str) -> dict[str, Any]:
+        tokens: dict[str, Any] = {
+            "access_token": f"access-{code}",
+            "id_token": "fake-id-token",
+            "expires_in": 3600,
+        }
+        if refresh_token is not None:
+            tokens["refresh_token"] = refresh_token
+        return tokens
+
+    async def fake_verify_id_token(id_token: str, expected_nonce: str) -> dict[str, Any]:
+        return {"sub": sub, "email": "student@example.test", "nonce": expected_nonce}
+
+    monkeypatch.setattr(oauth_google, "exchange_code", fake_exchange)
+    monkeypatch.setattr(oauth_google, "verify_id_token", fake_verify_id_token)
+
+
+async def _login(
+    client: AsyncClient, code: str = "c1", cookies: dict[str, str] | None = None
+) -> Response:
+    state, oauth_cookie = await _start(client)
+    return await client.get(
+        "/auth/google/callback",
+        params={"code": code, "state": state},
+        cookies={OAUTH_COOKIE_NAME: oauth_cookie, **(cookies or {})},
+        follow_redirects=False,
+    )
+
+
+async def test_start_does_not_request_offline_access(client: AsyncClient) -> None:
+    response = await client.get("/auth/google/start", follow_redirects=False)
+    query = parse_qs(urlparse(response.headers["location"]).query)
+
+    # Offline access belongs to the incremental Calendar connect (S3), not to login.
+    assert "access_type" not in query
+    assert "prompt" not in query
+    assert query["scope"] == ["openid email profile"]
+    assert query["code_challenge_method"] == ["S256"]
+
+
+async def test_relogin_without_refresh_token_keeps_the_previous_one(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_google(monkeypatch, sub="sub-refresh", refresh_token="first-refresh")
+    assert (await _login(client, "c1")).headers["location"] == "/"
+    before = (
+        await db_session.execute(text("SELECT refresh_token_enc FROM google_credentials"))
+    ).scalar_one()
+
+    _fake_google(monkeypatch, sub="sub-refresh", refresh_token=None)
+    assert (await _login(client, "c2")).headers["location"] == "/"
+    after = (
+        await db_session.execute(
+            text("SELECT refresh_token_enc, access_token_enc FROM google_credentials")
+        )
+    ).one()
+
+    assert before is not None
+    assert after.refresh_token_enc == before
+    assert b"access-c2" not in after.access_token_enc
+
+
+async def test_account_being_deleted_gets_no_session(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await db_session.execute(
+        text(
+            "INSERT INTO users (google_sub, email, status) "
+            "VALUES ('sub-deleting', 'gone@example.test', 'deleting')"
+        )
+    )
+    await db_session.commit()
+    _fake_google(monkeypatch, sub="sub-deleting", refresh_token=None)
+
+    response = await _login(client)
+
+    assert response.headers["location"] == "/login?error=oauth_failed"
+    assert COOKIE_NAME not in response.headers.get("set-cookie", "")
+    sessions_count = (
+        await db_session.execute(
+            text(
+                "SELECT count(*) FROM sessions s JOIN users u ON u.id = s.user_id "
+                "WHERE u.google_sub = 'sub-deleting'"
+            )
+        )
+    ).scalar_one()
+    assert sessions_count == 0
+
+
+async def test_login_revokes_the_session_the_browser_already_had(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_google(monkeypatch, sub="sub-fixation", refresh_token=None)
+    first = _cookie_value(await _login(client, "c1"), COOKIE_NAME)
+
+    second = await _login(client, "c2", cookies={COOKIE_NAME: first})
+
+    assert _cookie_value(second, COOKIE_NAME) != first
+    assert (await client.get("/me", cookies={COOKIE_NAME: first})).status_code == 401
