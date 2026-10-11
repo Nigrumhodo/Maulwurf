@@ -343,6 +343,10 @@ must establish quotas, rate limits, alerts, retention policies, and provider ter
 ## Further documentation
 
 - [Functional and technical specification](docs/ESPECIFICACION.md)
+- [System architecture](docs/ARCH.md) — context, containers, components and trust zones, with
+  implementation status
+- [Process diagrams](docs/PROCESOS.md) — upload, transcription, search, chat, Calendar, reminders,
+  deletion and team workflow
 - [Development runbook](docs/RUNBOOK-dev.md) — local stack, healthchecks, tests, lint, migrations
 - [Implementation and validation plan](docs/PLAN_IMPLEMENTACION.md)
 - [Team sprint plan (S1–S4)](docs/PLAN_SPRINTS.md) — open weekly backlogs with ticket
