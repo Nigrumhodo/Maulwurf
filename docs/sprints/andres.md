@@ -1,27 +1,27 @@
-# Andres Felipe — bitácora de sprint
+# Andres Felipe — sprint logbook
 
-> Perfil sugerido: API · Base de datos (§0.2 del plan) ·
-> Plan maestro: [../PLAN_SPRINTS.md](../PLAN_SPRINTS.md) ·
-> Pruebas: [../PLAN_TESTS.md](../PLAN_TESTS.md) ·
-> Contratos: [../ESPECIFICACION.md](../ESPECIFICACION.md) (§M1, §M2, §M4, §6) ·
-> Puertas: [../PLAN_IMPLEMENTACION.md](../PLAN_IMPLEMENTACION.md) (G3, G5-F1, G5-F2)
+> Suggested profile: API · Database (plan §0.2) ·
+> Master plan: [../PLAN_SPRINTS.md](../PLAN_SPRINTS.md) ·
+> Tests: [../PLAN_TESTS.md](../PLAN_TESTS.md) ·
+> Contracts: [../ESPECIFICACION.md](../ESPECIFICACION.md) (§M1, §M2, §M4, §6) ·
+> Gates: [../PLAN_IMPLEMENTACION.md](../PLAN_IMPLEMENTACION.md) (G3, G5-F1, G5-F2)
 
-## Tickets reclamados
+## Claimed tickets
 
-### Semana 1 (S1) — Fundación + spike
+### Week 1 (S1) — Foundation + spike
 
-> Sección histórica: las filas anteriores a la revisión 2026-09-19 son candidatos, no
-> claims; los tickets vigentes se registran primero en [CLAIMS.md](CLAIMS.md). Hasta que
-> exista una fila allí, esta tabla permanece vacía.
+> Historical section: rows written before the 2026-09-19 review are candidates, not
+> claims; current tickets are recorded first in [CLAIMS.md](CLAIMS.md). Until a row exists
+> there, this table stays empty.
 
-| Ticket | Área | Estado | Evidencia (comando, fecha, entorno, resultado) |
+| Ticket | Area | Status | Evidence (command, date, environment, result) |
 |---|---|---|---|
-| — | — | — | Sin claims aún: el sprint S1 se abre por PR en `CLAIMS.md`. |
+| — | — | — | No claims yet: the S1 sprint opens through a PR in `CLAIMS.md`. |
 
-## Bloqueos y dependencias
+## Blockers and dependencies
 
-- (el lunes de cada semana: anotar de quién esperas contrato congelado §6 o código real, y qué día)
+- (every Monday: note whom you are waiting on for a frozen contract §6 or real code, and which day)
 
-## Notas de semana
+## Week notes
 
-- (decisiones, hallazgos, desvíos de alcance — una línea por evento con fecha)
+- (decisions, findings, scope deviations — one line per event, with date)

@@ -26,7 +26,7 @@ ticket is [../PLAN_TESTS.md](../PLAN_TESTS.md); the contracts source is
    review from whoever holds an active claim there or from the lead.
 6. **Evidence over claims:** a ticket closes with a real command, date, environment, and
    result recorded in the logbook. A mock does not validate a provider; a unit test does
-   not validate infrastructure; nothing is `hecho` just for being written down.
+   not validate infrastructure; nothing is `done` just for being written down.
 
 ## Team logbooks
 
@@ -98,9 +98,9 @@ Each personal logbook keeps this minimum structure:
 > Historical section: rows written before the 2026-09-19 review are candidates, not
 > claims. Current tickets are recorded first in `CLAIMS.md`.
 
-| Ticket | Area | Status (`pendiente/en curso/bloqueado/hecho/transferido`) | Evidence (command, date, environment, result) |
+| Ticket | Area | Status (`pending/in progress/blocked/done/transferred`) | Evidence (command, date, environment, result) |
 |---|---|---|---|
-| <id> | <area> | pendiente | Claim accepted in `CLAIMS.md`: <PR/link> |
+| <id> | <area> | pending | Claim accepted in `CLAIMS.md`: <PR/link> |
 
 ## Blockers and dependencies
 
@@ -112,8 +112,8 @@ Each personal logbook keeps this minimum structure:
 ```
 
 Template rules: one ticket per row and only after it appears in `CLAIMS.md`; the status
-changes at the daily, not on Friday; a ticket marked `hecho` without evidence goes back
-to `en curso`. Each week S2–S4 adds its own section only when the sprint is open.
+changes at the daily, not on Friday; a ticket marked `done` without evidence goes back
+to `in progress`. Each week S2–S4 adds its own section only when the sprint is open.
 
 ## Links
 

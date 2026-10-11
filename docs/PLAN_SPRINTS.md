@@ -35,8 +35,8 @@
    [PLAN_TESTS.md](PLAN_TESTS.md).
 6. **Authority and evidence:** `CLAIMS.md` is canonical for ownership/status; logbooks
    keep commands, date, environment, results, and notes. A pre-existing row in a logbook
-   without an accepted claim is a historical candidate, not ownership. A `hecho` without
-   evidence goes back to `en curso`.
+   without an accepted claim is a historical candidate, not ownership. A `done` without
+   evidence goes back to `in progress`.
 
 ### 0.2 Areas and profiles
 
@@ -54,7 +54,7 @@ person**:
 Any member may claim from any area. A ticket whose Tests field includes `P-*`, or whose
 execution makes a real call to Riva, LLM/embeddings, or Google, requires the owner to have
 authorized eligibility and an approved budget. `CLAIMS.md` records only `no_aplica` or
-`verificada:<provider>`, never accounts, keys, tokens, or sensitive quotas. Crossing
+`verified:<provider>`, never accounts, keys, tokens, or sensitive quotas. Crossing
 folders requires review from the owner of that interface or, if there is none, from a
 sprint reviewer; that review does not turn the reviewer into an owner.
 
@@ -77,11 +77,11 @@ sprint reviewer; that review does not turn the reviewer into an owner.
    backlog is updated and merged with the child IDs and the parent's disposition;
    afterwards each child may be claimed in another PR. Out-of-scope ideas go to F4.
 6. **Closed statuses:** the canonical vocabulary is the one in
-   [sprints/CLAIMS.md](sprints/CLAIMS.md) §2 — `pendiente`, `en curso`, `bloqueado`,
-   `hecho`, `transferido`, and `cancelado`. Claiming, transferring, and unclaiming are
-   **actions/events**, not statuses; `continuo` describes the bounded nature of a ticket,
+   [sprints/CLAIMS.md](sprints/CLAIMS.md) §2 — `pending`, `in progress`, `blocked`,
+   `done`, `transferred`, and `cancelled`. Claiming, transferring, and unclaiming are
+   **actions/events**, not statuses; `continuous` describes the bounded nature of a ticket,
    never a status. A continuous-work ticket is bounded to the sprint and closes with
-   evidence; it does not remain `en curso` when the next week opens.
+   evidence; it does not remain `in progress` when the next week opens.
 
 ## 1. Sprint summary
 
@@ -204,7 +204,7 @@ progress SSE response shape.
 **Documentation:** ADRs reviewed; spike report; startup README; spec/plan updated if a
 contract changed.
 
-**Claims and logbooks:** ownership/status closed in `sprints/CLAIMS.md`; every `hecho`
+**Claims and logbooks:** ownership/status closed in `sprints/CLAIMS.md`; every `done`
 ticket links reproducible evidence in a PR or logbook (command, date, environment, result).
 
 ## 3. Week 2 (S2) — Knowledge: F1 vertical slice
@@ -284,7 +284,7 @@ terminal event; citation format `[Subject · Class · mm:ss]`; paginated `/searc
 | D2.5 | `TranscriptReader` with `?segment=`, conditional export, empty summary when `not_requested` | A2.9 | C-S2-DA-04 |
 | D2.6 | Chat UI: conversation history, SSE with `fetch`, `delta/citation/done/error` events, cancellation | L2.5, A2.12 | C-S2-DA-05 |
 | D2.7 | Clickable citations → reader with highlighted segment; sanitized Markdown | L2.6, D2.5 | C-S2-DA-05, E-S2-JL-09 |
-| D2.8 | Browser privacy: `no-store`, releasing `File`/object URLs, no private cache | continuo | C-S2-DA-07 |
+| D2.8 | Browser privacy: `no-store`, releasing `File`/object URLs, no private cache | continuous | C-S2-DA-07 |
 
 ### Definition of Done (S2 exit gate)
 
