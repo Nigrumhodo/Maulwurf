@@ -1,81 +1,80 @@
-# infra/ — entorno local de desarrollo (S1)
+# infra/ — local development environment (S1)
 
-Estado: `docker-compose.yml` (J1.1), el endurecimiento de `ingest` (J1.2), el
-`Caddyfile` sin buffering (J1.3) y la política de Redis (J1.6) están fusionados en
-`develop`. La propiedad de los tickets J1.x se registra en
-[docs/sprints/CLAIMS.md](../docs/sprints/CLAIMS.md); los comandos completos, en
+Status: `docker-compose.yml` (J1.1), the `ingest` hardening (J1.2), the no-buffering
+`Caddyfile` (J1.3), and the Redis policy (J1.6) are merged into `develop`. J1.x ticket
+ownership is recorded in [docs/sprints/CLAIMS.md](../docs/sprints/CLAIMS.md); full commands are in
 [docs/RUNBOOK-dev.md](../docs/RUNBOOK-dev.md).
 
-## Contenido
+## Contents
 
-| Archivo | Qué es |
+| File | What it is |
 |---|---|
-| `docker-compose.yml` | Los 8 servicios de S1 con healthchecks; imágenes fijadas por digest |
-| `Caddyfile` | Proxy TLS local (`tls internal`), mismo origen web/api/ingest, sin buffering ni caché |
+| `docker-compose.yml` | S1's 8 services with healthchecks; images pinned by digest |
+| `Caddyfile` | Local TLS proxy (`tls internal`), same origin for web/api/ingest, no buffering or cache |
 
-| Servicio | Imagen | Notas |
+| Service | Image | Notes |
 |---|---|---|
-| `web` | `maulwurf-web:local` (build `apps/web`) | Next.js 22-alpine, usuario no root |
-| `api` | `maulwurf-api:local` (build `apps/api`) | FastAPI; `/readyz` real: 200 con Postgres y Redis, 503 si falta uno |
-| `ingest` | `maulwurf-ingest:local` (build `apps/ingest`, target `runtime`) | Endurecido: ver abajo |
-| `worker` / `scheduler` | `maulwurf-api:local` | Procesos ARQ reales (J1.5) con healthcheck `arq --check`; jobs noop hasta S2 (ack/reintentos → J2.1) |
-| `postgres` | `pgvector/pgvector:pg16` por digest | Único durable: volumen `pgdata` |
-| `redis` | `redis:7.4-alpine` por digest | Sin persistencia, `noeviction` ([ADR-0005](../docs/adr/ADR-0005-redis.md)) |
-| `caddy` | `caddy:2.8-alpine` por digest | `admin off`; access log JSON sin bodies |
+| `web` | `maulwurf-web:local` (build `apps/web`) | Next.js 22-alpine, non-root user |
+| `api` | `maulwurf-api:local` (build `apps/api`) | FastAPI; real `/readyz`: 200 with Postgres and Redis, 503 if either is missing |
+| `ingest` | `maulwurf-ingest:local` (build `apps/ingest`, target `runtime`) | Hardened: see below |
+| `worker` / `scheduler` | `maulwurf-api:local` | Real ARQ processes (J1.5) with `arq --check` healthcheck; noop jobs until S2 (ack/retries → J2.1) |
+| `postgres` | `pgvector/pgvector:pg16` by digest | The only durable one: `pgdata` volume |
+| `redis` | `redis:7.4-alpine` by digest | No persistence, `noeviction` ([ADR-0005](../docs/adr/ADR-0005-redis.md)) |
+| `caddy` | `caddy:2.8-alpine` by digest | `admin off`; JSON access log without bodies |
 
-## Garantías del entorno local
+## Local environment guarantees
 
-- **Sin audio durable:** no hay MinIO/S3, ni volumen de audio; los temporales de ingesta
-  viven en tmpfs privado y se pierden al recrear el contenedor. Los únicos volúmenes son
-  `pgdata`, `caddy_data` y `caddy_config`.
-- **`ingest` endurecido (J1.2):** root fs de solo lectura, `cap_drop: ALL`,
-  `no-new-privileges`, usuario `10001`, tmpfs `noexec,nosuid,nodev` en `/work/tmp`,
-  límites de CPU/memoria, `pids_limit`, sin swap adicional y `core: 0`.
-- **Redis (J1.6):** `--save "" --appendonly no`, `noeviction`, valores ≤ 4 KiB y solo
-  claves `arq:*`/`mw:*`; publicado solo en loopback para el test I-S1-JF-03.
-- **Proxy (J1.3):** uploads en streaming puro; el `PUT /audios/*/content` apunta a
-  `api:8000` en S1 y conmuta a `ingest:8000` en S2 (comentario en el propio Caddyfile).
-  La prueba de no-buffering es `scripts/load/proxy_no_buffering.sh` (I-S1-JF-02).
-- **Secretos fuera del compose:** la contraseña de Postgres va como
-  `${POSTGRES_PASSWORD:-maulwurf}` (override con `.env`); los `MAULWURF_*` llegan por
-  `env_file`. Nunca commitear `.env`.
+- **No durable audio:** there is no MinIO/S3 and no audio volume; ingestion temporaries
+  live in private tmpfs and are lost when the container is recreated. The only volumes are
+  `pgdata`, `caddy_data`, and `caddy_config`.
+- **Hardened `ingest` (J1.2):** read-only root fs, `cap_drop: ALL`,
+  `no-new-privileges`, user `10001`, tmpfs `noexec,nosuid,nodev` on `/work/tmp`,
+  CPU/memory limits, `pids_limit`, no additional swap, and `core: 0`.
+- **Redis (J1.6):** `--save "" --appendonly no`, `noeviction`, values ≤ 4 KiB and only
+  `arq:*`/`mw:*` keys; published on loopback only for test I-S1-JF-03.
+- **Proxy (J1.3):** purely streaming uploads; the `PUT /audios/*/content` points to
+  `api:8000` in S1 and switches to `ingest:8000` in S2 (comment in the Caddyfile itself).
+  The no-buffering test is `scripts/load/proxy_no_buffering.sh` (I-S1-JF-02).
+- **Secrets outside the compose file:** the Postgres password goes as
+  `${POSTGRES_PASSWORD:-maulwurf}` (overridable with `.env`); the `MAULWURF_*` values arrive
+  via `env_file`. Never commit `.env`.
 
-## Variables de entorno del stack
+## Stack environment variables
 
-| Variable | Uso |
+| Variable | Use |
 |---|---|
-| `CADDY_HTTP_PORT` / `CADDY_HTTPS_PORT` | Puertos del host para 80/443 (p. ej. 8080/8443) |
-| `REDIS_PORT` | Puerto del host para el Redis publicado en loopback (p. ej. 6380) |
-| `POSTGRES_PASSWORD` | Override de la contraseña local de Postgres |
-| `INGEST_TMPFS_BYTES` / `INGEST_MEM_LIMIT` | tmpfs y límite de memoria de `ingest`; provisionales |
+| `CADDY_HTTP_PORT` / `CADDY_HTTPS_PORT` | Host ports for 80/443 (e.g. 8080/8443) |
+| `REDIS_PORT` | Host port for the Redis published on loopback (e.g. 6380) |
+| `POSTGRES_PASSWORD` | Override for the local Postgres password |
+| `INGEST_TMPFS_BYTES` / `INGEST_MEM_LIMIT` | `ingest` tmpfs and memory limit; provisional |
 
-Los valores de `INGEST_*` vienen de `.env.example` y **no están aprobados** hasta
-S1.B2/D4 (límites medidos); los 200 MiB/3 h del spike S1.A5 tampoco lo están.
+The `INGEST_*` values come from `.env.example` and are **not approved** until
+S1.B2/D4 (measured limits); the 200 MiB/3 h from spike S1.A5 are not either.
 
-## Arranque rápido
+## Quick start
 
 ```bash
-cp .env.example .env   # completar los MAULWURF_* con openssl rand -hex 32
+cp .env.example .env   # fill in the MAULWURF_* values with openssl rand -hex 32
 cd infra
 docker compose up -d --build --wait
 docker compose ps      # 8/8 healthy
 ```
 
-Si 80/443 están ocupados en el host:
+If 80/443 are taken on the host:
 
 ```bash
 CADDY_HTTP_PORT=8080 CADDY_HTTPS_PORT=8443 docker compose up -d --build --wait
 ```
 
-Healthchecks, TLS, tests y cierre: [docs/RUNBOOK-dev.md](../docs/RUNBOOK-dev.md).
+Healthchecks, TLS, tests, and shutdown: [docs/RUNBOOK-dev.md](../docs/RUNBOOK-dev.md).
 
-## Pendiente en esta área
+## Pending in this area
 
-- **J2.1:** ack/reintentos del dispatcher de outbox (J1.5 entregó worker/scheduler ARQ y
-  el gate de cleanup).
-- **Migraciones:** el contenedor `api` aplica `alembic upgrade head` al arrancar (A1.7);
-  comandos manuales en el [runbook](../docs/RUNBOOK-dev.md) (§5).
-- **Verificación del host (J1.2):** `zram` activo y `core_pattern` a systemd-coredump
-  quedaron como pendiente de operación en la bitácora.
-- **SSE y upload real:** A1.8 entregó el contrato de ingesta (`PUT` responde 503 en S1);
-  el upload real y el SSE llegan en S2.
+- **J2.1:** outbox dispatcher ack/retries (J1.5 delivered the ARQ worker/scheduler and the
+  cleanup gate).
+- **Migrations:** the `api` container runs `alembic upgrade head` on boot (A1.7);
+  manual commands in the [runbook](../docs/RUNBOOK-dev.md) (§5).
+- **Host verification (J1.2):** active `zram` and `core_pattern` to systemd-coredump were
+  left as a pending operations item in the logbook.
+- **SSE and real upload:** A1.8 delivered the ingestion contract (`PUT` responds 503 in S1);
+  real upload and SSE arrive in S2.

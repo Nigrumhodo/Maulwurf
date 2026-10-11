@@ -1,42 +1,42 @@
-# ADR-0005 — Política de Redis
+# ADR-0005 — Redis policy
 
-- Fecha UTC: 2026-09-25
-- Estado: Aceptado (fusionado en #17 con review; J1.6)
+- Date (UTC): 2026-09-25
+- Status: Accepted (merged in #17 with review; J1.6)
 - Ticket: J1.6
-- Relacionado: [../ESPECIFICACION.md](../ESPECIFICACION.md) §3.1 y §8,
+- Related: [../ESPECIFICACION.md](../ESPECIFICACION.md) §3.1 and §8,
   [../PLAN_IMPLEMENTACION.md](../PLAN_IMPLEMENTACION.md) (G1, G5-F1),
-  [../plan/S1.md](../plan/S1.md) §1.3 y §5 (J1.6)
+  [../plan/S1.md](../plan/S1.md) §1.3 and §5 (J1.6)
 
-## Contexto
+## Context
 
-ARQ usa Redis como cola y almacén de estado de trabajo. El outbox durable vive
-en PostgreSQL: los trabajos se pueden regenerar desde la BD si Redis se pierde
-(J2.3). El riesgo es convertir Redis en un almacén no auditado de audio,
-transcripts, prompts, tokens o PII, y en una segunda fuente de verdad con
-persistencia duradera no revisada.
+ARQ uses Redis as job queue and job state store. The durable outbox lives
+in PostgreSQL: jobs can be regenerated from the DB if Redis is lost
+(J2.3). The risk is turning Redis into an unaudited store of audio,
+transcripts, prompts, tokens, or PII, and into a second source of truth
+with unreviewed durable persistence.
 
-## Decisión
+## Decision
 
-| Tema | Decisión | Razón |
+| Topic | Decision | Reason |
 |---|---|---|
-| Fuente de verdad | PostgreSQL (`outbox_events`) | Redis es prescindible; los jobs se reconstruyen |
-| Persistencia de Redis | Deshabilitada: `--save "" --appendonly no`, sin volumen | Evita copias durables no auditadas |
-| Evicción | `maxmemory-policy noeviction` | Fallar visible antes que evacuar jobs en silencio |
-| `maxmemory` | `${REDIS_MAXMEMORY:-256mb}` (provisional) | Acota el contenedor; se revisa en S2/S4 |
-| Umbral de valor | **4 KiB por valor** | IDs, estados, contadores y resultados cortos de ARQ; nada mayor pertenece a Redis |
-| Catálogo de claves | `arq:*` (colas `arq:queue` y `arq:scheduler`, claves de salud `arq:queue:health-check` y `arq:scheduler:health-check`), `mw:*` solo IDs/estado | Toda clave nueva se documenta aquí |
-| TTL | Resultados ARQ `keep_result=60` s; claves de salud 30–60 s | Sin estado de larga vida |
-| Prohibido | Audio, transcripts, textos, prompts, tokens, credenciales, PII | G1 y reglas no negociables |
-| Exposición | Sin puerto al host; en local solo `127.0.0.1:6379` para el test de barrido | Reduce superficie sin bloquear I-S1-JF-03 |
+| Source of truth | PostgreSQL (`outbox_events`) | Redis is dispensable; jobs are rebuilt |
+| Redis persistence | Disabled: `--save "" --appendonly no`, no volume | Avoids unaudited durable copies |
+| Eviction | `maxmemory-policy noeviction` | Visible failure instead of silently evicting jobs |
+| `maxmemory` | `${REDIS_MAXMEMORY:-256mb}` (provisional) | Caps the container; revisited in S2/S4 |
+| Value threshold | **4 KiB per value** | IDs, states, counters, and short ARQ results; nothing larger belongs in Redis |
+| Key catalog | `arq:*` (queues `arq:queue` and `arq:scheduler`, health keys `arq:queue:health-check` and `arq:scheduler:health-check`), `mw:*` IDs/status only | Every new key is documented here |
+| TTL | ARQ results `keep_result=60` s; health keys 30–60 s | No long-lived state |
+| Forbidden | Audio, transcripts, texts, prompts, tokens, credentials, PII | G1 and non-negotiable rules |
+| Exposure | No port to the host; locally only `127.0.0.1:6379` for the sweep test | Shrinks surface without blocking I-S1-JF-03 |
 
-Cambiar cualquiera de estas filas exige actualizar este ADR y el compose en el
-mismo PR.
+Changing any of these rows requires updating this ADR and the compose file in
+the same PR.
 
-## Consecuencias
+## Consequences
 
-- Perder Redis (reinicio o `FLUSHALL`) pierde trabajos encolados, no datos:
-  el outbox de PostgreSQL los regenera (J2.3). El test I-S2-JF-03 lo verificará.
-- Con memoria llena, ARQ falla al encolar en vez de evacuar; J2.5 debe alertar.
-- El test I-S1-JF-03 barre claves y tamaños contra el umbral de 4 KiB, y
-  comprueba `aof_enabled=0`, `save` vacío y `noeviction`.
-- Este ADR no decide políticas de proveedor, embeddings ni dimensiones de índice.
+- Losing Redis (restart or `FLUSHALL`) loses queued jobs, not data:
+  the PostgreSQL outbox regenerates them (J2.3). Test I-S2-JF-03 will verify it.
+- With memory full, ARQ fails to enqueue instead of evicting; J2.5 must alert.
+- Test I-S1-JF-03 sweeps keys and sizes against the 4 KiB threshold, and
+  checks `aof_enabled=0`, empty `save`, and `noeviction`.
+- This ADR does not decide provider, embedding, or index dimension policies.

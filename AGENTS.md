@@ -42,7 +42,8 @@ explicit Definition of Done. See "Sprint Model" below.
 - `apps/web/` — Next.js 15 scaffold (placeholder landing page is out of scope; area `D-`
   owns the real routes): `package.json` (Vitest, ESLint, Tailwind), `tsconfig.json`, empty
   `lib/`, `components/`, `tests/{unit,e2e}/`.
-- `docs/` — Spanish-language product, architecture, provider, and delivery documentation.
+- `docs/` — English-language product, architecture, provider, and delivery documentation
+  (the original Spanish sources are archived under `docs/es/`).
   - `docs/ESPECIFICACION.md` — Source of truth for contracts (M1–M9), data model, security.
   - `docs/PLAN_IMPLEMENTACION.md` — Phases F0–F3, gates (G1, G2-T/G2-X, G3, G4, G5-F1/G5-F2,
   G6, G7-CAL/G7-MAIL, G8), decisions D1–D8 (D3 and D7 split per provider) and closure matrix.
@@ -59,8 +60,8 @@ explicit Definition of Done. See "Sprint Model" below.
     ticket detail.
   - `docs/PROPUESTA_PROYECTO_FINAL.md` — Project vision document.
   - `docs/sprints/` — Canonical claim registry in `docs/sprints/CLAIMS.md` (ownership and
-    state) plus one personal **bitácora** (logbook) per member for evidence, blockers and
-    notes; a bitácora row does not assign a ticket. Rules and template in
+    state) plus one personal **logbook** per member for evidence, blockers and
+    notes; a logbook row does not assign a ticket. Rules and template in
     `docs/sprints/README.md`.
   - `docs/NVIDIA_RIVA.md` — Audited Riva client parameters and reference invocation.
   - `docs/RUNBOOK-dev.md` — Canonical local development runbook (stack, healthchecks,
@@ -83,7 +84,7 @@ explicit Definition of Done. See "Sprint Model" below.
    `J-` infra/workers/integrations, `D-` web/UX); the letter marks the area, not a person.
    Only the **active sprint** is claimable. Claims are accepted via PR in
    `docs/sprints/CLAIMS.md` (ticket, unique owner, `claimed_at` UTC, state, cloud
-   eligibility, review). Bitácoras record evidence but do not assign tickets; rows written
+   eligibility, review). Logbooks record evidence but do not assign tickets; rows written
    before 2026-09-19 are historical candidates, not ownership.
 2. **Ticket = one owner.** Unclaimed tickets are resolved by the lead (reassign, split, or
    explicitly reduce the sprint's DoD). Cloud-budget tickets (`P-` tests) require access to
@@ -95,7 +96,7 @@ explicit Definition of Done. See "Sprint Model" below.
 4. **Definition of Done per sprint** (functional demo, tests per level, documentation,
    evidence) lives at the end of each week section of `docs/PLAN_SPRINTS.md`.
 5. **Evidence over claims.** A ticket is done only with real command, date, environment,
-   and result recorded in the bitácora; `CLAIMS.md` keeps the ownership state. Transfers
+   and result recorded in the logbook; `CLAIMS.md` keeps the ownership state. Transfers
    and unclaims require an atomic PR with motive and evidence handover. A passing checkbox
    without evidence is not done.
 6. **Document priority:** `ESPECIFICACION.md` and `PLAN_IMPLEMENTACION.md` override the
@@ -178,9 +179,18 @@ application and has not been run against NVIDIA from this repository.
 - Configuration uses Pydantic Settings with env prefix `MAULWURF_` and `extra="forbid"`;
   secrets come only from the environment (see `.env.example`), never from code.
 - Documentation uses ATX headings, fenced code blocks, tables where useful, Mermaid
-  diagrams, and relative links. Keep edits concise, preserve the existing Spanish technical
-  vocabulary in the source documents, and do not present proposals as completed work. Keep
-  new Markdown near 100 characters per line where practical.
+  diagrams, and relative links. Canonical documentation is in English; the original Spanish
+  sources are archived under `docs/es/` and are no longer edited. Keep edits concise, do not
+  present proposals as completed work, and keep new Markdown near 100 characters per line
+  where practical.
+- **Language and comments (rule):** write all documentation and all code comments in
+  English. In code, add a comment only when it is necessary: explain a non-obvious *why*
+  (a constraint, invariant, workaround, or security/privacy reason), never restate what the
+  code already says; prefer clear names and small functions over comments. Existing Spanish
+  comments stay as they are: do not translate or rewrite them in bulk, and do not add new
+  Spanish ones. Spanish literals that code or tests emit and compare (for example
+  `NO VERIFICADO` or the Spanish error messages) are data, not comments, and are kept
+  verbatim.
 - `docs/ESPECIFICACION.md` is the stated source of functional and technical contracts.
   Changes to phases, states, APIs, or guarantees must update the specification and
   `docs/PLAN_IMPLEMENTACION.md` in the same revision.
@@ -302,7 +312,7 @@ versioned or retained as a CI artifact. Persist only non-sensitive metrics and e
 1. S1 landed a real foundation (compose stack, migration, routers, tests, CI), but there
    is **no end-to-end feature** yet. Never claim that a planned service, endpoint, CI job,
    migration, or acceptance gate is implemented beyond what `docs/sprints/CLAIMS.md`
-   records as `hecho` with evidence; the F0 gates (D2, D3-Audio, D4, D6) are open, so no
+   records as `done` with evidence; the F0 gates (D2, D3-Audio, D4, D6) are open, so no
    real-class ingestion exists.
 2. Never add durable audio storage, an audio playback/download path, hidden retranscription,
    upload spooling to persistent disk, or audio copies in object storage, Redis, logs,
@@ -321,7 +331,7 @@ versioned or retained as a CI artifact. Persist only non-sensitive metrics and e
    changes must update `docs/ESPECIFICACION.md` and `docs/PLAN_IMPLEMENTACION.md` together.
 7. Respect the sprint claiming model: work belongs to a ticket with an accepted claim in
    `docs/sprints/CLAIMS.md`; do not silently take over a claimed ticket, split it, or edit
-   someone's bitácora. The placeholder landing page in `apps/web/app/page.tsx` is out of scope — do
+   someone's logbook. The placeholder landing page in `apps/web/app/page.tsx` is out of scope — do
    not invest in it.
 8. Preserve unrequested user changes and do not edit editor or agent workspace
    configuration or generated environment files as a side effect of application work.
@@ -382,8 +392,8 @@ versioned or retained as a CI artifact. Persist only non-sensitive metrics and e
 - [`docs/RUNBOOK-dev.md`](docs/RUNBOOK-dev.md) — Development runbook: local stack,
   healthchecks, migrations, tests, and lint.
 - [`docs/sprints/CLAIMS.md`](docs/sprints/CLAIMS.md) — Canonical claim registry (S1–S4).
-- [`docs/sprints/README.md`](docs/sprints/README.md) — Claiming rules and bitácora template;
-  one bitácora per member in that directory.
+- [`docs/sprints/README.md`](docs/sprints/README.md) — Claiming rules and logbook template;
+  one logbook per member in that directory.
 - [`docs/plan/S1.md`](docs/plan/S1.md)–[`docs/plan/S4.md`](docs/plan/S4.md) — Per-sprint
   detailed specifications and acceptance criteria.
 - [`docs/NVIDIA_RIVA.md`](docs/NVIDIA_RIVA.md) — Riva client audit, connection parameters,

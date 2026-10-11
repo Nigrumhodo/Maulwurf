@@ -1,24 +1,24 @@
-# RUNBOOK de desarrollo (local)
+# Development runbook (local)
 
-> Alcance: entorno local de desarrollo. No es un runbook de producción (S4/J4.x).
-> La fuente de verdad de contratos es [ESPECIFICACION.md](ESPECIFICACION.md);
-> el estado real del repositorio, lo que estas páginas documentan.
+> Scope: local development environment. Not a production runbook (S4/J4.x).
+> The source of truth for contracts is [ESPECIFICACION.md](ESPECIFICACION.md);
+> the actual state of the repository is what these pages document.
 
-## 1. Requisitos
+## 1. Requirements
 
-- Docker Engine + Compose v2 (probado con Docker 29.8 y Compose 5.5).
-- `uv` 0.12.18 o superior (gestiona también Python 3.12 vía `.python-version`).
-- Node.js 22 (`.nvmrc`) y `npm`.
-- `openssl` para generar secretos locales.
+- Docker Engine + Compose v2 (tested with Docker 29.8 and Compose 5.5).
+- `uv` 0.12.18 or higher (it also manages Python 3.12 via `.python-version`).
+- Node.js 22 (`.nvmrc`) and `npm`.
+- `openssl` to generate local secrets.
 
-## 2. Primer arranque
+## 2. First start
 
 ```bash
 git clone https://github.com/Nigrumhodo/Maulwurf.git
 cd Maulwurf
 cp .env.example .env
 
-# Generar secretos locales (no se commitean; .env está en .gitignore)
+# Generate local secrets (not committed; .env is in .gitignore)
 openssl rand -hex 32   # MAULWURF_SECRET_KEY
 openssl rand -hex 32   # MAULWURF_ENCRYPTION_KEY
 openssl rand -hex 32   # MAULWURF_OAUTH_STATE_SECRET
@@ -28,30 +28,30 @@ docker compose up -d --build --wait
 docker compose ps
 ```
 
-Si los puertos 80/443 ya están ocupados en el host:
+If ports 80/443 are already taken on the host:
 
 ```bash
 CADDY_HTTP_PORT=8080 CADDY_HTTPS_PORT=8443 docker compose up -d --build --wait
-# usar https://localhost:8443 en los comandos siguientes
+# use https://localhost:8443 in the following commands
 ```
 
-Los 8 servicios (`web`, `api`, `ingest`, `worker`, `scheduler`, `postgres`,
-`redis`, `caddy`) quedan `healthy`. `api` aplica las migraciones al arrancar (§5);
-`worker`/`scheduler` son procesos ARQ con healthcheck `arq ... --check` (J1.5).
+The 8 services (`web`, `api`, `ingest`, `worker`, `scheduler`, `postgres`,
+`redis`, `caddy`) end up `healthy`. `api` applies the migrations on startup (§5);
+`worker`/`scheduler` are ARQ processes with healthcheck `arq ... --check` (J1.5).
 
 ## 3. Healthchecks
 
 ```bash
 curl -k -o /dev/null -w '%{http_code}\n' https://localhost/          # web (200: placeholder)
-curl -k https://localhost/readyz                                     # api: 200 con Postgres y Redis, 503 si falta uno
+curl -k https://localhost/readyz                                     # api: 200 with Postgres and Redis, 503 if one is missing
 docker compose exec api    python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8000/healthz').status)"
 docker compose exec ingest python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8000/healthz').status)"
 ```
 
-## 4. TLS local
+## 4. Local TLS
 
-Caddy usa su CA interna (`tls internal`), persistida en el volumen `caddy_data`.
-Para confiar en ella en lugar de usar `curl -k`:
+Caddy uses its internal CA (`tls internal`), persisted in the `caddy_data` volume.
+To trust it instead of using `curl -k`:
 
 ```bash
 docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt /tmp/maulwurf-root.crt
@@ -59,26 +59,27 @@ sudo cp /tmp/maulwurf-root.crt /usr/local/share/ca-certificates/maulwurf-root.cr
 sudo update-ca-certificates
 ```
 
-## 5. Migraciones (A1.7)
+## 5. Migrations (A1.7)
 
-El contenedor `api` ejecuta `alembic upgrade head` antes de uvicorn, así que
-`docker compose up` deja la BD en `head` sin paso manual. Si varias réplicas arrancan a la
-vez, un advisory lock las serializa; la que espera más de 120 s falla en lugar de colgarse.
+The `api` container runs `alembic upgrade head` before uvicorn, so
+`docker compose up` leaves the DB at `head` with no manual step. If several replicas start at
+the same time, an advisory lock serializes them; the one waiting more than 120 s fails instead
+of hanging.
 
 ```bash
-docker compose exec api alembic current            # revisión aplicada (0001 en S1)
-docker compose exec api alembic upgrade head       # aplicar a mano, p. ej. tras un pull
-docker compose exec api alembic downgrade -1       # rollback a la revisión anterior
-docker compose exec api alembic history            # cadena de revisiones
+docker compose exec api alembic current            # applied revision (0001 in S1)
+docker compose exec api alembic upgrade head       # apply manually, e.g. after a pull
+docker compose exec api alembic downgrade -1       # rollback to the previous revision
+docker compose exec api alembic history            # revision chain
 ```
 
-El rollback de `0001` elimina todas las tablas de la app y sus datos locales: úsalo solo en
-desarrollo. Un cambio de esquema es siempre una revisión nueva
-(`uv run alembic revision --autogenerate -m "..."` desde `apps/api`, revisada a mano);
-nunca se edita una revisión ya aplicada. `uv run alembic check` debe responder «No new
-upgrade operations detected» antes de abrir el PR.
+Rolling back `0001` drops all the app tables and their local data: use it only in
+development. A schema change is always a new revision
+(`uv run alembic revision --autogenerate -m "..."` from `apps/api`, reviewed by hand);
+an already-applied revision is never edited. `uv run alembic check` must answer "No new
+upgrade operations detected" before opening the PR.
 
-## 6. Tests y lint
+## 6. Tests and lint
 
 ```bash
 # API
@@ -87,7 +88,7 @@ uv sync --frozen --extra dev
 uv run ruff check . && uv run mypy .
 uv run pytest -m "not integration and not provider and not load"
 
-# Ingesta
+# Ingest
 cd apps/ingest
 uv sync --frozen --extra dev
 uv run ruff check . && uv run mypy .
@@ -99,9 +100,9 @@ npm ci
 npm run lint && npm run typecheck && npm test && npm run build
 ```
 
-Integración local (Redis se publica solo en loopback; PostgreSQL no se publica
-al host). La suite crea su propia BD `maulwurf_test_*`, la migra y la elimina al
-terminar; necesita un PostgreSQL alcanzable, por ejemplo uno desechable:
+Local integration (Redis is published on loopback only; PostgreSQL is not published
+to the host). The suite creates its own `maulwurf_test_*` database, migrates it, and drops it
+when done; it needs a reachable PostgreSQL, for example a disposable one:
 
 ```bash
 docker run -d --rm --name mw-test-pg -e POSTGRES_USER=maulwurf \
@@ -110,23 +111,23 @@ docker run -d --rm --name mw-test-pg -e POSTGRES_USER=maulwurf \
 cd apps/api
 MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@127.0.0.1:55432/maulwurf \
   uv run pytest -m integration
-# Ingesta: misma variable (crea una BD `maulwurf_ingest_test_*`); necesita `ffmpeg` en el
-# PATH y, para los tests de audio sintético, `espeak-ng` (la CI los instala).
+# Ingest: same variable (creates a `maulwurf_ingest_test_*` DB); it needs `ffmpeg` on the
+# PATH and, for the synthetic-audio tests, `espeak-ng` (CI installs them).
 cd ../ingest
 MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@127.0.0.1:55432/maulwurf \
   uv run pytest -m integration
 docker stop mw-test-pg
 ```
 
-Si el puerto 6379 está ocupado (p. ej. otro stack local), usa otro puerto:
+If port 6379 is taken (e.g. another local stack), use another port:
 
 ```bash
 REDIS_PORT=6380 docker compose up -d redis
 MAULWURF_REDIS_URL=redis://localhost:6380/0 uv run pytest -m integration
 ```
 
-Para pruebas que necesiten PostgreSQL desde el host, crear un
-`infra/docker-compose.override.yml` local (no versionado) con:
+For tests that need PostgreSQL from the host, create a local (untracked)
+`infra/docker-compose.override.yml` with:
 
 ```yaml
 services:
@@ -135,41 +136,41 @@ services:
       - "127.0.0.1:5432:5432"
 ```
 
-Las suites `P-*` (proveedores) y `load` no corren en MR; requieren cuenta
-protegida y presupuesto, y se ejecutan aparte.
+The `P-*` (provider) and `load` suites do not run on MRs; they require a protected
+account and budget, and are run separately.
 
-## 7. Apagar y limpiar
+## 7. Shutting down and cleaning up
 
 ```bash
 cd infra
-docker compose down        # conserva pgdata
-docker compose down -v     # destructivo: borra volúmenes
+docker compose down        # keeps pgdata
+docker compose down -v     # destructive: deletes volumes
 ```
 
-No hay audio persistido que borrar: los temporales de ingesta son `tmpfs` y
-desaparecen al recrear el contenedor.
+There is no persisted audio to delete: ingestion temporaries are `tmpfs` and
+disappear when the container is recreated.
 
-## 8. Problemas comunes
+## 8. Common issues
 
-- **Puerto ocupado**: usar `CADDY_HTTP_PORT`/`CADDY_HTTPS_PORT` (§2).
-- **La API no arranca**: `MAULWURF_ENV` distinto de `local` con secretos
-  `change-me` falla a propósito (fail-fast de `app/core/config.py`).
-- **Aviso de certificado**: confiar en la CA (§4) o usar `curl -k`.
-- **Primer build lento**: descarga ffmpeg, dependencias Python y `npm ci`.
-- **Réplicas de `api` que fallan al arrancar**: al escalar `api`, todas intentan migrar.
-  Una aplica la migración y las demás esperan el lock; la que espera más de 120 s falla y
-  Docker la reinicia (`restart: unless-stopped`). Es esperado, no un error de la app. En
-  despliegue real (S4) la migración será un paso único, separado de las réplicas.
+- **Port taken**: use `CADDY_HTTP_PORT`/`CADDY_HTTPS_PORT` (§2).
+- **The API does not start**: a `MAULWURF_ENV` other than `local` with
+  `change-me` secrets fails on purpose (fail-fast in `app/core/config.py`).
+- **Certificate warning**: trust the CA (§4) or use `curl -k`.
+- **Slow first build**: it downloads ffmpeg, Python dependencies, and `npm ci`.
+- **`api` replicas failing at startup**: when scaling `api`, all replicas try to migrate.
+  One applies the migration and the others wait for the lock; the one waiting more than 120 s fails and
+  Docker restarts it (`restart: unless-stopped`). This is expected, not an app error. In a
+  real deployment (S4) the migration will be a single step, separate from the replicas.
 
-## 9. Reglas de privacidad del entorno local
+## 9. Local environment privacy rules
 
-- Sin grabaciones reales de clase ni audio durable: la ingesta real llega en S2.
-- Sin `NVIDIA_API_KEY` en logs, frontend ni commits.
-- Las suites `P-*` solo con cuenta autorizada y presupuesto documentado.
+- No real class recordings or durable audio: real ingestion arrives in S2.
+- No `NVIDIA_API_KEY` in logs, the frontend, or commits.
+- The `P-*` suites only with an authorized account and a documented budget.
 
-## Enlaces
+## Links
 
-- [../README.md](../README.md) — visión y estado del repositorio.
-- [ESPECIFICACION.md](ESPECIFICACION.md) — contratos M1–M9 y seguridad.
-- [PLAN_SPRINTS.md](PLAN_SPRINTS.md) — backlog y DoD por sprint.
-- [adr/](adr/README.md) — decisiones de arquitectura.
+- [../README.md](../README.md) — repository vision and status.
+- [ESPECIFICACION.md](ESPECIFICACION.md) — M1–M9 contracts and security.
+- [PLAN_SPRINTS.md](PLAN_SPRINTS.md) — backlog and DoD per sprint.
+- [adr/](adr/README.md) — architecture decisions.

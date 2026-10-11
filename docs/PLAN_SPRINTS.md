@@ -1,580 +1,582 @@
-# Maulwurf — Secuencia de sprints propuesta (S1–S4)
+# Maulwurf — Proposed sprint sequence (S1–S4)
 
-> Estado: revisión 2026-09-19. **Modelo: backlog abierto por sprint, sin preasignación.**
-> El único registro de ownership aceptado es
-> [sprints/CLAIMS.md](sprints/CLAIMS.md); las bitácoras personales documentan trabajo y
-> evidencia, pero no asignan tickets. Solo puede abrirse a claiming un sprint activo y las
-> semanas futuras permanecen bloqueadas. Subordinado a
-> [ESPECIFICACION.md](ESPECIFICACION.md) (contratos) y
-> [PLAN_IMPLEMENTACION.md](PLAN_IMPLEMENTACION.md) (puertas y evidencias). La
-> **especificación detallada de cómo debe funcionar cada sprint** vive en
-> [plan/S1.md](plan/S1.md) · [plan/S2.md](plan/S2.md) · [plan/S3.md](plan/S3.md) ·
-> [plan/S4.md](plan/S4.md) (contratos congelados, comportamiento por ticket, criterios de
-> aceptación y tests). Si este documento contradice la especificación, gana la
-> especificación. Nada de lo aquí descrito está implementado salvo lo marcado explícitamente
-> como esqueleto existente.
+> Status: revision 2026-09-19. **Model: open backlog per sprint, no pre-assignment.** The
+> only accepted ownership registry is [sprints/CLAIMS.md](sprints/CLAIMS.md); personal
+> logbooks document work and evidence but do not assign tickets. Only an active sprint can
+> open for claiming and future weeks remain blocked. Subordinate to
+> [ESPECIFICACION.md](ESPECIFICACION.md) (contracts) and
+> [PLAN_IMPLEMENTACION.md](PLAN_IMPLEMENTACION.md) (gates and evidence). The **detailed
+> specification of how each sprint must work** lives in [plan/S1.md](plan/S1.md) ·
+> [plan/S2.md](plan/S2.md) · [plan/S3.md](plan/S3.md) · [plan/S4.md](plan/S4.md) (frozen
+> contracts, per-ticket behavior, acceptance criteria, and tests). If this document
+> contradicts the specification, the specification wins. Nothing described here is
+> implemented except what is explicitly marked as existing skeleton.
 
-## 0. Modelo de planificación
+## 0. Planning model
 
-### 0.1 Cómo funciona
+### 0.1 How it works
 
-1. **Backlog por funcionalidad:** cada semana (§2–§5) publica tickets abiertos agrupados
-   por área, con dependencias y pruebas ([PLAN_TESTS.md](PLAN_TESTS.md)). La letra del ID no
-   asigna persona ni equipo.
-2. **Un solo sprint abierto:** el estado de apertura vive en
-   [sprints/CLAIMS.md](sprints/CLAIMS.md). Solo se reclaman tickets del sprint activo; S2–S4
-   no se reservan por anticipado. El siguiente sprint se abre únicamente después de revisar
-   la puerta previa, capacidad y disponibilidad del equipo.
-3. **Claim aceptado por PR:** el ownership nace solo al fusionar una fila válida en
-   `CLAIMS.md`, con ticket, owner único, `claimed_at` UTC, estado, elegibilidad cloud no
-   sensible y revisión. Una fila personal, comentario o rama no reserva un ticket.
-4. **Dependencias declaradas:** el proveedor congela el contrato el lunes y entrega una
-   **primera implementación integrable** a más tardar el día 3; no se exige código final ese
-   día. Consumidores avanzan contra el contrato/mock y la integración, pruebas y cierre se
-   completan los días 4–5.
-5. **Definition of Done por sprint:** cada semana cierra solo si cumple su DoD (funcional,
-   pruebas por nivel, documentación y demo). El detalle de cada nivel está en
+1. **Backlog by feature:** each week (§2–§5) publishes open tickets grouped by area, with
+   dependencies and tests ([PLAN_TESTS.md](PLAN_TESTS.md)). The ID letter does not assign
+   a person or team.
+2. **A single open sprint:** the opening state lives in
+   [sprints/CLAIMS.md](sprints/CLAIMS.md). Only tickets from the active sprint are
+   claimed; S2–S4 are not reserved in advance. The next sprint opens only after reviewing
+   the previous gate, capacity, and team availability.
+3. **Claim accepted by PR:** ownership is created only by merging a valid row in
+   `CLAIMS.md`, with ticket, single owner, `claimed_at` UTC, status, non-sensitive cloud
+   eligibility, and review. A personal row, comment, or branch does not reserve a ticket.
+4. **Declared dependencies:** the provider freezes the contract on Monday and delivers a
+   **first integrable implementation** no later than day 3; final code is not required
+   that day. Consumers advance against the contract/mock, and integration, tests, and
+   closure are completed on days 4–5.
+5. **Definition of Done per sprint:** each week closes only if it meets its DoD
+   (functional, tests per level, documentation, and demo). The detail of each level is in
    [PLAN_TESTS.md](PLAN_TESTS.md).
-6. **Autoridad y evidencia:** `CLAIMS.md` es canónico para ownership/estado; las bitácoras
-   guardan comandos, fecha, entorno, resultados y notas. Una fila preexistente en una
-   bitácora sin claim aceptado es un candidato histórico, no ownership. Un `hecho` sin
-   evidencia vuelve a `en curso`.
+6. **Authority and evidence:** `CLAIMS.md` is canonical for ownership/status; logbooks
+   keep commands, date, environment, results, and notes. A pre-existing row in a logbook
+   without an accepted claim is a historical candidate, not ownership. A `done` without
+   evidence goes back to `in progress`.
 
-### 0.2 Áreas y perfiles
+### 0.2 Areas and profiles
 
-Los identificadores de ticket conservan la letra histórica; **la letra designa el área, no
-a una persona**:
+Ticket identifiers keep the historical letter; **the letter designates the area, not a
+person**:
 
-| Letra | Área | Carpetas típicas | Perfil sugerido |
+| Letter | Area | Typical folders | Suggested profile |
 |---|---|---|---|
-| `L-` | RAG · prompts · calidad · liderazgo | `apps/api/prompts/`, datasets, ADRs | LLM/embeddings, coordinación |
-| `A-` | API · base de datos | `apps/api` (routers, services, models, core) | Python/FastAPI/SQLAlchemy |
-| `S-` | Ingesta · audio · ASR | `apps/ingest`, cliente Riva, ffmpeg, tmpfs | Sistemas, audio, resiliencia |
-| `J-` | Infra · workers · integraciones | `infra/`, CI, `apps/api/workers/`, Google | Docker/CI, ARQ/Redis, APIs Google |
+| `L-` | RAG · prompts · quality · leadership | `apps/api/prompts/`, datasets, ADRs | LLM/embeddings, coordination |
+| `A-` | API · database | `apps/api` (routers, services, models, core) | Python/FastAPI/SQLAlchemy |
+| `S-` | Ingestion · audio · ASR | `apps/ingest`, Riva client, ffmpeg, tmpfs | Systems, audio, resilience |
+| `J-` | Infra · workers · integrations | `infra/`, CI, `apps/api/workers/`, Google | Docker/CI, ARQ/Redis, Google APIs |
 | `D-` | Web · UX | `apps/web` | Next.js/TypeScript, UX |
 
-Cualquier miembro puede reclamar de cualquier área. Un ticket cuyo campo Tests incluya
-`P-*`, o cuya ejecución haga una llamada real a Riva, LLM/embeddings o Google, requiere que
-el owner tenga elegibilidad autorizada y presupuesto aprobado. `CLAIMS.md` registra solo
-`no_aplica` o `verificada:<proveedor>`, nunca cuentas, claves, tokens ni cuotas sensibles.
-Cruzar carpetas exige review del owner de esa interfaz o, si no existe, de un revisor del
-sprint; esa revisión no convierte al reviewer en owner.
+Any member may claim from any area. A ticket whose Tests field includes `P-*`, or whose
+execution makes a real call to Riva, LLM/embeddings, or Google, requires the owner to have
+authorized eligibility and an approved budget. `CLAIMS.md` records only `no_aplica` or
+`verified:<provider>`, never accounts, keys, tokens, or sensitive quotas. Crossing
+folders requires review from the owner of that interface or, if there is none, from a
+sprint reviewer; that review does not turn the reviewer into an owner.
 
-### 0.3 Reglas anti-choques
+### 0.3 Anti-collision rules
 
-1. **Interfaces congeladas el lunes** (§6): cambiarlas exige revisión y actualizar a los
-   consumidores el mismo día. El día 3 exige una primera implementación integrable, no la
-   versión final; el cierre ocurre los días 4–5.
-2. **Un ticket, un owner:** contributors y reviewers se reconocen en PRs/bitácoras, pero no
-   comparten ownership. La tabla vigente de `CLAIMS.md` no admite dos filas para un ticket.
-3. **Concurrencia:** gana el primer PR de claim revisado y fusionado. Todo PR concurrente se
-   rebasa contra la rama objetivo; si el ticket ya aparece, queda en conflicto y no concede
-   ownership. No hay reservas por orden de comentario o por trabajo previo.
-4. **Cambios de ownership:** transferencia y desclaim requieren PR atómico, motivo,
-   evidencia del estado del trabajo e historial en `CLAIMS.md`. El owner anterior conserva
-   el ticket hasta fusionar la transferencia; al fusionar un desclaim, vuelve al backlog.
-5. **Split auditable:** no se reclaman IDs hijos inventados en `CLAIMS.md`. Primero se
-   actualiza y fusiona este backlog con los IDs hijos y la disposición del padre; después
-   cada hijo puede reclamarse en otro PR. Las ideas fuera del alcance van a F4.
-6. **Estados cerrados:** el vocabulario canónico es el de
-   [sprints/CLAIMS.md](sprints/CLAIMS.md) §2 — `pendiente`, `en curso`, `bloqueado`, `hecho`,
-   `transferido` y `cancelado`. Reclamar, transferir y desclamar son **acciones/eventos**, no
-   estados; `continuo` describe la naturaleza acotada de un ticket, nunca un estado. Un ticket
-   de trabajo continuo se acota al sprint y cierra con evidencia; no permanece `en curso` al
-   abrir la semana siguiente.
+1. **Interfaces frozen on Monday** (§6): changing them requires review and updating
+   consumers the same day. Day 3 requires a first integrable implementation, not the
+   final version; closure happens on days 4–5.
+2. **One ticket, one owner:** contributors and reviewers are acknowledged in
+   PRs/logbooks, but do not share ownership. The current `CLAIMS.md` table does not allow
+   two rows for one ticket.
+3. **Concurrency:** the first reviewed and merged claim PR wins. Every concurrent PR
+   rebases against the target branch; if the ticket already appears, it stays in conflict
+   and does not grant ownership. There are no reservations by comment order or prior
+   work.
+4. **Ownership changes:** transfer and unclaim require an atomic PR, a motive, evidence
+   of the work state, and history in `CLAIMS.md`. The previous owner keeps the ticket
+   until the transfer merges; when an unclaim merges, the ticket returns to the backlog.
+5. **Auditable split:** invented child IDs are not claimed in `CLAIMS.md`. First this
+   backlog is updated and merged with the child IDs and the parent's disposition;
+   afterwards each child may be claimed in another PR. Out-of-scope ideas go to F4.
+6. **Closed statuses:** the canonical vocabulary is the one in
+   [sprints/CLAIMS.md](sprints/CLAIMS.md) §2 — `pending`, `in progress`, `blocked`,
+   `done`, `transferred`, and `cancelled`. Claiming, transferring, and unclaiming are
+   **actions/events**, not statuses; `continuous` describes the bounded nature of a ticket,
+   never a status. A continuous-work ticket is bounded to the sprint and closes with
+   evidence; it does not remain `in progress` when the next week opens.
 
-## 1. Resumen de sprints
+## 1. Sprint summary
 
-| Semana | Nombre | Objetivo en una frase | Puerta de salida (resumen) |
+| Week | Name | Objective in one sentence | Exit gate (summary) |
 |---|---|---|---|
-| S1 | **Fundación + spike** | Monorepo corriendo, auth básica, esquema inicial y contrato real de Riva probado | F0: G1 y exactamente G2-T o G2-X; decisiones D2/D3/D4/D6 |
-| S2 | **Conocimiento (F1)** | Subir audio → transcript → índice híbrido → chat con citas, corte vertical completo | E2E 1 h; G1, G2-T o G2-X, G3, G4 y G5-F1 |
-| S3 | **Acción (F2)** | Extracción LLM, bandeja de revisión, Calendar idempotente, tools de lectura | G5-F2, G6 y G7-CAL: confirmación → un evento |
-| S4 | **Recordatorios y cierre (F3)** | Gmail opt-in, recordatorios/digests, dashboard completo, Ctrl+K, hardening | G7-MAIL y G8; demo final + seguridad/costos revisados |
+| S1 | **Foundation + spike** | Monorepo running, basic auth, initial schema, and a real Riva contract tested | F0: G1 and exactly G2-T or G2-X; decisions D2/D3/D4/D6 |
+| S2 | **Knowledge (F1)** | Upload audio → transcript → hybrid index → chat with citations, complete vertical slice | 1 h E2E; G1, G2-T or G2-X, G3, G4, and G5-F1 |
+| S3 | **Action (F2)** | LLM extraction, review tray, idempotent Calendar, read-only tools | G5-F2, G6, and G7-CAL: confirmation → one event |
+| S4 | **Reminders and close (F3)** | Gmail opt-in, reminders/digests, full dashboard, Ctrl+K, hardening | G7-MAIL and G8; final demo + security/costs reviewed |
 
-El estado inicial y toda apertura se auditan en [sprints/CLAIMS.md](sprints/CLAIMS.md): no
-hay sprint activo ni tickets reclamados hasta que un PR de apertura registre capacidad y
-disponibilidad. S1 se abre primero; S2–S4 permanecen bloqueados hasta cerrar la puerta previa.
+The initial state and every opening are audited in [sprints/CLAIMS.md](sprints/CLAIMS.md):
+there is no active sprint or claimed ticket until an opening PR records capacity and
+availability. S1 opens first; S2–S4 remain blocked until the previous gate closes.
 
-Regla dura: **nada de ingesta real antes de que S1 cierre la puerta F0** (retención D3,
-límites D2/D4, timestamps D6, G1 y una variante G2 aprobada).
+Hard rule: **no real ingestion before S1 closes the F0 gate** (D3 retention, D2/D4
+limits, D6 timestamps, G1, and an approved G2 variant).
 
-**Estado del esqueleto (revisión 2026-09-19):** ya existen `apps/api` (FastAPI mínimo con
-`/healthz`+`/readyz` y config Pydantic Settings), `apps/ingest` (paquete vacío),
-`apps/web` (scaffold Next.js; landing placeholder a reemplazar por D1.8) y
-`scripts/scaffold_monorepo.sh`. No existen compose, CI de calidad, tests ni migraciones.
-Los tickets `L1.1`, `A1.1`, `A1.2`, `D1.1` se marcan como *verificar/completar*, no como
-creación desde cero.
+**Skeleton status (revision 2026-09-19):** `apps/api` already exists (minimal FastAPI with
+`/healthz`+`/readyz` and Pydantic Settings config), `apps/ingest` (empty package),
+`apps/web` (Next.js scaffold; placeholder landing to be replaced by D1.8), and
+`scripts/scaffold_monorepo.sh`. There is no compose, quality CI, tests, or migrations yet.
+Tickets `L1.1`, `A1.1`, `A1.2`, `D1.1` are marked as *verify/complete*, not as from-scratch
+creation.
 
-## 2. Semana 1 (S1) — Fundación + spike de viabilidad (F0)
+## 2. Week 1 (S1) — Foundation + feasibility spike (F0)
 
-**Objetivo:** monorepo corriendo, auth básica, esquema inicial y contrato real de Riva
-probado. **Especificación detallada:** [plan/S1.md](plan/S1.md). Secuencia sugerida por
-área: [DISENO_BD_API_SPRINTS.md](DISENO_BD_API_SPRINTS.md) §4.1.
+**Objective:** monorepo running, basic auth, initial schema, and a real Riva contract
+tested. **Detailed specification:** [plan/S1.md](plan/S1.md). Suggested sequence per area:
+[DISENO_BD_API_SPRINTS.md](DISENO_BD_API_SPRINTS.md) §4.1.
 
-**Interfaces congeladas el lunes:** contrato de sesión/cookie y CSRF; esquema de
-`POST /audios` + `PUT` binario (URL de upload relativa); shape de outbox; estados de
-ingesta (§M2); shape de respuesta SSE de progreso.
+**Interfaces frozen on Monday:** session/cookie and CSRF contract; schema of
+`POST /audios` + binary `PUT` (relative upload URL); outbox shape; ingestion states (§M2);
+progress SSE response shape.
 
-### Backlog S1 — RAG · liderazgo (`L1.x`)
+### S1 backlog — RAG · leadership (`L1.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| L1.1 | Verificar/ajustar estructura monorepo §3.3, versiones y lockfiles *(esqueleto ya en repo)* | — | — |
-| L1.2 | ADRs cortos: estructura, versiones, política de lockfiles, formato commit/PR | L1.1 | — |
-| L1.3 | Protocolo del spike: qué medir, formato del informe, criterios D2/D4/D6 | L1.1 | — |
-| L1.4 | Borrador Pydantic de análisis (§M4) y de chunk (§M6) para congelación | — | U-S1-JL-01/02 |
-| L1.5 | Formato del dataset G4: ≥50 preguntas/idioma, 15 no respondibles, evidencia esperada | — | U-S1-JL-03 |
-| L1.6 | Congelar interfaces S1 (§6) | — | — |
-| L1.7 | Coordinación, tablero y reviews de S1; cierre con decisiones y bloqueos registrados | — | — |
+| L1.1 | Verify/adjust monorepo structure §3.3, versions, and lockfiles *(skeleton already in repo)* | — | — |
+| L1.2 | Short ADRs: structure, versions, lockfile policy, commit/PR format | L1.1 | — |
+| L1.3 | Spike protocol: what to measure, report format, D2/D4/D6 criteria | L1.1 | — |
+| L1.4 | Pydantic draft of the analysis (§M4) and chunk (§M6) schemas for freezing | — | U-S1-JL-01/02 |
+| L1.5 | G4 dataset format: ≥50 questions/language, 15 unanswerable, expected evidence | — | U-S1-JL-03 |
+| L1.6 | Freeze S1 interfaces (§6) | — | — |
+| L1.7 | S1 coordination, board, and reviews; closure with decisions and blockers recorded | — | — |
 
-### Backlog S1 — API/BD (`A1.x`)
+### S1 backlog — API/DB (`A1.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| A1.1 | Verificar scaffold `apps/api` (FastAPI + Pydantic v2 + SQLAlchemy async) *(base ya creada)* | L1.1 | — |
-| A1.2 | Completar config Pydantic Settings; secretos solo por entorno *(esqueleto ya creado)* | A1.1 | — |
-| A1.3 | OAuth Google backend: `state`, PKCE, `nonce`/issuer/audience; identidad por `sub` | A1.2 | I-S1-AN-06 |
-| A1.4 | Sesión opaca: cookie `Secure/HttpOnly/SameSite=Lax`, hash en `sessions`, revocación; CSRF/Origin | A1.2 | U-S1-AN-01/02 |
-| A1.5 | Tablas núcleo `users/sessions/google_credentials/subjects`; AES-GCM con nonce y versión de clave; FKs compuestas; RLS base. Shape S1 de `audios`, `ingestion_attempts` y `outbox_events` (§6a: la tabla outbox se crea en S1) | A1.1 | U-S1-AN-03, I-S1-AN-05 |
-| A1.6 | CRUD materias con regla de borrado con clases activas | A1.5 | I-S1-AN-07 |
-| A1.7 | Migraciones Alembic desde vacío y actualización | A1.5 | I-S1-AN-04 |
-| A1.8 | Esqueleto `POST /audios` + `PUT` binario (contrato congelado); `GET/PATCH /me`, logout, `GET /integrations/status` | A1.4, L1.6 | — |
-| A1.9 | Tests de aislamiento básicos: usuario B no ve recursos de A ni adivinando IDs | A1.5 | I-S1-AN-05 |
+| A1.1 | Verify the `apps/api` scaffold (FastAPI + Pydantic v2 + async SQLAlchemy) *(base already created)* | L1.1 | — |
+| A1.2 | Complete the Pydantic Settings config; secrets only from the environment *(skeleton already created)* | A1.1 | — |
+| A1.3 | Google OAuth backend: `state`, PKCE, `nonce`/issuer/audience; identity from `sub` | A1.2 | I-S1-AN-06 |
+| A1.4 | Opaque session: `Secure/HttpOnly/SameSite=Lax` cookie, hash in `sessions`, revocation; CSRF/Origin | A1.2 | U-S1-AN-01/02 |
+| A1.5 | Core tables `users/sessions/google_credentials/subjects`; AES-GCM with nonce and key version; composite FKs; base RLS. S1 shape of `audios`, `ingestion_attempts`, and `outbox_events` (§6a: the outbox table is created in S1) | A1.1 | U-S1-AN-03, I-S1-AN-05 |
+| A1.6 | Subject CRUD with the deletion rule for subjects with active classes | A1.5 | I-S1-AN-07 |
+| A1.7 | Alembic migrations from empty and upgrade | A1.5 | I-S1-AN-04 |
+| A1.8 | Skeleton `POST /audios` + binary `PUT` (frozen contract); `GET/PATCH /me`, logout, `GET /integrations/status` | A1.4, L1.6 | — |
+| A1.9 | Basic isolation tests: user B cannot see A's resources, not even by guessing IDs | A1.5 | I-S1-AN-05 |
 
-### Backlog S1 — Ingesta/ASR (`S1.x`)
+### S1 backlog — Ingestion/ASR (`S1.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| S1.A1 | Generador de audio sintético en RAM con texto esperado conocido | — | U-S1-SG-01 |
-| S1.A2 | Primera llamada real a Riva (`nvidia-riva-client==2.27.0`, Bearer solo backend) | L1.3; API key autorizada | P-S1-SG-07 |
-| S1.A3 | Idiomas candidatos uno por uno; sin `multi` ni traducción | S1.A2 | P-S1-SG-07 |
-| S1.A4 | Formatos de entrada y sample rate efectivo (WAV PCM s16 mono candidato) | S1.A2 | U-S1-SG-02 |
-| S1.A5 | Límites: payload, duración, cuotas, deadlines, cancelación (presupuesto) | S1.A2 | P-S1-SG-07/08 |
-| S1.A6 | Offsets palabras/segmentos → decisión `word\|segment\|none` | S1.A2 | P-S1-SG-07, U-S1-SG-03 |
-| S1.A7 | Latencia por duración/idioma, memoria SDK, costo | S1.A2 | P-S1-SG-08 |
-| S1.A8 | Informe del contrato NVIDIA + revisión de términos de retención/tratamiento — cierra D3 (sin claves ni audio) | S1.A3–A7 | — |
-| S1.A9 | Presentar informe; cerrar D2/D3/D4/D6 con el equipo | S1.A8 | — |
-| S1.B1 | Ingesta con root read-only, tmpfs acotado, no root, sin swap/core dumps | J1.2 (imagen) | I-S1-SG-06 |
-| S1.B2 | Reserva de RAM por slot (200 MiB/3 h como objetivo a validar) | S1.B1 | — |
-| S1.B3 | Supervisor, lease, fencing y cleanup independiente del proceso ASR | S1.B1, A1.5 (`ingestion_attempts`) | I-S1-SG-04/05 |
-| S1.B4 | Matriz de fallos: 9 escenarios con inyección real (SIGKILL, reinicios, etc.) | S1.B3 | I-S1-SG-04 |
-| S1.B5 | Verificación de ausencia de audio en disco/Redis/logs/trazas/cachés | S1.B3 | I-S1-SG-06 |
-| S1.B6 | Lease vencido no marca cleanup verificado; outbox bloqueada sin evidencia | S1.B3 | I-S1-SG-05 |
+| S1.A1 | In-RAM synthetic audio generator with known expected text | — | U-S1-SG-01 |
+| S1.A2 | First real call to Riva (`nvidia-riva-client==2.27.0`, Bearer backend only) | L1.3; authorized API key | P-S1-SG-07 |
+| S1.A3 | Candidate languages one by one; no `multi`, no translation | S1.A2 | P-S1-SG-07 |
+| S1.A4 | Input formats and effective sample rate (WAV PCM s16 mono candidate) | S1.A2 | U-S1-SG-02 |
+| S1.A5 | Limits: payload, duration, quotas, deadlines, cancellation (budget) | S1.A2 | P-S1-SG-07/08 |
+| S1.A6 | Word/segment offsets → `word\|segment\|none` decision | S1.A2 | P-S1-SG-07, U-S1-SG-03 |
+| S1.A7 | Latency by duration/language, SDK memory, cost | S1.A2 | P-S1-SG-08 |
+| S1.A8 | NVIDIA contract report + review of retention/processing terms — closes D3 (no keys, no audio) | S1.A3–A7 | — |
+| S1.A9 | Present the report; close D2/D3/D4/D6 with the team | S1.A8 | — |
+| S1.B1 | Ingestion with read-only root, bounded tmpfs, non-root, no swap/core dumps | J1.2 (image) | I-S1-SG-06 |
+| S1.B2 | RAM reservation per slot (200 MiB/3 h as a target to validate) | S1.B1 | — |
+| S1.B3 | Supervisor, lease, fencing, and cleanup independent of the ASR process | S1.B1, A1.5 (`ingestion_attempts`) | I-S1-SG-04/05 |
+| S1.B4 | Failure matrix: 9 scenarios with real injection (SIGKILL, restarts, etc.) | S1.B3 | I-S1-SG-04 |
+| S1.B5 | Verification that audio is absent from disk/Redis/logs/traces/caches | S1.B3 | I-S1-SG-06 |
+| S1.B6 | Expired lease does not mark cleanup verified; outbox blocked without evidence | S1.B3 | I-S1-SG-05 |
 
-### Backlog S1 — Infra/Integraciones (`J1.x`)
+### S1 backlog — Infra/Integrations (`J1.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| J1.1 | `docker-compose.yml` con 8 servicios; `pgvector/pgvector:pg16` fijada; volumen nombrado para PG; secretos fuera del compose; imágenes multi-stage no-root; sin volumen de audio | L1.1 | I-S1-JF-01 |
-| J1.2 | Servicio `ingest` endurecido (read-only, tmpfs, no root, límites) con ffmpeg/ffprobe | J1.1 | I-S1-SG-06 |
-| J1.3 | Caddy TLS local sin buffering/caché para uploads | J1.1 | I-S1-JF-02 |
-| J1.4 | CI: ruff/ESLint, mypy/tsc, pytest/Vitest, integración, builds; plantilla de PR que implementa ADR-0004 | J1.1 | pipeline verde |
-| J1.5 | Esqueleto ARQ worker+scheduler, dispatcher outbox básico, `/healthz` `/readyz` | J1.1, A1.5 (tabla outbox), A1.8 | I-S1-JF-01, U-S1-JF-04 |
-| J1.6 | Redis solo IDs/estado; persistencia solo Postgres | J1.1 | I-S1-JF-03 |
-| J1.7 | README con comandos reproducibles (levantar, testear, lint) | J1.1 | — |
-| J1.8 | Imagen base de `ingest` con ffmpeg/ffprobe fijados para compose; comparar versión con la 8.0.1 del spike | J1.1 | — |
+| J1.1 | `docker-compose.yml` with 8 services; pinned `pgvector/pgvector:pg16`; named volume for PG; secrets outside compose; multi-stage non-root images; no audio volume | L1.1 | I-S1-JF-01 |
+| J1.2 | Hardened `ingest` service (read-only, tmpfs, non-root, limits) with ffmpeg/ffprobe | J1.1 | I-S1-SG-06 |
+| J1.3 | Local TLS Caddy without buffering/caching for uploads | J1.1 | I-S1-JF-02 |
+| J1.4 | CI: ruff/ESLint, mypy/tsc, pytest/Vitest, integration, builds; PR template implementing ADR-0004 | J1.1 | green pipeline |
+| J1.5 | ARQ worker+scheduler skeleton, basic outbox dispatcher, `/healthz` `/readyz` | J1.1, A1.5 (outbox table), A1.8 | I-S1-JF-01, U-S1-JF-04 |
+| J1.6 | Redis for IDs/state only; persistence only in Postgres | J1.1 | I-S1-JF-03 |
+| J1.7 | README with reproducible commands (bring up, test, lint) | J1.1 | — |
+| J1.8 | Base `ingest` image with pinned ffmpeg/ffprobe for compose; compare the version against the spike's 8.0.1 | J1.1 | — |
 
-### Backlog S1 — Web/UX (`D1.x`)
+### S1 backlog — Web/UX (`D1.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| D1.1 | Verificar scaffold `apps/web` (Next.js + TS + Tailwind) *(base ya creada; landing placeholder se reemplaza en D1.8)* | L1.1 | — |
-| D1.2 | Rutas base (`/biblioteca`, `/chat`, `/materias`, `/settings`) y layout de navegación | D1.1 | — |
-| D1.3 | Login Google con redirección/callback; logout; estados cargando/error | A1.3/A1.4, L1.6 | — |
-| D1.4 | Cliente HTTP: CSRF en mutaciones; interceptores 401/403/429 | L1.6 | U-S1-DA-01 |
-| D1.5 | Componentes base: inputs fecha/zona/idioma, badges de estado, empty states, toasts | D1.1 | U-S1-DA-02, C-S1-DA-03 |
-| D1.6 | CRUD materias contra la API real | A1.6 | U-S1-DA-02 |
-| D1.7 | Borradores estáticos de upload y biblioteca (sin wiring) para validar UX temprano | D1.5 | — |
-| D1.8 | Landing pública de producto: hero, flujo SUBE→ENCUENTRA→DECIDE, panel de privacidad, FAQ, footer; visible para visitantes en `/` (con sesión activa `/` sigue siendo dashboard, M9). **Pendiente de decisión de diseño: no hay propuesta de front vigente** | D1.5; decisión de diseño | — |
+| D1.1 | Verify the `apps/web` scaffold (Next.js + TS + Tailwind) *(base already created; placeholder landing replaced in D1.8)* | L1.1 | — |
+| D1.2 | Base routes (`/biblioteca`, `/chat`, `/materias`, `/settings`) and navigation layout | D1.1 | — |
+| D1.3 | Google login with redirect/callback; logout; loading/error states | A1.3/A1.4, L1.6 | — |
+| D1.4 | HTTP client: CSRF on mutations; 401/403/429 interceptors | L1.6 | U-S1-DA-01 |
+| D1.5 | Base components: date/zone/language inputs, status badges, empty states, toasts | D1.1 | U-S1-DA-02, C-S1-DA-03 |
+| D1.6 | Subject CRUD against the real API | A1.6 | U-S1-DA-02 |
+| D1.7 | Static upload and library drafts (no wiring) to validate UX early | D1.5 | — |
+| D1.8 | Public product landing: hero, UPLOAD→FIND→DECIDE flow, privacy panel, FAQ, footer; visible for visitors on `/` (with an active session `/` remains the dashboard, M9). **Pending design decision: there is no current front-end proposal** | D1.5; design decision | — |
 
-### Definition of Done (puerta de salida S1)
+### Definition of Done (S1 exit gate)
 
-**Funcional (demostrable en compose):**
-- `docker compose up` levanta los 8 servicios sin almacenamiento de audio.
-- Login/logout/`GET /me` funcionando vía Caddy; CRUD materias; migraciones desde vacío.
-- Informe del spike publicado; matriz de fallos del prototipo demostrada; D2/D3/D4/D6 cerradas.
-- Landing pública estática en `/` para visitantes (D1.8), sin datos privados ni secretos.
+**Functional (demonstrable in compose):**
+- `docker compose up` brings up the 8 services with no audio storage.
+- Login/logout/`GET /me` working through Caddy; subject CRUD; migrations from empty.
+- Spike report published; prototype failure matrix demonstrated; D2/D3/D4/D6 closed.
+- Static public landing on `/` for visitors (D1.8), with no private data or secrets.
 
-**Pruebas en verde (ver PLAN_TESTS §1):**
-- Unitarias `U-S1-*`; integración `I-S1-*` (compose, no-buffering, Redis, migraciones, aislamiento).
-- Provider-contract `P-S1-SG-07/08` ejecutadas (protegida, con presupuesto) → informe.
-- Smoke E2E: login desde navegador.
+**Green tests (see PLAN_TESTS §1):**
+- Unit `U-S1-*`; integration `I-S1-*` (compose, no-buffering, Redis, migrations, isolation).
+- Provider-contract `P-S1-SG-07/08` executed (protected, with budget) → report.
+- E2E smoke: login from the browser.
 
-**Documentación:** ADRs revisados; informe del spike; README de arranque; spec/plan
-actualizados si cambió un contrato.
+**Documentation:** ADRs reviewed; spike report; startup README; spec/plan updated if a
+contract changed.
 
-**Claims y bitácoras:** ownership/estado cerrados en `sprints/CLAIMS.md`; cada ticket
-`hecho` enlaza evidencia reproducible en PR o bitácora (comando, fecha, entorno, resultado).
+**Claims and logbooks:** ownership/status closed in `sprints/CLAIMS.md`; every `done`
+ticket links reproducible evidence in a PR or logbook (command, date, environment, result).
 
-## 3. Semana 2 (S2) — Conocimiento: corte vertical F1
+## 3. Week 2 (S2) — Knowledge: F1 vertical slice
 
-**Objetivo:** subir audio → transcript → índice híbrido → chat con citas, completo.
-**Especificación detallada:** [plan/S2.md](plan/S2.md). Secuencia sugerida por área:
+**Objective:** upload audio → transcript → hybrid index → chat with citations, end to end.
+**Detailed specification:** [plan/S2.md](plan/S2.md). Suggested sequence per area:
 DISENO_BD_API_SPRINTS.md §4.2.
 
-**Interfaces congeladas el lunes:** shape final de chunks/embeddings y job `index(audio_id)`;
-eventos SSE del chat `snapshot|delta|citation|done|error` con ID monotónico y terminal
-único; formato de citas `[Materia · Clase · mm:ss]`; contrato paginado de `/search`.
+**Interfaces frozen on Monday:** final chunks/embeddings shape and the `index(audio_id)`
+job; chat SSE events `snapshot|delta|citation|done|error` with a monotonic ID and a single
+terminal event; citation format `[Subject · Class · mm:ss]`; paginated `/search` contract.
 
-### Backlog S2 — RAG (`L2.x`)
+### S2 backlog — RAG (`L2.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| L2.1 | Chunking ~800/100 tokens, cortes en frase/segmento, offsets Unicode, `chunk_segments` | L1.4; tablas A2.1 (contrato) | U-S2-JL-01 |
-| L2.2 | Embeddings versionados + HNSW coseno; generación de índice con activación atómica | A2.1 | U-S2-JL-02, P-S2-JL-10 |
-| L2.3 | FTS por idioma + pgvector + fusión RRF; filtros tenant en ambas ramas antes de top-k | A2.1 | U-S2-JL-03/04 |
-| L2.4 | `SearchService` + `GET /search` (en pareja con A2.11) | L2.3 | I-S2-JL-06 |
-| L2.5 | Chat SSE: embedding → 30/rama → RRF → ~8 chunks bajo presupuesto; streaming | L2.4 | I-S2-JL-07/08 |
-| L2.6 | Citas solo a IDs validados en BD; «segmento N» sin offsets; `message_sources` completo | L2.5 | U-S2-JL-05 |
-| L2.7 | Evaluación G4 sobre dataset S1 (Recall@8 con filtros activos ≥ 0.85, citas ≥ 0.95, abstención ≥ 0.90) | L2.1–L2.6 | G4 |
-| L2.8 | p95 de recuperación ≤ 500 ms y primer token de chat p95 ≤ 5 s medidos | L2.4 | G4 |
+| L2.1 | Chunking ~800/100 tokens, cuts at sentence/segment, Unicode offsets, `chunk_segments` | L1.4; A2.1 tables (contract) | U-S2-JL-01 |
+| L2.2 | Versioned embeddings + cosine HNSW; index generation with atomic activation | A2.1 | U-S2-JL-02, P-S2-JL-10 |
+| L2.3 | Per-language FTS + pgvector + RRF fusion; tenant filters in both branches before top-k | A2.1 | U-S2-JL-03/04 |
+| L2.4 | `SearchService` + `GET /search` (paired with A2.11) | L2.3 | I-S2-JL-06 |
+| L2.5 | Chat SSE: embedding → 30/branch → RRF → ~8 chunks under budget; streaming | L2.4 | I-S2-JL-07/08 |
+| L2.6 | Citations only to IDs validated in the DB; "segment N" without offsets; complete `message_sources` | L2.5 | U-S2-JL-05 |
+| L2.7 | G4 evaluation on the S1 dataset (Recall@8 with active filters ≥ 0.85, citations ≥ 0.95, abstention ≥ 0.90) | L2.1–L2.6 | G4 |
+| L2.8 | Retrieval p95 ≤ 500 ms and chat first token p95 ≤ 5 s, measured | L2.4 | G4 |
 
-### Backlog S2 — API/BD (`A2.x`)
+### S2 backlog — API/DB (`A2.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| A2.1 | Migración S2 completa: transcript/segmentos, chunks/embeddings, chat y ajustes de `audios`/`ingestion_attempts`/`outbox_events` creadas en A1.5 (FKs tenant-aware) | A1.5 | I-S2-AN-05, I-S2-AN-11 |
-| A2.2 | `GET /ingestion/capabilities` con límites del spike (no constantes duras) | S1.A8 | U-S2-SG-01 |
-| A2.3 | `POST /audios`: consentimiento versionado, reserva de slot, URL relativa; sin dedupe aquí | A2.1, L1.6 | U-S2-AN-01 |
-| A2.4 | `PUT` binario autenticado; SHA-256 y dedupe tras cleanup; corte por límite | A2.3 | I-S2-AN-05 |
-| A2.5 | Dedupe por identidad en PUT; token de variante opaco de un uso; nunca retener audio | A2.3 | U-S2-AN-02, I-S2-AN-05 |
-| A2.6 | Estados por etapa independientes + agregado (`processing/ready/partial/failed`) | A2.1 | U-S2-AN-03 |
-| A2.7 | Cancelación, tombstone y fencing; `DELETE /audios/{id}` con purga de derivados | A2.6 | U-S2-AN-04, I-S2-AN-06 |
-| A2.8 | `retry` (solo análisis/índice) vs `reupload` (sin transcript utilizable) | A2.6 | I-S2-AN-08 |
-| A2.9 | Listado, `GET /audios/{id}`, SSE progreso desde BD, exports `txt`/`srt` condicionado | A2.6 | I-S2-AN-07/09 |
-| A2.10 | Commit atómico + estado `cleanup_pending`; gate de outbox solo para index/analyze | S2.5 | I-S2-AN-10 |
-| A2.11 | `GET /search` (en pareja con L2.4) | L2.3 | I-S2-JL-06 |
-| A2.12 | Tablas `conversations`/`messages`/`message_sources` + endpoints M7: CRUD de conversaciones (modos all/subject/class), historial, `client_message_id` idempotente, cancelación de streaming | A2.1, L2.5 (contrato) | I-S2-AN-11 |
+| A2.1 | Complete S2 migration: transcript/segments, chunks/embeddings, chat, and adjustments to `audios`/`ingestion_attempts`/`outbox_events` created in A1.5 (tenant-aware FKs) | A1.5 | I-S2-AN-05, I-S2-AN-11 |
+| A2.2 | `GET /ingestion/capabilities` with spike limits (no hard-coded constants) | S1.A8 | U-S2-SG-01 |
+| A2.3 | `POST /audios`: versioned consent, slot reservation, relative URL; no dedupe here | A2.1, L1.6 | U-S2-AN-01 |
+| A2.4 | Authenticated binary `PUT`; SHA-256 and dedupe after cleanup; cut off at the limit | A2.3 | I-S2-AN-05 |
+| A2.5 | Dedupe by identity on PUT; opaque one-use variant token; never retain audio | A2.3 | U-S2-AN-02, I-S2-AN-05 |
+| A2.6 | Independent per-stage states + aggregate (`processing/ready/partial/failed`) | A2.1 | U-S2-AN-03 |
+| A2.7 | Cancellation, tombstone, and fencing; `DELETE /audios/{id}` purging derivatives | A2.6 | U-S2-AN-04, I-S2-AN-06 |
+| A2.8 | `retry` (analysis/index only) vs `reupload` (no usable transcript) | A2.6 | I-S2-AN-08 |
+| A2.9 | Listing, `GET /audios/{id}`, SSE progress from the DB, conditional `txt`/`srt` exports | A2.6 | I-S2-AN-07/09 |
+| A2.10 | Atomic commit + `cleanup_pending` state; outbox gate only for index/analyze | S2.5 | I-S2-AN-10 |
+| A2.11 | `GET /search` (paired with L2.4) | L2.3 | I-S2-JL-06 |
+| A2.12 | `conversations`/`messages`/`message_sources` tables + M7 endpoints: conversation CRUD (all/subject/class modes), history, idempotent `client_message_id`, streaming cancellation | A2.1, L2.5 (contract) | I-S2-AN-11 |
 
-### Backlog S2 — Ingesta/ASR (`S2.x`)
+### S2 backlog — Ingestion/ASR (`S2.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| S2.1 | Recepción streaming a tmpfs, SHA-256, validación ffprobe completa | A2.2/A2.3; S1.A8 | U-S2-SG-02 |
-| S2.2 | ffmpeg sin red ni shell, con límites; normalización WAV PCM; fragmentación por límites reales | S2.1 | U-S2-SG-03 |
-| S2.3 | Procesamiento secuencial con backpressure; reconciliación de fronteras/overlap | S2.2 | U-S2-SG-04 |
-| S2.4 | Cliente Riva bloqueante fuera del event loop; reintentos clasificados | S2.2 | U-S2-SG-05, P-S2-SG-12 |
-| S2.5 | Commit atómico transcript+segmentos (contrato compartido con A2.10) | S2.3/S2.4 | I-S2-SG-06 |
-| S2.6 | Cleanup en `finally`; `cleanup_status` separado; outbox solo tras commit+cleanup | S2.5 | I-S2-SG-07 |
-| S2.7 | Reconciliador post-commit (sin retranscribir); fencing token | S2.6 | I-S2-SG-08/09 |
-| S2.8 | Cancelación: desconexión/lease/pestaña/post-commit | A2.7 | I-S2-SG-10 |
-| S2.9 | E2E clase sintética de 1 h con `word\|segment` (G2-T) o `none` con UI textual (G2-X) | S2.1–S2.8; D2.2/D2.3 | E-S2-SG-11 |
+| S2.1 | Streaming reception to tmpfs, SHA-256, full ffprobe validation | A2.2/A2.3; S1.A8 | U-S2-SG-02 |
+| S2.2 | ffmpeg with no network or shell, with limits; WAV PCM normalization; fragmentation by real limits | S2.1 | U-S2-SG-03 |
+| S2.3 | Sequential processing with backpressure; boundary/overlap reconciliation | S2.2 | U-S2-SG-04 |
+| S2.4 | Blocking Riva client outside the event loop; classified retries | S2.2 | U-S2-SG-05, P-S2-SG-12 |
+| S2.5 | Atomic transcript+segments commit (contract shared with A2.10) | S2.3/S2.4 | I-S2-SG-06 |
+| S2.6 | Cleanup in `finally`; separate `cleanup_status`; outbox only after commit+cleanup | S2.5 | I-S2-SG-07 |
+| S2.7 | Post-commit reconciler (no retranscription); fencing token | S2.6 | I-S2-SG-08/09 |
+| S2.8 | Cancellation: disconnect/lease/tab/post-commit | A2.7 | I-S2-SG-10 |
+| S2.9 | E2E 1 h synthetic class with `word\|segment` (G2-T) or `none` with textual UI (G2-X) | S2.1–S2.8; D2.2/D2.3 | E-S2-SG-11 |
 
-### Backlog S2 — Infra/Integraciones (`J2.x`)
+### S2 backlog — Infra/Integrations (`J2.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| J2.1 | Dispatcher outbox real: gate de cleanup solo para index/analyze; otros tipos habilitados | A2.10; U-S1-JF-04 | U-S2-JF-01 |
-| J2.2 | Job `index(audio_id)` idempotente; reintentos backoff+jitter | J2.1 | I-S2-JF-02 |
-| J2.3 | Reconstrucción tras perder Redis (regeneración desde BD/outbox) | J2.1 | I-S2-JF-03 |
-| J2.4 | Reconciliador: intentos muertos, outbox atascada, duplicados por lease | J2.2 | I-S2-JF-04 |
-| J2.5 | Observabilidad: logs JSON con IDs, métricas RAM/tmpfs/slots, alerta cleanup | J2.1 | C-S2-JF-10 |
-| J2.6 | Smoke E2E automatizado en pipeline | J2.2; S2.9; D2.2; D2.6 | E-S2-JF-06 |
-| J2.7 | Fault injection con los tickets de commit (S2.5/A2.10) | S2.5, A2.10 | I-S2-JF-05 |
+| J2.1 | Real outbox dispatcher: cleanup gate only for index/analyze; other types enabled | A2.10; U-S1-JF-04 | U-S2-JF-01 |
+| J2.2 | Idempotent `index(audio_id)` job; retries with backoff+jitter | J2.1 | I-S2-JF-02 |
+| J2.3 | Recovery after losing Redis (regeneration from DB/outbox) | J2.1 | I-S2-JF-03 |
+| J2.4 | Reconciler: dead attempts, stuck outbox, lease duplicates | J2.2 | I-S2-JF-04 |
+| J2.5 | Observability: JSON logs with IDs, RAM/tmpfs/slot metrics, cleanup alert | J2.1 | C-S2-JF-10 |
+| J2.6 | Automated E2E smoke in the pipeline | J2.2; S2.9; D2.2; D2.6 | E-S2-JF-06 |
+| J2.7 | Fault injection with the commit tickets (S2.5/A2.10) | S2.5, A2.10 | I-S2-JF-05 |
 
-### Backlog S2 — Web/UX (`D2.x`)
+### S2 backlog — Web/UX (`D2.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| D2.1 | Formulario upload M2: idioma sin preselección, consentimiento visible | A2.3, L1.6 | U-S2-DA-01 |
-| D2.2 | Upload `PUT` streaming con progreso real; cancelar subida cancela intento | A2.4 | U-S2-DA-02 |
-| D2.3 | Progreso SSE + fallback polling; bytes reales, cero porcentajes inventados | A2.9 | U-S2-DA-03 |
-| D2.4 | Biblioteca con estados por etapa honestos; «volver a subir» ≠ «reintentar» | A2.9 | E-S2-DA-06 |
-| D2.5 | `TranscriptReader` con `?segment=`, export condicionado, resumen vacío si `not_requested` | A2.9 | C-S2-DA-04 |
-| D2.6 | Chat UI: historial de conversaciones, SSE con `fetch`, eventos `delta/citation/done/error`, cancelación | L2.5, A2.12 | C-S2-DA-05 |
-| D2.7 | Citas clicables → lector con segmento resaltado; Markdown sanitizado | L2.6, D2.5 | C-S2-DA-05, E-S2-JL-09 |
-| D2.8 | Privacidad de navegador: `no-store`, liberar `File`/object URLs, sin caché privada | continuo | C-S2-DA-07 |
+| D2.1 | M2 upload form: language with no preselection, visible consent | A2.3, L1.6 | U-S2-DA-01 |
+| D2.2 | Streaming `PUT` upload with real progress; canceling the upload cancels the attempt | A2.4 | U-S2-DA-02 |
+| D2.3 | SSE progress + polling fallback; real bytes, zero invented percentages | A2.9 | U-S2-DA-03 |
+| D2.4 | Library with honest per-stage states; "upload again" ≠ "retry" | A2.9 | E-S2-DA-06 |
+| D2.5 | `TranscriptReader` with `?segment=`, conditional export, empty summary when `not_requested` | A2.9 | C-S2-DA-04 |
+| D2.6 | Chat UI: conversation history, SSE with `fetch`, `delta/citation/done/error` events, cancellation | L2.5, A2.12 | C-S2-DA-05 |
+| D2.7 | Clickable citations → reader with highlighted segment; sanitized Markdown | L2.6, D2.5 | C-S2-DA-05, E-S2-JL-09 |
+| D2.8 | Browser privacy: `no-store`, releasing `File`/object URLs, no private cache | continuous | C-S2-DA-07 |
 
-### Definition of Done (puerta de salida S2)
+### Definition of Done (S2 exit gate)
 
-**Funcional:** E2E real navegador → proxy → servicios con clase sintética de 1 h y límite
-efectivo publicado; audio ausente antes de indexar; chat responde con citas válidas y con
-historial persistente (conversaciones/mensajes, `client_message_id` idempotente).
+**Functional:** real browser → proxy → services E2E with a 1 h synthetic class and the
+published effective limit; audio absent before indexing; chat answers with valid citations and
+persistent history (conversations/messages, idempotent `client_message_id`).
 
-**Pruebas en verde (PLAN_TESTS §2):** unitarias `U-S2-*`; integración `I-S2-*` (dedupe
-concurrente, cleanup, fencing, reconciliador); smoke E2E `E-S2-JF-06` en cada MR;
-`E-S2-SG-11` con clase de 1 h. G1, G2-T o G2-X y G3 con evidencia; G4 y G5-F1 completas
-(Recall@8, citas, abstención por idioma con numerador/denominador).
+**Green tests (PLAN_TESTS §2):** unit `U-S2-*`; integration `I-S2-*` (concurrent dedupe,
+cleanup, fencing, reconciler); E2E smoke `E-S2-JF-06` on every MR;
+`E-S2-SG-11` with the 1 h class. G1, G2-T or G2-X, and G3 with evidence; G4 and G5-F1 complete
+(Recall@8, citations, per-language abstention with numerator/denominator).
 
-**Documentación:** contratos S2 congelados sin cambios; decisión `timestamp_precision`
-documentada; D3-Texto cerrada para el proveedor de embeddings/LLM antes de procesar texto no
-sintético; spec/plan actualizados si cambió un contrato; bitácoras con evidencia.
+**Documentation:** S2 frozen contracts unchanged; `timestamp_precision` decision
+documented; D3-Text closed for the embeddings/LLM provider before processing non-synthetic
+text; spec/plan updated if a contract changed; logbooks with evidence.
 
-## 4. Semana 3 (S3) — Acción: extracción y Calendar (F2)
+## 4. Week 3 (S3) — Action: extraction and Calendar (F2)
 
-**Objetivo:** propuesta → revisión → confirmación → **un único evento**; ninguna escritura
-sin confirmación humana. **Especificación detallada:** [plan/S3.md](plan/S3.md).
-Secuencia sugerida por área: DISENO_BD_API_SPRINTS.md §4.3.
+**Objective:** proposal → review → confirmation → **a single event**; no write without
+human confirmation. **Detailed specification:** [plan/S3.md](plan/S3.md).
+Suggested sequence per area: DISENO_BD_API_SPRINTS.md §4.3.
 
-**Interfaces congeladas el lunes:** contrato de `tasks` + revisiones; shape de
-`calendar_events`; tools de chat de lectura (`get_calendar_events`, `get_pending_tasks`,
-`propose_task`) y límites de iteraciones; prompts v1.
+**Interfaces frozen on Monday:** the `tasks` + revisions contract; the `calendar_events`
+shape; read-only chat tools (`get_calendar_events`, `get_pending_tasks`,
+`propose_task`) and iteration limits; prompts v1.
 
-### Backlog S3 — RAG (`L3.x`)
+### S3 backlog — RAG (`L3.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| L3.1 | `apps/api/prompts/v1/` versionada + tests de regresión en CI | L1.4 | R-S3-JL-06 |
-| L3.2 | Esquema Pydantic final §M4 (spans Unicode, cita textual, `date_status`) | L1.4 | U-S3-JL-01 |
-| L3.3 | Validación determinista post-LLM: pertenencia, evidencia literal contra BD | L3.2 | U-S3-JL-01/02 |
-| L3.4 | Resolución de fechas contra zona de la clase (DST, relativas, ambiguo → `needs_review`) | L3.2 | U-S3-JL-03 |
-| L3.5 | Ventanas con overlap + dedupe por evidencia; idempotencia con `processing_runs` | S3.4 | U-S3-JL-04 |
-| L3.6 | `analyze(audio_id)` + orquestador backend de tools de lectura; reanálisis con revisión | J2.2, A3.1 | U-S3-JL-05, I-S3-AN-04 |
-| L3.7 | Evaluación G6 (≥50 actividades/idioma; precisión ≥ 0.95, recall ≥ 0.85) | L3.1–L3.5 | P-S3-JL-07 |
-| L3.8 | Resumen (3–5 frases) y temas versionados | L3.1 | R-S3-JL-06 |
+| L3.1 | Versioned `apps/api/prompts/v1/` + regression tests in CI | L1.4 | R-S3-JL-06 |
+| L3.2 | Final §M4 Pydantic schema (Unicode spans, verbatim quote, `date_status`) | L1.4 | U-S3-JL-01 |
+| L3.3 | Deterministic post-LLM validation: membership, literal evidence against the DB | L3.2 | U-S3-JL-01/02 |
+| L3.4 | Date resolution against the class time zone (DST, relative, ambiguous → `needs_review`) | L3.2 | U-S3-JL-03 |
+| L3.5 | Windows with overlap + dedupe by evidence; idempotency with `processing_runs` | S3.4 | U-S3-JL-04 |
+| L3.6 | `analyze(audio_id)` + backend orchestrator for read-only tools; reanalysis with review | J2.2, A3.1 | U-S3-JL-05, I-S3-AN-04 |
+| L3.7 | G6 evaluation (≥50 activities/language; precision ≥ 0.95, recall ≥ 0.85) | L3.1–L3.5 | P-S3-JL-07 |
+| L3.8 | Summary (3–5 sentences) and versioned topics | L3.1 | R-S3-JL-06 |
 
-### Backlog S3 — API/BD (`A3.x`)
+### S3 backlog — API/DB (`A3.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| A3.1 | Tabla `tasks` completa: CHECKs excluyentes, `date_status`, versión, `calendar_sync_status` separado | A2.1; L3.2 (contrato) | U-S3-AN-01 |
-| A3.2 | Evidencia + `task_sources` (manual sin fuentes; corpus con fuentes validadas) | A3.1 | I-S3-AN-05 |
-| A3.3 | Endpoints M4 con optimistic locking (`confirm/dismiss/complete`, POST manual/chat) | A3.1 | U-S3-AN-02 |
-| A3.4 | Confirmación atómica: tarea + outbox en una transacción; 202 con `pending` | A3.3, J1.5 | I-S3-AN-03 |
-| A3.5 | Reanálisis crea revisión nueva; no toca tareas editadas/confirmadas | A3.1 | I-S3-AN-04 |
-| A3.6 | Reconstrucción de evidencia desde BD para validar spans de L3.3 | L3.3 | I-S3-AN-05 |
-| A3.7 | Reglas de estado: confirmar exige fecha, bloque Calendar y evidencia; `blocked→pending` solo en reconnect | A3.3 | I-S3-AN-03 |
-| A3.8 | `settings` Calendar + espejo `calendar_events` (calendarios de escritura/lectura) | A3.1 | I-S3-JF-05 |
-| A3.9 | Tests de idempotencia: doble análisis/confirmación no duplica | A3.4 | I-S3-AN-06 |
+| A3.1 | Complete `tasks` table: exclusive CHECKs, `date_status`, version, separate `calendar_sync_status` | A2.1; L3.2 (contract) | U-S3-AN-01 |
+| A3.2 | Evidence + `task_sources` (manual without sources; corpus with validated sources) | A3.1 | I-S3-AN-05 |
+| A3.3 | M4 endpoints with optimistic locking (`confirm/dismiss/complete`, manual/chat POST) | A3.1 | U-S3-AN-02 |
+| A3.4 | Atomic confirmation: task + outbox in one transaction; 202 with `pending` | A3.3, J1.5 | I-S3-AN-03 |
+| A3.5 | Reanalysis creates a new review; does not touch edited/confirmed tasks | A3.1 | I-S3-AN-04 |
+| A3.6 | Evidence reconstruction from the DB to validate L3.3 spans | L3.3 | I-S3-AN-05 |
+| A3.7 | Status rules: confirming requires a date, a Calendar block, and evidence; `blocked→pending` only on reconnect | A3.3 | I-S3-AN-03 |
+| A3.8 | Calendar `settings` + `calendar_events` mirror (write/read calendars) | A3.1 | I-S3-JF-05 |
+| A3.9 | Idempotency tests: double analysis/confirmation does not duplicate | A3.4 | I-S3-AN-06 |
 
-### Backlog S3 — Ingesta/ASR (`S3.x`)
+### S3 backlog — Ingestion/ASR (`S3.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| S3.1 | Backfill de análisis sobre clases F1: solo desde texto persistido | L3.6 (contrato día 1), A3.1 | I-S3-SG-01 |
-| S3.2 | Ventanas eficientes con coste de tokens medido | S3.1 | U-S3-SG-02 |
-| S3.3 | Robustez sin offsets del ASR: evidencia textual, cero minutos inventados | S3.1 | U-S3-SG-03 |
-| S3.4 | `processing_runs` por versión de transcript/config | S3.1 | I-S3-SG-04 |
-| S3.5 | Medición de costos ASR y RAM/tmpfs bajo carga | S3.2 | base C-S4-SG-04 |
-| S3.6 | Hardening: backoff+jitter (máx 3 transitorios); advertencias de calidad ASR | S3.1 | U-S3-SG-05 |
+| S3.1 | Analysis backfill over F1 classes: only from persisted text | L3.6 (day-1 contract), A3.1 | I-S3-SG-01 |
+| S3.2 | Efficient windows with measured token cost | S3.1 | U-S3-SG-02 |
+| S3.3 | Robustness without ASR offsets: textual evidence, zero invented minutes | S3.1 | U-S3-SG-03 |
+| S3.4 | `processing_runs` per transcript/config version | S3.1 | I-S3-SG-04 |
+| S3.5 | ASR and RAM/tmpfs cost measurement under load | S3.2 | C-S4-SG-04 baseline |
+| S3.6 | Hardening: backoff+jitter (max 3 transient); ASR quality warnings | S3.1 | U-S3-SG-05 |
 
-### Backlog S3 — Infra/Integraciones (`J3.x`)
+### S3 backlog — Infra/Integrations (`J3.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| J3.1 | Verificar scopes reales (D7) con cuenta protegida; registrar hallazgos | credenciales autorizadas | P-S3-JF-01 |
-| J3.2 | `GoogleCalendarService`: bloqueante aislado; `Retry-After`; `invalid_grant` desconecta | J3.1 | P-S3-JF-02 |
-| J3.3 | Endpoints `POST /integrations/google/connect\|reconnect` (OAuth incremental) + calendario secundario único «Maulwurf»; guardar ID; reconciliar creación ambigua | J3.2, A3.8 | I-S3-JF-06 |
-| J3.4 | Job `sync_task_event(task_id, version)` con ID determinista; timeout→consultar; 409→reconciliar | A3.4 (outbox) | I-S3-JF-03, E-S3-DA-05 |
-| J3.5 | Evento `[Maulwurf]` con link autenticado al segmento; all-day vs instante correctos | J3.4 | I-S3-JF-03 |
-| J3.6 | Patch con ETag; no sobrescribir cambios externos; completar cancela recordatorios | J3.4 | I-S3-JF-04 |
-| J3.7 | Lectura -7/+60 días con paginación; publicación atómica en `calendar_events`; `GET /calendar/events` | A3.8 | I-S3-JF-05 |
-| J3.8 | Conflictos (solape ≠ concentración); `GET /calendar/conflicts`, `POST /calendar/sync` | J3.7 | I-S3-JF-07 |
-| J3.9 | Cuenta de prueba protegida; recursos de prueba con limpieza (acotado al sprint) | D7-CAL | C-S3-JF-08 |
+| J3.1 | Verify real scopes (D7) with the protected account; record findings | authorized credentials | P-S3-JF-01 |
+| J3.2 | `GoogleCalendarService`: isolated blocking; `Retry-After`; `invalid_grant` disconnects | J3.1 | P-S3-JF-02 |
+| J3.3 | `POST /integrations/google/connect\|reconnect` endpoints (incremental OAuth) + single "Maulwurf" secondary calendar; store the ID; reconcile ambiguous creation | J3.2, A3.8 | I-S3-JF-06 |
+| J3.4 | `sync_task_event(task_id, version)` job with deterministic ID; timeout→query; 409→reconcile | A3.4 (outbox) | I-S3-JF-03, E-S3-DA-05 |
+| J3.5 | `[Maulwurf]` event with an authenticated link to the segment; correct all-day vs instant | J3.4 | I-S3-JF-03 |
+| J3.6 | Patch with ETag; do not overwrite external changes; completing cancels reminders | J3.4 | I-S3-JF-04 |
+| J3.7 | -7/+60 day read with pagination; atomic publication into `calendar_events`; `GET /calendar/events` | A3.8 | I-S3-JF-05 |
+| J3.8 | Conflicts (overlap ≠ clustering); `GET /calendar/conflicts`, `POST /calendar/sync` | J3.7 | I-S3-JF-07 |
+| J3.9 | Protected test account; test resources with cleanup (bounded to the sprint) | D7-CAL | C-S3-JF-08 |
 
-### Backlog S3 — Web/UX (`D3.x`)
+### S3 backlog — Web/UX (`D3.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| D3.1 | Bandeja «para confirmar»: estados, evidencia con cita, badges `date_status` | A3.3; L3.2 (schema) | C-S3-DA-01 |
-| D3.2 | Edición con bloques separados vencimiento/agenda (duración por defecto editable) | A3.3 | C-S3-DA-02 |
-| D3.3 | Confirmar/descartar/completar con versión; 409 → refrescar; preview de escritura | A3.3/A3.4 | C-S3-DA-03 |
-| D3.4 | «Ver segmento de transcripción» desde la tarea | D2.5 | C-S2-DA-04, E-S2-JL-09 |
-| D3.5 | Ficha de clase: resumen, temas, items, estados de análisis/índice | D2.5, L3.8 | C-S3-DA-06 |
-| D3.6 | Dashboard con agenda sin duplicar tarea/evento; frescura de sync visible | J3.7, A3.8 | C-S3-DA-07 |
-| D3.7 | Estados de sync por tarea + UI de reconexión Google | J3.4 | C-S3-DA-08 |
-| D3.8 | Tools de chat solo lectura; `propose_task` crea propuesta, nunca escribe agenda | L3.6 (tools) | C-S3-DA-04 |
+| D3.1 | "To confirm" tray: statuses, evidence with citation, `date_status` badges | A3.3; L3.2 (schema) | C-S3-DA-01 |
+| D3.2 | Editing with separate due-date/schedule blocks (editable default duration) | A3.3 | C-S3-DA-02 |
+| D3.3 | Confirm/discard/complete with version; 409 → refresh; write preview | A3.3/A3.4 | C-S3-DA-03 |
+| D3.4 | "View transcript segment" from the task | D2.5 | C-S2-DA-04, E-S2-JL-09 |
+| D3.5 | Class page: summary, topics, items, analysis/index statuses | D2.5, L3.8 | C-S3-DA-06 |
+| D3.6 | Dashboard with agenda without duplicating task/event; visible sync freshness | J3.7, A3.8 | C-S3-DA-07 |
+| D3.7 | Per-task sync states + Google reconnection UI | J3.4 | C-S3-DA-08 |
+| D3.8 | Read-only chat tools; `propose_task` creates a proposal, never writes the agenda | L3.6 (tools) | C-S3-DA-04 |
 
-### Definition of Done (puerta de salida S3)
+### Definition of Done (S3 exit gate)
 
-**Funcional:** E2E con cuenta Google de prueba: propuesta → revisión → confirmación →
-un único evento; lectura de agenda y edición confirmada; rechazo de scopes no rompe
-biblioteca/chat.
+**Functional:** E2E with a Google test account: proposal → review → confirmation →
+a single event; agenda reading and confirmed editing; rejected scopes do not break
+library/chat.
 
-**Pruebas en verde (PLAN_TESTS §3):** unitarias `U-S3-*`; regresión `R-S3-JL-06` en CI;
-integración `I-S3-*` (idempotencia, ETag, revisión, reconnect); provider `P-S3-JF-01/02` y
-`P-S3-JL-07` (protegidas, presupuesto). G5-F2, G6 y G7-CAL con evidencia.
+**Green tests (PLAN_TESTS §3):** unit `U-S3-*`; regression `R-S3-JL-06` in CI;
+integration `I-S3-*` (idempotency, ETag, review, reconnect); provider `P-S3-JF-01/02` and
+`P-S3-JL-07` (protected, budget). G5-F2, G6, and G7-CAL with evidence.
 
-**Documentación:** prompts v1 registrados con `prompt_version`; hallazgos D7 documentados;
-spec/plan actualizados si cambió un contrato; bitácoras con evidencia.
+**Documentation:** prompts v1 registered with `prompt_version`; D7 findings documented;
+spec/plan updated if a contract changed; logbooks with evidence.
 
-## 5. Semana 4 (S4) — Recordatorios, cierre y demo (F3)
+## 5. Week 4 (S4) — Reminders, close-out, and demo (F3)
 
-**Objetivo:** recordatorios confiables, dashboard completo, hardening y demo final.
-**Especificación detallada:** [plan/S4.md](plan/S4.md). Secuencia sugerida por área:
+**Objective:** reliable reminders, full dashboard, hardening, and the final demo.
+**Detailed specification:** [plan/S4.md](plan/S4.md). Suggested sequence per area:
 DISENO_BD_API_SPRINTS.md §4.4.
 
-**Interfaces congeladas el lunes:** preferencias/notificaciones; dedupe de recordatorios;
-rutas finales de UI.
+**Interfaces frozen on Monday:** preferences/notifications; reminder dedupe; final UI
+routes.
 
-### Backlog S4 — API/BD (`A4.x`)
+### S4 backlog — API/DB (`A4.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| A4.1 | `notifications` + extensión Gmail/digests de `settings` (base Calendar ya existe desde S3) | A3.8 | U-S4-AN-01/02 |
+| A4.1 | `notifications` + Gmail/digests extension of `settings` (the Calendar base already exists from S3) | A3.8 | U-S4-AN-01/02 |
 | A4.2 | `PATCH /me/notifications` + `POST /notifications/test` | A4.1 | I-S4-JF-05 |
-| A4.3 | Cambiar vencimiento/preferencias cancela solo ocurrencias futuras obsoletas | A4.1 | U-S4-AN-03 |
-| A4.4 | Borrado de cuenta con operación observable: `DELETE /me` + `GET /me/deletion/{id}` | A3.8, J3.3 | I-S4-AN-04 |
-| A4.5 | D8 ya aprobada: validación de backups y restore con tombstones reaplicados | A4.4, D8 aprobada | I-S4-AN-05 |
-| A4.6 | Hardening: ownership en API/SSE/tools/jobs; `no-store`; rate limits `429/503` | A4.4, J4.2 | I-S4-AN-06 |
-| A4.7 | Tests G3 finales + sweep de huérfanos (chunks/embeddings sin clase) | A4.4 | I-S4-AN-07 |
-| A4.8 | Soporte en ensayo de demo | — | — (soporte: se evidencia con E-S4-DA-04) |
+| A4.3 | Changing due date/preferences cancels only obsolete future occurrences | A4.1 | U-S4-AN-03 |
+| A4.4 | Account deletion with an observable operation: `DELETE /me` + `GET /me/deletion/{id}` | A3.8, J3.3 | I-S4-AN-04 |
+| A4.5 | D8 already approved: backup and restore validation with reapplied tombstones | A4.4, D8 approved | I-S4-AN-05 |
+| A4.6 | Hardening: ownership in API/SSE/tools/jobs; `no-store`; `429/503` rate limits | A4.4, J4.2 | I-S4-AN-06 |
+| A4.7 | Final G3 tests + orphan sweep (chunks/embeddings without a class) | A4.4 | I-S4-AN-07 |
+| A4.8 | Demo rehearsal support | — | — (support: evidenced with E-S4-DA-04) |
 
-### Backlog S4 — Infra/Integraciones (`J4.x`)
+### S4 backlog — Infra/Integrations (`J4.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| J4.1 | Gmail opt-in `gmail.send`; plantillas HTML+texto escapadas; destinatario verificado | D7-MAIL; credenciales | U-S4-JF-03, P-S4-JF-07 |
-| J4.2 | Scheduler ARQ con rol único; reclamación atómica; SLA 15 min | A4.1 | I-S4-JF-04 |
-| J4.3 | Recordatorios escalados T-48/T-24/T-2 h; T-3d/T-1d all-day hora local | J4.2 | U-S4-JF-01 |
-| J4.4 | Dedupe persistente + DST (hora inexistente/repetida) | J4.3 | U-S4-JF-02 |
-| J4.5 | `delivery_unknown` sin reintento ciego; reexpedición manual advierte duplicado | J4.2 | I-S4-JF-05 |
-| J4.6 | Digests diario 07:00 y semanal por fecha local, con conflictos | J4.2 | I-S4-JF-06 |
-| J4.7 | Despliegue de referencia; imágenes versionadas; migración como job único; rollback | J1.1 | L-S4-JF-08 |
-| J4.8 | Alertas/presupuesto + runbooks (cleanup, proveedor caído, tokens, restore) | J4.7, S4.1, A4.5 | C-S4-JF-10 |
-| J4.9 | Cierre G8: builds/tests de las 3 apps, restore, recordatorios en SLA | todo | E-S4-JF-09 |
-| J4.10 | Envío real de Gmail observado con limpieza posterior | J4.1; cuenta autorizada | P-S4-JF-07 |
+| J4.1 | Opt-in Gmail `gmail.send`; escaped HTML+text templates; verified recipient | D7-MAIL; credentials | U-S4-JF-03, P-S4-JF-07 |
+| J4.2 | ARQ scheduler with a single role; atomic claiming; 15 min SLA | A4.1 | I-S4-JF-04 |
+| J4.3 | Escalating reminders T-48/T-24/T-2 h; T-3d/T-1d all-day local time | J4.2 | U-S4-JF-01 |
+| J4.4 | Persistent dedupe + DST (nonexistent/repeated hour) | J4.2 | U-S4-JF-02 |
+| J4.5 | `delivery_unknown` without blind retries; manual reshipping warns about duplicates | J4.2 | I-S4-JF-05 |
+| J4.6 | Daily 07:00 and weekly digests by local date, with conflicts | J4.2 | I-S4-JF-06 |
+| J4.7 | Reference deployment; versioned images; migration as a single job; rollback | J1.1 | L-S4-JF-08 |
+| J4.8 | Alerts/budget + runbooks (cleanup, provider down, tokens, restore) | J4.7, S4.1, A4.5 | C-S4-JF-10 |
+| J4.9 | G8 closure: builds/tests for the 3 apps, restore, reminders within SLA | all | E-S4-JF-09 |
+| J4.10 | Observed real Gmail send with later cleanup | J4.1; authorized account | P-S4-JF-07 |
 
-### Backlog S4 — Ingesta/ASR (`S4.x`)
+### S4 backlog — Ingestion/ASR (`S4.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| S4.1 | Runbook de cleanup/recuperación ejecutable tal cual | S2.6, S2.7 | I-S4-SG-03 |
-| S4.2 | Hardening supervisor: sweeper 60 s; cleanup fallido bloquea admisión | S2.7 | L-S4-SG-01 |
-| S4.3 | Re-verificación G1 bajo carga con fallos inyectados | S2.x | L-S4-SG-01 |
-| S4.4 | TTLs efectivos (10/30/60 min) publicados con benchmark | S2.1 | L-S4-SG-02 |
-| S4.5 | Tabla de costos reales por hora de clase | S3.5 | C-S4-SG-04 |
-| S4.6 | Soporte en ensayo de demo | — | — (soporte: se evidencia con E-S4-DA-04) |
+| S4.1 | Cleanup/recovery runbook executable as written | S2.6, S2.7 | I-S4-SG-03 |
+| S4.2 | Supervisor hardening: 60 s sweeper; failed cleanup blocks admission | S2.7 | L-S4-SG-01 |
+| S4.3 | G1 re-verification under load with injected failures | S2.x | L-S4-SG-01 |
+| S4.4 | Effective TTLs (10/30/60 min) published with a benchmark | S2.1 | L-S4-SG-02 |
+| S4.5 | Table of real costs per class hour | S3.5 | C-S4-SG-04 |
+| S4.6 | Demo rehearsal support | — | — (support: evidenced with E-S4-DA-04) |
 
-### Backlog S4 — RAG (`L4.x`)
+### S4 backlog — RAG (`L4.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| L4.1 | Cierre G4/G6 con números finales y slices difíciles | L2.7, L3.7 | R-S4-JL-01 |
-| L4.2 | Revisión cruzada de seguridad (aislamiento, evidencia, tools, secretos) | — | C-S4-JL-02 |
-| L4.3 | Checklist §9 de PLAN_IMPLEMENTACION con evidencia ítem por ítem | — | C-S4-JL-03 |
-| L4.4 | Spec + plan + diseño actualizados en la misma revisión si un contrato cambió | — | C-S4-JL-03 |
-| L4.5 | Go/no-go de demo y guion completo | — | E-S4-DA-04 |
-| L4.6 | Retro final + backlog F4 priorizado | — | C-S4-JL-04 |
+| L4.1 | G4/G6 closure with final numbers and hard slices | L2.7, L3.7 | R-S4-JL-01 |
+| L4.2 | Cross security review (isolation, evidence, tools, secrets) | — | C-S4-JL-02 |
+| L4.3 | PLAN_IMPLEMENTACION §9 checklist with item-by-item evidence | — | C-S4-JL-03 |
+| L4.4 | Spec + plan + design updated in the same revision if a contract changed | — | C-S4-JL-03 |
+| L4.5 | Demo go/no-go and full script | — | E-S4-DA-04 |
+| L4.6 | Final retro + prioritized F4 backlog | — | C-S4-JL-04 |
 
-### Backlog S4 — Web/UX (`D4.x`)
+### S4 backlog — Web/UX (`D4.x`)
 
-| Ticket | Tarea (resumen) | Depende de | Tests |
+| Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| D4.1 | Preferencias de notificaciones en `/settings` | A4.2 | C-S4-DA-01 |
-| D4.2 | Panel de entregas: `delivery_unknown` explicado; reexpedición advierte | J4.5 | C-S4-DA-02 |
-| D4.3 | Ctrl+K global contra `GET /search` | L2.4 | C-S4-DA-03 |
-| D4.4 | Estadísticas por materia sin exponer audio | A2.9 | C-S4-DA-06 |
-| D4.5 | PWA opcional: service worker que excluye upload/API/transcripts/chat/SSE | D4.6 | C-S4-DA-05 |
-| D4.6 | Pulido: empty states, errores accionables, accesibilidad básica | D4.1, D4.2, D4.3 | C-S4-DA-05 |
-| D4.7 | Ensayo de demo ×2 (jueves y viernes) | L4.5 | E-S4-DA-04 |
-| D4.8 | Checklist G1 en cliente final (sin caché de privados) | D2.8 | C-S4-DA-05 |
+| D4.1 | Notification preferences in `/settings` | A4.2 | C-S4-DA-01 |
+| D4.2 | Deliveries panel: `delivery_unknown` explained; reshipping warns | J4.5 | C-S4-DA-02 |
+| D4.3 | Global Ctrl+K against `GET /search` | L2.4 | C-S4-DA-03 |
+| D4.4 | Per-subject statistics without exposing audio | A2.9 | C-S4-DA-06 |
+| D4.5 | Optional PWA: service worker excluding upload/API/transcripts/chat/SSE | D4.6 | C-S4-DA-05 |
+| D4.6 | Polish: empty states, actionable errors, basic accessibility | D4.1, D4.2, D4.3 | C-S4-DA-05 |
+| D4.7 | Demo rehearsal ×2 (Thursday and Friday) | L4.5 | E-S4-DA-04 |
+| D4.8 | G1 checklist on the final client (no private caching) | D2.8 | C-S4-DA-05 |
 
-### Definition of Done (puerta de salida S4)
+### Definition of Done (S4 exit gate)
 
-**Funcional:** envío real de prueba observado con cuenta autorizada; dedupe/DST/entrega
-incierta probados; dashboard completo + Ctrl+K; demo final corriendo en el despliegue de
-referencia.
+**Functional:** observed real test send with the authorized account; dedupe/DST/uncertain
+delivery tested; full dashboard + Ctrl+K; final demo running on the reference deployment.
 
-**Pruebas en verde (PLAN_TESTS §4):** suite completa de las 3 apps; carga `L-S4-*`
-(G1 bajo carga, TTLs); provider `P-S4-JF-07` (envío real controlado); G8 cerrada con
-evidencia.
+**Green tests (PLAN_TESTS §4):** full suite for the 3 apps; load `L-S4-*`
+(G1 under load, TTLs); provider `P-S4-JF-07` (controlled real send); G8 closed with
+evidence.
 
-**Documentación:** runbooks publicados; tabla de costos; informe de calidad final;
-checklist §9 marcada; spec/plan consistentes; bitácoras cerradas con evidencia.
+**Documentation:** published runbooks; cost table; final quality report;
+§9 checklist marked; consistent spec/plan; logbooks closed with evidence.
 
-## 6. Interfaces congeladas por semana
+## 6. Interfaces frozen per week
 
-Cambiar algo de esta tabla dentro de la semana exige aprobación del líder y actualizar
-los consumidores el mismo día.
+Changing anything in this table during the week requires the leader's approval and updating
+consumers the same day.
 
-| Semana | Congelado |
+| Week | Frozen |
 |---|---|
-| S1 | Sesión/cookie y CSRF; `POST /audios` + `PUT` binario; outbox shape; estados de ingesta; SSE de progreso |
-| S2 | Chunks/embeddings; eventos SSE del chat; formato de citas `[Materia · Clase · mm:ss]`; `/search` |
-| S3 | `tasks` + revisiones; `calendar_events`; tools de chat de lectura; prompts v1 |
-| S4 | Preferencias/notificaciones; dedupe de recordatorios; rutas finales de UI |
+| S1 | Session/cookie and CSRF; `POST /audios` + binary `PUT`; outbox shape; ingestion states; progress SSE |
+| S2 | Chunks/embeddings; chat SSE events; citation format `[Subject · Class · mm:ss]`; `/search` |
+| S3 | `tasks` + revisions; `calendar_events`; read-only chat tools; prompts v1 |
+| S4 | Preferences/notifications; reminder dedupe; final UI routes |
 
-### 6a. Topología de dependencias (por área)
+### 6a. Dependency topology (per area)
 
-El flujo es acíclico: el proveedor de una interfaz la congela el lunes y entrega código a
-más tardar el día 3; el consumidor construye contra el contrato congelado.
+The flow is acyclic: the provider of an interface freezes it on Monday and delivers code no
+later than day 3; the consumer builds against the frozen contract.
 
 ```text
-API/BD (sesión, esquema, endpoints) ──> Infra (compose, workers) ──> todos (entorno)
-API/BD (esquema/endpoints) ──> RAG (índice/chat), Web (UI), Infra (workers)
-Ingesta (límites/transcript) ──> API/BD (capabilities), RAG (chunking), Web (estados)
-RAG (prompts/citas/tools) ──> Web (UI), API/BD (tasks), Infra (jobs)
-Infra (outbox/jobs/runner) ──> RAG (analyze), API/BD (consumo outbox), Web (estados sync)
+API/DB (session, schema, endpoints) ──> Infra (compose, workers) ──> everyone (environment)
+API/DB (schema/endpoints) ──> RAG (index/chat), Web (UI), Infra (workers)
+Ingestion (limits/transcript) ──> API/DB (capabilities), RAG (chunking), Web (states)
+RAG (prompts/citations/tools) ──> Web (UI), API/DB (tasks), Infra (jobs)
+Infra (outbox/jobs/runner) ──> RAG (analyze), API/DB (outbox consumption), Web (sync states)
 ```
 
-Cruces aparentes resueltos (el patrón: primero el **contrato** congelado, después el código):
+Apparent crossings resolved (the pattern: the frozen **contract** first, then the code):
 
-| Cruce aparente | Por qué NO es ciclo |
+| Apparent crossing | Why it is NOT a cycle |
 |---|---|
-| API/BD necesita outbox (Infra) e Infra necesita tablas (API/BD) | API/BD define el shape de outbox el lunes S1; la tabla se crea en S1; el dispatcher lo implementa Infra en S2. |
-| RAG necesita `tasks` (API/BD) y API/BD valida spans de RAG | RAG entrega el esquema Pydantic + validadores el día 1–2 (corre sin BD); API/BD construye la tabla y luego ejecuta esa validación (A3.6). |
-| Web necesita endpoints (API/BD) y API/BD prueba E2E (Web) | Web construye contra el contrato congelado con mock local; el E2E cruzado es del miércoles. |
-| Infra necesita job `analyze` (RAG) y RAG necesita runner (Infra) | RAG entrega la función; Infra solo la encapsula en el worker sobre el runner genérico idempotente de S2. |
-| Ingesta necesita imagen con ffmpeg (Infra) e Infra necesita datos del spike (Ingesta) | Infra entrega imagen base el día 2; los límites medidos alimentan capabilities en S2, no en S1. |
+| API/DB needs the outbox (Infra) and Infra needs tables (API/DB) | API/DB defines the outbox shape on S1 Monday; the table is created in S1; Infra implements the dispatcher in S2. |
+| RAG needs `tasks` (API/DB) and API/DB validates RAG spans | RAG delivers the Pydantic schema + validators on day 1–2 (runs without the DB); API/DB builds the table and later runs that validation (A3.6). |
+| Web needs endpoints (API/DB) and API/DB tests E2E (Web) | Web builds against the frozen contract with a local mock; the crossed E2E belongs to Wednesday. |
+| Infra needs the `analyze` job (RAG) and RAG needs the runner (Infra) | RAG delivers the function; Infra only wraps it in the worker on top of the generic idempotent S2 runner. |
+| Ingestion needs an image with ffmpeg (Infra) and Infra needs spike data (Ingestion) | Infra delivers the base image on day 2; the measured limits feed capabilities in S2, not S1. |
 
-### 6b. Qué NO es dependencia dentro de la misma semana
+### 6b. What is NOT a dependency within the same week
 
-- **API/BD** no espera a Ingesta en S1: el `PUT` binario es esqueleto; la recepción real
-  llega en S2 sobre el contrato congelado.
-- **Ingesta** no espera a API/BD en S2: consume el shape congelado y usa su prototipo F0.2.
-- **RAG** no espera a Ingesta en S2: chunking/índice se desarrollan con transcripciones
-  sintéticas/redactadas; los transcripts reales solo alimentan la medición final.
-- **Web** no espera a nadie: mock local contra contratos congelados.
-- **Infra** no espera al índice de RAG en S2: `index(audio_id)` se prueba con un stub que
-  registra la llamada; la lógica real se conecta el día 4–5.
-- **Nadie** espera a Google/NVIDIA: los tickets con proveedor pagado (`P-`) usan mocks para
-  desarrollar y contrato congelado para conmutar.
+- **API/DB** does not wait for Ingestion in S1: the binary `PUT` is a skeleton; real
+  reception arrives in S2 on the frozen contract.
+- **Ingestion** does not wait for API/DB in S2: it consumes the frozen shape and uses its
+  F0.2 prototype.
+- **RAG** does not wait for Ingestion in S2: chunking/index are developed with synthetic/
+  drafted transcripts; real transcripts only feed the final measurement.
+- **Web** waits for nobody: local mock against frozen contracts.
+- **Infra** does not wait for the RAG index in S2: `index(audio_id)` is tested with a stub that
+  records the call; the real logic is wired on day 4–5.
+- **Nobody** waits for Google/NVIDIA: tickets with a paid provider (`P-*`) use mocks to
+  develop and the frozen contract to switch.
 
-## 7. Rutinas semanales
+## 7. Weekly routines
 
-- **Lunes (45 min, todo el equipo):** plan del sprint, congelación de interfaces y
-  **reclamo de tickets** mediante PR en `sprints/CLAIMS.md` (la bitácora solo recoge la
-  evidencia posterior).
-- **Daily (15 min):** hecho/ayer, hoy, bloqueos; el líder desbloquea.
-- **Miércoles (30 min):** integración cruzada — cada uno prueba el trabajo de otro en su
-  entorno; conmutación de mocks a código real.
-- **Viernes (45 min):** demo, verificación del DoD del sprint, retro y cierre de bitácoras.
-- **Regla anti-bloqueo:** quien espera código de otro sigue sobre el mock del contrato
-  congelado y lo reporta en la daily; el líder decide entre aceptar el mock para la demo o
-  reasignar tickets.
-- **Definition of done por ticket:** código + tests + documento/contrato actualizado +
-  demostrable en compose local + evidencia en la bitácora.
+- **Monday (45 min, whole team):** sprint planning, interface freezing, and
+  **ticket claiming** via PR in `sprints/CLAIMS.md` (the logbook only collects later
+  evidence).
+- **Daily (15 min):** done/yesterday, today, blockers; the lead unblocks.
+- **Wednesday (30 min):** cross integration — everyone tests someone else's work in their
+  environment; switching from mocks to real code.
+- **Friday (45 min):** demo, sprint DoD verification, retro, and logbook closure.
+- **Anti-blocking rule:** whoever waits on someone else's code keeps building on the frozen
+  contract's mock and reports it in the daily; the leader decides between accepting the mock
+  for the demo or reassigning tickets.
+- **Definition of done per ticket:** code + tests + updated document/contract +
+  demonstrable in local compose + evidence in the logbook.
 
-## 8. Gestión de riesgos
+## 8. Risk management
 
-| Riesgo | Señal temprana | Mitigación |
+| Risk | Early signal | Mitigation |
 |---|---|---|
-| Riva no entrega timestamps fiables | Spike S1 con `none` | Decidir D6 **en S1**: producto textual aceptado o alineación efímera; la UI nunca inventa minutos |
-| Límite de memoria/3 h no cabe | Benchmark S1 | Bajar límites efectivos en capabilities con aprobación del líder; jamás introducir disco |
-| Retención de proveedores sin garantía (D3) | Revisión contractual S1 | Bloquea clases reales; E2E con audio sintético en RAM; decidir con el usuario |
-| Ticket sin responsable al cierre del lunes | Backlog con huecos | El líder reasigna, divide o baja el alcance del DoD de forma explícita y visible |
-| Sobrecarga de una persona | Tickets sin avanzar en daily | Redistribución el día 2–3; un ticket con prueba `P-*` requiere elegibilidad verificada en `CLAIMS.md` |
-| Scope creep en F2/F3 | Tickets que cruzan carpetas | El líder rechaza PRs fuera del claiming; nuevas features → backlog F4 |
-| Landing sin diseño vigente | D1.8 sin dirección visual | Decidir la dirección mínima (tokens + hero) antes del claiming; la propuesta anterior de front quedó descartada y no obliga |
-| Google Testing caduca tokens a 7 días | Reconnect frecuente en S3 | Probar reconexión desde S3; registrar límites en docs |
-| Baja de un miembro | — | Las áreas tienen pares naturales (API/BD↔Ingesta, Infra↔Web, RAG cubre decisiones); el líder redistribuye el backlog |
+| Riva does not deliver reliable timestamps | S1 spike with `none` | Decide D6 **in S1**: textual product accepted or ephemeral alignment; the UI never invents minutes |
+| Memory/3 h limit does not fit | S1 benchmark | Lower effective limits in capabilities with the leader's approval; never introduce disk |
+| Provider retention without guarantees (D3) | S1 contract review | Blocks real classes; E2E with in-RAM synthetic audio; decide with the user |
+| Ticket without an owner at Monday's close | Backlog with gaps | The leader reassigns, splits, or lowers the DoD scope explicitly and visibly |
+| One person overloaded | Tickets not moving in the daily | Redistribution on day 2–3; a ticket with a `P-*` test requires verified eligibility in `CLAIMS.md` |
+| Scope creep in F2/F3 | Tickets crossing folders | The leader rejects PRs outside claiming; new features → F4 backlog |
+| Landing without a current design | D1.8 without visual direction | Decide the minimal direction (tokens + hero) before claiming; the previous front-end proposal was discarded and is not binding |
+| Google Testing expires tokens after 7 days | Frequent reconnect in S3 | Test reconnection from S3; record limits in docs |
+| A member drops out | — | Areas have natural pairs (API/DB↔Ingestion, Infra↔Web, RAG covers decisions); the leader redistributes the backlog |
 
-## 9. Reglas no negociables (de la especificación)
+## 9. Non-negotiable rules (from the specification)
 
-1. Cero audio durable: nada en disco, S3, Redis, logs, trazas, cachés ni backups. Perder
+1. Zero durable audio: nothing on disk, S3, Redis, logs, traces, caches, or backups. Losing
    audio = reupload.
-2. Idioma obligatorio elegido antes de subir; sin `multi`, sin traducción, sin fallback
-   silencioso.
-3. Escritura a Calendar solo con confirmación humana explícita; el chat nunca escribe ni
-   envía correo.
-4. Identidad siempre desde la sesión del backend, nunca del payload ni del LLM; todo
-   filtrado por `user_id`.
-5. Citas solo hacia IDs validados en BD; el LLM no genera timestamps ni fuentes.
-6. `NVIDIA_API_KEY` y tokens solo en el backend; jamás en frontend, logs o commits.
+2. Mandatory language chosen before uploading; no `multi`, no translation, no silent
+   fallback.
+3. Writing to Calendar only with explicit human confirmation; the chat never writes or
+   sends email.
+4. Identity always from the backend session, never from a payload or the LLM; everything
+   filtered by `user_id`.
+5. Citations only to IDs validated in the DB; the LLM does not generate timestamps or
+   sources.
+6. `NVIDIA_API_KEY` and tokens only in the backend; never in the frontend, logs, or
+   commits.
 
-## 10. Enlaces
+## 10. Links
 
-- [ESPECIFICACION.md](ESPECIFICACION.md) — contratos M1–M9, modelo de datos, NFRs.
-- [PLAN_IMPLEMENTACION.md](PLAN_IMPLEMENTACION.md) — puertas G1–G8, decisiones D1–D8, capas de prueba.
-- [PLAN_TESTS.md](PLAN_TESTS.md) — catálogo de pruebas (unitarias, integración, provider, E2E, carga) por sprint.
-- [DISENO_BD_API_SPRINTS.md](DISENO_BD_API_SPRINTS.md) — diseño de BD/API y secuencia sugerida por área.
-- [plan/](plan/S1.md) — especificación detallada por sprint: [S1](plan/S1.md) ·
+- [ESPECIFICACION.md](ESPECIFICACION.md) — M1–M9 contracts, data model, NFRs.
+- [PLAN_IMPLEMENTACION.md](PLAN_IMPLEMENTACION.md) — gates G1–G8, decisions D1–D8, test layers.
+- [PLAN_TESTS.md](PLAN_TESTS.md) — test catalog (unit, integration, provider, E2E, load) per sprint.
+- [DISENO_BD_API_SPRINTS.md](DISENO_BD_API_SPRINTS.md) — DB/API design and suggested sequence per area.
+- [plan/](plan/S1.md) — detailed per-sprint specification: [S1](plan/S1.md) ·
   [S2](plan/S2.md) · [S3](plan/S3.md) · [S4](plan/S4.md).
-- [NVIDIA_RIVA.md](NVIDIA_RIVA.md) — parámetros de conexión auditados para el spike S1.
-- [PROPUESTA_PROYECTO_FINAL.md](PROPUESTA_PROYECTO_FINAL.md) — visión y roles.
-- Bitácoras: [sprints/README.md](sprints/README.md) — reglas de claiming y plantilla ·
+- [NVIDIA_RIVA.md](NVIDIA_RIVA.md) — audited connection parameters for the S1 spike.
+- [PROPUESTA_PROYECTO_FINAL.md](PROPUESTA_PROYECTO_FINAL.md) — vision and roles.
+- Logbooks: [sprints/README.md](sprints/README.md) — claiming rules and template ·
   [sprints/jose-leonardo.md](sprints/jose-leonardo.md) · [sprints/andres.md](sprints/andres.md) ·
   [sprints/santiago.md](sprints/santiago.md) · [sprints/jefferson.md](sprints/jefferson.md) ·
   [sprints/daniel.md](sprints/daniel.md).
