@@ -1702,7 +1702,7 @@ by the lead. The full text, evidence and priorities are in [plan/S2.md](plan/S2.
 | A2.19 | API | Contract conformance (§3.2, §3.3, §3.5) | P1 |
 | S2.12 · S2.13 | Ingestion | Admission latch, heartbeat, ffprobe limits; error-code catalog (§3.2) | P1 |
 | L2.9 | RAG | Align the §M6 `Chunk` contract with §2.5 | P1 |
-| J2.10 | Infra | Edge upload limit and Caddy limits | P1 |
+| J2.10 | Infra | Ingress upload limit and Caddy limits (Cloudflare Tunnel is no longer planned) | P1 |
 | A2.15 · J2.9 · L2.11 | API · Infra · lead | Error envelope; CI hygiene; documentation reconciliation | P2 |
 
 ### 4.3 S3 — Action: extraction and Calendar (F2)

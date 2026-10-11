@@ -184,8 +184,8 @@ These associations complete the backlog references without changing the stable I
 | I-S2-AN-13 | I | 20 concurrent `POST /audios` never exceed `active_slots`/`per_user_active_limit`; two `PUT`s on one attempt reach the sink exactly once (`409 attempt_not_active`); abandoned and failed reservations free their slot | M2/G5-F1 |
 | U-S2-AN-14 | U | 404, 405 and an injected unhandled exception use `{"error": {code, message, details}}` and the 500 body carries no exception text | §3.2 |
 | U-S2-AN-15 | U | Startup without `MAULWURF_ENV` fails; weak or mutually equal secrets are rejected outside `local` | M1/security |
-| I-S2-AN-16 | I | RLS enabled: the A1.9 suite passes, a query without `app.user_id` fails (fail-closed), pooled connections do not leak the setting, one test shows the barrier works without the application filter | G3/ADR-0006 |
-| I-S2-AN-17 | I | Every composite FK has a non-partial covering index; `index_version` and dimension invariants rejected by the database; model↔migration drift test; `0003` upgrades and downgrades | G3/§2.1.8 |
+| I-S2-AN-16 | I | RLS enabled: the A1.9 suite passes, a query without `app.user_id` fails (fail-closed), the table owner is also subject to the policies (`FORCE`), pooled connections do not leak the setting, one test shows the barrier works without the application filter | G3/ADR-0006 |
+| I-S2-AN-17 | I | Every composite FK has a non-partial covering index; `index_version` and dimension invariants rejected by the database; blank transcript text rejected (if confirmed by the lead); `alembic check` drift test; `0003` upgrades and downgrades | G3/§2.1.8 |
 | U-S2-AN-18 | U | One contract test per conformance item: capabilities TTL, language normalization, variant-token codes, `GET`/`PATCH /me`, single upload-limit source, consistent `503` headers | M1/M2 |
 
 ### 2.3 Retrieval/RAG — chunking, index and chat
@@ -223,9 +223,9 @@ published per the PLAN_IMPLEMENTACION §7.1 protocol.
 | I-S2-JF-05 | I | Injected crash before and after the commit between ingestion and API: outcome per contract | G5-F1 |
 | E-S2-JF-06 | E | Pipeline E2E smoke: upload → transcript → cleanup → index → question with citation | G4/G5-F1 |
 | C-S2-JF-10 | C | Minimal observability: drafted alert for failed cleanup, failure panel per stage, and no sensitive payload in metrics | G1/G8 |
-| I-S2-JF-11 | I | `docker compose config`: `ingest` has the Riva and `INGEST_*` variable names and none of the API secrets; `.env` can override `MAULWURF_PUBLIC_ORIGIN` | M2/G1 |
+| I-S2-JF-11 | I | `docker compose config`: `ingest` has the Riva and `INGEST_*` variable names and none of the API secrets; no default for `NVIDIA_API_KEY`; `ingest` still runs as UID 10001; `.env` can override `MAULWURF_PUBLIC_ORIGIN` | M2/G1 |
 | C-S2-JF-12 | C | Checklist: CI fails on a seeded fake secret and on an emptied suite; CI Redis has `maxmemory` and `noeviction`; license report published | G8/ADR-0005 |
-| C-S2-JF-13 | C | Checklist: effective edge upload limit measured or documented (date, environment, status codes); Caddy body and timeout limits set | D4/M2 |
+| C-S2-JF-13 | C | Checklist: ingress decided; its effective upload limit, timeouts and buffering measured or documented (date, environment, status codes); Caddy body and timeout limits set | D4/M2 |
 
 ### 2.5 Web/UX — upload, library and chat
 

@@ -294,7 +294,7 @@ remain open S1 tickets and the slice cannot run without them.
 | J2.7 | Fault injection with the commit tickets (S2.5/A2.10) | S2.5, A2.10 | I-S2-JF-05 |
 | J2.8 | *(gap, P0)* Compose/env wiring for `ingest` (Riva credentials, `INGEST_*`, origin override, `INGEST_SLOTS`) | A2.13 | I-S2-JF-11 |
 | J2.9 | *(gap, P2)* CI hygiene: no empty-suite tolerance, Redis `maxmemory`, secret and license scan | J1.4 | C-S2-JF-12 |
-| J2.10 | *(gap, P1)* Edge upload limit (Cloudflare Tunnel) and Caddy body/timeouts limits | — | C-S2-JF-13 |
+| J2.10 | *(gap, P1)* Ingress decision (Cloudflare Tunnel dropped), its upload limit and timeouts, and Caddy body/timeout limits | Ingress decision | C-S2-JF-13 |
 
 ### S2 backlog — Web/UX (`D2.x`)
 
