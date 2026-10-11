@@ -20,7 +20,7 @@ The monorepo has these product roots:
 ```text
 apps/api/      FastAPI, models, Alembic, versioned prompts
 apps/ingest/   Ephemeral ingestion and ASR (included even though missing from §3.3)
-apps/web/      Next.js App Router
+apps/web/      Next.js App Router (superseded by ADR-0007: React SPA built with Vite)
 infra/         Compose, Caddy, CI (J1.x; still placeholder)
 scripts/       Scaffold, spikes, and load
 docs/          Contracts and planning

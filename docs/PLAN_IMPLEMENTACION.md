@@ -6,7 +6,7 @@
 
 ## 1. Objective and invariant decisions
 
-Build a Next.js web app with a FastAPI backend to turn classes into queryable knowledge and
+Build a React web app (Vite SPA, ADR-0007) with a FastAPI backend to turn classes into queryable knowledge and
 activity proposals, without persistently storing audio.
 
 - Audio only in memory/tmpfs during reception, validation, conversion, and ASR; verified
@@ -97,7 +97,7 @@ alignment for G2-T; update spec, API, and UI in the same revision. No silent fal
   no persistent swap/core dumps/snapshots/hibernation. Verify the host configuration, not
   only Compose.
 - [ ] Real proxy without buffering/caching/capturing bodies to disk; direct binary path to
-  FastAPI, without Server Actions or the default `UploadFile` spooling.
+  FastAPI, with a `fetch` streaming `PUT` and without the default `UploadFile` spooling.
 - [ ] Measure RAM reservation per slot: original + active fragments + SDK/ffmpeg buffers +
   safety margin. The 200 MiB/3 h target is not an approved limit until the test is passed;
   reduce and publish capacity if it does not fit.
@@ -118,7 +118,7 @@ unreachable. Any detected persistence blocks the delivery.
 ### F0.3 Application foundation
 
 - [ ] Monorepo from §3, pinned supported versions, and lockfiles. FastAPI/Pydantic/SQLAlchemy
-  async, Next.js/TypeScript, PostgreSQL/pgvector, Redis/ARQ, and ffmpeg.
+  async, React/Vite/TypeScript (ADR-0007), PostgreSQL/pgvector, Redis/ARQ, and ffmpeg.
 - [ ] Services `web`, `api`, `ingest`, `worker`, `scheduler`, `postgres`, `redis`, `caddy`;
   no audio storage. Initial single-instance ingestion; scaling with reservation affinity
   remains pending design/testing.

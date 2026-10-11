@@ -128,7 +128,7 @@ Audio → Transcription → Task extraction (LLM) → Google Calendar
 
 ```mermaid
 flowchart TD
-    U[Student] --> WEB[Next.js PWA web]
+    U[Student] --> WEB[React SPA web, Vite]
     WEB -->|Same-origin REST and SSE| API[FastAPI API]
     API -->|OAuth and session| GO[Google OAuth]
     API --> PG[(PostgreSQL with pgvector)]
@@ -149,7 +149,7 @@ flowchart TD
 
 | Layer | Decision | Alternative | Rationale |
 |---|---|---|---|
-| Frontend | Next.js App Router on a supported stable version + TypeScript + Tailwind + shadcn/ui | — | Pin versions and lockfile in F0; PWA without caching private data |
+| Frontend | React SPA built with Vite + React Router + TypeScript + Tailwind, served as static files by a minimal Express process ([ADR-0007](adr/ADR-0007-web-stack.md)) | Next.js App Router (replaced on 2026-10-11) | Pin versions and lockfile; no SSR; optional PWA without caching private data |
 | Backend | FastAPI + Pydantic v2 + SQLAlchemy 2 async | — | API and isolated ingestion service; blocking calls outside the event loop |
 | Relational DB | PostgreSQL 16 | — | Data + vectors + outbox in a single DB |
 | Vectors | **pgvector**, HNSW cosine | — | Hybrid search with tenant filters before retrieval |
@@ -178,10 +178,12 @@ maulwurf/
 │   │   ├── prompts/            # versioned prompts (see §4.4)
 │   │   ├── alembic/
 │   │   └── tests/
-│   └── web/            # Next.js
-│       ├── app/                # App Router routes
-│       ├── components/
-│       └── lib/
+│   └── web/            # React SPA (Vite), ADR-0007
+│       └── src/
+│           ├── pages/          # React Router routes
+│           ├── components/
+│           ├── lib/
+│           └── server/         # Express: static files + SPA fallback only
 ├── infra/
 │   ├── docker-compose.yml
 │   └── Caddyfile               # reverse proxy + TLS
@@ -258,7 +260,7 @@ retained file.
   accepting bytes.
 - `POST /audios` only validates metadata/consent, reserves RAM capacity, and creates the
   attempt; it cannot yet decide deduplication because it has not received the content. The
-  binary upload uses `PUT`, not Next Server Actions or `UploadFile` with default spooling to
+  binary upload uses `PUT` with `fetch`, not a framework upload helper or `UploadFile` with default spooling to
   disk. No resumable upload in MVP.
 - The `PUT` computes SHA-256 incrementally and decides deduplication **by user and ingestion
   identity**: hash, language, subject, class date, and timezone (not title/teacher). Exact
@@ -735,7 +737,7 @@ Full sequence, from upload to the Calendar event:
 ```mermaid
 sequenceDiagram
     actor U as Student
-    participant W as Next.js Web
+    participant W as React Web
     participant A as FastAPI API
     participant I as Supervised ephemeral ingestion
     participant Q as Outbox and Redis IDs only
