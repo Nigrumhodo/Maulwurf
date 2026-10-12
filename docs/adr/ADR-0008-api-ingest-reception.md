@@ -186,7 +186,9 @@ forwarding. **Fails closed**: a missing, malformed or different hash or byte cou
 `reception_integrity_failed`. With a match, it requires a held reception for that attempt
 and token, moves `receiving → transcribing`,
 hands the workdir to the supervisor's ASR stage (S2.10), and answers `202
-{"status": "transcribing"}`. Repeated or late calls answer `409 reception_not_held`. From
+{"status": "transcribing"}`. Repeated or late calls answer `409 reception_not_held` and never start a second ASR run:
+the hold is consumed by the same guarded `receiving → transcribing` statement that starts
+the stage. `api` does not retry `admit`. From
 here on the existing supervisor rules apply unchanged (fencing, cleanup in `finally`,
 `transcript_committed_cleanup_pending → succeeded` only after verified cleanup).
 
@@ -195,8 +197,9 @@ here on the existing supervisor rules apply unchanged (fencing, cleanup in `fina
 Body `{"reason": "<reason>"}`. Deletes the workdir, verifies cleanup with
 `cleanup.destroy_and_verify`, records `cleanup_status`, writes the terminal status, releases
 the slot, and answers `200 {"cleanup_status": "verified" | "failed"}`. `failed` also closes
-admission (S1.B6). Idempotent: a second call for an already-discarded reception answers
-`200` with the recorded `cleanup_status`.
+admission (S1.B6). Idempotent: a second call for an already-discarded reception (by `api` or by the hold
+timer) answers `200` with the recorded `cleanup_status` and changes nothing, so a retry
+never turns into a `500`.
 
 | `reason` (sent by `api`) | Persisted status / `error_code` |
 |---|---|
@@ -216,10 +219,19 @@ later call answers `409 reception_not_held`. A crash of `api` between the two ph
 here; a crash of `ingest` itself loses the tmpfs with the container and leaves an expired
 lease with `cleanup_status = pending` for S2.7.
 
-The hold does not add capacity risk beyond the slot itself: per-user and global limits are
-enforced at `POST /audios` (A2.3, hardened by A2.14) before any byte is accepted, a slot is
-taken only for the duration of one upload plus at most `HOLD_TIMEOUT`, and dedupe in `api`
-is a few indexed reads.
+Capacity during receive and hold, in three layers:
+
+1. `POST /audios` applies `per_user_active_limit` and `active_slots` before any byte (A2.3,
+   made race-free by A2.14). Both are unpublished while D4 is blocked, so this layer does not
+   limit yet.
+2. The slot gate of `receive` (§3, step 2) is global: one slot while D4 is blocked (S1.B2),
+   held for one upload plus at most `HOLD_TIMEOUT`.
+3. `ingest` refuses a second concurrent reception (receiving or held) for the same `user_id`
+   with `503 capacity_unavailable`, whatever the slot count. This is structural, not a tuned
+   number: a user cannot occupy more than one slot, even after D4 publishes more slots.
+
+Dedupe in `api` is a few indexed reads, so a held slot is normally released in
+milliseconds; `HOLD_TIMEOUT` only bounds the abnormal case.
 
 ### 4. Sequence
 
