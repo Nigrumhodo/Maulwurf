@@ -228,8 +228,12 @@ in [docs/RUNBOOK-dev.md](docs/RUNBOOK-dev.md). Quick start:
 
 ```bash
 cp .env.example .env   # complete the MAULWURF_* secrets
-cd infra && docker compose up -d --build --wait
+cd infra && docker compose --env-file ../.env up -d --build --wait
 ```
+
+If ports 80/443 are taken, set `CADDY_HTTPS_PORT` and a matching `MAULWURF_PUBLIC_ORIGIN` in
+`.env`. To try the Google login you need a test OAuth client; the steps and the exact redirect
+URI are in the [runbook](docs/RUNBOOK-dev.md#google-login-a13).
 
 The pinned Riva client can also be installed standalone for provider work (authorized key and
 test audio required; never a real class recording):
