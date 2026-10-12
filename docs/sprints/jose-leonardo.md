@@ -39,6 +39,13 @@
 
 ## Week notes
 
+- 2026-10-12: reviewer evidence for A1.3 (owner ARES313), cloud eligibility `verified`.
+  Real Google login observed by the lead in local Compose (`develop` at `854ad52`, Caddy on
+  8443 because host port 443 is taken), with a test OAuth client in a Google Cloud test
+  project (consent screen in Testing, scopes `openid email profile`, redirect URI
+  `https://localhost:8443/auth/google/callback`). Result: `/login` → Google → callback →
+  session issued and the panel loads. Credentials only in the local `.env`, never in the
+  repo, chat or tickets. Setup documented in `docs/RUNBOOK-dev.md` (#61).
 - 2026-09-27: S1.B1 does not modify the development host (zram and `core_pattern` set to
   systemd-coredump stay as they are). The guarantees are tested at container level
   (`memswap_limit` = `mem_limit`, `memory.swap.max=0`, `ulimit -c 0`); the real host is
