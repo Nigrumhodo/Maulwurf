@@ -28,12 +28,47 @@ docker compose up -d --build --wait
 docker compose ps
 ```
 
-If ports 80/443 are already taken on the host:
+If ports 80/443 are already taken on the host, set the ports in the root `.env`:
 
 ```bash
-CADDY_HTTP_PORT=8080 CADDY_HTTPS_PORT=8443 docker compose up -d --build --wait
+# .env (repo root)
+CADDY_HTTP_PORT=8080
+CADDY_HTTPS_PORT=8443
+
+cd infra
+docker compose --env-file ../.env up -d --build --wait
 # use https://localhost:8443 in the following commands
 ```
+
+Compose only reads a `.env` located next to `docker-compose.yml` (`infra/`) for variable
+interpolation, so from `infra/` always pass `--env-file ../.env` (or export the variables).
+Without it the ports silently fall back to 80/443. An inline
+`CADDY_HTTPS_PORT=8443 docker compose ...` also works.
+
+With Compose, `MAULWURF_PUBLIC_ORIGIN` is derived from `CADDY_HTTPS_PORT` in
+`infra/docker-compose.yml` (`environment` wins over `env_file`), so setting it in `.env` has
+no effect there. It only applies when running `uvicorn` standalone.
+
+### Google login (A1.3)
+
+The login needs a Google OAuth client for local testing. Credentials stay in your local
+`.env`; never paste them in chat, PRs, or tickets.
+
+1. In [Google Cloud Console](https://console.cloud.google.com), create a test project.
+2. **APIs & Services -> OAuth consent screen**: user type External, publishing status
+   Testing, scopes `openid`, `email` and `profile` only. Add the Google accounts you will
+   sign in with as **test users**; others get `access_denied`.
+3. **Credentials -> Create credentials -> OAuth client ID**: type Web application, no
+   JavaScript origins. Add this exact authorized redirect URI:
+   `https://localhost:<CADDY_HTTPS_PORT>/auth/google/callback`, e.g.
+   `https://localhost:8443/auth/google/callback` (port 443 is implicit: no `:443` suffix
+   in the URI). Scheme, host and port must match.
+4. Put the values in `.env`: `MAULWURF_GOOGLE_CLIENT_ID`, `MAULWURF_GOOGLE_CLIENT_SECRET`,
+   and a random `MAULWURF_OAUTH_STATE_SECRET` (see above).
+5. Restart `api` with the same `--env-file`, open `https://localhost:<CADDY_HTTPS_PORT>/login` and accept
+   Caddy's local certificate.
+
+Calendar and Gmail scopes are not requested at login; they arrive in S3.
 
 The 8 services (`web`, `api`, `ingest`, `worker`, `scheduler`, `postgres`,
 `redis`, `caddy`) end up `healthy`. `api` applies the migrations on startup (§5);
@@ -153,6 +188,16 @@ disappear when the container is recreated.
 ## 8. Common issues
 
 - **Port taken**: use `CADDY_HTTP_PORT`/`CADDY_HTTPS_PORT` (§2).
+- **`Invalid request` (HTTP 400) on every page**: another process owns host port 443 and
+  answers instead of Caddy (check with `ss -ltn | grep :443`). Use other ports (§2).
+- **`docker compose` ignores my ports**: pass `--env-file ../.env` from `infra/` (§2).
+- **Google `redirect_uri_mismatch`**: the redirect URI registered in Google Cloud differs
+  from `https://localhost:<CADDY_HTTPS_PORT>/auth/google/callback`, port included.
+- **Google `access_denied`**: the account is not a test user of the consent screen.
+- **`/login?error=oauth_not_configured`**: `MAULWURF_GOOGLE_CLIENT_ID`/`_SECRET` are empty
+  or `api` was not recreated after editing `.env`.
+- **`/login?error=oauth_failed`**: see `docker compose logs api`; common causes are an
+  unverified Google email or a login attempt older than 10 minutes.
 - **The API does not start**: a `MAULWURF_ENV` other than `local` with
   `change-me` secrets fails on purpose (fail-fast in `app/core/config.py`).
 - **Certificate warning**: trust the CA (§4) or use `curl -k`.
