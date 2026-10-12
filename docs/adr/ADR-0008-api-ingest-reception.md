@@ -61,13 +61,27 @@ bytes sit only in the attempt's tmpfs:
 
 ## Contract
 
+### 0. Named durations
+
+The first three are **separate settings** that today take the same value as the S1.B3 lease
+TTL (30 s). They are named apart so a later change of one does not silently move the others.
+
+| Name | Where | Value today | Bounds |
+|---|---|---|---|
+| `CREDENTIAL_TTL` | `api` mints `exp = now + CREDENTIAL_TTL` | 30 s | must be ≤ the lease TTL |
+| `HOP_IDLE_TIMEOUT` | httpx read/write/pool timeout of `api` → `ingest` | 30 s | no progress for longer = lost hop |
+| `HOLD_TIMEOUT` | `ingest` timer from the `200` of `receive` | 30 s | must be ≤ the lease TTL |
+| `HOP_CONNECT_TIMEOUT` | httpx connect timeout | 2 s | the existing `CHECK_TIMEOUT_S` of ingest |
+
 ### 1. Topology and transport
 
 - Caller: `api` only. Callee: `ingest` at `MAULWURF_INGEST_URL` (Compose:
   `http://ingest:8000`). Plain HTTP/1.1 on the internal `data` network, no TLS in local and
   CI; a deployed environment needs a private network or mTLS (J4.x).
-- Caddy never routes `/internal/*`. The Caddyfile answers `404` for that prefix as defense
-  in depth, and `ingest` leaves the `edge` network (J2.8), so Caddy cannot reach it at all.
+- The real guarantee is the network: `ingest` leaves the `edge` network (J2.8), so Caddy
+  cannot resolve or reach it, whatever the path. On top of that the Caddyfile answers `404`
+  for `/internal/*`; Caddy matches the cleaned, unescaped path, and any variant it does not
+  match (another case, for example) falls to the `web` fallback, never to `ingest`.
 - Transfer encoding: `Transfer-Encoding: chunked`. `api` does not forward the browser's
   `Content-Length` as a framing header; it sends it, when present, as
   `X-Maulwurf-Declared-Bytes` for logging and early rejection only. Neither side trusts it
@@ -80,8 +94,14 @@ bytes sit only in the attempt's tmpfs:
 Every internal request carries `Authorization: Bearer <credential>`. The credential is
 minted by `api` per operation and never leaves the backend.
 
-- Format: `v1.<payload>.<mac>`, both parts base64url without padding. `mac` is
-  HMAC-SHA256 with the shared secret over the ASCII bytes `maulwurf-ingest/v1.<payload>`.
+- Format: `v1.<kid>.<payload>.<mac>`, payload and MAC base64url without padding. `mac` is
+  HMAC-SHA256 with the secret named by `kid` over the ASCII bytes
+  `maulwurf-ingest/v1.<kid>.<payload>`. The fixed prefix separates this MAC from any other
+  use of the secret; the operation is separated by the `op` claim, which the endpoint
+  checks (below).
+- Payload serialization is canonical: UTF-8 JSON, keys sorted, separators `,` and `:`, no
+  whitespace, exactly the keys of the table. A payload that does not re-serialize to the same
+  bytes, or has a missing or extra key, is rejected. No field is ever concatenated.
 - Payload (canonical JSON, sorted keys):
 
   | Field | Meaning |
@@ -91,20 +111,36 @@ minted by `api` per operation and never leaves the backend.
   | `aud` | `audio_id` of the attempt |
   | `uid` | `user_id` taken from the authenticated session |
   | `ft` | fencing token the request is bound to (see below) |
-  | `exp` | Unix seconds; `now + lease TTL` (30 s, the existing S1.B3 value) |
+  | `exp` | Unix seconds; `now + CREDENTIAL_TTL` (§0) |
+  | `ins` | `admit`/`discard` only: the instance id returned by `receive`; `null` for `receive` |
 
 - `ft` binding: for `receive`, the attempt's current `fencing_token` as read by `api` under
   the PUT checks; `ingest` acquires only if the row still has exactly that token, then
   increments it (S1.B3). For `admit`/`discard`, the incremented token returned by `receive`.
   A replayed `receive` credential therefore fails after the first acquire, and an
   `admit`/`discard` is accepted only for the reception that the same lease holds.
-- Verification in `ingest`: constant-time MAC check, `exp` not past, `att` equals the path,
-  and the database row matches `uid`, `aud` and `ft`. Any mismatch answers
+- Verification in `ingest`, in this order: known `kid`; constant-time MAC check
+  (`hmac.compare_digest`); canonical payload; `op` equals the operation of the endpoint (an
+  `admit` token on `discard` is rejected); `exp` not past; `att` equals the path; for
+  `admit`/`discard`, `ins` equals this instance; and the database row matches `uid`, `aud`
+  and `ft`. Any mismatch answers
   `401 internal_credential_invalid` without touching the row. No `jti` store: the fencing
   token and the status checks make each credential effectively single-use.
+- Replay: a `receive` token is bound to `ft = N`; the first acquire moves the row to `N+1`,
+  so the same token is rejected afterwards even inside its 30 s. `admit`/`discard` tokens are
+  bound to `N+1` and to a held reception: the first call ends the hold, and a second one
+  finds no hold (`admit`) or returns the recorded result without side effects (`discard`).
 - Secret: `MAULWURF_INGEST_CREDENTIAL_SECRET` in `api`, the same value as
-  `INGEST_CREDENTIAL_SECRET` in `ingest` (Compose maps one `.env` variable to both). It is
-  the only API-side secret `ingest` receives; it grants nothing outside these endpoints.
+  `INGEST_CREDENTIAL_SECRET` in `ingest` (Compose maps one `.env` variable to both). At least
+  32 random bytes (64 hex characters) in **every** environment, `local` included; both
+  services refuse to start with a shorter value or a `change-me` placeholder. It is the only
+  API-side secret `ingest` receives; it grants nothing outside these endpoints.
+- Rotation: `kid` is a short label (`k1`, `k2`, …) set with
+  `MAULWURF_INGEST_CREDENTIAL_KID`/`INGEST_CREDENTIAL_KID`. `ingest` may also accept one
+  previous pair (`INGEST_CREDENTIAL_PREVIOUS_KID`/`_SECRET`) during a rotation; `api` always
+  mints with the current one. Because a credential lives `CREDENTIAL_TTL`, a rotation is three restarts with
+  no downtime: `ingest` with both pairs, then `api` with the new one, then `ingest` without
+  the old pair.
 - The session cookie, CSRF token, Origin, OAuth tokens and encryption keys are never
   forwarded. `api` builds the internal request from scratch; it does not proxy headers.
 
@@ -125,8 +161,8 @@ minted by `api` per operation and never leaves the backend.
 6. Answer `200`:
 
    ```json
-   {"fencing_token": 8, "sha256": "<64 hex>", "received_bytes": 1234567,
-    "duration_s": 3605.2}
+   {"fencing_token": 8, "instance": "<ingest instance id>", "sha256": "<64 hex>",
+    "received_bytes": 1234567, "duration_s": 3605.2}
    ```
 
    and keep holding the workdir under the lease (`status` stays `receiving`).
@@ -144,7 +180,11 @@ under the lease before answering:
 
 #### `POST /internal/v1/receptions/{attempt_id}/admit` (op `admit`)
 
-Requires a held reception for that attempt and token. Moves `receiving → transcribing`,
+Body `{"sha256": "<64 hex>", "received_bytes": N}`: the values `api` computed while
+forwarding. **Fails closed**: a missing, malformed or different hash or byte count answers
+`409 reception_integrity_failed`, discards the file, and writes `requires_reupload` /
+`reception_integrity_failed`. With a match, it requires a held reception for that attempt
+and token, moves `receiving → transcribing`,
 hands the workdir to the supervisor's ASR stage (S2.10), and answers `202
 {"status": "transcribing"}`. Repeated or late calls answer `409 reception_not_held`. From
 here on the existing supervisor rules apply unchanged (fencing, cleanup in `finally`,
@@ -168,10 +208,18 @@ admission (S1.B6). Idempotent: a second call for an already-discarded reception 
 
 #### Hold timeout
 
-If neither `admit` nor `discard` arrives within one lease TTL after the `200` of `receive`,
-`ingest` discards on its own, writes `requires_reupload` / `reception_abandoned`, and the
-later call answers `409 reception_not_held`. No new number: a hold longer than the lease
-would lose the lease anyway.
+The hold timer runs **in `ingest`** (the supervisor task that owns the lease), starts when
+the `200` of `receive` is written, and lasts `HOLD_TIMEOUT` (§0). If neither `admit` nor
+`discard` arrives in time, that task discards on its own, verifies cleanup, releases the
+slot, writes `requires_reupload` / `reception_abandoned`, and the
+later call answers `409 reception_not_held`. A crash of `api` between the two phases ends
+here; a crash of `ingest` itself loses the tmpfs with the container and leaves an expired
+lease with `cleanup_status = pending` for S2.7.
+
+The hold does not add capacity risk beyond the slot itself: per-user and global limits are
+enforced at `POST /audios` (A2.3, hardened by A2.14) before any byte is accepted, a slot is
+taken only for the duration of one upload plus at most `HOLD_TIMEOUT`, and dedupe in `api`
+is a few indexed reads.
 
 ### 4. Sequence
 
@@ -196,7 +244,8 @@ sequenceDiagram
     A->>A: compare hashes; dedupe lookup
     alt new content or confirmed variant
         A->>P: write identity (admit_identity)
-        A->>I: POST …/admit (op=admit, ft=N+1)
+        A->>I: POST …/admit (op=admit, ft=N+1, ins) {sha256, received_bytes}
+        I->>I: check hash and count again (fail closed)
         I->>P: receiving → transcribing
         I-->>A: 202 {status: transcribing}
         A-->>B: 202 {attempt_id, status, received_bytes}
@@ -228,12 +277,21 @@ sequenceDiagram
 
 ### 6. Hash
 
-`api` computes the SHA-256 while forwarding; that value is the one dedupe and
-`admit_identity` use, so the content is hashed once for the decision and never re-read from
-disk. `ingest` computes its own while writing and returns it. A mismatch means the internal
-hop corrupted or truncated the stream: `api` calls `discard` with
-`reception_integrity_failed` and answers `500 internal_error`. This is the "hash matches on
-both sides" criterion of A2.13.
+Both sides hash the bytes they actually move; no side trusts `Content-Length` or
+`X-Maulwurf-Declared-Bytes` for the hash, the count or the cut.
+
+1. `api` hashes while forwarding. Its value is only known when the browser stream ends, so it
+   is never sent as a header or trailer of the `receive` request.
+2. `ingest` hashes while writing and returns `sha256` and `received_bytes` in the `receive`
+   answer.
+3. `api` compares both. On mismatch it calls `discard("reception_integrity_failed")` and
+   answers `500 internal_error`.
+4. On match, `api` uses its own value for dedupe and `admit_identity` (the content is never
+   re-read from disk) and sends it again in the `admit` body, where `ingest` checks it a
+   second time and fails closed (§3).
+
+A declared `Content-Length` that differs from the bytes received changes nothing: the count
+is the real one, and the API pre-filter only rejects a declared size above the limit.
 
 ### 7. Backpressure, timeouts, and disconnects
 
@@ -243,11 +301,12 @@ both sides" criterion of A2.13.
   file. `finish()` closes the generator and awaits the `receive` answer.
 - `ingest` side: uvicorn stops reading the socket while `receiver.receive` is writing, so
   TCP flow control propagates back to `api`, Caddy and the browser.
-- Timeouts (`api` → `ingest`, httpx): connect 2 s (the existing `CHECK_TIMEOUT_S` of
-  ingest), and an idle read/write/pool timeout of one lease TTL. The `receive` answer waits
-  for ffprobe, whose own bound comes from S2.12.
-- Browser disconnect: `api` gets `ClientDisconnect`, cancels the internal request (closing
-  the connection), and, if a `receive` answer already arrived, calls `discard` with
+- Timeouts (`api` → `ingest`, httpx): `HOP_CONNECT_TIMEOUT` and `HOP_IDLE_TIMEOUT` (§0).
+  The `receive` answer waits for ffprobe, whose own bound comes from S2.12.
+- Browser disconnect: `api` gets `ClientDisconnect` (or its handler task gets
+  `asyncio.CancelledError`); in a `finally` it cancels the task that runs the internal
+  request and closes the httpx stream, so the TCP connection to `ingest` closes at once and
+  `ingest` sees the dropped body without waiting for a timeout. Then, and, if a `receive` answer already arrived, calls `discard` with
   `client_disconnected`. Without an answer, `ingest` sees the dropped body and writes
   `cancelled` / `reception_interrupted` itself. Either way the browser gets no response and
   the reservation is gone; uploading again needs a new `POST /audios`.
@@ -269,7 +328,8 @@ both sides" criterion of A2.13.
 | `415 unsupported_format` | `415 unsupported_format` (the internal `reason` is not exposed) |
 | `503 capacity_unavailable`, connect error, timeout | `503 capacity_unavailable` + `Retry-After` |
 | `401 internal_credential_invalid` | `500 internal_error` (configuration fault; logged, never exposed) |
-| `409 reception_not_held` on admit | `503 capacity_unavailable` after identity compensation |
+| `409 reception_not_held` or `409 wrong_instance` on admit | `503 capacity_unavailable` after identity compensation |
+| `409 reception_integrity_failed` on admit | `500 internal_error` after identity compensation |
 | `discard` → `failed` or error | `500 internal_error` (no `200`/`409` without verified cleanup) |
 | anything else | `500 internal_error` |
 
@@ -284,6 +344,8 @@ New persisted codes for the S2.13 catalog: `reception_interrupted`, `reception_a
 | `MAULWURF_INGEST_URL` | `api` | none | `get_reception_sink()` keeps `UnavailableReceptionSink` (503) |
 | `MAULWURF_INGEST_CREDENTIAL_SECRET` | `api` | none | same; outside `local` a `change-me` value fails fast |
 | `INGEST_CREDENTIAL_SECRET` | `ingest` | none | internal endpoints answer `503 capacity_unavailable`; `/readyz` reports `credential` |
+| `MAULWURF_INGEST_CREDENTIAL_KID` / `INGEST_CREDENTIAL_KID` | both | `k1` | label of the current secret |
+| `INGEST_CREDENTIAL_PREVIOUS_KID` / `_SECRET` | `ingest` | none | only during a rotation |
 
 Both secrets are set together or neither (like the Google pair). J2.8 passes `ingest` an
 explicit list of variables, never the whole `.env`.
@@ -297,9 +359,16 @@ any byte of the body. No access log of `ingest` records the `Authorization` head
 ### 11. Multiple `ingest` instances
 
 The held file lives in one container's tmpfs, so `admit`/`discard` must reach the instance
-that answered `receive`. With one instance (Compose, S2) this is automatic. Before scaling,
-`receive` must return the instance address and `api` must pin phase 2 to it (J4.x); until
-then running more than one `ingest` replica is unsupported.
+that answered `receive`. Guards that exist from the first implementation:
+
+- `ingest` generates a random instance id at startup and returns it in `receive`; `api` puts
+  it in the `ins` claim of phase 2, and a different instance rejects the call with `409
+  wrong_instance` (logged as a configuration error, mapped to `503`). A misrouted call fails
+  deterministically and closed instead of with an intermittent `409`.
+- Compose sets `deploy.replicas: 1` on `ingest` (J2.8), and the I-S2-JF-11 script asserts it.
+
+Scaling out needs `receive` to return a routable address and `api` to pin phase 2 to it
+(J4.x); until then more than one `ingest` replica is unsupported.
 
 ## Consequences
 

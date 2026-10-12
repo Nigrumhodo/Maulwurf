@@ -90,7 +90,7 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | claim | L1.4 | jpinillaz | done | 2026-10-04 | not applicable | — / lead | Pydantic drafts §M4/§M6 (U-S1-JL-01/02); merged in #43. No LLM calls. |
 | claim | L1.5 | jpinillaz | done | 2026-10-04 | not applicable | — / lead | G4 dataset format and validator (U-S1-JL-03); merged in #45. No real content. |
 | claim | A1.6 | <danielsam171> | done | 2026-10-06| not applicable | jpinillaz / area A | Subject CRUD (I-S1-AN-07); merged in #50 with the `DELETE`/`POST /audios` row-lock fix. Force deferred to S2 |
-| claim | A1.3 | ARES313 | done | 2026-10-11 | verified (2026-10-12, jpinillaz) | jpinillaz / area A, security | Google OAuth backend (I-S1-AN-06) merged in #42. Real login with a test OAuth client in local compose observed by the lead on 2026-10-12; setup in `docs/RUNBOOK-dev.md` (#61). No credentials in the repo. |
+| claim | A1.3 | ARES313 | done | 2026-10-11 | verified (2026-10-12, jpinillaz) | jpinillaz / area A, security | Google OAuth backend (I-S1-AN-06) merged in #42. Real login with a test OAuth client in local compose observed by the lead on 2026-10-12; setup in `docs/RUNBOOK-dev.md` (#61); evidence in `jose-leonardo.md` (week notes, 2026-10-12). No credentials in the repo. |
 | claim | D1.1 | ARES313 | done | 2026-10-11 | not applicable | jpinillaz / lead | Vite + React scaffold under ADR-0007; merged in #42 |
 | claim | D1.2 | ARES313 | done | 2026-10-11 | not applicable | — / lead | Base routes and shared layout; merged in #42 |
 | claim | D1.3 | ARES313 | done | 2026-10-11 | not applicable | — / lead | Google login, logout and loading/error states; merged in #42 |
