@@ -41,8 +41,8 @@ These six values are **all** the status vocabulary: there are no `claimed`, `in_
 
 ## 3. Active sprint
 
-**S2 is open.** In S1 only A1.6 remains `in progress`: #49 claims the CRUD and the code is
-not in `develop`. A1.3 and L1.7 are not implemented. S3 and S4 remain closed. D2 and D6
+**S2 is open.** S1 has every implementation ticket `done`; only L1.7 (coordination and the
+formal S1 close) is unclaimed. S3 and S4 remain closed. D2 and D6
 remain `pending`; D3-Audio and D4 remain `blocked`.
 
 ### S1 — Foundation + F0 spike
@@ -89,11 +89,11 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | claim | A1.9 | jpinillaz | done | 2026-10-04 | not applicable | — / area A | Suite I-S1-AN-05 against Postgres; merged in #44. The A1.6 and A1.3 routes stay outside the matrix. |
 | claim | L1.4 | jpinillaz | done | 2026-10-04 | not applicable | — / lead | Pydantic drafts §M4/§M6 (U-S1-JL-01/02); merged in #43. No LLM calls. |
 | claim | L1.5 | jpinillaz | done | 2026-10-04 | not applicable | — / lead | G4 dataset format and validator (U-S1-JL-03); merged in #45. No real content. |
-| claim | A1.6 | <danielsam171> | in progress | 2026-10-06| not applicable | — / area A | Subject CRUD (I-S1-AN-07); force deferred to S2 |
-| claim | A1.3 | ARES313 | in progress | 2026-10-11 | pending | jpinillaz / area A, security | Google OAuth backend (I-S1-AN-06) in #42, tested with a local double. Real-Google demo waits for a reviewer and a protected OAuth project. Plane listed dsamacag, who never claimed nor started it. |
-| claim | D1.1 | ARES313 | in progress | 2026-10-11 | not applicable | jpinillaz / lead | Vite + React scaffold under ADR-0007; in #42 |
-| claim | D1.2 | ARES313 | in progress | 2026-10-11 | not applicable | — / lead | Base routes and shared layout; in #42 |
-| claim | D1.3 | ARES313 | in progress | 2026-10-11 | not applicable | — / lead | Google login, logout and loading/error states; in #42 |
+| claim | A1.6 | <danielsam171> | done | 2026-10-06| not applicable | jpinillaz / area A | Subject CRUD (I-S1-AN-07); merged in #50 with the `DELETE`/`POST /audios` row-lock fix. Force deferred to S2 |
+| claim | A1.3 | ARES313 | done | 2026-10-11 | verified (2026-10-12, jpinillaz) | jpinillaz / area A, security | Google OAuth backend (I-S1-AN-06) merged in #42. Real login with a test OAuth client in local compose observed by the lead on 2026-10-12; setup in `docs/RUNBOOK-dev.md` (#61). No credentials in the repo. |
+| claim | D1.1 | ARES313 | done | 2026-10-11 | not applicable | jpinillaz / lead | Vite + React scaffold under ADR-0007; merged in #42 |
+| claim | D1.2 | ARES313 | done | 2026-10-11 | not applicable | — / lead | Base routes and shared layout; merged in #42 |
+| claim | D1.3 | ARES313 | done | 2026-10-11 | not applicable | — / lead | Google login, logout and loading/error states; merged in #42 |
 
 ### S2 — Knowledge
 
@@ -105,8 +105,10 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | claim | A2.4 | angalindog | done | 2026-10-07 | not applicable | — / area A | Streaming `PUT`, SHA-256 and dedupe; merged in #52. The default sink is still 503 (C2). |
 | claim | S2.1 | satnovaOG | done | 2026-10-09 | not applicable | — / lead | Reception and ffprobe; merged in #54 |
 | claim | S2.2 | satnovaOG | done | 2026-10-09 | not applicable | — / lead | Bounded ffmpeg and 30 s fragmentation; merged in #54 |
-| claim | S2.3 | satnovaOG | in progress | 2026-10-09 | not applicable | — / lead | Backpressure and boundary reconciliation (U-S2-SG-04) |
-| claim | S2.4 | satnovaOG | in progress | 2026-10-09 | pending | — / lead | Isolated Riva client. `P-S2-SG-12` is not executed. Cloud without a reviewer. |
+| claim | S2.3 | satnovaOG | done | 2026-10-09 | not applicable | — / lead | Backpressure and boundary reconciliation (U-S2-SG-04); merged in #55 |
+| claim | S2.4 | satnovaOG | done | 2026-10-09 | pending | — / lead | Isolated Riva client; merged in #55. `P-S2-SG-12` is not executed. Cloud without a reviewer. |
+| claim | L2.10 | jpinillaz | done | 2026-10-11 | not applicable | — / lead | Web stack decision, ADR-0007; merged in #42 |
+| claim | A2.13 | jpinillaz | in progress | 2026-10-12 | not applicable | — / area A, area S | API↔ingest contract: ADR-0008 and plan `docs/plan/tickets/A2.13.md` in this PR; client code in a follow-up PR (I-S2-AN-12) |
 
 ## 4. Change history
 
@@ -134,3 +136,4 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | 2026-10-09 | S2 opens. S2.1 and S2.2 are claimed (`done`, #54) and S2.3 and S2.4 (`in progress`). D2 and D6 stay `pending`; D3-Audio and D4 stay `blocked`. S2.4 stays with cloud `pending`: `P-S2-SG-12` is not run. A1.6, A1.9, L1.4 and L1.5 stay `in progress` in S1. | This PR |
 | 2026-10-09 | A1.9 (#44), L1.4 (#43) and L1.5 (#45) move to `done`. A1.6 stays `in progress`: #49 only claims and the CRUD is not in `develop`. A1.3 and L1.7 are not implemented. A2.1 (#48), A2.2 (#47), A2.3 (#51) and A2.4 (#52) are claimed as `done` (`angalindog`). A2.5 stays open. | This change |
 | 2026-10-11 | The lead accepts the Vite + React web stack (ADR-0007, in #42). A1.3, D1.1, D1.2 and D1.3 are claimed by ARES313 (`in progress` until #42 merges); A1.3 keeps cloud eligibility `pending`. | This PR |
+| 2026-10-12 | A1.3, D1.1, D1.2 and D1.3 move to `done` (#42); A1.3 cloud eligibility `verified` after the lead observed a real Google login in local compose. A1.6 moves to `done` (#50). S2.3 and S2.4 move to `done` (#55); S2.4 keeps cloud `pending`. L2.10 is recorded as `done` (ADR-0007). A2.13 is claimed (`in progress`) with ADR-0008. | This PR |

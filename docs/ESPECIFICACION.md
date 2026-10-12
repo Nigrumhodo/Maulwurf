@@ -132,7 +132,8 @@ flowchart TD
     WEB -->|Same-origin REST and SSE| API[FastAPI API]
     API -->|OAuth and session| GO[Google OAuth]
     API --> PG[(PostgreSQL with pgvector)]
-    WEB -->|Direct upload via proxy without disk buffering| IN[FastAPI ingestion service]
+    WEB -->|Streaming PUT via proxy without disk buffering| API
+    API -->|Internal stream, credential per attempt, ADR-0008| IN[FastAPI ingestion service]
     IN -->|Only during ASR| RAM[Bounded tmpfs temporaries]
     IN -->|gRPC TLS| TR[NVIDIA Riva Whisper large-v3]
     IN -->|Transcript and outbox without audio| PG
@@ -230,8 +231,9 @@ Gmail).
 
 - `sessions` and `google_credentials` tables (user_id, encrypted tokens, granted scopes,
   expiration, status, key version).
-- A FastAPI dependency shared by API and ingestion to validate session, CSRF, and resource
-  ownership.
+- A FastAPI dependency in the API to validate session, CSRF, and resource ownership. The API
+  is the only session authority: ingestion never receives the session cookie and accepts only
+  the per-attempt internal credential of [ADR-0008](adr/ADR-0008-api-ingest-reception.md).
 - User settings page and incremental consent.
 
 **Endpoints:** `GET /auth/google/start`, `GET /auth/google/callback`, `POST /auth/logout`,
@@ -261,7 +263,10 @@ retained file.
 - `POST /audios` only validates metadata/consent, reserves RAM capacity, and creates the
   attempt; it cannot yet decide deduplication because it has not received the content. The
   binary upload uses `PUT` with `fetch`, not a framework upload helper or `UploadFile` with default spooling to
-  disk. No resumable upload in MVP.
+  disk. No resumable upload in MVP. The `PUT` terminates in the API, which streams it to the
+  ingestion service over the internal network with backpressure and no buffering
+  ([ADR-0008](adr/ADR-0008-api-ingest-reception.md)); ingestion holds the bytes only in the
+  attempt's tmpfs until the API admits or discards them.
 - The `PUT` computes SHA-256 incrementally and decides deduplication **by user and ingestion
   identity**: hash, language, subject, class date, and timezone (not title/teacher). Exact
   match: clean up the upload, release the reservation, and return the canonical class without

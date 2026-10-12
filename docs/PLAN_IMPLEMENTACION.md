@@ -97,7 +97,8 @@ alignment for G2-T; update spec, API, and UI in the same revision. No silent fal
   no persistent swap/core dumps/snapshots/hibernation. Verify the host configuration, not
   only Compose.
 - [ ] Real proxy without buffering/caching/capturing bodies to disk; direct binary path to
-  FastAPI, with a `fetch` streaming `PUT` and without the default `UploadFile` spooling.
+  FastAPI, with a `fetch` streaming `PUT` and without the default `UploadFile` spooling. The
+  API streams the body to ingestion over the internal network (ADR-0008); neither hop spools.
 - [ ] Measure RAM reservation per slot: original + active fragments + SDK/ffmpeg buffers +
   safety margin. The 200 MiB/3 h target is not an approved limit until the test is passed;
   reduce and publish capacity if it does not fit.
@@ -142,7 +143,8 @@ because this plan exists.
 - [ ] Implement `/ingestion/capabilities` with effective language/formats/limits/TTL. Form
   without a preselected language, required metadata, and consent.
 - [ ] `POST /audios` records versioned consent and reserves slot + attempt; it does not
-  promise deduplication before knowing the hash. Authenticated `PUT` computes SHA-256 and
+  promise deduplication before knowing the hash. Authenticated `PUT` (terminated in the API
+  and streamed to ingestion, ADR-0008) computes SHA-256 and
   answers 202 only after reception/admission, or 200/409 from dedup, always after cleanup.
   Compensate reservations if the DB fails.
 - [ ] Exact-identity deduplication in the `PUT`; a variant returns an opaque single-use

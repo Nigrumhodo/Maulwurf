@@ -140,7 +140,7 @@ image is J1.2, Caddy J1.3, the ARQ processes J1.5, and the Redis policy J1.6.
 
 | Route | Destination | Notes |
 |---|---|---|
-| `PUT /audios/*/content` | `api:8000` | Streaming without compression or buffering. The Caddyfile comment anticipates moving it to `ingest:8000` in S2 |
+| `PUT /audios/*/content` | `api:8000` | Streaming without compression or buffering. It stays on `api`, which streams to `ingest` internally ([ADR-0008](adr/ADR-0008-api-ingest-reception.md)); `/internal/*` is never routed |
 | `/audios/*/progress` | `api:8000` with `flush_interval -1` | Progress SSE: the route exists in Caddy, but not in the API routers |
 | `/auth/*`, `/me`, `/me/*`, `/subjects`, `/subjects/*`, `/integrations/*`, `/audios`, `/audios/*`, `/ingestion/*`, `/readyz` | `api:8000` | `/subjects` has no router yet in `develop` (A1.6) |
 | Anything else | `web:3000` | Fallback |
@@ -412,7 +412,7 @@ flowchart LR
 | D4 Capacity | `blocked` | Upload limits, RAM per slot and deadlines | F0.1 minutes |
 | D6 Temporality | `pending` (proposal `none`) | Decides `timestamp_precision`, the citation format and SRT | F0.1 minutes |
 | D8 Retention and backups | The spec lists it as pending; `plan/S4.md` treats it as approved | Text and chat retention, and backup policy | ESPECIFICACION §12, `plan/S4.md` |
-| `PUT` route (C2) | Open | Today `api` receives and the sink responds 503; the spec draws the `PUT` towards `ingest`. The internal contract between them is missing | `infra/Caddyfile`, `services/uploads.py`; tickets A2.13 and S2.11 |
+| `PUT` route (C2) | Decided ([ADR-0008](adr/ADR-0008-api-ingest-reception.md)), implementation pending | `api` terminates the `PUT` and streams to `ingest` in two phases (receive and hold, then admit or discard) with a per-attempt internal credential. Until A2.13/S2.11 land, the default sink still responds 503 | `infra/Caddyfile`, `services/uploads.py`; tickets A2.13, S2.11, J2.8 |
 | Web framework | Closed 2026-10-11 | Vite + React SPA served by Express, decided by the lead | [ADR-0007](adr/ADR-0007-web-stack.md); PR #42; ticket L2.10 |
 | Ingress and upload limit | Not defined | Cloudflare Tunnel is no longer planned and the documents do not say what replaces it. Any ingress in front of Caddy has its own request-body limit and timeouts and may buffer, so the effective limit against the 200 MiB target is unknown; ticket J2.10 | `infra/Caddyfile` (no body limit nor timeouts), [PROPUESTA_PROYECTO_FINAL.md](PROPUESTA_PROYECTO_FINAL.md) |
 
