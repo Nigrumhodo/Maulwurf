@@ -1,0 +1,35 @@
+@startsalt
+<style>
+saltDiagram { FontName "Noto Sans"; FontSize 13 }
+</style>
+{+
+  {* <b>Maulwurf</b> | Dashboard | Library | Subjects | Chat | Inbox | Settings | maria@unal.edu.co }
+  ==
+  <b><size:16>Settings
+  {/ <b>Profile | Integrations | Notifications | Account }
+  {+
+    <b>Profile
+    Email        | maria@unal.edu.co
+    Display name | "María            "
+    Timezone     | ^America/Bogota^
+    [Save]
+  }
+  {+
+    <b>Integrations
+    Google sign-in   | <color:#006600>connected</color>
+    Google Calendar  | <color:#AA0000>disconnected (access revoked)</color> | [Reconnect]
+    Gmail reminders  | not connected | [Connect]
+  }
+  {+
+    <b>Notifications
+    [X] Reminders before due dates (T-48 h, T-24 h, T-2 h)
+    [X] Daily digest at | "07:00"
+    [ ] Weekly digest on Sunday evening
+  }
+  {+
+    <b>Account
+    [Delete my account and data]
+    [ ] Also delete the events Maulwurf created in Google Calendar
+  }
+}
+@endsalt

@@ -1,0 +1,52 @@
+@startuml
+!theme plain
+skinparam defaultFontName "Noto Sans"
+skinparam defaultFontSize 12
+skinparam ArrowColor #444444
+title Figure 6.1 · Upload, transcription and cleanup
+
+start
+:Student selects subject, class date,
+timezone, language and file;
+:POST /audios;
+if (Consent and metadata valid?) then (yes)
+  :Reserve capacity;
+  :PUT binary to API;
+  :API authenticates session, CSRF and Origin;
+  :API streams over internal HTTP
+to ingest with per-attempt credential;
+  :Ingest writes bounded tmpfs,
+hashes and probes the stream;
+  if (Format, duration and channels valid?) then (yes)
+    :Normalize with bounded ffmpeg;
+    :Split into fragments with overlap;
+    repeat
+      :Send one fragment to Riva;
+      :Reconcile text and offsets;
+    repeat while (Fragments remain?) is (yes)
+    if (Usable text?) then (yes)
+      :Commit transcript + segments +
+      disabled outbox in one transaction;
+      :Delete original, normalized file
+      and fragments;
+      :Verify cleanup and lease/fencing;
+      if (Cleanup verified?) then (yes)
+        :Enable index/analyze outbox;
+        :Return 202 and expose progress;
+      else (no)
+        :Keep cleanup_pending/failed;
+        :Block outbox and alert;
+      endif
+    else (no)
+      :Reject with no_usable_text;
+      :Cleanup and close admission;
+    endif
+  else (no)
+    :Reject invalid format;
+    :Cleanup and release reservation;
+  endif
+else (no)
+  :Return typed validation error;
+endif
+stop
+@enduml

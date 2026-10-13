@@ -1,0 +1,104 @@
+@startuml
+!theme plain
+!pragma layout smetana
+skinparam defaultFontName "Noto Sans"
+skinparam defaultFontSize 12
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam ArrowColor #444444
+hide empty members
+title Figure 3.2 · Service layer: interfaces, adapters and dependencies
+
+package "api (FastAPI)" {
+  class UploadService <<service>> {
+    + reserve(user, metadata, consent): Reservation
+    + receiveContent(user, audioId, attemptId, body): UploadResult
+  }
+  interface ReceptionSink {
+    + begin(attempt): void
+    + write(chunk: bytes): void
+    + finish(): ReceiveResult
+    + discard(): void
+    + admit(): Admission
+  }
+  class IngestReceptionSink <<adapter, ADR-0008>> {
+    - ingestUrl: URL
+    - credential: AttemptCredential
+  }
+  class SearchService <<service>> {
+    + search(user, query, filters): ResultPage
+    - rrf(lexical, vector): Ranking
+  }
+  class RAGService <<service>> {
+    + answer(conversation, question): EventStream
+    - validateCitation(segmentId): bool
+  }
+  class OutboxDispatcher <<worker>> {
+    + dispatchBatch(): int
+  }
+  class AnalysisJob <<ARQ job>> {
+    + analyze(audioId): void
+  }
+  class IndexJob <<ARQ job>> {
+    + index(audioId, transcriptVersion): void
+  }
+  class GoogleCalendarService <<service>> {
+    + syncTaskEvent(taskId, taskVersion): void
+    + listEvents(user, range): CalendarEvent [*]
+  }
+  class NotificationScheduler <<ARQ cron>> {
+    + scheduleReminders(now): int
+    + sendDigest(user, kind): void
+  }
+  interface LLMAdapter {
+    + complete(messages, schema): Completion
+    + stream(messages): TokenStream
+  }
+  interface EmbeddingAdapter {
+    + embed(texts: String [*]): Vector [*]
+  }
+}
+
+package "ingest (FastAPI, hardened)" {
+  class IngestionSupervisor <<service>> {
+    + runAttempt(attemptId, stream): RunResult
+    - destroyAndVerify(workdir): CleanupEvidence
+  }
+  class Pipeline {
+    + process(file, fragmentSeconds, overlap): PipelineResult
+  }
+  class Reconciler {
+    + reconcile(fragments): ReconciledTranscript
+  }
+  interface TranscriptionService {
+    + transcribe(wav: bytes, languageCode, deadline): Transcript
+    + cancel(): void
+  }
+  class NvidiaRivaTranscriptionService <<adapter>> {
+    - maxAttempts: int = 3
+  }
+}
+
+class "Domain entities\n(Figure 3.1)" as Domain <<persistence>>
+
+UploadService --> ReceptionSink : streams bytes
+ReceptionSink <|.. IngestReceptionSink
+IngestReceptionSink ..> IngestionSupervisor : internal HTTP stream
+IngestionSupervisor --> Pipeline
+Pipeline --> TranscriptionService : one fragment at a time
+Pipeline --> Reconciler
+TranscriptionService <|.. NvidiaRivaTranscriptionService
+RAGService --> SearchService
+RAGService --> LLMAdapter
+SearchService --> EmbeddingAdapter
+IndexJob --> EmbeddingAdapter
+AnalysisJob --> LLMAdapter
+OutboxDispatcher ..> IndexJob : enqueues
+OutboxDispatcher ..> AnalysisJob : enqueues
+OutboxDispatcher ..> GoogleCalendarService : enqueues sync
+NotificationScheduler --> Domain
+UploadService --> Domain
+IngestionSupervisor --> Domain : transcript, lease, cleanup
+SearchService --> Domain
+GoogleCalendarService --> Domain
+@enduml

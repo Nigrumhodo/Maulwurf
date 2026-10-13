@@ -1,0 +1,86 @@
+@startuml
+!theme plain
+!pragma layout smetana
+skinparam defaultFontName "Noto Sans"
+skinparam defaultFontSize 11
+skinparam linetype ortho
+skinparam ArrowColor #444444
+hide circle
+hide empty members
+title Figure 4.1 · Overview of the relational model (27 tables)
+
+package "Identity, ingestion and outbox" {
+  entity "users" as users #FFFFFF
+  entity "sessions" as sessions #FFFFFF
+  entity "google_credentials" as google_credentials #FFFFFF
+  entity "settings" as settings <<planned>> #EFEFEF
+  entity "account_deletions" as account_deletions <<planned>> #EFEFEF
+  entity "subjects" as subjects #FFFFFF
+  entity "audios" as audios #FFFFFF
+  entity "ingestion_attempts" as ingestion_attempts #FFFFFF
+  entity "variant_confirmation_tokens" as variant_confirmation_tokens #FFFFFF
+  entity "outbox_events" as outbox_events #FFFFFF
+}
+package "Knowledge and chat" {
+  entity "transcripts" as transcripts #FFFFFF
+  entity "segments" as segments #FFFFFF
+  entity "chunks" as chunks #FFFFFF
+  entity "chunk_segments" as chunk_segments #FFFFFF
+  entity "embeddings" as embeddings #FFFFFF
+  entity "index_generations" as index_generations #FFFFFF
+  entity "conversations" as conversations #FFFFFF
+  entity "messages" as messages #FFFFFF
+  entity "message_sources" as message_sources #FFFFFF
+}
+package "Action (tasks, Calendar, notifications)" {
+  entity "processing_runs" as processing_runs #FFFFFF
+  entity "tasks" as tasks <<planned>> #EFEFEF
+  entity "task_evidence" as task_evidence <<planned>> #EFEFEF
+  entity "task_sources" as task_sources <<planned>> #EFEFEF
+  entity "task_revisions" as task_revisions <<planned>> #EFEFEF
+  entity "calendar_events" as calendar_events <<planned>> #EFEFEF
+  entity "google_remote_operations" as google_remote_operations <<planned>> #EFEFEF
+  entity "notifications" as notifications <<planned>> #EFEFEF
+}
+
+users ||--o{ sessions
+users ||--o| google_credentials
+users ||--o| settings
+users ||--o{ subjects
+users ||--o{ audios
+subjects ||--o{ audios
+audios ||--o{ ingestion_attempts
+audios ||--o{ variant_confirmation_tokens
+subjects ||--o{ variant_confirmation_tokens
+audios |o--o{ variant_confirmation_tokens
+users ||--o{ outbox_events
+audios ||--o{ transcripts
+transcripts ||--o{ segments
+audios ||--o{ chunks
+transcripts ||--o{ chunks
+chunks ||--o{ chunk_segments
+segments ||--o{ chunk_segments
+chunks ||--o{ embeddings
+subjects |o--o{ conversations
+audios |o--o{ conversations
+conversations ||--o{ messages
+messages ||--o{ message_sources
+audios |o--o{ message_sources
+transcripts |o--o{ message_sources
+chunks |o--o{ message_sources
+segments |o--o{ message_sources
+audios ||--o{ processing_runs
+audios |o--o{ tasks
+subjects |o--o{ tasks
+tasks ||--o{ task_evidence
+transcripts ||--o{ task_evidence
+segments ||--o{ task_evidence
+tasks ||--o{ task_sources
+audios ||--o{ task_sources
+transcripts ||--o{ task_sources
+segments ||--o{ task_sources
+tasks ||--o{ task_revisions
+processing_runs |o--o{ task_revisions
+tasks |o--o{ calendar_events
+tasks |o--o{ notifications
+@enduml

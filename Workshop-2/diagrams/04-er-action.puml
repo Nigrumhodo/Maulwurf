@@ -1,0 +1,187 @@
+@startuml
+!theme plain
+!pragma layout smetana
+skinparam defaultFontName "Noto Sans"
+skinparam defaultFontSize 11
+skinparam linetype ortho
+skinparam ArrowColor #444444
+hide circle
+hide empty members
+title Figure 4.4 · Tasks, Calendar and notifications
+
+entity "audios" as audios #F7F7F7 {
+  * id : uuid <<PK>>
+  --
+  (see its own figure)
+}
+entity "subjects" as subjects #F7F7F7 {
+  * id : uuid <<PK>>
+  --
+  (see its own figure)
+}
+entity "transcripts" as transcripts #F7F7F7 {
+  * id : uuid <<PK>>
+  --
+  (see its own figure)
+}
+entity "segments" as segments #F7F7F7 {
+  * id : uuid <<PK>>
+  --
+  (see its own figure)
+}
+entity "processing_runs" as processing_runs #FFFFFF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+  * audio_id : uuid <<FK>>
+  --
+  * stage : text
+  * transcript_version : integer
+  * config_version : text
+    prompt_version : text
+  * status : text
+  * attempt_count : integer
+    error_code : text
+    started_at : timestamptz
+    finished_at : timestamptz
+  * created_at : timestamptz
+}
+entity "tasks" as tasks <<planned>> #EFEFEF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+    audio_id : uuid <<FK>>
+    subject_id : uuid <<FK>>
+  --
+  * source : text
+  * tipo : text
+  * titulo : text
+    detalle : text
+    due_date : date
+    due_at : timestamptz
+  * timezone : text
+  * all_day : boolean
+  * date_status : text
+    date_text : text
+    date_reason : text
+    confidence_score : double precision
+  * status : text
+  * calendar_sync_status : text
+  * version : integer
+  * due_version : integer
+    event_start_at : timestamptz
+    event_end_at : timestamptz
+    event_start_date : date
+    event_end_date_exclusive : date
+    calendar_id : text
+    calendar_event_id : text
+    confirmed_at : timestamptz
+    completed_at : timestamptz
+    dismissed_at : timestamptz
+  * created_at : timestamptz
+  * updated_at : timestamptz
+}
+entity "task_evidence" as task_evidence <<planned>> #EFEFEF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+  * task_id : uuid <<FK>>
+  * transcript_id : uuid <<FK>>
+  * segment_id : uuid <<FK>>
+  --
+  * task_version : integer
+  * char_start : integer
+  * char_end : integer
+  * quote : text
+}
+entity "task_sources" as task_sources <<planned>> #EFEFEF {
+  * user_id : uuid <<PK,FK>>
+  * task_id : uuid <<PK,FK>>
+  * audio_id : uuid <<FK>>
+  * transcript_id : uuid <<FK>>
+  * segment_id : uuid <<PK,FK>>
+  * char_start : integer <<PK>>
+  * char_end : integer <<PK>>
+  --
+  * transcript_version : integer
+}
+entity "task_revisions" as task_revisions <<planned>> #EFEFEF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+  * task_id : uuid <<FK>>
+    run_id : uuid <<FK>>
+  --
+  * base_task_version : integer
+  * revision_type : text
+  * proposed_fields : jsonb
+  * evidence_validated : boolean
+  * status : text
+    activated_at : timestamptz
+  * created_at : timestamptz
+}
+entity "calendar_events" as calendar_events <<planned>> #EFEFEF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+    task_id : uuid <<FK>>
+  --
+  * calendar_id : text
+  * event_id : text
+  * source : text
+  * title : text
+    start_at : timestamptz
+    end_at : timestamptz
+    start_date : date
+    end_date_exclusive : date
+    timezone : text
+    etag : text
+  * remote_status : text
+  * last_synced_at : timestamptz
+  * created_at : timestamptz
+  * updated_at : timestamptz
+}
+entity "google_remote_operations" as google_remote_operations <<planned>> #EFEFEF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+  --
+  * kind : text
+    calendar_id : text
+    event_id : text
+  * authorized : boolean
+  * status : text
+  * attempts : integer
+    error_code : text
+  * created_at : timestamptz
+    finished_at : timestamptz
+}
+entity "notifications" as notifications <<planned>> #EFEFEF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+    task_id : uuid <<FK>>
+  --
+  * type : text
+    occurrence : date
+    due_version : integer
+  * scheduled_at : timestamptz
+  * dedupe_key : text
+  * status : text
+    lease_expires_at : timestamptz
+  * attempts : integer
+    sent_at : timestamptz
+    provider_message_id : text
+    last_error_code : text
+  * created_at : timestamptz
+  * updated_at : timestamptz
+}
+
+audios ||--o{ processing_runs : audio_id
+audios |o--o{ tasks : audio_id
+subjects |o--o{ tasks : subject_id
+tasks ||--o{ task_evidence : task_id
+transcripts ||--o{ task_evidence : transcript_id
+segments ||--o{ task_evidence : segment_id
+tasks ||--o{ task_sources : task_id
+audios ||--o{ task_sources : audio_id
+transcripts ||--o{ task_sources : transcript_id
+segments ||--o{ task_sources : segment_id
+tasks ||--o{ task_revisions : task_id
+processing_runs |o--o{ task_revisions : run_id
+tasks |o--o{ calendar_events : task_id
+tasks |o--o{ notifications : task_id
+@enduml

@@ -1,0 +1,30 @@
+@startuml
+!theme plain
+skinparam defaultFontName "Noto Sans"
+skinparam defaultFontSize 12
+skinparam ArrowColor #444444
+title Figure 6.3 · Account deletion and retention boundary
+
+start
+:Student requests DELETE /me;
+:Create deletion operation;
+:Tombstone user and block new work;
+:Keep initiating session restricted;
+:Revoke other sessions and cancel jobs;
+if (Delete Google events too?) then (yes)
+  :Create authorized remote deletion operations;
+else (no)
+  :Keep existing Google events;
+endif
+:Stop integrations and remove stored tokens;
+:Purge tenant data, audio-derived rows
+and private message content;
+:Keep only remote IDs, authorization,
+status and redacted error summary;
+if (Remote operations complete?) then (yes)
+  :Return completed;
+else (remote failure)
+  :Return completed_with_remote_failures;
+endif
+stop
+@enduml
