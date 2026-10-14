@@ -1,0 +1,36 @@
+@startuml
+!theme plain
+skinparam defaultFontName "Noto Sans"
+skinparam defaultFontSize 12
+skinparam ArrowColor #444444
+title Figure 7.2 · Trust zones and data flow
+
+rectangle "User device\n(untrusted browser)" as browser #F2F2F2
+rectangle "Edge zone\nCaddy + React SPA" as edge #E8EEFF
+rectangle "Application zone\nAPI · worker · scheduler" as app #FFF4D6
+rectangle "Ephemeral audio zone\ningest tmpfs, no swap\nUID 10001, read-only root" as audio #FFE7C2
+rectangle "Owned durable data\nPostgreSQL + pgvector\ntext, embeddings, metadata" as durable #E2F0D9
+rectangle "ID-only queue\nRedis, no persistence" as queue #E2F0D9
+rectangle "External providers\nGoogle · NVIDIA · LLM" as ext #F4E1F7
+
+browser --> edge : cookies, CSRF,\nmetadata and binary stream
+edge --> app : same-origin HTTPS
+app --> audio : internal stream with\nshort-lived attempt credential
+audio --> ext : audio fragments only\naudio --> durable : transcript, segments,\nlease and cleanup evidence
+app --> durable : tenant data and outbox
+app --> queue : IDs and health state
+queue --> app : jobs and health
+app --> ext : OAuth, Calendar, Gmail,\ntext providers
+note right of audio
+  Never durable:
+  original audio,
+  converted WAV,
+  fragments,
+  provider payloads
+end note
+note right of durable
+  Tenant key: user_id
+  RLS is planned as an
+  additional barrier (A2.17)
+end note
+@enduml

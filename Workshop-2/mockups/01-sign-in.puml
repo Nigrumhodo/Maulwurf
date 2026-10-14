@@ -1,0 +1,26 @@
+@startsalt
+<style>
+saltDiagram { FontName "Noto Sans"; FontSize 13 }
+</style>
+{+
+  {* <b>Maulwurf</b> | . | . | [Sign in] }
+  ==
+  {
+    .
+    <b><size:18>Your classes, turned into study actions
+    Upload a class recording. Maulwurf keeps only the text, answers with citations
+    and proposes tasks you confirm before anything reaches your calendar.
+    .
+    1. Sign in with your Google account
+    2. Upload the recording of a class and choose its language
+    3. Search, ask and review proposed tasks
+    .
+    [         Continue with Google         ]
+    .
+    <i>Audio is deleted after transcription and is never stored. Calendar and Gmail</i>
+    <i>are connected later, only if you choose to.</i>
+    .
+    <color:#AA0000>Google sign-in expired; please try again.</color>
+  }
+}
+@endsalt

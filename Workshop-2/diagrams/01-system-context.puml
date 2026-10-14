@@ -1,0 +1,29 @@
+@startuml
+!theme plain
+!pragma layout smetana
+skinparam defaultFontName "Noto Sans"
+skinparam defaultFontSize 13
+skinparam rectangleBorderColor #444444
+skinparam ArrowColor #444444
+title Figure 1.1 · System context of Maulwurf
+
+actor "Student" as student
+actor "Visitor" as visitor
+
+rectangle "Maulwurf\n(self-hosted, multi-tenant)\n\nweb SPA · API · ingestion · workers\nPostgreSQL + pgvector · Redis" as system #FFF4D6
+
+rectangle "Google Identity\n(OAuth 2.0 / OpenID Connect)" as oauth #E8EEFF
+rectangle "Google Calendar API" as calendar #E8EEFF
+rectangle "Gmail API" as gmail #E8EEFF
+rectangle "NVIDIA Riva on NVCF\nwhisper-large-v3, gRPC TLS" as riva #E8EEFF
+rectangle "LLM and embedding\nproviders (via LiteLLM)" as llm #E8EEFF
+
+visitor --> system : reads the public\nlanding page
+student --> system : uploads class audio,\nreads transcripts, asks\nquestions, confirms tasks
+system --> oauth : sign-in, incremental\nconsent, token refresh
+system --> riva : ephemeral audio fragments\n(transcription only)
+riva --> system : text and offsets
+system --> llm : transcript text, questions\n(never audio)
+system --> calendar : one event per\nconfirmed task; read agenda
+system --> gmail : opt-in reminders\nand digests
+@enduml

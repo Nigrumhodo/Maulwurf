@@ -1,0 +1,33 @@
+@startsalt
+<style>
+saltDiagram { FontName "Noto Sans"; FontSize 13 }
+</style>
+{+
+  {* <b>Maulwurf</b> | Dashboard | Library | Subjects | Chat | Inbox | Settings | maria@unal.edu.co }
+  ==
+  {
+    {+
+      <b>Conversations
+      [+ New]
+      > Exam topics (Calculus II)
+      Lab deadlines
+      Friction questions
+    } | {+
+      { <b>Exam topics | . | Scope: | ^Subject: Calculus II^ }
+      ==
+      <b>You
+      What topics enter the midterm exam?
+      .
+      <b>Maulwurf
+      The midterm covers topics 1 to 4, including trigonometric substitution
+      <u>[Calculus II · Class 03 · 31:15]</u> and integration by parts
+      <u>[Calculus II · Class 02 · segment 14]</u>.
+      .
+      <b>Maulwurf
+      I could not find when the exam room was announced; check with your teacher.
+      ==
+      { "Ask about your classes…                                   " | [Send] | [Stop] }
+    }
+  }
+}
+@endsalt

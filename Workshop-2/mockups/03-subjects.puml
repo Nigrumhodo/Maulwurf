@@ -1,0 +1,26 @@
+@startsalt
+<style>
+saltDiagram { FontName "Noto Sans"; FontSize 13 }
+</style>
+{+
+  {* <b>Maulwurf</b> | Dashboard | Library | Subjects | Chat | Inbox | Settings | maria@unal.edu.co }
+  ==
+  <b><size:16>Subjects
+  {#
+    <b>Name | <b>Teacher | <b>Color | <b>Classes | <b>Actions
+    Calculus II | Prof. Rojas | ■ indigo | 3 | [Edit] | [Delete]
+    Physics I | Prof. Díaz | ■ teal | 2 | [Edit] | [Delete]
+    History | — | ■ amber | 1 | [Edit] | [Delete]
+  }
+  ..
+  {
+    <b>New subject
+    Name    | "Linear Algebra          "
+    Teacher | "optional                "
+    Color   | ^indigo^
+    [Cancel] | [Create subject]
+  }
+  ..
+  <color:#AA6600>Physics I has 2 active classes. Move them or confirm deletion of the classes too.</color>
+}
+@endsalt

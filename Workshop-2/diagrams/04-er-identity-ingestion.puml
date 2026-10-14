@@ -1,0 +1,177 @@
+@startuml
+!theme plain
+!pragma layout smetana
+skinparam defaultFontName "Noto Sans"
+skinparam defaultFontSize 11
+skinparam linetype ortho
+skinparam ArrowColor #444444
+hide circle
+hide empty members
+title Figure 4.2 · Identity, ingestion and outbox
+
+entity "users" as users #FFFFFF {
+  * id : uuid <<PK>>
+  --
+  * google_sub : text
+  * email : text
+  * email_verified : boolean
+  * timezone : text
+    display_name : text
+  * status : text
+  * created_at : timestamptz
+  * updated_at : timestamptz
+    deleted_at : timestamptz
+}
+entity "sessions" as sessions #FFFFFF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+  --
+  * token_hash : text
+  * csrf_hash : text
+  * created_at : timestamptz
+  * expires_at : timestamptz
+    revoked_at : timestamptz
+    last_seen_at : timestamptz
+}
+entity "google_credentials" as google_credentials #FFFFFF {
+  * user_id : uuid <<PK,FK>>
+  --
+  * access_token_enc : bytea
+    refresh_token_enc : bytea
+  * key_version : integer
+  * scopes : text[]
+    token_expires_at : timestamptz
+  * status : text
+    last_refresh_at : timestamptz
+  * updated_at : timestamptz
+}
+entity "settings" as settings <<planned>> #EFEFEF {
+  * user_id : uuid <<PK,FK>>
+  --
+    calendar_write_calendar_id : text
+  * calendar_read_calendar_ids : text[]
+  * created_at : timestamptz
+  * updated_at : timestamptz
+}
+entity "account_deletions" as account_deletions <<planned>> #EFEFEF {
+  * id : uuid <<PK>>
+  --
+  * former_user_id : uuid
+  * status : text
+  * delete_events : boolean
+    error_summary : text
+  * expires_at : timestamptz
+  * created_at : timestamptz
+    completed_at : timestamptz
+}
+entity "subjects" as subjects #FFFFFF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+  --
+  * name : text
+  * color : text
+    teacher : text
+  * created_at : timestamptz
+  * updated_at : timestamptz
+    deleted_at : timestamptz
+}
+entity "audios" as audios #FFFFFF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+  * subject_id : uuid <<FK>>
+  --
+    title : text
+    teacher : text
+    sha256 : text
+  * class_date : date
+  * class_timezone : text
+  * language_code : text
+    original_bytes : bigint
+    duration_seconds : double precision
+  * required_stages : text[]
+    active_transcript_version : integer
+    active_analysis_version : integer
+    active_index_version : text
+  * created_at : timestamptz
+  * updated_at : timestamptz
+    deleted_at : timestamptz
+}
+entity "ingestion_attempts" as ingestion_attempts #FFFFFF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+  * audio_id : uuid <<FK>>
+  --
+  * privacy_notice_version : text
+  * cloud_processing_accepted_at : timestamptz
+  * third_party_voice_acknowledged_at : timestamptz
+  * declared_providers : jsonb
+  * status : text
+  * owner_instance : text
+  * fencing_token : bigint
+    lease_expires_at : timestamptz
+    heartbeat_at : timestamptz
+    upload_expires_at : timestamptz
+    receive_deadline : timestamptz
+    asr_deadline : timestamptz
+  * received_bytes : bigint
+    expected_bytes : bigint
+    fragments_done : integer
+    fragments_total : integer
+  * cleanup_status : text
+    cleanup_verified_at : timestamptz
+  * cleanup_evidence : jsonb
+    audio_deleted_at : timestamptz
+    error_code : text
+  * created_at : timestamptz
+  * updated_at : timestamptz
+}
+entity "variant_confirmation_tokens" as variant_confirmation_tokens #FFFFFF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+  * canonical_audio_id : uuid <<FK>>
+  * subject_id : uuid <<FK>>
+    reserved_audio_id : uuid <<FK>>
+  --
+  * token_hash : text
+  * content_sha256 : text
+  * class_date : date
+  * class_timezone : text
+  * language_code : text
+  * metadata_digest : text
+  * expires_at : timestamptz
+    consumed_at : timestamptz
+  * created_at : timestamptz
+}
+entity "outbox_events" as outbox_events #FFFFFF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+  --
+  * type : text
+  * resource_type : text
+  * resource_id : uuid
+    resource_version : integer
+  * payload : jsonb
+  * enabled : boolean
+    blocked_reason : text
+  * status : text
+  * attempts : integer
+  * max_attempts : integer
+    next_attempt_at : timestamptz
+    dedupe_key : text
+    published_at : timestamptz
+    completed_at : timestamptz
+  * created_at : timestamptz
+}
+
+users ||--o{ sessions : user_id
+users ||--o| google_credentials : user_id
+users ||--o| settings : user_id
+users ||--o{ subjects : user_id
+users ||--o{ audios : user_id
+subjects ||--o{ audios : subject_id
+audios ||--o{ ingestion_attempts : audio_id
+audios ||--o{ variant_confirmation_tokens : canonical_audio_id
+subjects ||--o{ variant_confirmation_tokens : subject_id
+audios |o--o{ variant_confirmation_tokens : reserved_audio_id
+users ||--o{ outbox_events : user_id
+@enduml

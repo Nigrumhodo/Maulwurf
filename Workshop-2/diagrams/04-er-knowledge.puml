@@ -1,0 +1,159 @@
+@startuml
+!theme plain
+!pragma layout smetana
+skinparam defaultFontName "Noto Sans"
+skinparam defaultFontSize 11
+skinparam linetype ortho
+skinparam ArrowColor #444444
+hide circle
+hide empty members
+title Figure 4.3 · Transcripts, index and chat
+
+entity "audios" as audios #F7F7F7 {
+  * id : uuid <<PK>>
+  --
+  (see its own figure)
+}
+entity "subjects" as subjects #F7F7F7 {
+  * id : uuid <<PK>>
+  --
+  (see its own figure)
+}
+entity "transcripts" as transcripts #FFFFFF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+  * audio_id : uuid <<FK>>
+  --
+  * version : integer
+  * language_requested : text
+  * provider : text
+  * model : text
+  * model_config : jsonb
+    client_version : text
+  * timestamp_precision : text
+  * text : text
+  * char_count : integer
+  * quality_flags : jsonb
+  * warnings : jsonb
+  * fts_config : text
+    summary : text
+    topics : text[]
+    analysis_version : integer
+  * created_at : timestamptz
+}
+entity "segments" as segments #FFFFFF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+  * transcript_id : uuid <<FK>>
+  --
+  * ordinal : integer
+  * text : text
+  * char_start : integer
+  * char_end : integer
+    t_start : double precision
+    t_end : double precision
+}
+entity "chunks" as chunks #FFFFFF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+  * audio_id : uuid <<FK>>
+  * transcript_id : uuid <<FK>>
+  --
+  * transcript_version : integer
+  * index_version : text
+  * ordinal : integer
+  * content : text
+  * char_start : integer
+  * char_end : integer
+  * token_count : integer
+    t_start : double precision
+    t_end : double precision
+    tsv : tsvector
+}
+entity "chunk_segments" as chunk_segments #FFFFFF {
+  * user_id : uuid <<PK,FK>>
+  * chunk_id : uuid <<PK,FK>>
+  * segment_id : uuid <<PK,FK>>
+  --
+    overlap_span : jsonb
+}
+entity "embeddings" as embeddings #FFFFFF {
+  * user_id : uuid <<PK,FK>>
+  * chunk_id : uuid <<PK,FK>>
+  * index_version : text <<PK>>
+  --
+  * model : text
+  * dimension : integer
+  * vector : vector(1536)
+  * created_at : timestamptz
+}
+entity "index_generations" as index_generations #FFFFFF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+  --
+  * version : text
+  * model : text
+  * dimension : integer
+  * status : text
+  * chunk_count : integer
+    activated_at : timestamptz
+  * created_at : timestamptz
+}
+entity "conversations" as conversations #FFFFFF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+    subject_id : uuid <<FK>>
+    audio_id : uuid <<FK>>
+  --
+  * mode : text
+    title : text
+  * created_at : timestamptz
+  * updated_at : timestamptz
+    deleted_at : timestamptz
+}
+entity "messages" as messages #FFFFFF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+  * conversation_id : uuid <<FK>>
+  --
+  * role : text
+  * content : text
+    client_message_id : text
+  * status : text
+  * citas : jsonb
+    model : text
+    prompt_version : text
+    input_tokens : integer
+    output_tokens : integer
+  * created_at : timestamptz
+}
+entity "message_sources" as message_sources #FFFFFF {
+  * id : uuid <<PK>>
+  * user_id : uuid <<FK>>
+  * message_id : uuid <<FK>>
+    audio_id : uuid <<FK>>
+    transcript_id : uuid <<FK>>
+    chunk_id : uuid <<FK>>
+    segment_id : uuid <<FK>>
+  --
+  * kind : text
+    transcript_version : integer
+  * delivered_at : timestamptz
+}
+
+audios ||--o{ transcripts : audio_id
+transcripts ||--o{ segments : transcript_id
+audios ||--o{ chunks : audio_id
+transcripts ||--o{ chunks : transcript_id
+chunks ||--o{ chunk_segments : chunk_id
+segments ||--o{ chunk_segments : segment_id
+chunks ||--o{ embeddings : chunk_id
+subjects |o--o{ conversations : subject_id
+audios |o--o{ conversations : audio_id
+conversations ||--o{ messages : conversation_id
+messages ||--o{ message_sources : message_id
+audios |o--o{ message_sources : audio_id
+transcripts |o--o{ message_sources : transcript_id
+chunks |o--o{ message_sources : chunk_id
+segments |o--o{ message_sources : segment_id
+@enduml

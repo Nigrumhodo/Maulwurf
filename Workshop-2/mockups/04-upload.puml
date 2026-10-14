@@ -1,0 +1,29 @@
+@startsalt
+<style>
+saltDiagram { FontName "Noto Sans"; FontSize 13 }
+</style>
+{+
+  {* <b>Maulwurf</b> | Dashboard | Library | Subjects | Chat | Inbox | Settings | maria@unal.edu.co }
+  ==
+  <b><size:16>Upload a class
+  {
+    Subject                | ^Calculus II            ^
+    Class date             | "2026-10-08             "
+    Class timezone         | ^America/Bogota         ^
+    Audio language         | ^— choose a language —  ^
+    Optional class title   | "Class 03 — integrals   "
+    Optional teacher       | "Prof. Rojas            "
+    File                   | "lecture-03.m4a         " | [Choose file]
+  }
+  ..
+  <i>Accepted: mp3, m4a, wav, ogg, opus, flac, webm · up to 200 MiB / 3 h (provisional)</i>
+  ..
+  <b>Privacy notice 2026-09-v1
+  [X] I accept that the audio is processed in the cloud by NVIDIA to transcribe it
+  [X] I confirm that other voices in the recording (teacher, classmates) may be processed
+  <i>The audio is deleted after transcription. It cannot be played, downloaded or</i>
+  <i>transcribed again: if it is lost, you will be asked to upload it again.</i>
+  ..
+  { [Cancel] | . | [Upload and transcribe] }
+}
+@endsalt
