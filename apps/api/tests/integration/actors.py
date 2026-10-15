@@ -175,6 +175,41 @@ async def make_transcript(db: AsyncSession, actor: Actor) -> Transcript:
     return transcript
 
 
+async def make_class_with_transcript(
+    db: AsyncSession, actor: Actor, *, required_stages: list[str] | None = None
+) -> tuple[Audio, IngestionAttempt, Transcript]:
+    """Clase con transcript utilizable (A2.8): intento `succeeded` con cleanup verificado.
+
+    Es el estado en el que la matriz de decisión permite `retry`: `active_transcript_version`
+    apunta a una fila `transcripts` viva y el último intento no está activo. `make_transcript`
+    no sirve porque crea su propio audio; aquí audio, intento y transcript comparten fila.
+    """
+    audio = await make_audio(db, actor)
+    if required_stages is not None:
+        audio.required_stages = required_stages
+    attempt = await make_attempt(db, actor, audio=audio)
+    attempt.status = "succeeded"
+    attempt.cleanup_status = "verified"
+    text = "texto de prueba"
+    transcript = Transcript(
+        user_id=actor.user_id,
+        audio_id=audio.id,
+        version=1,
+        language_requested=audio.language_code,
+        model="test-model",
+        model_config={},
+        timestamp_precision="none",
+        text=text,
+        char_count=len(text),
+        fts_config="spanish",
+    )
+    db.add(transcript)
+    await db.flush()
+    audio.active_transcript_version = 1
+    await db.flush()
+    return audio, attempt, transcript
+
+
 async def make_segment(db: AsyncSession, actor: Actor) -> Segment:
     transcript = await make_transcript(db, actor)
     segment = Segment(
