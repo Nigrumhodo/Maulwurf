@@ -13,26 +13,41 @@ límite en caliente y dedupe resuelto DESPUÉS de limpiar (`200 duplicate_exact`
 `409 duplicate_variant`); `202` solo para contenido admitido por el sink de ingesta. El
 sink por defecto aún no está disponible (contrato interno con S2.1 pendiente, punto C2):
 responde `503 capacity_unavailable` antes de leer un byte, igual que en A1.8.
+
+Cancelación y tombstone (A2.7, S2.md §A2.7): `POST /audios/{id}/attempts/{attempt_id}/cancel`
+cancela un intento pre-commit invalidando su fencing (`202`; `409 invalid_transition` tras
+el commit o en un final), y `DELETE /audios/{id}` tombstonea la clase purgando todos sus
+derivados en la misma transacción (`202` trazable). El router solo resuelve ownership y
+monta la respuesta: la máquina de estados decide y el SQL vive en `services/audios` (ADR-0006).
 """
+
 import uuid
 from datetime import UTC, date, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, Query, Request, Response
+from fastapi import APIRouter, Body, Depends, Header, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.config import settings
 from app.core.deps import DbSession, MutationSession
-from app.core.errors import ApiError, consent_required, language_not_allowed, not_found
+from app.core.errors import (
+    ApiError,
+    consent_required,
+    google_deletion_unavailable,
+    language_not_allowed,
+    not_found,
+)
 from app.core.validation import is_iana_timezone
 from app.models import Audio, IngestionAttempt, Subject
 from app.services.audios import (
     allowed_languages,
+    cancel_attempt,
     check_quota,
     consume_variant_token,
     create_reservation,
     reserve_slot,
+    tombstone_audio,
 )
 from app.services.tenant import get_owned
 from app.services.uploads import (
@@ -82,6 +97,45 @@ class AudioCreated(BaseModel):
     upload_url: str
     upload_expires_at: datetime
     outcome: str = "new"
+
+
+class AudioDelete(BaseModel):
+    """Opciones del tombstone (A2.7): el contrato congela el nombre del flag remoto."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # DISENO §3.5: borrar eventos de Google ya creados exige una opción explícita. En S2
+    # no puede existir ninguno (las tablas remotas son S3/F2), así que `true` responde
+    # `409 google_deletion_unavailable` en vez de fingir trabajo remoto.
+    delete_google_events: bool = False
+
+
+class CancelAccepted(BaseModel):
+    attempt_id: uuid.UUID
+    status: str
+
+
+class TombstonePurged(BaseModel):
+    """Conteos por tabla: hacen verificable la purga sin exponer contenido (M9)."""
+
+    attempts_cancelled: int
+    outbox_events_skipped: int
+    processing_runs_cancelled: int
+    message_sources_deleted: int
+    messages_tombstoned: int
+    embeddings_deleted: int
+    chunk_segments_deleted: int
+    chunks_deleted: int
+    segments_deleted: int
+    transcripts_deleted: int
+
+
+class TombstoneAccepted(BaseModel):
+    audio_id: uuid.UUID
+    status: str = "tombstoned"
+    purged: TombstonePurged
+    google_events: str = "kept"
+    notice: str
 
 
 @router.post(
@@ -224,3 +278,95 @@ async def upload_content(
         content_length=content_length,
     )
     return JSONResponse(status_code=outcome.status_code, content=outcome.payload)
+
+
+@router.post(
+    "/audios/{audio_id}/attempts/{attempt_id}/cancel",
+    status_code=202,
+    responses={
+        202: {"description": "Intento cancelado (idempotente si ya estaba cancelled)"},
+        401: {"description": "Sin sesión (auth_required)"},
+        403: {"description": "CSRF u Origin inválido (csrf_invalid)"},
+        404: {"description": "Audio o intento inexistente o ajeno (not_found)"},
+        409: {"description": "invalid_transition: tras el commit o en un estado final"},
+    },
+)
+async def cancel_attempt_endpoint(
+    audio_id: uuid.UUID, attempt_id: uuid.UUID, session: MutationSession, db: DbSession
+) -> CancelAccepted:
+    """Cancelación explícita (A2.7, S2.md §A2.7): invalida el fencing en una sentencia.
+
+    El router solo resuelve ownership (ADR-0006); `services.audios.cancel_attempt` decide
+    con la máquina y gana o pierde la carrera con un `UPDATE` condicional. `ingest` ve el
+    token nuevo en su próximo heartbeat, cancela subprocess/gRPC y verifica la limpieza.
+    Tras el commit el transcript nunca se destruye: `409 invalid_transition` (M2).
+    """
+    audio = await get_owned(db, Audio, session.user_id, audio_id)
+    if audio is None or audio.deleted_at is not None:
+        raise not_found()
+    attempt = await get_owned(db, IngestionAttempt, session.user_id, attempt_id)
+    if attempt is None or attempt.audio_id != audio.id:
+        raise not_found()
+    # Valores leídos antes del commit: los atributos ORM expiran al confirmar.
+    attempt_id_value = attempt.id
+    status = await cancel_attempt(db, attempt=attempt)
+    await db.commit()
+    return CancelAccepted(attempt_id=attempt_id_value, status=status)
+
+
+@router.delete(
+    "/audios/{audio_id}",
+    status_code=202,
+    responses={
+        202: {"description": "Tombstone aceptado; purga de derivados en la misma transacción"},
+        401: {"description": "Sin sesión (auth_required)"},
+        403: {"description": "CSRF u Origin inválido (csrf_invalid)"},
+        404: {"description": "Audio inexistente, ajeno o ya tombstoneado (not_found)"},
+        409: {"description": "google_deletion_unavailable: la opción remota aún no existe (S3)"},
+    },
+)
+async def delete_audio(
+    audio_id: uuid.UUID,
+    session: MutationSession,
+    db: DbSession,
+    body: Annotated[AudioDelete | None, Body()] = None,
+) -> TombstoneAccepted:
+    """Tombstone de una clase (A2.7): cancela intentos/jobs y purga cada derivado.
+
+    `deleted_at` invalida la clase para todo lector; los intentos activos quedan
+    `cancelled` con el fencing invalidado (un commit tardío de `ingest` es rechazado);
+    transcripts, segmentos, chunks, embeddings, citas y resúmenes se borran en la misma
+    transacción. Los eventos de Google existentes se CONSERVAN por defecto con aviso:
+    borrarlos exige la opción explícita `delete_google_events` (DISENO §3.5), hoy
+    respondida con `409 google_deletion_unavailable` porque `google_remote_operations` es
+    S3/F2. `202` porque el trabajo remoto diferido (S3) podrá venir detrás de este tombstone.
+    """
+    audio = await get_owned(db, Audio, session.user_id, audio_id)
+    if audio is None or audio.deleted_at is not None:
+        raise not_found()
+    options = body or AudioDelete()
+    if options.delete_google_events:
+        raise google_deletion_unavailable()
+    # Valores leídos antes del commit: los atributos ORM expiran al confirmar.
+    audio_id_value = audio.id
+    result = await tombstone_audio(db, user_id=session.user_id, audio=audio)
+    await db.commit()
+    return TombstoneAccepted(
+        audio_id=audio_id_value,
+        purged=TombstonePurged(
+            attempts_cancelled=result.attempts_cancelled,
+            outbox_events_skipped=result.outbox_events_skipped,
+            processing_runs_cancelled=result.processing_runs_cancelled,
+            message_sources_deleted=result.message_sources_deleted,
+            messages_tombstoned=result.messages_tombstoned,
+            embeddings_deleted=result.embeddings_deleted,
+            chunk_segments_deleted=result.chunk_segments_deleted,
+            chunks_deleted=result.chunks_deleted,
+            segments_deleted=result.segments_deleted,
+            transcripts_deleted=result.transcripts_deleted,
+        ),
+        notice=(
+            "La clase fue eliminada; los eventos de Google ya creados se conservan en tu "
+            "calendario y pueden borrarse allí."
+        ),
+    )

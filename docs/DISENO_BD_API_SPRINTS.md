@@ -347,6 +347,17 @@ Design notes ([ESPECIFICACION.md](ESPECIFICACION.md) §6.2):
   `cleanup_status='failed'` stops local admission and raises an alert.
 - Candidate TTLs are set only after the F0 benchmark; until then
   `GET /ingestion/capabilities` returns `null` and `limits_validated=false`.
+- Class purge order, fixed by `DELETE /audios/{id}` (A2.7, one transaction, always explicit
+  deletes and never the FK cascade, so every count in the `202` body is verifiable):
+  conditional `audios.deleted_at` (a second concurrent DELETE loses and gets `404`) →
+  active `ingestion_attempts` to `cancelled` with `fencing_token + 1` (a late `ingest`
+  commit fails its token check) → `outbox_events` `pending` to `skipped` (never
+  `enabled=false`, which the `cleanup_gate` CHECK would reject as a lie) →
+  `processing_runs` `pending|running` to `cancelled` → `message_sources` of the class →
+  content-free `messages` (`content=''`, `citas='[]'`) → `embeddings` → `chunk_segments`
+  → `chunks` → `segments` → `transcripts` (summary and topics go with the transcript).
+  Final attempts keep their `error_code`; existing Google events are kept by default.
+  Proven by `I-S2-AN-06` in `apps/api/tests/integration/test_delete_audio.py`.
 
 ### 2.5 S2 — Transcript, chunks, embeddings, and index (API/DB + RAG)
 

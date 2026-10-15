@@ -41,7 +41,7 @@ from app.core.config import settings
 from app.core.errors import ApiError, duplicate_variant, variant_hash_mismatch
 from app.models import Audio, IngestionAttempt
 from app.services import dedupe, state_machine
-from app.services.audios import RETRY_AFTER_SECONDS
+from app.services.audios import RETRY_AFTER_SECONDS, cas_transition
 from app.services.tenant import get_owned
 
 
@@ -194,8 +194,16 @@ async def _abort_disconnected(
     # que es lo que exige el contrato («desconectar cancela y limpia el intento»).
     with suppress(SinkError):
         await sink.discard()
-    # A2.6: the typed destination of a mid-upload disconnection; the machine owns the write.
-    state_machine.transition(attempt, "cancelled")
+    # A2.6/A2.7: typed destination written through the CAS. A concurrent commit wins the
+    # race and this late cancel becomes a no-op (H2), and its `invalid_transition` is
+    # swallowed here (H3): this is a cleanup path with no HTTP response to send, and a
+    # final or committed attempt must never be overwritten or crash the disconnect.
+    try:
+        await cas_transition(db, attempt=attempt, target="cancelled")
+    except ApiError as exc:
+        if exc.code != "invalid_transition":
+            raise
+        return  # no commit: the winner's state stands.
     await db.commit()
 
 
