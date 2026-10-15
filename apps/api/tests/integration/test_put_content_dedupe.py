@@ -1,4 +1,4 @@
-"""I-S2-AN-05 (M2/G3): dedupe en el `PUT`, cleanup previo y token de variante (A2.4).
+"""I-S2-AN-05 (M2/G3): dedupe en el `PUT`, cleanup previo y token de variante (A2.1/A2.4/A2.5).
 
 Contra PostgreSQL real y con un doble `ReceptionSink` inyectado: el contrato interno de
 recepción con S2.1 sigue sin congelar (C2), así que en producción el sink por defecto
@@ -14,6 +14,13 @@ cubre la matriz de S2.md §A2.4:
   `410`/`409`/`404`/`403`/`401` sin abrir el sink;
 - compensación ante fallo de `commit` o de `admit()`, desconexión, cuerpo vacío y
   descarte fallido de duplicados (nunca se responde duplicado sin cleanup).
+
+A2.5 additions (PLAN_TESTS §2.2): the second POST also rejects a token whose bound metadata does
+not match (`mismatch` case) and a token replayed after a valid consumption; and two simultaneous
+uploads with the same hash and different contexts resolve toward ONE canonical — the late arrival
+cleans up and gets the `409` + token instead of a second `202` (S2.md §A2.5 review finding
+2026-10-11). The `test_simultaneous_variant_contexts_*` test fails on develop without the
+post-admission re-check and passes with it.
 
 Bytes sintéticos generados en RAM por cada test: jamás se persisten como archivo ni como
 artefacto de CI.
@@ -418,7 +425,7 @@ async def test_second_put_with_different_hash_is_422(
     _assert_clean(response, sink)
 
 
-@pytest.mark.parametrize("case", ["expired", "consumed", "foreign"])
+@pytest.mark.parametrize("case", ["expired", "consumed", "foreign", "mismatch"])
 async def test_second_post_rejects_bad_token_without_reserving(
     client: AsyncClient, db_session: AsyncSession, case: str
 ) -> None:
@@ -432,10 +439,14 @@ async def test_second_post_rejects_bad_token_without_reserving(
     elif case == "consumed":
         token.consumed_at = datetime.now(UTC)
         token.reserved_audio_id = token.canonical_audio_id
+    posted_date = token.class_date.isoformat()
+    if case == "mismatch":
+        # A2.5: the token is bound to its metadata; another class_date cannot consume it.
+        posted_date = (token.class_date + timedelta(days=1)).isoformat()
     await db_session.flush()
     body = {
         "subject_id": str(token.subject_id),
-        "class_date": token.class_date.isoformat(),
+        "class_date": posted_date,
         "class_timezone": token.class_timezone,
         "language_code": token.language_code,
         "title": "Variante",
@@ -463,7 +474,140 @@ async def test_second_post_rejects_bad_token_without_reserving(
     ) == before  # 0 escrituras: el token malo no reserva capacidad
 
 
+async def test_consumed_token_cannot_be_replayed_by_the_full_flow(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """A2.5: a token consumed through the real flow stays single-use for a full replay."""
+    actor = await make_actor(db_session)
+    subject_id = await _subject_id(db_session, actor)
+    _confirmed, token = await _variant_chain(client, actor, subject_id)
+    before = (
+        await _count(db_session, Audio),
+        await _count(db_session, IngestionAttempt),
+        await _count(db_session, VariantConfirmationToken),
+    )
+
+    replay = await client.post(
+        "/audios",
+        json=_raw_body(subject_id, class_date="2026-09-22", variant_confirmation_token=token),
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+
+    assert replay.status_code == 422
+    assert replay.json()["error"]["code"] == "validation_failed"
+    assert (
+        await _count(db_session, Audio),
+        await _count(db_session, IngestionAttempt),
+        await _count(db_session, VariantConfirmationToken),
+    ) == before
+
+
+async def test_simultaneous_variant_contexts_resolve_to_one_canonical(
+    client: AsyncClient, db_session: AsyncSession, sink: FakeSink, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A2.5 review finding (2026-10-11): same hash + different contexts arriving at once.
+
+    Both pre-commit lookups can miss the other row (it is not committed yet) and the
+    `audios_dedupe_identity` unique index does not collide across contexts, so without the
+    post-admission re-check BOTH uploads would be admitted (`202`). The late arrival must clean
+    up and get the `409 duplicate_variant` + token instead. This test fails on develop.
+    """
+    actor = await make_actor(db_session)
+    subject_id = await _subject_id(db_session, actor)
+    winner = await _reserve(client, actor, _raw_body(subject_id))
+    assert (await _put(client, actor, winner["upload_url"])).status_code == 202
+    sink.events.clear()
+    loser = await _reserve(client, actor, _raw_body(subject_id, class_date="2026-09-22"))
+
+    # Inside the test transaction `now()` is the transaction timestamp, so both reservations
+    # share `created_at` and precedence would fall to the random PK: force a strict ordering
+    # (in production each reservation commits in its own transaction and the clock decides).
+    winner_audio = await db_session.get(Audio, uuid.UUID(winner["audio_id"]))
+    loser_audio = await db_session.get(Audio, uuid.UUID(loser["audio_id"]))
+    assert winner_audio is not None and loser_audio is not None
+    base = datetime.now(UTC) - timedelta(minutes=5)
+    winner_audio.created_at = base
+    loser_audio.created_at = base + timedelta(minutes=1)
+    await db_session.flush()
+
+    real_lookup = dedupe.lookup_variant
+    calls: list[uuid.UUID] = []
+
+    async def racy_lookup(db: AsyncSession, **kwargs: Any) -> Audio | None:
+        calls.append(kwargs["exclude_audio_id"])
+        if len(calls) == 1:
+            return None  # the window: the winner was not committed yet when we looked
+        return await real_lookup(db, **kwargs)
+
+    monkeypatch.setattr(dedupe, "lookup_variant", racy_lookup)
+
+    response = await _put(client, actor, loser["upload_url"])
+
+    assert response.status_code == 409
+    error = response.json()["error"]
+    assert error["code"] == "duplicate_variant"
+    assert error["details"]["existing_audio_id"] == winner["audio_id"]
+    assert len(calls) == 2  # pre-commit miss + post-admission re-check
+    # Verified cleanup before the 409 and the provisional class absorbed.
+    assert sink.events == ["begin", "write", "finish", "discard"]
+    assert await db_session.get(IngestionAttempt, uuid.UUID(loser["attempt_id"])) is None
+    assert await db_session.get(Audio, uuid.UUID(loser["audio_id"])) is None
+    fresh_winner = await db_session.get(Audio, uuid.UUID(winner["audio_id"]))
+    assert fresh_winner is not None and fresh_winner.sha256 == DIGEST
+    # The token binds the discarded context so the client can confirm via a second POST.
+    plaintext = error["details"]["variant_confirmation_token"]
+    token_row = (
+        await db_session.execute(
+            select(VariantConfirmationToken).where(
+                VariantConfirmationToken.token_hash == token_hash(plaintext)
+            )
+        )
+    ).scalar_one()
+    assert token_row.canonical_audio_id == uuid.UUID(winner["audio_id"])
+    assert token_row.class_date.isoformat() == "2026-09-22"
+    _assert_clean(response, sink)
+
+
+async def test_distinct_tenants_uploading_same_content_never_dedupe_each_other(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """A2.5 / G3: dedupe and variants are strictly tenant-isolated.
+
+    Two distinct users uploading the exact same audio bytes (even with identical metadata)
+    each receive their own 202 admission, with distinct audio IDs and separate DB rows.
+    """
+    alice = await make_actor(db_session)
+    bob = await make_actor(db_session)
+    alice_user_id = alice.user.id
+    bob_user_id = bob.user.id
+    alice_subject = await _subject_id(db_session, alice)
+    bob_subject = await _subject_id(db_session, bob)
+
+    alice_res = await _reserve(client, alice, _raw_body(alice_subject))
+    bob_res = await _reserve(client, bob, _raw_body(bob_subject))
+
+    alice_put = await _put(client, alice, alice_res["upload_url"])
+    assert alice_put.status_code == 202
+    assert alice_put.json()["attempt_id"] == alice_res["attempt_id"]
+
+    bob_put = await _put(client, bob, bob_res["upload_url"])
+    assert bob_put.status_code == 202
+    assert bob_put.json()["attempt_id"] == bob_res["attempt_id"]
+
+    assert alice_res["audio_id"] != bob_res["audio_id"]
+    alice_audio = await db_session.get(Audio, uuid.UUID(alice_res["audio_id"]))
+    bob_audio = await db_session.get(Audio, uuid.UUID(bob_res["audio_id"]))
+    assert alice_audio is not None and alice_audio.user_id == alice_user_id
+    assert bob_audio is not None and bob_audio.user_id == bob_user_id
+    assert alice_audio.sha256 == DIGEST
+    assert bob_audio.sha256 == DIGEST
+
+
+
+
 # --- D. Límite y validaciones previas al sink --------------------------------------------
+
 
 
 async def test_declared_too_large_is_413_without_opening_sink(

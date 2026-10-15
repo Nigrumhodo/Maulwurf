@@ -18,6 +18,14 @@ Compensación (plan §8.1): todo fallo posterior a recibir deja la reserva limpi
 descartados y, si ya se escribió la identidad, restaurados— salvo que ni siquiera eso sea
 posible (BD caída), caso que deja al reconciliador de S2.7. Un `202` jamás se emite sin que
 el sink haya admitido el contenido.
+
+Concurrent-variant re-check (A2.5, S2.md §A2.5 review finding 2026-10-11): two uploads with the
+same hash and different contexts can both miss the pre-commit lookups, and the exact-identity
+unique index does not collide across contexts. After committing its identity, the admission
+re-runs the variant lookup and the late arrival (`dedupe.is_late_arrival`) verifies the discard,
+absorbs its provisional class and answers `409 duplicate_variant` with a token bound to its
+discarded context. Token-confirmed variants skip the re-check: sharing a hash across contexts is
+legal once the human confirmed it.
 """
 
 import hashlib
@@ -269,6 +277,52 @@ async def _resolve_duplicate(
     raise error
 
 
+async def _reject_if_concurrent_variant(
+    db: AsyncSession,
+    sink: ReceptionSink,
+    *,
+    user_id: uuid.UUID,
+    audio_id: uuid.UUID,
+    attempt_id: uuid.UUID,
+    identity: dedupe.Identity,
+    sha256_hex: str,
+) -> None:
+    """Post-admission re-check for the concurrent-variant window (A2.5, review finding 2026-10-11).
+
+    After our identity commit, at least the later committer of a same-hash/different-context race
+    sees the rival, so exactly one class survives per race: the late arrival verifies the discard,
+    absorbs its provisional reservation and answers `409 duplicate_variant` with a token bound to
+    its discarded context. The ORM rows are re-read because `admit_identity` committed (or rolled
+    back) and expired them.
+    """
+    rival = await dedupe.lookup_variant(
+        db,
+        user_id=user_id,
+        sha256_hex=sha256_hex,
+        identity=identity,
+        exclude_audio_id=audio_id,
+    )
+    if rival is None:
+        return  # no rival: the common path pays exactly one extra SELECT.
+    own = await get_owned(db, Audio, user_id, audio_id)
+    attempt = await get_owned(db, IngestionAttempt, user_id, attempt_id)
+    if own is None or attempt is None:
+        return
+    if not dedupe.is_late_arrival(rival, own):
+        # This class holds precedence: the rival's own re-check yields toward us.
+        return
+    rival_id = rival.id
+    await _discard_verified(sink)
+    await dedupe.absorb_reservation(db, audio=own, attempt=attempt)
+    issued = await dedupe.issue_variant_token(
+        db, canonical=rival, identity=identity, content_sha256=sha256_hex
+    )
+    # Flat values read BEFORE the commit: nothing from the ORM after it.
+    error = duplicate_variant(rival_id, issued.plaintext, issued.expires_at)
+    await db.commit()
+    raise error
+
+
 async def receive_content(
     db: AsyncSession,
     request: Request,
@@ -398,6 +452,18 @@ async def receive_content(
             await dedupe.absorb_reservation(db, audio=fresh_audio, attempt=fresh_attempt)
         await db.commit()
         return UploadResult(200, payload)
+
+    if confirmed is None:
+        # A2.5: only fresh admissions re-check; a token-confirmed variant may share the hash.
+        await _reject_if_concurrent_variant(
+            db,
+            sink,
+            user_id=user_id,
+            audio_id=audio_id,
+            attempt_id=attempt_id,
+            identity=identity,
+            sha256_hex=sha256_hex,
+        )
 
     try:
         admission = await sink.admit()
