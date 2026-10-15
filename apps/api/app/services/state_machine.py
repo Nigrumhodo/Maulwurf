@@ -42,6 +42,10 @@ AGGREGATE_STATES = ("processing", "ready", "partial", "failed")
 # Absorbing finals of `ingestion_attempts.status`.
 TERMINAL_ATTEMPT_STATES = ("succeeded", "requires_reupload", "rejected", "cancelled")
 
+# The ONLY destination an explicit cancel or a `DELETE /audios/{id}` tombstone may write
+# (A2.7). `tests/unit/test_state_machine.py` fails if it drifts from `INGESTION_STATES`.
+TOMBSTONE_EXIT = "cancelled"
+
 # Legal next states per current status. Self-transitions are handled as no-ops and are not
 # listed. Anything not listed here is a contract violation → 409 invalid_transition.
 ATTEMPT_TRANSITIONS: dict[str, frozenset[str]] = {
@@ -116,6 +120,11 @@ def transition(attempt: AttemptRow, target: str, *, error_code: str | None = Non
     Only these two attributes are touched; the caller owns the surrounding transaction.
     """
     ensure_transition(attempt.status, target)
+    if target == attempt.status:
+        # A self-transition is a REAL no-op (PR #65 review finding, fixed in A2.7):
+        # absorbing finals must never rewrite the persisted `error_code`, or the original
+        # cause of a `rejected`/`cancelled` attempt could be silently replaced.
+        return target
     attempt.status = target
     if error_code is not None:
         attempt.error_code = error_code
@@ -134,6 +143,31 @@ def transition_for_loss(attempt: AttemptRow, reason: str) -> str:
     """End an attempt via a typed loss reason (final state + persisted `error_code`)."""
     target, code = loss_destination(reason)
     return transition(attempt, target, error_code=code)
+
+
+def tombstone_target(status: str) -> str | None:
+    """Where a `DELETE /audios/{id}` tombstone may move an attempt; `None` = leave it alone.
+
+    The tombstone (A2.7) is stronger than an explicit cancel: the user asked to destroy
+    the class, so even ``transcript_committed_cleanup_pending`` — which the cancel
+    endpoint must never touch — ends ``cancelled``. Exactly the active states are
+    rewritten; final states keep their ``error_code`` as history.
+    """
+    if status in ACTIVE_INGESTION_STATES:
+        return TOMBSTONE_EXIT
+    return None
+
+
+def late_write_allowed(
+    *, current_token: int, presented_token: int, attempt_status: str
+) -> bool:
+    """False for a late commit: the fencing token moved or the attempt left the active path.
+
+    A2.10's atomic commit reuses this decision (A2.7): after a cancel or a tombstone
+    invalidated the token, no owner can publish a transcript (DISENO §3.6 fencing).
+    Unknown statuses fail closed — only known active states may publish.
+    """
+    return current_token == presented_token and attempt_status in ACTIVE_INGESTION_STATES
 
 
 def blocks_derived_stages(status: str) -> bool:
@@ -197,8 +231,12 @@ def aggregate_status(
     the class is `failed`; then, while any REQUIRED stage is pending/running, still
     `processing` (work ongoing, even if another required stage already failed); all
     required succeeded → `ready`; otherwise `partial`. Non-required stages (e.g. F1 with
-    `analyze=not_requested`) never turn `ready` into `partial`.
+    `analyze=not_requested`) never turn `ready` into `partial`. An empty
+    ``required_stages`` is a programming error, not a state of the world: ``all([])`` is
+    ``True`` and would silently read ``ready`` while hiding owed work (A2.7).
     """
+    if not required_stages:
+        raise ValueError("required_stages must not be empty")
     if attempt_status in ACTIVE_INGESTION_STATES:
         return "processing"
     if not has_transcript or attempt_status != "succeeded":

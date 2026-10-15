@@ -19,6 +19,7 @@ from app.models import (
     Audio,
     Chunk,
     Conversation,
+    Embedding,
     GoogleCredential,
     IndexGeneration,
     IngestionAttempt,
@@ -206,6 +207,24 @@ async def make_chunk(db: AsyncSession, actor: Actor) -> Chunk:
     db.add(chunk)
     await db.flush()
     return chunk
+
+
+async def make_embedding(
+    db: AsyncSession, actor: Actor, *, chunk: Chunk | None = None
+) -> Embedding:
+    """Vector de un chunk propio o del dado (A2.7: `ChunkSegment`/`Embedding` sin factoría)."""
+    chunk = chunk or await make_chunk(db, actor)
+    embedding = Embedding(
+        user_id=actor.user.id,
+        chunk_id=chunk.id,
+        index_version="test-v1",
+        model="test-model",
+        dimension=1536,
+        vector=[0.0] * 1536,
+    )
+    db.add(embedding)
+    await db.flush()
+    return embedding
 
 
 async def make_index_generation(db: AsyncSession, actor: Actor) -> IndexGeneration:

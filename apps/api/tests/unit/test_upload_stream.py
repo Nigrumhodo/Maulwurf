@@ -141,17 +141,23 @@ class _FakeRequest:
 
 
 class _StubDb:
-    """`AsyncSession` de mentira para los caminos que solo hacen `commit`/`rollback`."""
+    """`AsyncSession` de mentira para los caminos que solo hacen `execute`/`commit`/`rollback`."""
 
     def __init__(self) -> None:
         self.commits = 0
         self.rollbacks = 0
+        self.executed = 0
 
     async def commit(self) -> None:
         self.commits += 1
 
     async def rollback(self) -> None:
         self.rollbacks += 1
+
+    async def execute(self, statement: Any) -> Any:
+        # El CAS de A2.7 solo mira `rowcount`: 1 fila = esta escritura ganó la carrera.
+        self.executed += 1
+        return SimpleNamespace(rowcount=1)
 
 
 def _db() -> AsyncSession:
@@ -174,14 +180,17 @@ def _audio(**fields: Any) -> Audio:
 
 
 def _attempt(**fields: Any) -> IngestionAttempt:
+    """Fila ORM transitoria, sin sesión y sin PG: `cas_transition` escribe su estado con
+    `set_committed_value`, que solo existe sobre una instancia SQLAlchemy de verdad."""
     values: dict[str, Any] = {
         "id": uuid.uuid4(),
+        "user_id": uuid.uuid4(),
         "status": "awaiting_upload",
         "received_bytes": 0,
         "expected_bytes": None,
     }
     values.update(fields)
-    return cast(IngestionAttempt, SimpleNamespace(**values))
+    return IngestionAttempt(**values)
 
 
 def _patch_no_duplicates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -377,6 +386,23 @@ async def test_client_disconnect_cancels_attempt_and_cleans_up() -> None:
     assert attempt.status == "cancelled"
     assert sink.events == ["begin", "write", "discard"] and "admit" not in sink.events
     assert sink.retained == b""
+
+
+async def test_disconnect_after_the_commit_never_leaks_a_409() -> None:
+    # H3 (review del PR #65, corregido en A2.7): si el intento ya hizo commit del
+    # transcript, la máquina rechaza el cancel; ese 409 es de una ruta de cleanup sin
+    # respuesta HTTP, así que se traga, no se commitea nada y el temporal igual se limpia.
+    sink = _Sink()
+    attempt = _attempt(status="transcript_committed_cleanup_pending")
+    db = _db()
+    request = _FakeRequest([b"RIFF"], fail_after=RuntimeError("conexión perdida"))
+
+    with pytest.raises(RuntimeError, match="conexión perdida"):
+        await _receive(request, sink, attempt=attempt, db=db)
+
+    assert attempt.status == "transcript_committed_cleanup_pending"  # unchanged
+    assert cast(_StubDb, db).commits == 0
+    assert sink.events == ["begin", "write", "discard"]
 
 
 def test_effective_limit_follows_published_capabilities(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -212,6 +212,22 @@ def test_self_transition_is_an_accepted_noop(status: str) -> None:
     assert row.error_code == "kept"  # a no-op never clears a persisted code
 
 
+@pytest.mark.parametrize(
+    ("final", "code"),
+    [
+        ("rejected", "no_usable_text"),
+        ("requires_reupload", "technical_loss"),
+        ("cancelled", "upload_expired"),
+    ],
+)
+def test_self_transition_never_rewrites_a_persisted_error_code(final: str, code: str) -> None:
+    # PR #65 review finding, fixed in A2.7: a no-op must not replace the original cause
+    # of an already-final attempt, or the history of its loss would be falsified.
+    row = attempt(final, error_code=code)
+    assert transition(row, final, error_code="otro") == final
+    assert row.error_code == code
+
+
 # --- E. Cleanup is independent and never success ---------------------------------------
 
 
@@ -347,9 +363,12 @@ def test_partial_when_a_required_stage_is_terminal_failed_or_cancelled() -> None
     )
 
 
-def test_empty_required_stages_with_transcript_reads_ready() -> None:
-    # Documented edge: nothing required and a usable transcript ⇒ nothing is owed.
-    assert aggregate("succeeded", required=(), stages={}) == "ready"
+def test_empty_required_stages_are_a_programming_error() -> None:
+    # `all([])` is True: without this guard an empty requirement would read `ready` and
+    # silently hide owed work (A2.7 review improvement). The schema defaults
+    # `audios.required_stages` to '{index}', so an empty list cannot come from the data.
+    with pytest.raises(ValueError, match="required_stages"):
+        aggregate("succeeded", required=(), stages={})
 
 
 # --- I. Drift between the machine and the DB CHECKs of migration 0002 ------------------
@@ -388,3 +407,21 @@ def test_stage_states_match_the_processing_runs_checks() -> None:
         "technical_loss",
         "explicit_cancel",
     }
+
+
+def test_tombstone_rewrites_exactly_the_active_states() -> None:
+    # The DELETE tombstone (A2.7) is stronger than cancel — it may end a committed
+    # attempt — but never touches a final state or its `error_code`.
+    for status in ACTIVE_INGESTION_STATES:
+        assert state_machine.tombstone_target(status) == "cancelled"
+    for status in TERMINAL_ATTEMPT_STATES:
+        assert state_machine.tombstone_target(status) is None
+    assert state_machine.tombstone_target("nonsense") is None  # fails closed
+
+
+def test_tombstone_exit_stays_a_legal_status_and_final() -> None:
+    # Drift guard for the A2.7 constant: whatever cancel and the tombstone write must
+    # remain a status the DB CHECK admits and an absorbing final of the machine.
+    assert state_machine.TOMBSTONE_EXIT in INGESTION_STATES
+    assert state_machine.TOMBSTONE_EXIT in TERMINAL_ATTEMPT_STATES
+    assert state_machine.tombstone_target("transcribing") == state_machine.TOMBSTONE_EXIT

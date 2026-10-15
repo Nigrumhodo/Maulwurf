@@ -104,6 +104,18 @@ def variant_hash_mismatch() -> ApiError:
     )
 
 
+def google_deletion_unavailable() -> ApiError:
+    # A2.7: en S2 no puede existir ningún evento remoto (`calendar_events` y
+    # `google_remote_operations` son S3/F2), así que la opción explícita del contrato
+    # (DISENO §3.5) se congela con un 409 honesto: nunca se comunica que se pidió un
+    # borrado remoto que nadie va a ejecutar.
+    return ApiError(
+        409,
+        "google_deletion_unavailable",
+        "La eliminación remota de eventos de Google aún no está disponible.",
+    )
+
+
 async def _handle_validation(_: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, RequestValidationError)  # noqa: S101 - registrado solo para ella
     # Solo ubicación y mensaje por campo: nunca el valor recibido (puede traer PII).

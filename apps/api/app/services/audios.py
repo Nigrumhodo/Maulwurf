@@ -9,20 +9,44 @@ consume el token, así que o se reserva y consume todo, o no queda nada.
 Cuota (`429`) y slot (`503`) son mecanismos condicionales (A2.3/decisión D4): DISENO §3.1
 exige `Retry-After`, pero el acta F0.1 mantiene D4 `blocked`, así que **sin límite publicado
 no se limita**. No se inventan numéricos antes de que F0 los establezca.
+
+Cancelación, tombstone y fencing (A2.7, S2.md §A2.7): la máquina de estados decide y la BD
+garantiza. `cas_transition` es el primitivo compare-and-swap que `uploads._abort_disconnected`
+y el endpoint de cancelación comparten; `cancel_attempt` cancela E invalida el fencing en UNA
+sentencia condicional (estilo `ingest/lease.py`), y `tombstone_audio` purga todos los
+derivados de la clase en una sola transacción.
 """
 
 import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from typing import Any, cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import CursorResult, Result, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.config import settings
-from app.core.errors import ApiError, validation_failed
-from app.models import Audio, IngestionAttempt, VariantConfirmationToken
+from app.core.errors import ApiError, not_found, validation_failed
+from app.models import (
+    Audio,
+    Chunk,
+    ChunkSegment,
+    Conversation,
+    Embedding,
+    IngestionAttempt,
+    Message,
+    MessageSource,
+    OutboxEvent,
+    ProcessingRun,
+    Segment,
+    Transcript,
+    VariantConfirmationToken,
+)
 from app.models.ingestion import ACTIVE_INGESTION_STATES
+from app.services import state_machine
+from app.services.state_machine import TOMBSTONE_EXIT
 
 # Proveedores que el aviso de privacidad declara al usuario (se registran con el intento).
 DECLARED_PROVIDERS = {"asr": "nvidia-riva/whisper-large-v3"}
@@ -62,6 +86,13 @@ def token_hash(presented: str) -> str:
 
 def _retry_after() -> dict[str, str]:
     return {"Retry-After": str(RETRY_AFTER_SECONDS)}
+
+
+def _rowcount(result: Result[Any]) -> int:
+    # `Session.execute` está tipeado como `Result`, pero un DML devuelve `CursorResult`
+    # con `rowcount` en runtime (A2.7): aquí se decide la carrera por filas afectadas,
+    # nunca por el estado que el objeto en memoria cree tener.
+    return cast("CursorResult[Any]", result).rowcount
 
 
 async def check_quota(db: AsyncSession, user_id: uuid.UUID) -> None:
@@ -223,4 +254,284 @@ async def create_reservation(
         audio_id=audio.id,
         attempt_id=attempt.id,
         upload_expires_at=upload_expires_at,
+    )
+
+
+# --- A2.7: cancelación, tombstone y fencing ---------------------------------------------
+
+
+async def cas_transition(
+    db: AsyncSession,
+    *,
+    attempt: IngestionAttempt,
+    target: str,
+    error_code: str | None = None,
+) -> None:
+    """Valida con la máquina y DESPUÉS gana la escritura o la pierde honestamente (H2).
+
+    La máquina de estados valida el estado en memoria; el `UPDATE` condicional garantiza
+    que la fila siga en ese estado al escribir, así una carrera (commit de `ingest`,
+    otro request) nunca se pisa. Cero filas = otro escritor movió el intento primero →
+    el mismo `409 invalid_transition` que levantaría la máquina.
+    """
+    state_machine.ensure_transition(attempt.status, target)
+    values: dict[str, object] = {"status": target}
+    if error_code is not None:
+        values["error_code"] = error_code
+    result = await db.execute(
+        update(IngestionAttempt)
+        .where(
+            IngestionAttempt.id == attempt.id,
+            IngestionAttempt.user_id == attempt.user_id,
+            IngestionAttempt.status == attempt.status,
+        )
+        # `synchronize_session=False`: la fila manda y el objeto se sincroniza a mano
+        # debajo; que la sesión re-aplique la sentencia convertiría el commit en una
+        # escritura INCONDICIONAL capaz de deshacer el CAS que acaba de ganar.
+        .execution_options(synchronize_session=False)
+        .values(**values)
+    )
+    if _rowcount(result) != 1:
+        raise state_machine.invalid_transition(attempt.status, target)
+    # Estado comprometido de la fila, no atributo sucio: un assign marcaría el objeto
+    # como modificado y el `commit()` posterior emitiría un segundo `UPDATE` sin las
+    # condiciones del CAS (H2 volvería a abrir la carrera que acaba de cerrarse).
+    set_committed_value(attempt, "status", target)
+    if error_code is not None:
+        set_committed_value(attempt, "error_code", error_code)
+
+
+async def cancel_attempt(db: AsyncSession, *, attempt: IngestionAttempt) -> str:
+    """Cancelación explícita (A2.7): cancela E invalida el fencing en UNA sentencia.
+
+    Idempotente sobre un intento ya `cancelled` (no-op real: ni estado, ni `error_code`,
+    ni token). Tras el commit —o en cualquier estado final— la máquina responde `409
+    invalid_transition` y el transcript nunca se destruye (DISENO §3.5). `ingest` ve el
+    token nuevo en su próximo heartbeat, mata el subprocess y verifica la limpieza.
+    """
+    if attempt.status == TOMBSTONE_EXIT:
+        return TOMBSTONE_EXIT
+    # Autoridad única: desde `transcript_committed_cleanup_pending` o desde un final, la
+    # máquina levanta el 409 con ambos estados para el cliente.
+    state_machine.ensure_transition(attempt.status, TOMBSTONE_EXIT)
+    expected = attempt.status
+    row = (
+        await db.execute(
+            update(IngestionAttempt)
+            .where(
+                IngestionAttempt.id == attempt.id,
+                IngestionAttempt.user_id == attempt.user_id,
+                IngestionAttempt.status == expected,
+            )
+            # `synchronize_session=False`: la fila manda y el objeto se sincroniza con el
+            # `RETURNING`; que la sesión re-aplique la sentencia convertiría el commit en
+            # un `UPDATE` incondicional con el token leído antes de la carrera.
+            .execution_options(synchronize_session=False)
+            .values(
+                status=TOMBSTONE_EXIT,
+                fencing_token=IngestionAttempt.fencing_token + 1,
+                lease_expires_at=None,
+            )
+            .returning(
+                IngestionAttempt.status,
+                IngestionAttempt.fencing_token,
+                IngestionAttempt.lease_expires_at,
+            )
+        )
+    ).one_or_none()
+    if row is None:
+        # El intento se movió mientras escribíamos: la verdad la tiene la fila.
+        await db.refresh(attempt, ("status",))
+        if attempt.status == TOMBSTONE_EXIT:
+            return TOMBSTONE_EXIT
+        raise state_machine.invalid_transition(attempt.status, TOMBSTONE_EXIT)
+    # El token nuevo lo calcula la BD (`fencing_token + 1`), no este proceso: se registra
+    # como estado comprometido para que el commit no emita un segundo `UPDATE` con un
+    # valor leído antes de la carrera —ese eco bajaría el token y reabriría la valla.
+    status, fencing_token, lease_expires_at = row
+    set_committed_value(attempt, "status", status)
+    set_committed_value(attempt, "fencing_token", fencing_token)
+    set_committed_value(attempt, "lease_expires_at", lease_expires_at)
+    return TOMBSTONE_EXIT
+
+
+@dataclass(frozen=True)
+class TombstoneResult:
+    """Conteos por tabla de una transacción de tombstone: alimentan el `202` trazable."""
+
+    attempts_cancelled: int
+    outbox_events_skipped: int
+    processing_runs_cancelled: int
+    message_sources_deleted: int
+    messages_tombstoned: int
+    embeddings_deleted: int
+    chunk_segments_deleted: int
+    chunks_deleted: int
+    segments_deleted: int
+    transcripts_deleted: int
+
+
+async def tombstone_audio(
+    db: AsyncSession, *, user_id: uuid.UUID, audio: Audio
+) -> TombstoneResult:
+    """Tombstone de una clase (A2.7): cancela lo activo y purga cada derivado.
+
+    Una sola transacción: `deleted_at` primero para que nadie la lea como viva; invalida
+    el fencing de los intentos activos (un commit tardío falla su chequeo de token);
+    outbox y runs se detienen; la purga dura va en orden de FK con conteos verificables.
+    Los eventos de Google existentes se conservan por defecto (DISENO §3.5): borrarlos
+    exige la opción explícita y `google_remote_operations`, que son S3/F2.
+    """
+    now = datetime.now(UTC)
+    # El guardia del router es una LECTURA (TOCTOU): esta sentencia condicional es la que
+    # gana o pierde la carrera contra otro `DELETE` concurrente. El candado de `audios` se
+    # toma primero, el mismo orden que usa cualquier otro escritor de esta transacción
+    # (`admit_identity`, `_restore_identity`: audios → ingestion_attempts), para que una
+    # subida o un segundo DELETE esperen en lugar de cruzar candados.
+    marked = await db.execute(
+        update(Audio)
+        .where(
+            Audio.user_id == user_id,
+            Audio.id == audio.id,
+            Audio.deleted_at.is_(None),
+        )
+        .execution_options(synchronize_session=False)
+        # `active_transcript_version`: nadie trate una versión purgada como la activa
+        # (retry/reupload la leen, A2.8).
+        .values(deleted_at=now, active_transcript_version=None)
+    )
+    if _rowcount(marked) != 1:
+        raise not_found()  # otro DELETE llegó primero (ADR-0006: «ya no existe» = 404)
+    set_committed_value(audio, "deleted_at", now)
+    set_committed_value(audio, "active_transcript_version", None)
+
+    cancelled = await db.execute(
+        update(IngestionAttempt)
+        .where(
+            IngestionAttempt.user_id == user_id,
+            IngestionAttempt.audio_id == audio.id,
+            IngestionAttempt.status.in_(ACTIVE_INGESTION_STATES),
+        )
+        .execution_options(synchronize_session=False)
+        .values(
+            status=TOMBSTONE_EXIT,
+            fencing_token=IngestionAttempt.fencing_token + 1,
+            lease_expires_at=None,
+        )
+    )
+    skipped = await db.execute(
+        update(OutboxEvent)
+        .where(
+            OutboxEvent.user_id == user_id,
+            OutboxEvent.resource_type == "audio",
+            OutboxEvent.resource_id == audio.id,
+            OutboxEvent.status == "pending",
+        )
+        # `skipped` y nunca `enabled=false`: el CHECK `cleanup_gate` solo admite eventos
+        # index/analyze deshabilitados con `blocked_reason='cleanup_pending'`, que sería
+        # mentira —esta clase no espera limpieza, está muerta—.
+        .execution_options(synchronize_session=False)
+        .values(status="skipped")
+    )
+    stopped = await db.execute(
+        update(ProcessingRun)
+        .where(
+            ProcessingRun.user_id == user_id,
+            ProcessingRun.audio_id == audio.id,
+            ProcessingRun.status.in_(("pending", "running")),
+        )
+        .execution_options(synchronize_session=False)
+        .values(status="cancelled", finished_at=datetime.now(UTC))
+    )
+
+    transcript_ids = select(Transcript.id).where(
+        Transcript.user_id == user_id, Transcript.audio_id == audio.id
+    )
+    segment_ids = select(Segment.id).where(
+        Segment.user_id == user_id, Segment.transcript_id.in_(transcript_ids)
+    )
+    chunk_ids = select(Chunk.id).where(
+        Chunk.user_id == user_id, Chunk.audio_id == audio.id
+    )
+
+    # Citas primero: `message_sources` tiene FK hacia transcript/chunk/segment. El
+    # `RETURNING` da los mensajes citados y el conteo en la misma lectura (el resultado
+    # de un DML con `returning` no expone `rowcount`).
+    source_rows = (
+        await db.execute(
+            delete(MessageSource)
+            .where(
+                MessageSource.user_id == user_id,
+                or_(
+                    MessageSource.audio_id == audio.id,
+                    MessageSource.transcript_id.in_(transcript_ids),
+                    MessageSource.chunk_id.in_(chunk_ids),
+                    MessageSource.segment_id.in_(segment_ids),
+                ),
+            )
+            .returning(MessageSource.message_id)
+        )
+    ).all()
+    cited_message_ids = [row[0] for row in source_rows]
+
+    # Content-free tombstone (M2): «invalidated nunca deja texto recuperable». La
+    # procedencia no se puede separar con seguridad, así que el mensaje que citaba estas
+    # fuentes —y los de las conversaciones `mode='class'` de esta clase— queda vacío.
+    conditions = [
+        Message.conversation_id.in_(
+            select(Conversation.id).where(
+                Conversation.user_id == user_id,
+                Conversation.mode == "class",
+                Conversation.audio_id == audio.id,
+            )
+        )
+    ]
+    if cited_message_ids:
+        conditions.append(Message.id.in_(cited_message_ids))
+    messages = await db.execute(
+        update(Message)
+        .where(Message.user_id == user_id, or_(*conditions))
+        .execution_options(synchronize_session=False)
+        .values(content="", citas=[])
+    )
+
+    # Purga dura en orden de FK (embeddings → chunks → segments → transcripts); el orden
+    # explícito, en vez de la cascada, es lo que hace verificables los conteos.
+    embeddings = await db.execute(
+        delete(Embedding)
+        .where(Embedding.user_id == user_id, Embedding.chunk_id.in_(chunk_ids))
+        .execution_options(synchronize_session=False)
+    )
+    chunk_links = await db.execute(
+        delete(ChunkSegment)
+        .where(ChunkSegment.user_id == user_id, ChunkSegment.chunk_id.in_(chunk_ids))
+        .execution_options(synchronize_session=False)
+    )
+    chunks = await db.execute(
+        delete(Chunk)
+        .where(Chunk.user_id == user_id, Chunk.audio_id == audio.id)
+        .execution_options(synchronize_session=False)
+    )
+    segments = await db.execute(
+        delete(Segment)
+        .where(Segment.user_id == user_id, Segment.transcript_id.in_(transcript_ids))
+        .execution_options(synchronize_session=False)
+    )
+    transcripts = await db.execute(
+        delete(Transcript)
+        .where(Transcript.user_id == user_id, Transcript.audio_id == audio.id)
+        .execution_options(synchronize_session=False)
+    )
+
+    return TombstoneResult(
+        attempts_cancelled=_rowcount(cancelled) or 0,
+        outbox_events_skipped=_rowcount(skipped) or 0,
+        processing_runs_cancelled=_rowcount(stopped) or 0,
+        message_sources_deleted=len(source_rows),
+        messages_tombstoned=_rowcount(messages) or 0,
+        embeddings_deleted=_rowcount(embeddings) or 0,
+        chunk_segments_deleted=_rowcount(chunk_links) or 0,
+        chunks_deleted=_rowcount(chunks) or 0,
+        segments_deleted=_rowcount(segments) or 0,
+        transcripts_deleted=_rowcount(transcripts) or 0,
     )
