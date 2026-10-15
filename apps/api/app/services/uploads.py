@@ -40,7 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.errors import ApiError, duplicate_variant, variant_hash_mismatch
 from app.models import Audio, IngestionAttempt
-from app.services import dedupe
+from app.services import dedupe, state_machine
 from app.services.audios import RETRY_AFTER_SECONDS
 from app.services.tenant import get_owned
 
@@ -194,7 +194,8 @@ async def _abort_disconnected(
     # que es lo que exige el contrato («desconectar cancela y limpia el intento»).
     with suppress(SinkError):
         await sink.discard()
-    attempt.status = "cancelled"
+    # A2.6: the typed destination of a mid-upload disconnection; the machine owns the write.
+    state_machine.transition(attempt, "cancelled")
     await db.commit()
 
 
@@ -400,8 +401,8 @@ async def receive_content(
     confirmed = await dedupe.find_confirmed_variant(db, user_id=user_id, audio_id=audio_id)
     if confirmed is not None and not dedupe.verify_variant_hash(confirmed, sha256_hex):
         await _discard_verified(sink)
-        attempt.status = "rejected"
-        attempt.error_code = "variant_hash_mismatch"
+        # A2.6: typed final destination, validated by the state machine (still awaiting_upload).
+        state_machine.transition(attempt, "rejected", error_code="variant_hash_mismatch")
         await db.commit()
         raise variant_hash_mismatch()
 
