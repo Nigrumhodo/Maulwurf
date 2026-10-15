@@ -19,11 +19,17 @@ cancela un intento pre-commit invalidando su fencing (`202`; `409 invalid_transi
 el commit o en un final), y `DELETE /audios/{id}` tombstonea la clase purgando todos sus
 derivados en la misma transacción (`202` trazable). El router solo resuelve ownership y
 monta la respuesta: la máquina de estados decide y el SQL vive en `services/audios` (ADR-0006).
+
+Retry vs reupload (A2.8, S2.md §A2.8): `POST /audios/{id}/retry` (`202`) reencola etapas de
+texto sobre un transcript utilizable con runs idempotentes, y `POST /audios/{id}/reupload`
+(`201`) abre una sesión efímera nueva sobre la MISMA clase cuando no hay texto utilizable.
+La matriz de conflictos (`409 transcript_unavailable|invalid_transition`) y el SQL viven en
+`services/runs` (ADR-0006).
 """
 
 import uuid
 from datetime import UTC, date, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, Header, Query, Request, Response
 from fastapi.responses import JSONResponse
@@ -48,6 +54,11 @@ from app.services.audios import (
     create_reservation,
     reserve_slot,
     tombstone_audio,
+)
+from app.services.runs import (
+    ensure_reupload_allowed,
+    open_reupload,
+    request_retry,
 )
 from app.services.tenant import get_owned
 from app.services.uploads import (
@@ -97,6 +108,49 @@ class AudioCreated(BaseModel):
     upload_url: str
     upload_expires_at: datetime
     outcome: str = "new"
+
+
+class AudioRetry(BaseModel):
+    """Body del `POST /audios/{id}/retry` (A2.8): etapas de texto sobre un transcript.
+
+    La forma se valida aquí (`422 validation_failed`): al menos una etapa, sin duplicados y
+    solo `index`/`analyze`. Si el transcript no existe, está obsoleto o la etapa no se debe,
+    `services/runs` responde `409` con su código tipado.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    stages: list[Literal["index", "analyze"]] = Field(min_length=1)
+    transcript_version: int = Field(ge=1)
+
+    @field_validator("stages")
+    @classmethod
+    def _no_duplicates(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("etapas duplicadas")
+        return value
+
+
+class RetryStageAccepted(BaseModel):
+    stage: str
+    run_id: uuid.UUID
+    status: str
+
+
+class RetryAccepted(BaseModel):
+    audio_id: uuid.UUID
+    transcript_version: int
+    runs: list[RetryStageAccepted]
+
+
+class ReuploadCreated(BaseModel):
+    """`201` del reupload (A2.8): misma clase, nueva sesión efímera de subida."""
+
+    audio_id: uuid.UUID
+    attempt_id: uuid.UUID
+    upload_url: str
+    upload_expires_at: datetime
+    outcome: str = "reupload"
 
 
 class AudioDelete(BaseModel):
@@ -370,3 +424,97 @@ async def delete_audio(
             "calendario y pueden borrarse allí."
         ),
     )
+
+
+@router.post(
+    "/audios/{audio_id}/retry",
+    status_code=202,
+    responses={
+        202: {"description": "Etapas encoladas (idempotente: un run reutilizado no duplica)"},
+        401: {"description": "Sin sesión (auth_required)"},
+        403: {"description": "CSRF u Origin inválido (csrf_invalid)"},
+        404: {"description": "Audio inexistente, ajeno o tombstoneado (not_found)"},
+        409: {"description": "transcript_unavailable | invalid_transition"},
+        422: {"description": "validation_failed: stages vacío, duplicado o desconocido"},
+    },
+)
+async def retry_audio(
+    audio_id: uuid.UUID, body: AudioRetry, session: MutationSession, db: DbSession
+) -> RetryAccepted:
+    """Reintentar etapas de texto (A2.8, S2.md §A2.8): solo sobre transcript utilizable.
+
+    `202` cuando cada etapa queda como run `pending` (creado, reseteado o ya en vuelo),
+    `409 transcript_unavailable` sin texto usable u obsoleto, y `409 invalid_transition`
+    si la etapa no se debe, ya tuvo éxito o el intento sigue activo. Los runs son
+    idempotentes por clave única; el router no hace SQL (ADR-0006).
+    """
+    audio = await get_owned(db, Audio, session.user_id, audio_id, lock="share")
+    if audio is None or audio.deleted_at is not None:
+        raise not_found()
+    outcome = await request_retry(
+        db,
+        user_id=session.user_id,
+        audio=audio,
+        stages=body.stages,
+        transcript_version=body.transcript_version,
+    )
+    # `get_session` never commits (`core/db.py`): without this the runs and their outbox
+    # events would live only in this request's session and vanish on close. Flat values,
+    # so they are safe to read after the commit.
+    accepted = RetryAccepted(
+        audio_id=outcome.audio_id,
+        transcript_version=outcome.transcript_version,
+        runs=[
+            RetryStageAccepted(stage=run.stage, run_id=run.run_id, status=run.status)
+            for run in outcome.runs
+        ],
+    )
+    await db.commit()
+    return accepted
+
+
+@router.post(
+    "/audios/{audio_id}/reupload",
+    status_code=201,
+    responses={
+        201: {"description": "Nueva sesión efímera de subida para la misma clase"},
+        401: {"description": "Sin sesión (auth_required)"},
+        403: {"description": "CSRF u Origin inválido (csrf_invalid)"},
+        404: {"description": "Audio inexistente, ajeno o tombstoneado (not_found)"},
+        409: {"description": "invalid_transition: transcript utilizable o intento activo"},
+        429: {"description": "Cuota por usuario (rate_limited), con Retry-After"},
+        503: {"description": "Sin slot de ingesta (capacity_unavailable), con Retry-After"},
+    },
+)
+async def reupload_audio(
+    audio_id: uuid.UUID, response: Response, session: MutationSession, db: DbSession
+) -> ReuploadCreated:
+    """Subir de nuevo (A2.8): nueva sesión efímera sobre la MISMA identidad de clase.
+
+    Solo existe SIN transcript utilizable y sin intento activo (si no, `409
+    invalid_transition`). Copia el snapshot de consentimiento del intento anterior y limpia
+    `sha256`; cuota y slot se comprueban como en `POST /audios` antes de reservar nada.
+    `lock="update"` serializa reuploads concurrentes de la misma clase: el segundo ve el
+    intento que el primero acaba de abrir y recibe su `409` en lugar de un IntegrityError.
+    """
+    audio = await get_owned(db, Audio, session.user_id, audio_id, lock="update")
+    if audio is None or audio.deleted_at is not None:
+        raise not_found()
+    previous = await ensure_reupload_allowed(db, user_id=session.user_id, audio=audio)
+    # Cuota y slot, como en `POST /audios` y el cancel: un rechazo no reserva capacidad.
+    await check_quota(db, session.user_id)
+    await reserve_slot(db)
+    reservation = await open_reupload(
+        db, user_id=session.user_id, audio=audio, previous=previous
+    )
+    upload_url = f"/audios/{reservation.audio_id}/content?attempt_id={reservation.attempt_id}"
+    # Valores leídos antes del commit: los atributos ORM expiran al confirmar.
+    created = ReuploadCreated(
+        audio_id=reservation.audio_id,
+        attempt_id=reservation.attempt_id,
+        upload_url=upload_url,
+        upload_expires_at=reservation.upload_expires_at,
+    )
+    await db.commit()
+    response.headers["Location"] = upload_url
+    return created
