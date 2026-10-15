@@ -1,19 +1,23 @@
-"""Dedupe en el `PUT`: identidad exacta, variante y token de confirmación (A2.4, S2.md §A2.4).
+"""Dedupe in the `PUT`: exact identity, variants, and the confirmation token (A2.4/A2.5).
 
-Toda la SQL de decisión de duplicados vive aquí y no en el router (guardia ADR-0006). La
-identidad es la de M2: SHA-256 + idioma + materia + fecha + zona horaria (título y profesor
-no participan). La semántica completa de A2.5 (concurrencia y `U-S2-AN-02`) sigue abierta;
-este módulo entrega el mínimo que exige A2.4:
+Normative source: S2.md §A2.5. All duplicate-decision SQL lives here and not in the router
+(ADR-0006 guard). The identity is M2's: SHA-256 + language + subject + class date + time
+zone (title and teacher never participate). Complete A2.5 semantics, unit-covered by
+`tests/unit/test_dedupe_identity.py`:
 
-- lookup exacto/variante filtrado por tenant, con `exclude_audio_id` para que un reintento
-  de la propia reserva nunca se confunda consigo mismo;
-- token opaco de un solo uso: en BD solo vive su SHA-256, jamás el plano;
-- absorción de la reserva provisional (M2: «limpiar y liberar la reserva») antes de
-  cualquier respuesta `200/409`;
-- escritura de identidad con convergencia: el índice único `audios_dedupe_identity` convierte
-  dos uploads exactos simultáneos en `duplicate_exact` hacia la clase canónica.
+- exact/variant lookups filtered by tenant, with `exclude_audio_id` so a retry of the same
+  reservation never matches itself;
+- opaque single-use token: only its SHA-256 lives in the DB, never the plaintext;
+- absorption of the provisional reservation (M2: «clean up and release the reservation»)
+  before any `200/409` response;
+- identity writes converge: the `audios_dedupe_identity` unique index turns two simultaneous
+  exact uploads into `duplicate_exact` toward the canonical;
+- `is_late_arrival` settles the remaining tie: two simultaneous uploads with the same hash and
+  DIFFERENT contexts can both miss the pre-commit lookups and the unique index does not collide
+  across contexts (S2.md §A2.5 review finding 2026-10-11), so `services/uploads.py` re-checks
+  after committing its identity and the late arrival yields to the older reservation.
 
-El orden de pasos (limpiar → decidir → commit → admitir) lo decide `services/uploads.py`.
+The step order (clean → decide → commit → admit) is owned by `services/uploads.py`.
 """
 
 import hashlib
@@ -62,6 +66,25 @@ def identity_of(audio: Audio) -> Identity:
         class_date=audio.class_date,
         class_timezone=audio.class_timezone,
     )
+
+
+def _precedence(audio: Audio) -> tuple[datetime, uuid.UUID]:
+    """Precedence key between two classes sharing a hash with different contexts."""
+    created = audio.created_at
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    return (created, audio.id)
+
+
+def is_late_arrival(rival: Audio, own: Audio) -> bool:
+    """True when `own` must yield to `rival`: the older reservation wins, ties broken by id.
+
+    Deterministic in both directions, so a concurrent-variant race (same hash, different
+    contexts, both uncommitted during each other's lookups) resolves toward exactly ONE
+    canonical: the loser cleans up and hands its discarded context back as a confirmable
+    variant (S2.md §A2.5 review finding 2026-10-11).
+    """
+    return _precedence(own) > _precedence(rival)
 
 
 def _metadata_digest(identity: Identity) -> str:
