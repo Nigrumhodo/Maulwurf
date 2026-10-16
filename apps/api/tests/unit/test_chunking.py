@@ -271,6 +271,26 @@ def test_oversized_split_stays_within_a_time_budget() -> None:
     assert best < 3.0
 
 
+def test_cjk_without_punctuation_splits_in_bounded_time() -> None:
+    # Whitespace-free CJK (common in ASR output) used to hit a quadratic search path
+    # (~5 s for 100k chars). The bounded search keeps it well under a second; the bound is
+    # generous to stay stable on slower CI hosts (best-of-three runs).
+    text = "中" * 100_000
+    segment = _segment(0, text, 0)
+
+    best = float("inf")
+    for _ in range(3):
+        started = time.perf_counter()
+        chunks = _run(text, [segment])
+        best = min(best, time.perf_counter() - started)
+
+    assert chunks[0].char_start == 0
+    assert chunks[-1].char_end == len(text)
+    assert all(chunk.token_count <= TARGET_TOKENS for chunk in chunks)
+    assert all(chunk.content == text[chunk.char_start : chunk.char_end] for chunk in chunks)
+    assert best < 2.0
+
+
 def test_same_input_same_output() -> None:
     text, segments = _build(["Uno. Dos. Tres. Cuatro."])
     audio_id = uuid4()
@@ -323,6 +343,11 @@ def test_zero_duration_segments_are_accepted() -> None:
 
 def test_empty_transcript_returns_no_chunks() -> None:
     assert _run("", []) == []
+
+
+def test_whitespace_only_transcript_returns_no_chunks() -> None:
+    for text in ("   ", "\n\t \n", " \u00a0 "):
+        assert _run(text, [_segment(0, text, 0)]) == []
 
 
 def test_invalid_segments_raise() -> None:

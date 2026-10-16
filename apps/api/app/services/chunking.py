@@ -146,7 +146,8 @@ def chunk_segments(
         raise ValueError("target_tokens debe ser >= 1")
     if overlap_tokens < 0:
         raise ValueError("overlap_tokens debe ser >= 0")
-    if not transcript_text:
+    # A whitespace-only transcript has no indexable content; never emit a blank chunk.
+    if not transcript_text.strip():
         return []
     if not segments:
         raise ValueError("se requiere al menos un segmento cuando hay texto")
@@ -268,6 +269,37 @@ def _last_whitespace(text: str, start: int, end: int) -> int:
     return -1
 
 
+def _max_prefix_end(
+    text: str,
+    position: int,
+    end: int,
+    target_tokens: int,
+    count_tokens: TokenCounter,
+) -> int:
+    """Largest ``m`` in ``[position, end]`` with ``count_tokens(text[position:m]) <= target``.
+
+    The search window grows exponentially from ``position`` before the binary search, so it
+    never measures the whole remaining text on every iteration. A token is at least one
+    character, so the exponential growth also adapts to ``chars/token`` (1 for CJK, ~5 for
+    Spanish) without a hard-coded factor; a sentence with no spaces and no punctuation thus
+    stays near-linear instead of quadratic.
+    """
+    low = position
+    high = position + 1
+    while high < end and count_tokens(text[position:high]) <= target_tokens:
+        low = high
+        high = min(position + (high - position) * 2, end)
+    if count_tokens(text[position:high]) <= target_tokens:
+        return high
+    while low + 1 < high:
+        middle = (low + high) // 2
+        if count_tokens(text[position:middle]) <= target_tokens:
+            low = middle
+        else:
+            high = middle
+    return low
+
+
 def _split_oversized(
     *,
     text: str,
@@ -286,20 +318,14 @@ def _split_oversized(
     units: list[_Unit] = []
     position = start
     while position < end:
-        remaining = count_tokens(text[position:end])
-        if remaining <= target_tokens:
-            units.append(_Unit(offset + position, offset + end, remaining, segment_index))
+        split = _max_prefix_end(text, position, end, target_tokens, count_tokens)
+        if split >= end:
+            units.append(
+                _Unit(
+                    offset + position, offset + end, count_tokens(text[position:end]), segment_index
+                )
+            )
             break
-        low, high = position + 1, end
-        best = position + 1
-        while low <= high:
-            middle = (low + high) // 2
-            if count_tokens(text[position:middle]) <= target_tokens:
-                best = middle
-                low = middle + 1
-            else:
-                high = middle - 1
-        split = best
         whitespace = _last_whitespace(text, position, split)
         if whitespace > position:
             split = whitespace + 1
