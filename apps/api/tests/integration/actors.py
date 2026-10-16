@@ -225,6 +225,67 @@ async def make_segment(db: AsyncSession, actor: Actor) -> Segment:
     return segment
 
 
+async def make_timed_segment(
+    db: AsyncSession,
+    actor: Actor,
+    *,
+    transcript_id: uuid.UUID,
+    ordinal: int,
+    t_start: float | None,
+    t_end: float | None,
+    text: str | None = None,
+) -> Segment:
+    """Segment of the actor's transcript with measured times (A2.9 SRT export tests).
+
+    The CHECK `time_range` (A2.1) only accepts both times NULL or both set with
+    `0 <= t_start < t_end`, so callers cannot persist a half-timed segment.
+    """
+    segment = Segment(
+        user_id=actor.user_id,
+        transcript_id=transcript_id,
+        ordinal=ordinal,
+        text=text or f"segmento {ordinal}",
+        char_start=0,
+        char_end=1,
+        t_start=t_start,
+        t_end=t_end,
+    )
+    db.add(segment)
+    await db.flush()
+    return segment
+
+
+async def make_class_with_timed_segments(
+    db: AsyncSession,
+    actor: Actor,
+    *,
+    precision: str = "segment",
+    duration_seconds: float | None = 10.0,
+    times: tuple[tuple[float | None, float | None], ...] = ((0.0, 5.0), (5.0, 10.0)),
+) -> tuple[Audio, IngestionAttempt, Transcript, list[Segment]]:
+    """Class with a usable transcript and ordered, measured segments (A2.9).
+
+    Returns the segments too, so a test can ask for one by id (`?segment=`). `precision`
+    and `duration_seconds` are the two levers the SRT rule reads (A2.9/exports).
+    """
+    audio, attempt, transcript = await make_class_with_transcript(db, actor)
+    transcript.timestamp_precision = precision
+    audio.duration_seconds = duration_seconds
+    segments = [
+        await make_timed_segment(
+            db,
+            actor,
+            transcript_id=transcript.id,
+            ordinal=ordinal,
+            t_start=start,
+            t_end=end,
+        )
+        for ordinal, (start, end) in enumerate(times, start=1)
+    ]
+    await db.flush()
+    return audio, attempt, transcript, segments
+
+
 async def make_chunk(db: AsyncSession, actor: Actor) -> Chunk:
     transcript = await make_transcript(db, actor)
     chunk = Chunk(

@@ -25,6 +25,13 @@ stages over a usable transcript with idempotent runs, and `POST /audios/{id}/reu
 (`201`) opens a new ephemeral session on the SAME class when there is no usable text.
 The conflict matrix (`409 transcript_unavailable|invalid_transition`) and the SQL live in
 `services/runs` (ADR-0006).
+
+Library reads and exports (A2.9, S2.md §A2.9): `GET /audios` lists the tenant's live classes,
+`GET /audios/{id}` returns the derived per-stage states with their honest aggregate, `GET
+/audios/{id}/progress` streams DB snapshots as SSE (state, not increments) and `GET
+/audios/{id}/transcript.{txt,srt}` serve the durable text — TXT always with a transcript,
+SRT only when the measured times are usable (`409 srt_unavailable`). All SQL lives in
+`services/library` and the pure rules in `services/{exports,progress}` (ADR-0006).
 """
 
 import uuid
@@ -32,20 +39,22 @@ from datetime import UTC, date, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, Header, Query, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.config import settings
-from app.core.deps import DbSession, MutationSession
+from app.core.deps import CurrentSession, DbSession, MutationSession, ProgressSessions
 from app.core.errors import (
     ApiError,
     consent_required,
     google_deletion_unavailable,
     language_not_allowed,
     not_found,
+    srt_unavailable,
 )
 from app.core.validation import is_iana_timezone
 from app.models import Audio, IngestionAttempt, Subject
+from app.services import library, progress
 from app.services.audios import (
     allowed_languages,
     cancel_attempt,
@@ -55,6 +64,7 @@ from app.services.audios import (
     reserve_slot,
     tombstone_audio,
 )
+from app.services.exports import render_srt, render_txt, srt_exportable
 from app.services.runs import (
     ensure_reupload_allowed,
     open_reupload,
@@ -190,6 +200,139 @@ class TombstoneAccepted(BaseModel):
     purged: TombstonePurged
     google_events: str = "kept"
     notice: str
+
+
+class SubjectRefOut(BaseModel):
+    id: str
+    name: str
+    color: str
+
+
+class AttemptOut(BaseModel):
+    """Honest snapshot of the latest attempt: real bytes and fragments, no percentages."""
+
+    attempt_id: str
+    status: str
+    received_bytes: int
+    fragments_done: int | None
+    fragments_total: int | None
+    cleanup_status: str
+
+
+class AudioListItemOut(BaseModel):
+    id: str
+    subject: SubjectRefOut
+    title: str | None
+    class_date: date
+    class_timezone: str
+    language_code: str
+    duration_seconds: float | None
+    created_at: datetime
+    attempt: AttemptOut | None
+    stages: dict[str, str]
+    aggregate_status: str
+
+
+class AudioListOut(BaseModel):
+    items: list[AudioListItemOut]
+
+
+class TranscriptOut(BaseModel):
+    version: int
+    timestamp_precision: str
+    char_count: int
+
+
+class ExportsOut(BaseModel):
+    """Which exports the class can serve RIGHT NOW; `srt` is false unless times are valid."""
+
+    txt: bool
+    srt: bool
+
+
+class AudioDetailOut(BaseModel):
+    id: str
+    subject: SubjectRefOut
+    title: str | None
+    class_date: date
+    class_timezone: str
+    language_code: str
+    duration_seconds: float | None
+    created_at: datetime
+    attempt: AttemptOut | None
+    stages: dict[str, str]
+    aggregate_status: str
+    audio_retained: bool = False
+    transcript: TranscriptOut | None
+    exports: ExportsOut
+
+
+def _subject_out(ref: library.SubjectRef) -> SubjectRefOut:
+    return SubjectRefOut(id=str(ref.id), name=ref.name, color=ref.color)
+
+
+def _attempt_out(attempt: library.AttemptSummary | None) -> AttemptOut | None:
+    if attempt is None:
+        return None
+    return AttemptOut(
+        attempt_id=str(attempt.attempt_id),
+        status=attempt.status,
+        received_bytes=attempt.received_bytes,
+        fragments_done=attempt.fragments_done,
+        fragments_total=attempt.fragments_total,
+        cleanup_status=attempt.cleanup_status,
+    )
+
+
+def _list_item_out(row: library.AudioSummary) -> AudioListItemOut:
+    return AudioListItemOut(
+        id=str(row.id),
+        subject=_subject_out(row.subject),
+        title=row.title,
+        class_date=row.class_date,
+        class_timezone=row.class_timezone,
+        language_code=row.language_code,
+        duration_seconds=row.duration_seconds,
+        created_at=row.created_at,
+        attempt=_attempt_out(row.attempt),
+        stages=dict(row.stages),
+        aggregate_status=row.aggregate_status,
+    )
+
+
+def _detail_out(detail: library.AudioDetail) -> AudioDetailOut:
+    row = detail.summary
+    return AudioDetailOut(
+        id=str(row.id),
+        subject=_subject_out(row.subject),
+        title=row.title,
+        class_date=row.class_date,
+        class_timezone=row.class_timezone,
+        language_code=row.language_code,
+        duration_seconds=row.duration_seconds,
+        created_at=row.created_at,
+        attempt=_attempt_out(row.attempt),
+        stages=dict(row.stages),
+        aggregate_status=row.aggregate_status,
+        transcript=(
+            TranscriptOut(
+                version=detail.transcript.version,
+                timestamp_precision=detail.transcript.timestamp_precision,
+                char_count=detail.transcript.char_count,
+            )
+            if detail.transcript is not None
+            else None
+        ),
+        exports=ExportsOut(txt=detail.transcript is not None, srt=detail.srt_exportable),
+    )
+
+
+async def _owned_live_audio(db: DbSession, user_id: uuid.UUID, audio_id: uuid.UUID) -> Audio:
+    """Owned, non-tombstoned class or `404`; never reveals a foreign id (ADR-0006)."""
+    audio = await get_owned(db, Audio, user_id, audio_id)
+    if audio is None or audio.deleted_at is not None:
+        raise not_found()
+    return audio
 
 
 @router.post(
@@ -518,3 +661,167 @@ async def reupload_audio(
     await db.commit()
     response.headers["Location"] = upload_url
     return created
+
+
+@router.get(
+    "/audios",
+    responses={
+        200: {"description": "Clases vivas del tenant, más recientes primero"},
+        401: {"description": "Sin sesión (auth_required)"},
+        422: {"description": "validation_failed: limit fuera de rango o subject_id no UUID"},
+    },
+)
+async def list_audios(
+    response: Response,
+    session: CurrentSession,
+    db: DbSession,
+    subject_id: Annotated[uuid.UUID | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> AudioListOut:
+    """A2.9: tenant listing with derived per-stage state, aggregate and attempt (S2.md §A2.9).
+
+    A foreign or unknown `subject_id` yields an empty list instead of a `404`: the filter
+    never discloses whether a subject exists in another tenant (ADR-0006). Tombstoned
+    classes are excluded. The SQL lives in `services/library` (ADR-0006).
+    """
+    response.headers["Cache-Control"] = "no-store"
+    rows = await library.list_audios(
+        db, user_id=session.user_id, subject_id=subject_id, limit=limit
+    )
+    return AudioListOut(items=[_list_item_out(row) for row in rows])
+
+
+@router.get(
+    "/audios/{audio_id}",
+    responses={
+        200: {"description": "Detalle con estados por etapa, agregado, intento y transcript"},
+        401: {"description": "Sin sesión (auth_required)"},
+        404: {"description": "Audio inexistente, ajeno o tombstoneado (not_found)"},
+    },
+)
+async def get_audio(
+    audio_id: uuid.UUID, response: Response, session: CurrentSession, db: DbSession
+) -> AudioDetailOut:
+    """A2.9: per-stage statuses + honest aggregate + latest attempt + export availability."""
+    response.headers["Cache-Control"] = "no-store"
+    audio = await _owned_live_audio(db, session.user_id, audio_id)
+    detail = await library.get_audio_detail(db, user_id=session.user_id, audio=audio)
+    return _detail_out(detail)
+
+
+@router.get(
+    "/audios/{audio_id}/progress",
+    responses={
+        200: {"description": "text/event-stream: snapshot, progress, ping, done|error"},
+        401: {"description": "Sin sesión (auth_required)"},
+        404: {"description": "Audio inexistente, ajeno o tombstoneado (not_found)"},
+    },
+)
+async def audio_progress(
+    audio_id: uuid.UUID,
+    session: CurrentSession,
+    db: DbSession,
+    factory: ProgressSessions,
+) -> Response:
+    """A2.9: SSE progress read from the DB (S2.md §A2.9 on DISENO §3.5).
+
+    Ownership is resolved BEFORE returning the stream, so a foreign id is a real `404` HTTP
+    status. The stream is STATE: every connect/reconnect re-sends a fresh `snapshot`; deltas
+    report only measured bytes/fragments and exactly one `done`/`error` closes it. Reads use
+    the injected factory with a short-lived session per poll (no long transaction).
+    """
+    await _owned_live_audio(db, session.user_id, audio_id)
+    stream = library.stream_progress(
+        factory,
+        user_id=session.user_id,
+        audio_id=audio_id,
+        poll_seconds=progress.POLL_SECONDS,
+        heartbeat_seconds=progress.HEARTBEAT_SECONDS,
+        max_seconds=progress.MAX_SECONDS,
+    )
+    return StreamingResponse(
+        stream,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-store",
+            # Proxies must not buffer the stream (Caddy already disables buffering, J1.x).
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get(
+    "/audios/{audio_id}/transcript.txt",
+    response_class=Response,
+    responses={
+        200: {"description": "text/plain con la transcripción activa (o el segmento pedido)"},
+        401: {"description": "Sin sesión (auth_required)"},
+        404: {"description": "Audio/transcript/segmento inexistente, ajeno o tombstoneado"},
+    },
+)
+async def export_transcript_txt(
+    audio_id: uuid.UUID,
+    session: CurrentSession,
+    db: DbSession,
+    segment: Annotated[uuid.UUID | None, Query()] = None,
+) -> Response:
+    """A2.9: the durable text as-is. `?segment=` narrows to one owned segment (M9)."""
+    audio = await _owned_live_audio(db, session.user_id, audio_id)
+    transcript = await library.active_transcript(db, user_id=session.user_id, audio=audio)
+    if transcript is None:
+        raise not_found()
+    text = transcript.text
+    if segment is not None:
+        row = await library.get_segment(
+            db, user_id=session.user_id, transcript_id=transcript.id, segment_id=segment
+        )
+        if row is None:
+            # Foreign or unknown segment: indistinguishable from missing (ADR-0006).
+            raise not_found()
+        text = row.text
+    return Response(
+        content=render_txt(text=text),
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": 'attachment; filename="transcript.txt"',
+        },
+    )
+
+
+@router.get(
+    "/audios/{audio_id}/transcript.srt",
+    response_class=Response,
+    responses={
+        200: {"description": "application/x-subrip con tiempos medidos y ordenados"},
+        401: {"description": "Sin sesión (auth_required)"},
+        404: {"description": "Audio o transcript inexistente, ajeno o tombstoneado"},
+        409: {"description": "srt_unavailable: sin tiempos válidos o fuera de la duración"},
+    },
+)
+async def export_transcript_srt(
+    audio_id: uuid.UUID, session: CurrentSession, db: DbSession
+) -> Response:
+    """A2.9: SRT only with usable times, else `409 srt_unavailable` (SPEC M3, fails closed)."""
+    audio = await _owned_live_audio(db, session.user_id, audio_id)
+    transcript = await library.active_transcript(db, user_id=session.user_id, audio=audio)
+    if transcript is None:
+        raise not_found()
+    segments = await library.segments_for(
+        db, user_id=session.user_id, transcript_id=transcript.id
+    )
+    if not srt_exportable(
+        timestamp_precision=transcript.timestamp_precision,
+        segments=segments,
+        duration_seconds=audio.duration_seconds,
+    ):
+        raise srt_unavailable()
+    return Response(
+        content=render_srt(segments),
+        media_type="application/x-subrip",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": 'attachment; filename="transcript.srt"',
+        },
+    )
+

@@ -7,10 +7,10 @@ import hmac
 from typing import Annotated
 
 from fastapi import Depends, Request, Response
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
-from app.core.db import get_session
+from app.core.db import SessionFactory, get_session
 from app.core.errors import auth_required, csrf_invalid
 from app.models import Session
 from app.services import sessions
@@ -90,3 +90,16 @@ async def require_mutation(request: Request, session: CurrentSession) -> Session
 
 
 MutationSession = Annotated[Session, Depends(require_mutation)]
+
+
+def progress_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Session factory for the progress SSE generator (A2.9).
+
+    The stream outlives a single request, so it opens short-lived sessions per poll instead
+    of holding the request session open for the whole connection. Overridable in tests, the
+    same way `get_session` is.
+    """
+    return SessionFactory
+
+
+ProgressSessions = Annotated[async_sessionmaker[AsyncSession], Depends(progress_session_factory)]

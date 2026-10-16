@@ -116,6 +116,17 @@ def google_deletion_unavailable() -> ApiError:
     )
 
 
+def srt_unavailable() -> ApiError:
+    # A2.9: the SRT is offered ONLY when the timestamps the ASR measured are usable (real
+    # precision, ordered and inside the class duration). Anything else is refused instead of
+    # inventing or shifting minutes (ESPECIFICACION.md M2/M3, S2.md §A2.9).
+    return ApiError(
+        409,
+        "srt_unavailable",
+        "Esta clase no tiene tiempos válidos para exportar a SRT.",
+    )
+
+
 async def _handle_validation(_: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, RequestValidationError)  # noqa: S101 - registrado solo para ella
     # Solo ubicación y mensaje por campo: nunca el valor recibido (puede traer PII).
