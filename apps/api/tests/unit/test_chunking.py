@@ -10,6 +10,7 @@ The §M6↔table reconciliation (L2.9) is out of scope; these tests pin the chun
 contract, not persistence.
 """
 
+import time
 from uuid import uuid4
 
 import pytest
@@ -253,6 +254,23 @@ def test_newlines_split_chunks_at_line_boundaries() -> None:
         assert chunk.content.endswith("\n")
 
 
+def test_oversized_split_stays_within_a_time_budget() -> None:
+    # Guards against the regression where sub-splitting scanned every whitespace match in
+    # the span on each iteration (~4 s for 60k words). The backwards scan runs in ~1 s;
+    # the bound is generous to stay stable on slower CI hosts (best-of-three runs).
+    text = " ".join(["w"] * 60_000) + "."
+    segment = _segment(0, text, 0)
+
+    best = float("inf")
+    for _ in range(3):
+        started = time.perf_counter()
+        chunks = _run(text, [segment])
+        best = min(best, time.perf_counter() - started)
+
+    assert chunks[-1].char_end == len(text)
+    assert best < 3.0
+
+
 def test_same_input_same_output() -> None:
     text, segments = _build(["Uno. Dos. Tres. Cuatro."])
     audio_id = uuid4()
@@ -343,16 +361,46 @@ def test_invalid_segments_raise() -> None:
         _run(text, negative_times)
 
 
-def test_segments_must_cover_the_whole_transcript() -> None:
+def test_segments_must_cover_all_non_blank_text() -> None:
     text = "Uno. Dos."
 
     missing_head = [SegmentInput(uuid4(), 0, "no. Dos.", 1, 9, None, None)]
-    with pytest.raises(ValueError, match="start at offset 0"):
+    with pytest.raises(ValueError, match="before the first segment"):
         _run(text, missing_head)
 
     missing_tail = [SegmentInput(uuid4(), 0, "Uno.", 0, 4, None, None)]
-    with pytest.raises(ValueError, match="end at len"):
+    with pytest.raises(ValueError, match="after the last segment"):
         _run(text, missing_tail)
+
+
+def test_blank_text_outside_segments_is_tolerated() -> None:
+    # Trailing newline left outside the segment (common in assembled transcripts).
+    punct = "Hola mundo."
+    text = punct + "\n"
+    chunks = _run(text, [SegmentInput(uuid4(), 0, punct, 0, len(punct), None, None)])
+    assert chunks
+    assert chunks[0].char_start == 0
+    assert chunks[-1].char_end == len(punct)
+
+    # Leading whitespace left outside the segment.
+    text = "  Hola."
+    chunks = _run(text, [SegmentInput(uuid4(), 0, "Hola.", 2, len(text), None, None)])
+    assert chunks[0].char_start == 2
+    assert chunks[0].content == "Hola."
+
+
+def test_empty_asr_segments_are_skipped() -> None:
+    text = "HelloWorld"
+    segments = [
+        SegmentInput(uuid4(), 0, "Hello", 0, 5, 0.0, 1.0),
+        SegmentInput(uuid4(), 1, "", 5, 5, 1.0, 1.0),  # empty text, zero duration
+        SegmentInput(uuid4(), 2, "World", 5, 10, 1.0, 2.0),
+    ]
+
+    chunks = _run(text, segments)
+
+    assert "".join(chunk.content for chunk in chunks) == text
+    assert all(link.segment_ordinal != 1 for chunk in chunks for link in chunk.segments)
 
 
 def test_offsets_match_schema_contract() -> None:

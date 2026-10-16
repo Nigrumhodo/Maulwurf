@@ -37,10 +37,6 @@ TokenCounter = Callable[[str], int]
 _CJK = "\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af"
 _TOKEN_RE = re.compile(rf"[{_CJK}]|[^\W_]+|\S", re.UNICODE)
 
-# Any Unicode whitespace (spaces, tabs, newlines): a preferred sub-split point so an
-# oversized sentence is not cut in the middle of a word when a space-like run is available.
-_WHITESPACE = re.compile(r"\s")
-
 # A sentence ends after a run of terminal punctuation (optionally followed by closing
 # quotes/brackets) or after a newline run. Trailing whitespace is left to the next span so
 # the spans stay contiguous.
@@ -142,8 +138,9 @@ def chunk_segments(
 
     Raises ``ValueError`` when the input violates the frozen invariants (non-increasing
     ordinals, a segment range outside the text, a ``text`` that does not match its range,
-    non-contiguous segments, or segments that do not span the whole text). An empty
-    transcript returns no chunks.
+    non-contiguous segments, or non-blank text outside the segments). Blank edges before
+    the first or after the last segment are tolerated. An empty transcript returns no
+    chunks.
     """
     if target_tokens < 1:
         raise ValueError("target_tokens debe ser >= 1")
@@ -207,8 +204,10 @@ def _validate_segments(transcript_text: str, segments: Sequence[SegmentInput]) -
                 )
         if segment.char_start < 0 or segment.char_end > len(transcript_text):
             raise ValueError(f"rango fuera del texto en el ordinal {segment.ordinal}")
-        if segment.char_start >= segment.char_end:
-            raise ValueError(f"rango vacío o invertido en el ordinal {segment.ordinal}")
+        # Empty segments (``char_start == char_end``, text ``""``) are tolerated: ASR
+        # engines emit them. Only inverted ranges are rejected.
+        if segment.char_start > segment.char_end:
+            raise ValueError(f"rango invertido en el ordinal {segment.ordinal}")
         if segment.text != transcript_text[segment.char_start : segment.char_end]:
             raise ValueError(f"texto inconsistente con el rango en el ordinal {segment.ordinal}")
         # Zero-duration segments are tolerated (ASR may emit them); only inverted or
@@ -219,10 +218,10 @@ def _validate_segments(transcript_text: str, segments: Sequence[SegmentInput]) -
         elif (segment.t_start is None) != (segment.t_end is None):
             raise ValueError(f"t_start y t_end van juntos o ambos nulos ({segment.ordinal})")
         previous = segment
-    if segments[0].char_start != 0:
-        raise ValueError("first segment must start at offset 0")
-    if segments[-1].char_end != len(transcript_text):
-        raise ValueError("last segment must end at len(transcript_text)")
+    if transcript_text[: segments[0].char_start].strip():
+        raise ValueError("text before the first segment is not covered")
+    if transcript_text[segments[-1].char_end :].strip():
+        raise ValueError("text after the last segment is not covered")
 
 
 def _segment_units(
@@ -252,6 +251,21 @@ def _segment_units(
                 )
             )
     return units
+
+
+def _last_whitespace(text: str, start: int, end: int) -> int:
+    """Index of the last whitespace code point in ``text[start:end]``, or ``-1``.
+
+    Scans backwards so the common case (a space-like run near ``end``) stops on the first
+    step, unlike a forward scan that visits every whitespace in the span. ``str.isspace``
+    covers all Unicode whitespace (spaces, tabs, newlines, non-breaking spaces).
+    """
+    index = end - 1
+    while index >= start:
+        if text[index].isspace():
+            return index
+        index -= 1
+    return -1
 
 
 def _split_oversized(
@@ -286,9 +300,7 @@ def _split_oversized(
             else:
                 high = middle - 1
         split = best
-        whitespace = -1
-        for match in _WHITESPACE.finditer(text, position, split):
-            whitespace = match.start()
+        whitespace = _last_whitespace(text, position, split)
         if whitespace > position:
             split = whitespace + 1
         elif split <= position:
