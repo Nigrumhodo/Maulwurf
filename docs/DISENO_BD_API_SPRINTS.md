@@ -1184,6 +1184,12 @@ tenant, expires soon, and is consumed once.
 - Disconnecting the upload before it completes cancels and cleans up the attempt; after
   the `202`, closing the tab/SSE does **not** cancel ASR (it continues under its lease).
 
+`GET /audios?subject_id={uuid}&limit={1..100}` — tenant listing (spec M9): `{ "items": [ … ] }`
+with the same per-item fields as the detail below except `audio_retained`, `transcript` and
+`exports`. Ordered by `class_date DESC, created_at DESC`; tombstoned classes are excluded and a
+foreign or unknown `subject_id` yields an empty list (never a `404`, so it discloses nothing
+across tenants).
+
 `GET /audios/{id}` — detail view with independent per-stage statuses (spec M2):
 
 ```json
@@ -1194,6 +1200,8 @@ tenant, expires soon, and is consumed once.
   "class_date": "2026-09-21",
   "class_timezone": "America/Bogota",
   "language_code": "es",
+  "duration_seconds": 3725.5,
+  "created_at": "2026-09-21T18:02:11Z",
   "attempt": {
     "attempt_id": "c41b…",
     "status": "transcribing",
@@ -1204,9 +1212,15 @@ tenant, expires soon, and is consumed once.
   },
   "stages": { "index": "pending", "analyze": "not_requested" },
   "aggregate_status": "processing",
-  "audio_retained": false
+  "audio_retained": false,
+  "transcript": { "version": 2, "timestamp_precision": "segment", "char_count": 18422 },
+  "exports": { "txt": true, "srt": true }
 }
 ```
+
+`transcript` is `null` without a usable transcript; `exports.srt` is `true` only when a
+truthful SRT exists (real precision and ordered times inside `duration_seconds`), so the
+client can enable the download without probing the `409`.
 
 `aggregate_status`: `processing` while required stages are pending/running; `ready` if all
 succeeded; `partial` if there is a usable transcript but some required stage failed/was
@@ -1248,8 +1262,8 @@ Other M2 endpoints:
 | `POST` | `/audios/{id}/reupload` | S2 | Only without a usable transcript; new ephemeral session with the **same** ingestion identity | `201` new URL · `409` if a transcript already exists |
 | `POST` | `/audios/{id}/attempts/{attempt_id}/cancel` | S2 | Cancels an authenticated attempt; after the commit it returns a conflict with the current status and does **not** destroy the transcript | `202` · `409 invalid_transition` |
 | `DELETE` | `/audios/{id}` | S2 | Tombstone: cancels attempts/jobs, deletes derived transcripts/chunks/embeddings/tasks/summary/citations; existing Google events are kept by default (notice); removing them requires an explicit option via `google_remote_operations` | `202` |
-| `GET` | `/audios/{id}/transcript.txt` | S2 | TXT export if there is a transcript | `200` · `404` |
-| `GET` | `/audios/{id}/transcript.srt` | S2 | SRT export **only** with valid, ordered timestamps within the duration | `200` · `409 srt_unavailable` |
+| `GET` | `/audios/{id}/transcript.txt` | S2 | TXT export of the active transcript, or of one `?segment={segment_id}` (owner-scoped) | `200` · `404` |
+| `GET` | `/audios/{id}/transcript.srt` | S2 | SRT export **only** with valid, ordered timestamps within the duration | `200` · `404` sin transcript · `409 srt_unavailable` |
 
 ### 3.6 M3 — Internal transcription contract (not a public API)
 

@@ -103,6 +103,7 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | claim | A2.2 | angalindog | done | 2026-10-05 | not applicable | — / area A | `GET /ingestion/capabilities`; merged in #47 |
 | claim | A2.3 | angalindog | done | 2026-10-07 | not applicable | — / area A | `POST /audios` with consent and slot; merged in #51 |
 | claim | A2.4 | angalindog | done | 2026-10-07 | not applicable | — / area A | Streaming `PUT`, SHA-256 and dedupe; merged in #52. The default sink is still 503 (C2). |
+| claim | A2.9 | angalindog | in progress | 2026-10-15 | not applicable | — / area A | Library reads, SSE progress and conditional txt/srt exports (I-S2-AN-07/09); branch `feature/A2.9-listing-sse-exports`; PR pending |
 | claim | S2.1 | satnovaOG | done | 2026-10-09 | not applicable | — / lead | Reception and ffprobe; merged in #54 |
 | claim | S2.2 | satnovaOG | done | 2026-10-09 | not applicable | — / lead | Bounded ffmpeg and 30 s fragmentation; merged in #54 |
 | claim | S2.3 | satnovaOG | done | 2026-10-09 | not applicable | — / lead | Backpressure and boundary reconciliation (U-S2-SG-04); merged in #55 |
@@ -137,3 +138,4 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | 2026-10-09 | A1.9 (#44), L1.4 (#43) and L1.5 (#45) move to `done`. A1.6 stays `in progress`: #49 only claims and the CRUD is not in `develop`. A1.3 and L1.7 are not implemented. A2.1 (#48), A2.2 (#47), A2.3 (#51) and A2.4 (#52) are claimed as `done` (`angalindog`). A2.5 stays open. | This change |
 | 2026-10-11 | The lead accepts the Vite + React web stack (ADR-0007, in #42). A1.3, D1.1, D1.2 and D1.3 are claimed by ARES313 (`in progress` until #42 merges); A1.3 keeps cloud eligibility `pending`. | This PR |
 | 2026-10-12 | A1.3, D1.1, D1.2 and D1.3 move to `done` (#42); A1.3 cloud eligibility `verified` after the lead observed a real Google login in local compose. A1.6 moves to `done` (#50). S2.3 and S2.4 move to `done` (#55); S2.4 keeps cloud `pending`. L2.10 is recorded as `done` (ADR-0007). A2.13 is claimed (`in progress`) with ADR-0008. | This PR |
+| 2026-10-15 | A2.9 is claimed (`in progress`): tenant listing, `GET /audios/{id}` detail, SSE progress and conditional txt/srt exports; tests I-S2-AN-07/09 green locally. | This PR |
