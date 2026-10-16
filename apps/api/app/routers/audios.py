@@ -20,10 +20,10 @@ el commit o en un final), y `DELETE /audios/{id}` tombstonea la clase purgando t
 derivados en la misma transacción (`202` trazable). El router solo resuelve ownership y
 monta la respuesta: la máquina de estados decide y el SQL vive en `services/audios` (ADR-0006).
 
-Retry vs reupload (A2.8, S2.md §A2.8): `POST /audios/{id}/retry` (`202`) reencola etapas de
-texto sobre un transcript utilizable con runs idempotentes, y `POST /audios/{id}/reupload`
-(`201`) abre una sesión efímera nueva sobre la MISMA clase cuando no hay texto utilizable.
-La matriz de conflictos (`409 transcript_unavailable|invalid_transition`) y el SQL viven en
+Retry vs reupload (A2.8, S2.md §A2.8): `POST /audios/{id}/retry` (`202`) requeues text
+stages over a usable transcript with idempotent runs, and `POST /audios/{id}/reupload`
+(`201`) opens a new ephemeral session on the SAME class when there is no usable text.
+The conflict matrix (`409 transcript_unavailable|invalid_transition`) and the SQL live in
 `services/runs` (ADR-0006).
 """
 
@@ -111,11 +111,11 @@ class AudioCreated(BaseModel):
 
 
 class AudioRetry(BaseModel):
-    """Body del `POST /audios/{id}/retry` (A2.8): etapas de texto sobre un transcript.
+    """Body of `POST /audios/{id}/retry` (A2.8): text stages over a transcript.
 
-    La forma se valida aquí (`422 validation_failed`): al menos una etapa, sin duplicados y
-    solo `index`/`analyze`. Si el transcript no existe, está obsoleto o la etapa no se debe,
-    `services/runs` responde `409` con su código tipado.
+    The shape is validated here (`422 validation_failed`): at least one stage, no duplicates
+    and only `index`/`analyze`. If the transcript does not exist, is obsolete or the stage
+    is not owed, `services/runs` answers `409` with its typed code.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -144,7 +144,7 @@ class RetryAccepted(BaseModel):
 
 
 class ReuploadCreated(BaseModel):
-    """`201` del reupload (A2.8): misma clase, nueva sesión efímera de subida."""
+    """`201` of the reupload (A2.8): same class, new ephemeral upload session."""
 
     audio_id: uuid.UUID
     attempt_id: uuid.UUID
@@ -441,12 +441,12 @@ async def delete_audio(
 async def retry_audio(
     audio_id: uuid.UUID, body: AudioRetry, session: MutationSession, db: DbSession
 ) -> RetryAccepted:
-    """Reintentar etapas de texto (A2.8, S2.md §A2.8): solo sobre transcript utilizable.
+    """Retry text stages (A2.8, S2.md §A2.8): only over a usable transcript.
 
-    `202` cuando cada etapa queda como run `pending` (creado, reseteado o ya en vuelo),
-    `409 transcript_unavailable` sin texto usable u obsoleto, y `409 invalid_transition`
-    si la etapa no se debe, ya tuvo éxito o el intento sigue activo. Los runs son
-    idempotentes por clave única; el router no hace SQL (ADR-0006).
+    `202` when every stage ends as a `pending` run (created, reset or already in flight),
+    `409 transcript_unavailable` without usable or obsolete text, and `409 invalid_transition`
+    if the stage is not owed, already succeeded or the attempt is still active. Runs are
+    idempotent on their unique key; the router does no SQL (ADR-0006).
     """
     audio = await get_owned(db, Audio, session.user_id, audio_id, lock="share")
     if audio is None or audio.deleted_at is not None:
@@ -489,26 +489,26 @@ async def retry_audio(
 async def reupload_audio(
     audio_id: uuid.UUID, response: Response, session: MutationSession, db: DbSession
 ) -> ReuploadCreated:
-    """Subir de nuevo (A2.8): nueva sesión efímera sobre la MISMA identidad de clase.
+    """Upload again (A2.8): a new ephemeral session over the SAME class identity.
 
-    Solo existe SIN transcript utilizable y sin intento activo (si no, `409
-    invalid_transition`). Copia el snapshot de consentimiento del intento anterior y limpia
-    `sha256`; cuota y slot se comprueban como en `POST /audios` antes de reservar nada.
-    `lock="update"` serializa reuploads concurrentes de la misma clase: el segundo ve el
-    intento que el primero acaba de abrir y recibe su `409` en lugar de un IntegrityError.
+    It only exists WITHOUT a usable transcript and without an active attempt (otherwise, `409
+    invalid_transition`). It copies the previous attempt's consent snapshot and clears
+    `sha256`; quota and slot are checked as in `POST /audios` before reserving anything.
+    `lock="update"` serializes concurrent reuploads of the same class: the second one sees
+    the attempt the first just opened and gets its `409` instead of an IntegrityError.
     """
     audio = await get_owned(db, Audio, session.user_id, audio_id, lock="update")
     if audio is None or audio.deleted_at is not None:
         raise not_found()
     previous = await ensure_reupload_allowed(db, user_id=session.user_id, audio=audio)
-    # Cuota y slot, como en `POST /audios` y el cancel: un rechazo no reserva capacidad.
+    # Quota and slot, as in `POST /audios` and the cancel: a rejection reserves no capacity.
     await check_quota(db, session.user_id)
     await reserve_slot(db)
     reservation = await open_reupload(
         db, user_id=session.user_id, audio=audio, previous=previous
     )
     upload_url = f"/audios/{reservation.audio_id}/content?attempt_id={reservation.attempt_id}"
-    # Valores leídos antes del commit: los atributos ORM expiran al confirmar.
+    # Values read before the commit: the ORM attributes expire on confirm.
     created = ReuploadCreated(
         audio_id=reservation.audio_id,
         attempt_id=reservation.attempt_id,
