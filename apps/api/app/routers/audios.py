@@ -43,7 +43,13 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.config import settings
-from app.core.deps import CurrentSession, DbSession, MutationSession, ProgressSessions
+from app.core.deps import (
+    CurrentSession,
+    DbSession,
+    MutationSession,
+    ProgressSessions,
+    resolve_authenticated_session,
+)
 from app.core.errors import (
     ApiError,
     consent_required,
@@ -719,21 +725,30 @@ async def get_audio(
 )
 async def audio_progress(
     audio_id: uuid.UUID,
-    session: CurrentSession,
-    db: DbSession,
+    request: Request,
     factory: ProgressSessions,
 ) -> Response:
     """A2.9: SSE progress read from the DB (S2.md §A2.9 on DISENO §3.5).
 
-    Ownership is resolved BEFORE returning the stream, so a foreign id is a real `404` HTTP
-    status. The stream is STATE: every connect/reconnect re-sends a fresh `snapshot`; deltas
-    report only measured bytes/fragments and exactly one `done`/`error` closes it. Reads use
-    the injected factory with a short-lived session per poll (no long transaction).
+    Authentication and ownership are resolved on a SHORT-LIVED session opened from the
+    injected factory and closed BEFORE the stream is returned. The route deliberately does
+    NOT depend on the request-scoped `DbSession`/`CurrentSession`: FastAPI keeps a yield
+    dependency's cleanup open for the whole `StreamingResponse` (up to `MAX_SECONDS`), which
+    would pin one pool connection per client and exhaust the pool with ~10 concurrent viewers
+    (A2.9 pool-exhaustion fix). Ownership is still resolved before the stream, so a foreign id
+    is a real `404` HTTP status.
+
+    The stream is STATE: every connect/reconnect re-sends a fresh `snapshot`; deltas report
+    only measured bytes/fragments and exactly one `done`/`error` closes it. Each poll opens
+    its own short-lived session (no long transaction, no held connection).
     """
-    await _owned_live_audio(db, session.user_id, audio_id)
+    async with factory() as db:
+        session = await resolve_authenticated_session(db, request)
+        user_id = session.user_id
+        await _owned_live_audio(db, user_id, audio_id)
     stream = library.stream_progress(
         factory,
-        user_id=session.user_id,
+        user_id=user_id,
         audio_id=audio_id,
         poll_seconds=progress.POLL_SECONDS,
         heartbeat_seconds=progress.HEARTBEAT_SECONDS,
@@ -781,9 +796,11 @@ async def export_transcript_txt(
         text = row.text
     return Response(
         content=render_txt(text=text),
-        media_type="text/plain",
+        media_type="text/plain; charset=utf-8",
         headers={
             "Cache-Control": "no-store",
+            # Attachment + nosniff: never let a browser sniff/serve the transcript inline.
+            "X-Content-Type-Options": "nosniff",
             "Content-Disposition": 'attachment; filename="transcript.txt"',
         },
     )
@@ -818,9 +835,11 @@ async def export_transcript_srt(
         raise srt_unavailable()
     return Response(
         content=render_srt(segments),
-        media_type="application/x-subrip",
+        media_type="application/x-subrip; charset=utf-8",
         headers={
             "Cache-Control": "no-store",
+            # Attachment + nosniff: never let a browser sniff/serve the captions inline.
+            "X-Content-Type-Options": "nosniff",
             "Content-Disposition": 'attachment; filename="transcript.srt"',
         },
     )

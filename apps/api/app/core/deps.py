@@ -58,11 +58,22 @@ def clear_oauth_state_cookie(response: Response) -> None:
     )
 
 
-async def current_session(request: Request, db: DbSession) -> Session:
+async def resolve_authenticated_session(db: AsyncSession, request: Request) -> Session:
+    """Authenticated session for the request cookie, on a caller-provided DB session.
+
+    Split out of `current_session` so a streaming route can authenticate and check ownership
+    on a SHORT-LIVED session it closes itself, instead of depending on the request-scoped
+    `get_session` yield generator, which FastAPI keeps open for the whole `StreamingResponse`
+    (A2.9 pool-exhaustion fix). `401 auth_required` when the cookie is missing/expired.
+    """
     session = await sessions.resolve_session(db, request.cookies.get(COOKIE_NAME))
     if session is None:
         raise auth_required()
     return session
+
+
+async def current_session(request: Request, db: DbSession) -> Session:
+    return await resolve_authenticated_session(db, request)
 
 
 CurrentSession = Annotated[Session, Depends(current_session)]

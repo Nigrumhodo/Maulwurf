@@ -170,8 +170,9 @@ async def test_transcript_txt_returns_the_verbatim_text(
 
     assert response.status_code == 200
     assert response.text == transcript.text
-    assert response.headers["content-type"].startswith("text/plain")
+    assert response.headers["content-type"] == "text/plain; charset=utf-8"
     assert "attachment" in response.headers["content-disposition"]
+    assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["cache-control"] == "no-store"
 
 
@@ -230,8 +231,9 @@ async def test_transcript_srt_with_valid_times(
     response = await client.get(f"/audios/{audio.id}/transcript.srt", cookies=actor.cookies)
 
     assert response.status_code == 200
-    assert response.headers["content-type"].startswith("application/x-subrip")
+    assert response.headers["content-type"] == "application/x-subrip; charset=utf-8"
     assert "attachment" in response.headers["content-disposition"]
+    assert response.headers["x-content-type-options"] == "nosniff"
     assert response.text.startswith("1\n00:00:00,000 --> 00:00:05,000\n")
     assert "2\n00:00:05,000 --> 00:00:10,000\n" in response.text
 

@@ -7,8 +7,11 @@ terminal se prueba iterando `library.stream_progress` directamente porque el `AS
 de httpx 0.28 bufferiza el cuerpo y no permite leer un stream abierto.
 
 El stream abre sesiones cortas con la factoría inyectada (`progress_session_factory`), así
-que aquí se sustituyen TANTO `get_session` (ownership) COMO esa factoría por una factoría real
-sobre la BD migrada, y las filas se confirman para que el generador (otra conexión) las vea.
+que aquí esa factoría se sustituye por una real sobre la BD migrada y las filas se confirman
+para que el generador (otra conexión) las vea. `get_session` (la dependencia de request con
+`yield`) se sustituye por un GUARD que falla si alguien la toca: la ruta SSE debe autenticar y
+comprobar ownership en sus propias sesiones cortas, sin retener una conexión de request durante
+todo el stream (fix de agotamiento de pool de A2.9).
 """
 
 import json
@@ -57,11 +60,14 @@ async def sse(
         engine, expire_on_commit=False
     )
 
-    async def real_session() -> AsyncIterator[AsyncSession]:
-        async with factory() as session:
-            yield session
+    async def forbidden_request_session() -> AsyncSession:
+        # The SSE route must NOT depend on the request-scoped `get_session`: FastAPI would
+        # keep its yield cleanup open for the whole StreamingResponse, pinning a pool
+        # connection per client (A2.9 pool-exhaustion fix). If this is ever called, the
+        # route regressed and the test fails loudly.
+        raise AssertionError("SSE must not use the request-scoped get_session")
 
-    app.dependency_overrides[get_session] = real_session
+    app.dependency_overrides[get_session] = forbidden_request_session
     app.dependency_overrides[progress_session_factory] = lambda: factory
     try:
         async with AsyncClient(
