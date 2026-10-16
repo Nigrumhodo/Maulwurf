@@ -13,6 +13,7 @@ IDs en variables planas ANTES de la petición (patrón de `actors.Actor`); los h
 esos valores planos y no filas.
 """
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -21,7 +22,7 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
 from app.core.db import get_session
@@ -29,6 +30,7 @@ from app.core.deps import CSRF_HEADER
 from app.main import app
 from app.models import Audio, IngestionAttempt, OutboxEvent, ProcessingRun
 from app.models.base import TenantOwned
+from app.services import runs
 from app.services.runs import RUN_CONFIG_VERSION
 from tests.integration import actors
 
@@ -221,6 +223,82 @@ async def test_retry_both_stages_when_both_are_owed(
     assert [run["stage"] for run in response.json()["runs"]] == ["index", "analyze"]
     events = await _events(db_session, actor.user_id, audio_id)
     assert {event.type for event in events} == {"index_requested", "analyze_requested"}
+
+
+async def test_concurrent_retries_in_opposite_stage_order_do_not_deadlock(
+    migrated_database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two retries of the same stages in opposite order must not deadlock (A2.8).
+
+    `request_retry` takes one `FOR UPDATE` row lock per stage. Iterating the caller's order
+    would let one transaction lock `index` while the other locks `analyze`, and each then
+    asking for the row the other holds is exactly the cycle PostgreSQL aborts as a deadlock.
+    Locking in the canonical `sorted(stages)` order makes both retries contend for the SAME
+    first row, so the second one only waits for the first to commit.
+
+    Uses its own committed rows and one real connection per request: the rolled-back per-test
+    session cannot hold a lock another connection would see. A barrier before the first lock
+    releases both requests together, so each grabs its first row before asking for its second
+    and the race is reproduced deterministically.
+    """
+    engine = create_async_engine(migrated_database_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def real_session() -> AsyncIterator[AsyncSession]:
+        async with factory() as session:
+            yield session
+
+    async with factory() as setup:
+        actor = await actors.make_actor(setup)
+        audio, _attempt, _transcript = await actors.make_class_with_transcript(
+            setup, actor, required_stages=["index", "analyze"]
+        )
+        audio_id = audio.id
+        for stage in ("index", "analyze"):
+            await _seed_failed_run(setup, actor, audio_id, stage=stage)
+        await setup.commit()
+
+    real_locked_run = runs._locked_run
+    barrier = asyncio.Barrier(2)
+    first_lock_seen: set[int] = set()
+
+    async def synchronized_locked_run(
+        db: AsyncSession,
+        *,
+        user_id: uuid.UUID,
+        audio_id: uuid.UUID,
+        stage: str,
+        transcript_version: int,
+    ) -> ProcessingRun | None:
+        task = asyncio.current_task()
+        if task is not None and id(task) not in first_lock_seen:
+            first_lock_seen.add(id(task))
+            # Neither request holds a lock yet: release them together so each takes its first
+            # row before asking for its second (the window the deadlock needs).
+            await barrier.wait()
+        return await real_locked_run(
+            db,
+            user_id=user_id,
+            audio_id=audio_id,
+            stage=stage,
+            transcript_version=transcript_version,
+        )
+
+    monkeypatch.setattr(runs, "_locked_run", synchronized_locked_run)
+    app.dependency_overrides[get_session] = real_session
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url=settings.allowed_origin
+        ) as client:
+            first, second = await asyncio.gather(
+                _retry(client, actor, audio_id, ["index", "analyze"]),
+                _retry(client, actor, audio_id, ["analyze", "index"]),
+            )
+    finally:
+        app.dependency_overrides.clear()
+        await engine.dispose()
+
+    assert (first.status_code, second.status_code) == (202, 202)
 
 
 # --- B. Retry: los cuatro conflictos tipados ---------------------------------------------

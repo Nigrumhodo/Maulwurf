@@ -401,22 +401,25 @@ async def request_retry(
         # Cleanup is not verified yet: index/analysis must not start over half-deleted
         # temporaries (M2 cleanup gate, same authority as A2.6).
         raise _invalid_transition({"current_status": latest.status})
-    outcomes = []
-    for stage in stages:
-        outcomes.append(
-            await _ensure_stage_run(
-                db,
-                user_id=user_id,
-                audio_id=audio.id,
-                stage=stage,
-                transcript_version=transcript_version,
-            )
+    # Take the `FOR UPDATE` row locks in a canonical (sorted) stage order: two concurrent
+    # retries of the same stages in opposite order would otherwise lock the rows in opposite
+    # order and PostgreSQL would resolve the cycle as a deadlock. Every retry now contends
+    # for the SAME first row, so the second one just waits. The response below reports the
+    # runs in the caller's order, which the client already knows.
+    by_stage: dict[str, StageRunOutcome] = {}
+    for stage in sorted(stages):
+        by_stage[stage] = await _ensure_stage_run(
+            db,
+            user_id=user_id,
+            audio_id=audio.id,
+            stage=stage,
+            transcript_version=transcript_version,
         )
     # Flat values captured before the router's `commit()` (ORM attributes expire after it).
     return RetryOutcome(
         audio_id=audio.id,
         transcript_version=transcript_version,
-        runs=tuple(outcomes),
+        runs=tuple(by_stage[stage] for stage in stages),
     )
 
 
