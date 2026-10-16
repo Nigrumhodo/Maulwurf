@@ -226,6 +226,33 @@ def test_oversized_sentence_is_split_with_offsets() -> None:
         assert chunk.content == text[chunk.char_start : chunk.char_end]
 
 
+def test_oversized_sentence_splits_on_unicode_whitespace() -> None:
+    # One oversized sentence whose words are separated by tabs: the sub-split must land on
+    # the tab, never inside a word (a plain " " search would miss it).
+    text = "\t".join(f"w{i}" for i in range(2500)) + "."
+    chunks = _run(text, [_segment(0, text, 0)], overlap_tokens=0)
+
+    assert len(chunks) >= 3
+    assert chunks[0].char_start == 0
+    assert chunks[-1].char_end == len(text)
+    rebuilt = ""
+    for chunk in chunks:
+        assert chunk.content == text[chunk.char_start : chunk.char_end]
+        rebuilt += chunk.content
+    assert rebuilt == text
+    for chunk in chunks[:-1]:
+        assert chunk.content.endswith("\t")
+
+
+def test_newlines_split_chunks_at_line_boundaries() -> None:
+    text = "line one\nline two\nline three\n"
+    chunks = _run(text, [_segment(0, text, 0)], target_tokens=2, overlap_tokens=0)
+
+    assert "".join(chunk.content for chunk in chunks) == text
+    for chunk in chunks[:-1]:
+        assert chunk.content.endswith("\n")
+
+
 def test_same_input_same_output() -> None:
     text, segments = _build(["Uno. Dos. Tres. Cuatro."])
     audio_id = uuid4()
@@ -261,6 +288,21 @@ def test_times_derived_or_null() -> None:
     assert chunks[0].t_end is None
 
 
+def test_zero_duration_segments_are_accepted() -> None:
+    first, second = "Uno. ", "Dos."
+    text = first + second
+    segments = [
+        SegmentInput(uuid4(), 0, first, 0, len(first), 5.0, 5.0),  # zero duration
+        SegmentInput(uuid4(), 1, second, len(first), len(text), 5.0, 9.0),
+    ]
+
+    chunks = _run(text, segments, target_tokens=4, overlap_tokens=0)
+
+    assert len(chunks) == 1
+    assert chunks[0].t_start == 5.0
+    assert chunks[0].t_end == 9.0
+
+
 def test_empty_transcript_returns_no_chunks() -> None:
     assert _run("", []) == []
 
@@ -292,9 +334,25 @@ def test_invalid_segments_raise() -> None:
     with pytest.raises(ValueError):
         _run(text, out_of_bounds)
 
-    invalid_times = [SegmentInput(uuid4(), 0, "Uno. Dos.", 0, 9, 5.0, 5.0)]
+    inverted_times = [SegmentInput(uuid4(), 0, "Uno. Dos.", 0, 9, 5.0, 4.0)]
     with pytest.raises(ValueError):
-        _run(text, invalid_times)
+        _run(text, inverted_times)
+
+    negative_times = [SegmentInput(uuid4(), 0, "Uno. Dos.", 0, 9, -1.0, 5.0)]
+    with pytest.raises(ValueError):
+        _run(text, negative_times)
+
+
+def test_segments_must_cover_the_whole_transcript() -> None:
+    text = "Uno. Dos."
+
+    missing_head = [SegmentInput(uuid4(), 0, "no. Dos.", 1, 9, None, None)]
+    with pytest.raises(ValueError, match="start at offset 0"):
+        _run(text, missing_head)
+
+    missing_tail = [SegmentInput(uuid4(), 0, "Uno.", 0, 4, None, None)]
+    with pytest.raises(ValueError, match="end at len"):
+        _run(text, missing_tail)
 
 
 def test_offsets_match_schema_contract() -> None:
