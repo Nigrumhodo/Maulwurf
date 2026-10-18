@@ -84,6 +84,10 @@ de este PR de planificación.
 | claim | S1.B4 | satnovaOG | hecho | 2026-09-27 | no aplica | — / líder | Matriz I-S1-SG-04: 10 passed en contenedor Ubuntu (PID propio). En el WSL del host, `unreadable_processes` de root impide `verified`. |
 | claim | S1.B5 | satnovaOG | hecho | 2026-09-27 | no aplica | — / área S | I-S1-SG-06: 9 passed en WSL. Barrido en cero. En este host el éxito no queda `verified` por `unreadable_processes` (igual que S1.B4). |
 | claim | S1.B6 | satnovaOG | hecho | 2026-09-27 | no aplica | — / área S | I-S1-SG-05: lease `pending` no cierra admisión; cleanup `failed` alerta y la cierra. Outbox: 1 passed. |
+| claim | D1.1 | ARES313 | en curso | 2026-10-03 | no aplica | — / área D | Scaffold Vite + React 19 + Tailwind 4 (ADR-0007), migrado desde Next. `437b53e` en `frontJJ`; lint/typecheck/build verde. Pendiente de PR a `develop`. |
+| claim | D1.2 | ARES313 | en curso | 2026-10-03 | no aplica | — / área D | Rutas base (`/biblioteca`, `/chat`, `/materias`, `/settings`) y layout protegido. `34701c1`, restyle `c168669`. Pendiente de PR a `develop`. |
+| claim | D1.3 | ARES313 | en curso | 2026-10-03 | no aplica | — / área D | Login Google (redirección/callback/logout, estados carga/error) sobre OAuth backend A1.3. `b164313`, `6a6c4da`. Pendiente de PR a `develop`. |
+| claim | D1.4 | ARES313 | en curso | 2026-10-17 | no aplica | — / área D | Cliente HTTP same-origin con CSRF en mutaciones e interceptores 401/403/429 (`ad75e7c`); U-S1-DA-01: 15 tests verde. Pendiente de PR a `develop`. |
 
 ## 4. Historial de cambios
 
@@ -106,3 +110,4 @@ de este PR de planificación.
 | 2026-09-27 | S1.B5 y S1.B6 pasan a `hecho`. I-S1-SG-06: 9 passed en ingest. I-S1-SG-05: el gate de outbox, 1 passed. En el WSL el éxito no queda `verified` por `unreadable_processes`. | Este cambio |
 | 2026-09-28 | A1.2, A1.4, A1.7, A1.8, J1.5, S1.B1 y S1.B3 pasan a `hecho` tras fusionar #22, #23, #26, #28–#30, #33 y #34 en `develop`. L1.6 sigue `en curso` hasta que se fusione su PR. | Este PR |
 | 2026-09-28 | L1.6 pasa a `hecho`: el PR `s1/l1.6-freeze` (#38) se fusionó en `develop` (35e4d70) tras #39/#40. La congelación `S1-v1` está publicada en `docs/plan/S1.md`. | Este PR |
+| 2026-10-17 | Se registran D1.1–D1.4 (área Web) de ARES313 en la rama `frontJJ`, `en curso` pendientes de PR a `develop`. D1.4 cierra el cliente HTTP (U-S1-DA-01, 15 tests). | Este cambio |
