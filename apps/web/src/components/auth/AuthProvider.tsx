@@ -3,11 +3,12 @@ import type { ReactNode } from "react";
 import { Navigate, Outlet } from "react-router-dom";
 import { fetchMe, postLogout } from "@/lib/auth";
 import type { Me } from "@/lib/auth";
+import { clearCsrfToken, getCsrfToken } from "@/lib/csrf";
 import { BlinkingCaret } from "@/components/motion/BlinkingCaret";
 
-// D1.2 — Estado de sesión compartido. `GET /me` decide si hay sesión (cookie
+// D1.2/D1.4 — Estado de sesión compartido. `GET /me` decide si hay sesión (cookie
 // `mw_session`); sin sesión el backend responde 401 y aquí se queda `user=null`.
-// El token CSRF se mantiene solo en memoria (estado React), nunca en storage
+// El token CSRF se mantiene solo en memoria (`lib/csrf.ts`), nunca en storage
 // (regla D1.4/D2.8). El modo invitado es provisional (maqueta): solo desbloquea
 // la navegación, sin permisos reales del backend.
 
@@ -26,7 +27,6 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<Me | null>(null);
-  const [csrfToken, setCsrfToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [guest, setGuest] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -43,7 +43,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (cancelled) return;
       if (me !== null) {
         setUser(me);
-        setCsrfToken(me.csrf_token);
       }
       setLoading(false);
     });
@@ -63,12 +62,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function logout(): Promise<void> {
     try {
-      await postLogout(csrfToken);
+      await postLogout();
     } catch {
       // Aunque falle la revocación remota, el estado local se limpia igual.
     } finally {
       setUser(null);
-      setCsrfToken(null);
+      clearCsrfToken();
       setGuest(false);
       try {
         window.sessionStorage.removeItem(GUEST_KEY);
@@ -79,7 +78,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, csrfToken, loading, guest, enterAsGuest, logout }}>
+    <AuthContext.Provider
+      value={{ user, csrfToken: getCsrfToken(), loading, guest, enterAsGuest, logout }}
+    >
       {children}
     </AuthContext.Provider>
   );

@@ -1,12 +1,16 @@
-// D1.3 — Helpers de autenticación con Google OAuth.
+// D1.3/D1.4 — Helpers de autenticación con Google OAuth y bootstrap de CSRF.
 //
 // El flujo OAuth lo resuelve el backend (A1.3): el frontend solo redirige a
 // `/auth/google/start` y deja que FastAPI genere `state` + PKCE, valide el
 // `nonce`/issuer/audience y use el `sub` de Google como identidad (M1).
 // Por eso el navegador nunca ve el client secret ni tokens de Google.
 //
+// El perfil + CSRF se obtienen con `fetchMe()` → `bootstrapCsrf()` (D1.4): el
+// token vive solo en memoria y toda mutación lo inyecta vía `apiFetch`.
+//
 // Regla transversal (ADR-0006): la identidad la fija el estado autenticado del
 // backend (cookie opaca `mw_session`), nunca un payload del cliente.
+import { apiFetch, bootstrapCsrf } from "./api";
 
 /** Endpoint backend que inicia el login con Google (contrato M1). */
 export const GOOGLE_AUTH_START_URL = "/auth/google/start";
@@ -26,32 +30,19 @@ export interface Me {
 }
 
 /**
- * Consulta `GET /me` same-origin (cookie `mw_session`). Devuelve `null` si no
- * hay sesión (401), si el endpoint no responde JSON o ante fallo de red: nunca
- * lanza para casos de autenticación. El `Cache-Control: no-store` lo garantiza
- * el backend; aquí además no se cachea.
+ * Consulta `GET /me` same-origin (cookie `mw_session`) y guarda el token CSRF en
+ * memoria. Devuelve `null` sin lanzar si no hay sesión (401), si el endpoint no
+ * responde JSON o ante fallo de red. El `Cache-Control: no-store` lo garantiza el
+ * backend; aquí además se fuerza `cache: "no-store"`.
  */
 export async function fetchMe(): Promise<Me | null> {
-  let res: Response;
-  try {
-    res = await fetch("/me", { cache: "no-store", credentials: "include" });
-  } catch {
-    return null;
-  }
-  if (!res.ok) return null;
-  const contentType = res.headers.get("content-type") ?? "";
-  if (!contentType.includes("application/json")) return null;
-  return (await res.json()) as Me;
+  return bootstrapCsrf();
 }
 
 /**
- * Revoca la sesión en el backend (mutación: exige `X-CSRF-Token` y Origin
- * same-origin, A1.4). El estado local lo limpia el `AuthProvider`.
+ * Revoca la sesión en el backend. Es una mutación: `apiFetch` inyecta
+ * `X-CSRF-Token` (A1.4). El estado local lo limpia el `AuthProvider`.
  */
-export async function postLogout(csrfToken: string | null): Promise<void> {
-  await fetch("/auth/logout", {
-    method: "POST",
-    credentials: "include",
-    headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined,
-  });
+export async function postLogout(): Promise<void> {
+  await apiFetch("/auth/logout", { method: "POST" });
 }
