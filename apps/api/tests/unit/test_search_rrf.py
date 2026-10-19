@@ -25,7 +25,12 @@ from tests.fixtures import search_corpus as corpus
 
 def _ranking(chunk_ids: Sequence[uuid.UUID]) -> list[Candidate]:
     return [
-        Candidate(chunk_id=chunk_id, audio_id=corpus.audio_of(chunk_id), rank=rank, score=0.0)
+        Candidate(
+            chunk_id=chunk_id,
+            audio_id=corpus.audio_of(chunk_id),
+            rank=rank,
+            branch_score=0.0,
+        )
         for rank, chunk_id in enumerate(chunk_ids, start=1)
     ]
 
@@ -122,8 +127,8 @@ def test_dedupe_removes_overlapping_duplicate_content() -> None:
 # --- 7. Diversity --------------------------------------------------------------------
 
 
-def test_diversity_caps_chunks_per_audio() -> None:
-    """`MAX_CHUNKS_PER_AUDIO` limits one class in the front, then overflow fills in order."""
+def test_diversity_soft_caps_chunks_per_audio() -> None:
+    """Soft cap: at most `max_per_audio` per class in front; overflow is appended, never dropped."""
     a1, a2, a3 = (
         corpus.CHUNK_ES_DEFINITE,
         corpus.CHUNK_ES_CHAIN,
@@ -140,6 +145,9 @@ def test_diversity_caps_chunks_per_audio() -> None:
     # (a3) is appended afterwards so the list is not shortened.
     assert _ids(diverse) == [a1, a2, other, a3]
     assert _ids(diverse[:3]).count(a3) == 0
+    # Documented contract: the cap is on the front of the list, so the class may still reappear
+    # in the overflow (`merge` slices to `top_k` afterwards). A hard cap would shorten top-k.
+    assert _ids(diverse).count(a3) == 1
 
 
 # --- 8. Top-k after dedupe and diversity ---------------------------------------------

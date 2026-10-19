@@ -12,6 +12,12 @@ does not silently skip them. It is idempotent (`WHERE c.tsv IS NULL`) and re-run
 Downgrade is intentionally a no-op: the migration changes data, not schema, and nulling `tsv`
 again would break the lexical branch. Recomputing it is cheap and deterministic.
 
+Single statement, not batched: S2 carries no real corpus (D3-Texto is open), the predicate is
+`tsv IS NULL` so a re-run after a partial failure only touches the remaining rows, and Alembic
+runs the whole revision in one transaction anyway. If the table ever grows large enough to make
+one `UPDATE` a locking problem, split it into a batched, chunk-keyed loop (keyset on `chunks.id`)
+in a dedicated ops migration rather than tuning this one.
+
 Note on numbering: this takes the `0003` slot. A2.18 (unclaimed) expected `0003_*.py` for the
 schema-integrity migration; it now needs `0004`.
 """

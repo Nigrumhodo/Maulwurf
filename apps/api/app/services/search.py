@@ -22,11 +22,14 @@ What this module guarantees (S2.md §1.3 and §L2.3, ESPECIFICACION §M6/DISENO 
 - **Dedupe and diversity before the top-k.** A chunk reached by both branches counts once
   (natural dedupe by `chunk_id`); overlapping content (the same normalized text inside one
   class) collapses to a single survivor, using the candidate content read before the fusion;
-  diversity caps how many chunks a single class can contribute. Only then is the list cut to
-  `top_k`, so diversity cannot leave the result set short.
+  diversity soft-caps how many chunks a single class contributes to the front of the list.
+  Only then is the list cut to `top_k`.
 - **`iterative_scan` is enabled inside a SAVEPOINT.** An unsupported GUC (pgvector < 0.8)
   rolls the savepoint back and surfaces as `SearchHnswUnsupported`, never as a poisoned
   caller transaction.
+- **Retrieved content is untrusted data.** Every `FusedHit` is a `chunk_id`/`audio_id`/score;
+  the chunk text is transcript data and must never be interpreted as instructions by a later
+  consumer (L2.5 prompt construction, L2.6 citation validation).
 - **No content in logs.** Only counts, version and error codes; never `content`, the query
   text, vectors or the API key.
 
@@ -63,6 +66,9 @@ MAX_CHUNKS_PER_AUDIO = 2  # diversity cap per class (plan §7, decisión 4).
 
 # Per-transaction GUC: with filters active, HNSW must keep scanning until it has `LIMIT`
 # candidates, otherwise the top-k comes back short (DISENO §2.5).
+# `hnsw.ef_search` and `hnsw.max_scan_tuples` are deliberately left at the PostgreSQL defaults:
+# choosing them is a capacity/latency decision that needs the F0 measurements and the G4 quality
+# gate (L2.7/L2.8). Hard-coding a value now would be an invented limit (guardrail 10).
 ITERATIVE_SCAN_SQL = text("SET LOCAL hnsw.iterative_scan = strict_order")
 
 
@@ -95,12 +101,18 @@ class SearchHnswUnsupported(SearchError):
 
 @dataclass(frozen=True)
 class Candidate:
-    """One hit of a single branch, already filtered by tenant/version, with its 1-based rank."""
+    """One hit of a single branch, already filtered by tenant/version, with its 1-based rank.
+
+    `branch_score` is the branch-native value and is **not comparable across branches**: the
+    lexical branch orders by `ts_rank_cd` (higher is better) and the vector branch orders by
+    cosine distance (lower is better). RRF is derived from `rank` alone, so this field never
+    influences the fusion; it is kept for diagnostics only.
+    """
 
     chunk_id: uuid.UUID
     audio_id: uuid.UUID
     rank: int
-    score: float
+    branch_score: float
 
 
 @dataclass(frozen=True)
@@ -287,10 +299,15 @@ def dedupe(
 def diversify(
     hits: Sequence[FusedHit], *, max_per_audio: int = MAX_CHUNKS_PER_AUDIO
 ) -> list[FusedHit]:
-    """Cap how many chunks one class contributes, without shortening the result set.
+    """Promote diversity with a **soft** cap per class, never shortening the result set.
 
-    Two deterministic passes: the first respects `max_per_audio`, the second appends the
-    overflow in its original (score) order so a small corpus still fills `top_k`.
+    Contract: the first pass front-loads at most `max_per_audio` chunks of each class; a second
+    pass appends the overflow in its original (RRF) order. So the cap is *not* a hard limit on
+    the returned list — it only guarantees that, while other classes still have candidates, no
+    class occupies more than `max_per_audio` of the front. Truncating the overflow instead would
+    let `merge` return fewer than `top_k` whenever one class dominates the corpus, which is the
+    case the plan explicitly avoids (plan §7, decisión 4). If L2.7/G4 later needs a hard cap,
+    drop the overflow pass rather than slicing here.
     """
     if max_per_audio <= 0:
         return list(hits)
@@ -333,7 +350,7 @@ async def _candidates(
             chunk_id=row.chunk_id,
             audio_id=row.audio_id,
             rank=position,
-            score=float(row.score),
+            branch_score=float(row.score),
         )
         for position, row in enumerate(rows, start=1)
     ]
