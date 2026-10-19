@@ -37,7 +37,17 @@ from app.schemas.ingestion import IngestionCapabilities
 
 ENV_PREFIX = "MAULWURF_"
 ENV_FILES = ("../../.env", ".env")
-_SECRET_FIELDS = ("secret_key", "encryption_key", "oauth_state_secret", "google_client_secret")
+_SECRET_FIELDS = (
+    "secret_key",
+    "encryption_key",
+    "oauth_state_secret",
+    "google_client_secret",
+    "embedding_api_key",
+)
+# Pinned by `embeddings.vector vector(1536)` in migration 0002 (M6). Changing it requires a
+# migration and a whole new index generation, so startup validates it instead of silently
+# accepting a model with another dimension.
+EMBEDDING_DIMENSION = 1536
 _DEV_DEFAULT_FIELDS = ("database_url", "redis_url", "public_origin")
 # `.env` que usa la construcción en curso (respeta `_env_file`, p. ej. None en tests).
 _active_env_files: ContextVar[tuple[str, ...]] = ContextVar("_active_env_files", default=ENV_FILES)
@@ -93,6 +103,26 @@ class Settings(BaseSettings):
     # la lee de MAULWURF_INGESTION_CAPABILITIES como un objeto JSON; sin ella el endpoint
     # devuelve el shape seguro sin límites aprobados.
     ingestion_capabilities: IngestionCapabilities = Field(default_factory=IngestionCapabilities)
+    # Versioned embeddings (L2.2, M6/D5): provider compatible with the embeddings API.
+    # `base_url` is the base to which `/embeddings` is appended. Without base_url and api_key
+    # indexing fails with `embedding_not_configured`; there is never a default provider nor
+    # a silent degradation to fake vectors.
+    embedding_base_url: AnyHttpUrl | None = None
+    embedding_api_key: SecretStr | None = None
+    embedding_model: str = Field(default="text-embedding-3-small", min_length=1)
+    embedding_dimension: int = Field(default=EMBEDDING_DIMENSION, ge=1)
+    # Bounded per-batch budget (guardrail 10: no loop or burst without a limit).
+    embedding_batch_size: int = Field(default=100, ge=1, le=512)
+    embedding_max_retries: int = Field(default=3, ge=0, le=10)
+    embedding_timeout_seconds: float = Field(default=30.0, gt=0, le=600)
+    # Lotes en paralelo (PR #71). Por defecto 1 = secuencial: la cuota del proveedor sigue
+    # pendiente (D5, guardia 10), así que el paralelismo no se activa por defecto; el techo
+    # (4) acota cualquier ráfaga cuando D5 fije el límite real.
+    embedding_max_concurrency: int = Field(default=1, ge=1, le=4)
+    # D3-Texto: models/providers whose decision is closed (ESPECIFICACION §12). Empty by
+    # default — fail closed: with the decision open only synthetic or redacted text is
+    # indexed (S2.md §0.6, rule 6). Only the lead's recorded closure fills it in.
+    d3_text_closed_models: tuple[str, ...] = ()
     # Único Origin aceptado en mutaciones (A1.4): el que sirve Caddy, same-origin.
     public_origin: AnyHttpUrl = cast(AnyHttpUrl, "https://localhost")
     # cast: pydantic valida los DSN en runtime; mypy no relaja el tipo del default.
@@ -133,6 +163,24 @@ class Settings(BaseSettings):
     def _reject_incomplete_oauth(self) -> "Settings":
         if (self.google_client_id is None) != (self.google_client_secret is None):
             raise ValueError("google_client_id y google_client_secret van juntos")
+        return self
+
+    @model_validator(mode="after")
+    def _reject_incomplete_embedding_config(self) -> "Settings":
+        if (self.embedding_base_url is None) != (self.embedding_api_key is None):
+            raise ValueError("embedding_base_url y embedding_api_key van juntos")
+        return self
+
+    @model_validator(mode="after")
+    def _reject_embedding_dimension_change(self) -> "Settings":
+        # The vector dimension lives in the schema (`embeddings.vector vector(1536)`, M6);
+        # another value here could only come from an incompatible model and would fail on
+        # INSERT, so it is rejected at startup with the field name.
+        if self.embedding_dimension != EMBEDDING_DIMENSION:
+            raise ValueError(
+                f"embedding_dimension debe ser {EMBEDDING_DIMENSION} "
+                "(dimensión fijada en la migración 0002)"
+            )
         return self
 
     @model_validator(mode="after")

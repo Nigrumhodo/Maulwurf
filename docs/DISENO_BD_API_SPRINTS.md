@@ -505,7 +505,12 @@ Notes:
 - A chunk is **not** the minimal unit of evidence: `chunk_segments` keeps the segments and
   their spans even when chunks overlap.
 - Chunks and generations: reindexing with a new `index_version` re-chunks — it creates new
-  `chunks`/`chunk_segments` rows for that generation and purges retired embeddings. A
+  `chunks`/`chunk_segments` rows for that generation and **retires** the previous one
+  (`status = 'retired'`). The retired generation keeps its chunks and embeddings
+  materialized: they are never deleted inside the activation transaction, so a rollback to
+  that version stays possible and a failed activation leaves no half-deleted index. Searches
+  already exclude them because they filter by the active generation. Physical cleanup of
+  retired generations is a retention policy (J2.4, plan §5), not part of activation. A
   `chunk_id` belongs to exactly one generation; the `index_version` of `embeddings` is
   defensive redundancy and must match the chunk's.
 - Vector retrieval with filters (contract §3.9): the query requires
