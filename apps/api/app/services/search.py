@@ -271,9 +271,7 @@ def rrf_fuse(rankings: Sequence[Sequence[Candidate]], *, k: int = RRF_K) -> list
     return fused
 
 
-def dedupe(
-    hits: Sequence[FusedHit], *, content_key: ContentKey | None = None
-) -> list[FusedHit]:
+def dedupe(hits: Sequence[FusedHit], *, content_key: ContentKey | None = None) -> list[FusedHit]:
     """Collapse duplicate chunks and overlapping content, keeping the best-ranked survivor.
 
     `hits` is expected best-first (the output of `rrf_fuse`). With `content_key`, two chunks
@@ -393,9 +391,7 @@ async def _content_keys(
         return {}
     rows = (
         await db.execute(
-            select(Chunk.id, Chunk.content).where(
-                Chunk.user_id == user_id, Chunk.id.in_(chunk_ids)
-            )
+            select(Chunk.id, Chunk.content).where(Chunk.user_id == user_id, Chunk.id.in_(chunk_ids))
         )
     ).all()
     return {row.id: _normalize_content(row.content) for row in rows}
@@ -424,7 +420,9 @@ async def hybrid_search(
     text_query = query_text.strip()
     if not text_query:
         raise SearchInvalidQuery("La consulta está vacía.", details={"reason": "empty_query"})
-    if query_vector is None:
+    # A degenerate (empty) vector would reach PostgreSQL as an uncastable bind and surface as
+    # an untyped 500; the documented typed error for "no usable vector" is 400 (plan §2.5).
+    if not query_vector:
         raise SearchVectorRequired(
             "La búsqueda híbrida necesita el vector de la consulta.",
             details={"reason": "missing_query_vector"},

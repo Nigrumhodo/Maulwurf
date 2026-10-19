@@ -179,7 +179,16 @@ def test_upgrade_from_empty_reaches_head(empty_schema: str) -> None:
 
 def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     cfg = alembic_config(empty_schema)
+    revision = ScriptDirectory.from_config(cfg).get_revision(_head(empty_schema))
+    assert revision is not None
+    parent = revision.down_revision
+    assert isinstance(parent, str)  # this chain is linear
     command.upgrade(cfg, "head")
+
+    # `0003` only backfills `chunks.tsv` (data, not schema), so its downgrade is a no-op:
+    # one step back lands on the parent revision with the S2 schema still intact.
+    command.downgrade(cfg, "-1")
+    assert _state(empty_schema) == (S2_TABLES, [parent])
 
     command.downgrade(cfg, "-1")
     assert _state(empty_schema) == (S1_TABLES, ["0001"])
@@ -204,8 +213,7 @@ def test_s2_catalog_has_composite_fks_indexes_and_no_audio_storage_key(
     for table_name, expected in S2_COMPOSITE_FOREIGN_KEYS.items():
         normalized_expected = {_normalized_constraint(definition) for definition in expected}
         normalized_actual = {
-            _normalized_constraint(definition)
-            for definition in foreign_keys.get(table_name, set())
+            _normalized_constraint(definition) for definition in foreign_keys.get(table_name, set())
         }
         assert normalized_expected <= normalized_actual
     for index_name, fragment in S2_INDEX_FRAGMENTS.items():

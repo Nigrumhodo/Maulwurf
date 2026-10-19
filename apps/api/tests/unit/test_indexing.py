@@ -537,6 +537,7 @@ async def test_indexing_persists_chunk_tsv_from_transcript_config() -> None:
 
 # --- 18. Tenant isolation --------------------------------------------------------
 
+
 async def test_indexing_every_statement_is_tenant_scoped() -> None:
     """Every query and every written row carries the authenticated `user_id`."""
     user_id = uuid.uuid4()

@@ -115,9 +115,7 @@ def test_rrf_chunk_in_both_branches_sums_both_terms() -> None:
 
 def test_dedupe_removes_overlapping_duplicate_content() -> None:
     """Same class + same content → one survivor (the best-ranked; here the first)."""
-    fused = rrf_fuse(
-        [_ranking((corpus.CHUNK_ES_DEFINITE, corpus.CHUNK_ES_DEFINITE_DUP))]
-    )
+    fused = rrf_fuse([_ranking((corpus.CHUNK_ES_DEFINITE, corpus.CHUNK_ES_DEFINITE_DUP))])
 
     survivors = dedupe(fused, content_key=corpus.content_of)
 

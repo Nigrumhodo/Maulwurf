@@ -356,6 +356,21 @@ async def test_hybrid_search_requires_query_vector() -> None:
     assert db.executed == []
 
 
+async def test_hybrid_search_rejects_empty_query_vector() -> None:
+    """A degenerate empty vector is the same typed 400, never an unhandled database error."""
+    db = StubSession()
+
+    with pytest.raises(search.SearchVectorRequired):
+        await search.hybrid_search(
+            _db(db),
+            user_id=USER_ID,
+            query_text="integral",
+            query_vector=[],
+            version=VERSION,
+        )
+    assert db.executed == []
+
+
 async def test_hybrid_search_resolves_active_generation() -> None:
     generation = SimpleGeneration(VERSION)
     db = StubSession(generation=generation)
