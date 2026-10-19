@@ -71,11 +71,18 @@ def test_allowed_origin_has_no_trailing_slash() -> None:
 
 def test_repr_and_dump_never_expose_secret_values() -> None:
     settings = _settings(
-        google_client_id="client-id", google_client_secret="google-value-for-test"
+        google_client_id="client-id",
+        google_client_secret="google-value-for-test",
+        embedding_base_url="https://api.openai.com/v1",
+        embedding_api_key="embedding-value-for-test",
     )
     rendered = f"{settings!r} {settings} {settings.model_dump()} {settings.model_dump_json()}"
 
-    for value in [*SECRETS.values(), "google-value-for-test"]:
+    for value in [
+        *SECRETS.values(),
+        "google-value-for-test",
+        "embedding-value-for-test",
+    ]:
         assert value not in rendered
 
 
@@ -187,3 +194,39 @@ def test_dev_default_guard_also_covers_default_factory(
 def test_empty_language_allowlist_is_rejected() -> None:
     with pytest.raises(ValidationError, match="ingest_languages"):
         _settings(ingest_languages=())
+
+
+# --- Versioned embeddings and D3-Texto (L2.2) -----------------------------------------
+
+
+def test_embedding_dimension_is_pinned_to_the_schema() -> None:
+    # `embeddings.vector` is `vector(1536)` in migration 0002: another value fails at boot.
+    with pytest.raises(ValidationError, match="embedding_dimension"):
+        _settings(embedding_dimension=3072)
+
+
+def test_embedding_url_and_key_go_together() -> None:
+    with pytest.raises(ValidationError, match="embedding_base_url"):
+        _settings(embedding_base_url="https://api.openai.com/v1")
+    with pytest.raises(ValidationError, match="embedding_api_key"):
+        _settings(embedding_api_key="only-the-key")
+
+
+def test_change_me_embedding_key_rejected_outside_local() -> None:
+    with pytest.raises(ValidationError, match="embedding_api_key"):
+        _prod(
+            embedding_base_url="https://api.openai.com/v1",
+            embedding_api_key="change-me-please",
+        )
+
+
+def test_d3_text_models_default_to_fail_closed() -> None:
+    # Empty by default: while D3-Texto is open only synthetic or redacted text is indexed.
+    assert _settings().d3_text_closed_models == ()
+
+
+def test_embedding_budget_is_bounded() -> None:
+    with pytest.raises(ValidationError, match="embedding_batch_size"):
+        _settings(embedding_batch_size=10_000)
+    with pytest.raises(ValidationError, match="embedding_max_retries"):
+        _settings(embedding_max_retries=99)
