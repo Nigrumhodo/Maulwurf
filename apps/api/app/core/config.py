@@ -115,6 +115,10 @@ class Settings(BaseSettings):
     embedding_batch_size: int = Field(default=100, ge=1, le=512)
     embedding_max_retries: int = Field(default=3, ge=0, le=10)
     embedding_timeout_seconds: float = Field(default=30.0, gt=0, le=600)
+    # Lotes en paralelo (PR #71). Por defecto 1 = secuencial: la cuota del proveedor sigue
+    # pendiente (D5, guardia 10), así que el paralelismo no se activa por defecto; el techo
+    # (4) acota cualquier ráfaga cuando D5 fije el límite real.
+    embedding_max_concurrency: int = Field(default=1, ge=1, le=4)
     # D3-Texto: models/providers whose decision is closed (ESPECIFICACION §12). Empty by
     # default — fail closed: with the decision open only synthetic or redacted text is
     # indexed (S2.md §0.6, rule 6). Only the lead's recorded closure fills it in.

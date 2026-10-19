@@ -3,12 +3,14 @@
 No network and no database: `httpx.MockTransport` serves the responses and an injected
 `sleeper` records the delays (it never really sleeps). Docstring and `U-` level per
 `docs/PLAN_TESTS.md` §0.4.6: a test that needed the network would be `I-`/`P-`.
+Batches share one `httpx.AsyncClient` and run under a bounded semaphore (PR #71 review).
 """
 
+import asyncio
 import json
 import logging
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -40,10 +42,11 @@ class _Sleeper:
 
 
 def _provider(
-    handler: Callable[[httpx.Request], httpx.Response],
+    handler: Callable[[httpx.Request], httpx.Response | Awaitable[httpx.Response]],
     *,
     batch_size: int = 100,
     max_retries: int = 3,
+    max_concurrency: int = 1,
     dimension: int = DIMENSION,
     sleeper: _Sleeper | None = None,
 ) -> HttpEmbeddingProvider:
@@ -54,8 +57,11 @@ def _provider(
         dimension=dimension,
         batch_size=batch_size,
         max_retries=max_retries,
+        max_concurrency=max_concurrency,
         timeout_seconds=5.0,
-        transport=httpx.MockTransport(handler),
+        # httpx types the mock handler as sync-only, but its async path awaits the handler
+        # when it returns an awaitable; the cast lets the concurrency tests suspend there.
+        transport=httpx.MockTransport(cast(Any, handler)),
         sleeper=sleeper or _Sleeper(),
         jitter=lambda: 0.0,
     )
@@ -229,9 +235,13 @@ async def test_embeddings_rate_limit_honours_retry_after() -> None:
 # --- 6. Client errors: not a single retry -----------------------------------------------
 
 
-@pytest.mark.parametrize("status", [400, 401, 403, 404, 413])
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 409, 413])
 async def test_embeddings_never_retry_client_errors(status: int) -> None:
-    """A request error is never retried: a single call."""
+    """A request error is never retried: a single call.
+
+    `409` is included on purpose (review of PR #71): a state conflict reported by the
+    provider is definitive, so retrying it would only repeat the same rejection.
+    """
     calls: list[int] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -278,6 +288,88 @@ async def test_embeddings_logs_contain_no_content(
     assert caplog.records
     assert secret_text not in logged
     assert "test-key" not in logged
+
+
+# --- 9. One client, bounded concurrency (review of PR #71) ------------------------------
+
+
+async def test_embeddings_reuse_a_single_http_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Three batches go through one `httpx.AsyncClient`: one connection pool, no per-batch one."""
+    created: list[httpx.AsyncClient] = []
+
+    class _CountingClient(httpx.AsyncClient):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            created.append(self)
+
+    # The service imports this same module attribute, so patching it counts its clients.
+    monkeypatch.setattr(httpx, "AsyncClient", _CountingClient)
+
+    vectors = await _provider(_ok, batch_size=1).embed(["a", "b", "c"])
+
+    assert len(vectors) == 3
+    assert len(created) == 1
+
+
+async def test_embeddings_batches_run_with_bounded_concurrency() -> None:
+    """`max_concurrency` caps in-flight requests at 2 while keeping the input order."""
+    in_flight = 0
+    peak = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0)  # yields so the second slot can overlap this request
+        in_flight -= 1
+        payload = json.loads(request.content)
+        return httpx.Response(200, json={"data": _vectors(count=len(payload["input"]))})
+
+    vectors = await _provider(handler, batch_size=1, max_concurrency=2).embed(
+        ["a", "b", "c", "d"]
+    )
+
+    assert peak == 2
+    assert len(vectors) == 4
+
+
+async def test_embeddings_are_sequential_by_default() -> None:
+    """Default `max_concurrency` is 1: no parallelism until D5 fixes the provider quota."""
+    in_flight = 0
+    peak = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0)
+        in_flight -= 1
+        payload = json.loads(request.content)
+        return httpx.Response(200, json={"data": _vectors(count=len(payload["input"]))})
+
+    await _provider(handler, batch_size=1).embed(["a", "b", "c"])
+
+    assert peak == 1
+
+
+async def test_embeddings_concurrent_failure_is_typed_and_partial_never_returned() -> None:
+    """A failing batch among several in flight propagates and no partial list is returned."""
+    started: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        text = payload["input"][0]
+        started.append(text)
+        if text == "bad":
+            return httpx.Response(401, text="unauthorized")
+        await asyncio.sleep(0)
+        return httpx.Response(200, json={"data": _vectors(count=len(payload["input"]))})
+
+    with pytest.raises(EmbeddingProviderError) as failure:
+        await _provider(handler, batch_size=1, max_concurrency=2).embed(["ok1", "bad", "ok2"])
+
+    assert failure.value.details["status"] == 401
+    assert started == ["ok1", "bad", "ok2"]  # every in-flight batch finished, none orphaned
 
 
 # --- Provider configuration -------------------------------------------------------------

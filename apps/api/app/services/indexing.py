@@ -3,11 +3,16 @@
 What this module guarantees:
 
 - **A single active generation per user.** Activation issues `retire` + `activate` + `audios`
-  pointers + purge of the retired generation and makes **one single commit**: a reader in
-  `READ COMMITTED` sees the old version or the new one, never a mixture. The strong guarantee
-  comes from the database (`index_generations_one_active`, partial unique index of migration
-  0002): two concurrent activations collide and the loser becomes `GenerationConflict`
-  (`generation_conflict`).
+  pointers and makes **one single commit**: a reader in `READ COMMITTED` sees the old version
+  or the new one, never a mixture. The strong guarantee comes from the database
+  (`index_generations_one_active`, partial unique index of migration 0002): two concurrent
+  activations collide and the loser becomes `GenerationConflict` (`generation_conflict`).
+- **The retired generation is kept, not deleted (review of PR #71).** Activation only flips
+  status and pointers: the previous generation's chunks/embeddings stay materialized. A
+  failure inside the activation still rolls everything back, and the retained rows are the
+  prerequisite for a future rollback to the previous version; the search already excludes
+  them because it filters by `active_generation`. Physical cleanup of retired generations is
+  a retention policy owned by J2.4 (plan §5), not by the activation transaction.
 - **A partial index is never activated.** Before activating, every `chunk` of the version
   must have its `embeddings` row and every eligible class must be covered; otherwise
   `generation_incomplete` and the generation stays in `building` (invisible: the search
@@ -27,7 +32,8 @@ are not synchronized; `active_generation()` is the authoritative read (each requ
 own session).
 
 What it does NOT do (later tickets): `processing_runs` lifecycle and the ARQ job (J2.2/J2.1),
-hybrid search/RRF (L2.3/L2.4), chat (L2.5) and migrations (A2.18).
+hybrid search/RRF (L2.3/L2.4), chat (L2.5), migrations (A2.18) and the physical cleanup /
+retention of retired generations (J2.4).
 """
 
 import logging
@@ -40,11 +46,9 @@ from typing import Any, Literal, cast
 from sqlalchemy import (
     ColumnElement,
     CursorResult,
-    Delete,
     Select,
     Update,
     and_,
-    delete,
     func,
     select,
     update,
@@ -278,7 +282,6 @@ async def activate_generation(
             )
         await db.execute(_audio_versions_statement(user_id=user_id, version=version))
         await db.execute(_clear_stale_audio_versions_statement(user_id=user_id, version=version))
-        await db.execute(_purge_retired_chunks_statement(user_id=user_id))
         # The ORM object reflects the new state for the caller; the real activation is the
         # UPDATE above, inside the same transaction.
         generation.status = INDEX_ACTIVE
@@ -715,16 +718,5 @@ def _clear_stale_audio_versions_statement(*, user_id: uuid.UUID, version: str) -
             Audio.active_index_version != version,
         )
         .values(active_index_version=None)
-        .execution_options(synchronize_session=False)
-    )
-
-
-def _purge_retired_chunks_statement(user_id: uuid.UUID) -> Delete:
-    retired = select(IndexGeneration.version).where(
-        IndexGeneration.user_id == user_id, IndexGeneration.status == INDEX_RETIRED
-    )
-    return (
-        delete(Chunk)
-        .where(Chunk.user_id == user_id, Chunk.index_version.in_(retired.scalar_subquery()))
         .execution_options(synchronize_session=False)
     )

@@ -13,8 +13,12 @@ Ticket decisions and why:
   dimension; `embeddings.vector` is `vector(1536)` in migration 0002, so a provider of
   another dimension is a hard error, not a silent truncation.
 - **Bounded budget (guardrail 10):** exponential backoff + jitter retries only for 429/5xx/
-  network, `Retry-After` honoured, at most `embedding_max_retries`; 400/401/403/404/413/422
-  are never retried.
+  network, `Retry-After` honoured, at most `embedding_max_retries`; 400/401/403/404/409/413/
+  422 are never retried (409 is a definitive state conflict, not a transient failure).
+- **Bounded concurrency (PR #71):** every batch shares one `httpx.AsyncClient` (one connection
+  pool, no per-batch handshake) and batches run through an `asyncio.Semaphore` of
+  `embedding_max_concurrency` slots — 1 by default (sequential) until D5 fixes the provider
+  quota. `asyncio.gather` reassembles the results in batch order.
 - **No content in logs:** only model, batch size, status, attempt and delay. Never the text,
   the vectors or the key.
 
@@ -41,7 +45,7 @@ EMBEDDINGS_PATH = "embeddings"
 # too: a huge header must not block the job indefinitely.
 _BACKOFF_BASE_SECONDS = 0.5
 _MAX_RETRY_AFTER_SECONDS = 60.0
-_RETRYABLE_STATUS = frozenset({408, 409, 429, 500, 502, 503, 504})
+_RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 # 400 is handled separately: it can be an overlong batch (model limit) or a malformed request,
 # and that distinction changes the error code the job publishes.
 _TOO_LONG_MARKERS = ("context length", "maximum context", "too long", "too many tokens")
@@ -121,7 +125,7 @@ def is_configured(settings: Settings = live_settings) -> bool:
 
 
 class HttpEmbeddingProvider:
-    """Sequential, batched client with a bounded retry budget for the embeddings provider."""
+    """Batched client: one shared HTTP client, bounded retries and bounded concurrency."""
 
     def __init__(
         self,
@@ -133,6 +137,7 @@ class HttpEmbeddingProvider:
         batch_size: int,
         max_retries: int = 3,
         timeout_seconds: float = 30.0,
+        max_concurrency: int = 1,
         transport: httpx.AsyncBaseTransport | None = None,
         sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
         jitter: Callable[[], float] = _unit_interval,
@@ -144,6 +149,8 @@ class HttpEmbeddingProvider:
         self._batch_size = batch_size
         self._max_attempts = max_retries + 1
         self._timeout = timeout_seconds
+        # 1 = sequential: the default until D5 fixes the provider quota (guardrail 10).
+        self._max_concurrency = max(1, max_concurrency)
         self._transport = transport
         self._sleep = sleeper
         self._jitter = jitter
@@ -164,6 +171,7 @@ class HttpEmbeddingProvider:
             batch_size=settings.embedding_batch_size,
             max_retries=settings.embedding_max_retries,
             timeout_seconds=settings.embedding_timeout_seconds,
+            max_concurrency=settings.embedding_max_concurrency,
             **overrides,
         )
 
@@ -179,17 +187,45 @@ class HttpEmbeddingProvider:
     def batch_size(self) -> int:
         return self._batch_size
 
+    @property
+    def max_concurrency(self) -> int:
+        return self._max_concurrency
+
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
-        """One vector per text, in input order. An empty batch never calls the provider."""
+        """One vector per text, in input order. An empty batch never calls the provider.
+
+        All batches share a single `httpx.AsyncClient` (one connection pool) and are limited by
+        an `asyncio.Semaphore`: at most `max_concurrency` requests in flight. `asyncio.gather`
+        returns the batch results in argument order, so the vectors stay aligned with the input.
+        With `return_exceptions=True` no batch is left orphaned when another one fails: the
+        loop below re-raises the first failure in batch order after the in-flight batches end.
+        """
         pending = list(texts)
         if not pending:
             return []
-        vectors: list[list[float]] = []
+        batches = [
+            pending[start : start + self._batch_size]
+            for start in range(0, len(pending), self._batch_size)
+        ]
+        slots = asyncio.Semaphore(self._max_concurrency)
         async with httpx.AsyncClient(transport=self._transport, timeout=self._timeout) as client:
-            for start in range(0, len(pending), self._batch_size):
-                batch = pending[start : start + self._batch_size]
-                vectors.extend(await self._embed_batch(client, batch))
+            grouped = await asyncio.gather(
+                *(self._embed_with_slot(client, slots, batch) for batch in batches),
+                return_exceptions=True,
+            )
+        vectors: list[list[float]] = []
+        for item in grouped:
+            if isinstance(item, BaseException):
+                raise item
+            vectors.extend(item)
         return vectors
+
+    async def _embed_with_slot(
+        self, client: httpx.AsyncClient, slots: asyncio.Semaphore, batch: Sequence[str]
+    ) -> list[list[float]]:
+        """One batch holding one semaphore slot, so at most `max_concurrency` run at once."""
+        async with slots:
+            return await self._embed_batch(client, batch)
 
     async def _embed_batch(
         self, client: httpx.AsyncClient, batch: Sequence[str]

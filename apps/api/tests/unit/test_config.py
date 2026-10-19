@@ -230,3 +230,12 @@ def test_embedding_budget_is_bounded() -> None:
         _settings(embedding_batch_size=10_000)
     with pytest.raises(ValidationError, match="embedding_max_retries"):
         _settings(embedding_max_retries=99)
+
+
+def test_embedding_concurrency_is_bounded_and_sequential_by_default() -> None:
+    # PR #71: the knob exists, but parallelism stays off until D5 fixes the provider quota.
+    assert _settings().embedding_max_concurrency == 1
+    with pytest.raises(ValidationError, match="embedding_max_concurrency"):
+        _settings(embedding_max_concurrency=0)
+    with pytest.raises(ValidationError, match="embedding_max_concurrency"):
+        _settings(embedding_max_concurrency=8)

@@ -123,6 +123,7 @@ class StubSession:
                 return "sql:audio_versions", _Rows(rowcount=1)
             return "sql:clear_stale_audio_versions", _Rows(rowcount=0)
         if sql.startswith("DELETE FROM chunks"):
+            # Regression guard: activation must never delete retired chunks (test 14).
             return "sql:purge_retired_chunks", _Rows(rowcount=1)
         if "FROM index_generations" in sql:
             return "sql:generation", _Rows(scalar=self.generation)
@@ -254,7 +255,7 @@ async def test_indexing_creates_building_generation() -> None:
 
 
 async def test_indexing_activation_is_one_transaction() -> None:
-    """Activation chains retire→activate→pointers→purge with **one single** commit."""
+    """Activation chains retire→activate→pointers with **one single** commit."""
     user_id = uuid.uuid4()
     audio_id = uuid.uuid4()
     db = StubSession(
@@ -278,7 +279,6 @@ async def test_indexing_activation_is_one_transaction() -> None:
         "sql:activate",
         "sql:audio_versions",
         "sql:clear_stale_audio_versions",
-        "sql:purge_retired_chunks",
         "commit",
     ]
     assert db.commits == 1
@@ -405,11 +405,16 @@ async def test_indexing_rejects_model_drift_before_writing() -> None:
     assert db.added == []
 
 
-# --- 14. Purge of the retired version -------------------------------------------------
+# --- 14. The retired version is retired, not deleted (review of PR #71) ----------------
 
 
-async def test_indexing_purges_retired_version_in_the_activation_transaction() -> None:
-    """The purge and the `audios` pointers come after activation, before the only commit."""
+async def test_indexing_activation_never_deletes_retired_chunks() -> None:
+    """Activation flips status/pointers only: no `DELETE` runs inside the transaction.
+
+    The retained rows keep a rollback to the previous version possible (physical cleanup of
+    retired generations is J2.4's retention policy, plan §5), so a `DELETE` here would be a
+    regression: the stub still routes it to `sql:purge_retired_chunks` and this test fails.
+    """
     user_id = uuid.uuid4()
     audio_id = uuid.uuid4()
     db = StubSession(
@@ -422,9 +427,10 @@ async def test_indexing_purges_retired_version_in_the_activation_transaction() -
 
     await indexing.activate_generation(_db(db), user_id=user_id, version=VERSION)
 
-    purge_at = db.events.index("sql:purge_retired_chunks")
-    assert db.events.index("sql:activate") < db.events.index("sql:audio_versions") < purge_at
-    assert purge_at < db.events.index("commit")
+    assert "sql:purge_retired_chunks" not in db.events
+    assert not [sql for sql, _ in db.statements if sql.startswith("DELETE")]
+    assert db.events.index("sql:activate") < db.events.index("sql:audio_versions")
+    assert db.events.index("sql:clear_stale_audio_versions") < db.events.index("commit")
     assert db.events.count("commit") == 1
 
 
