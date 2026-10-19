@@ -196,7 +196,7 @@ def lexical_candidates_statement(
     )
     arms: list[Select[tuple[uuid.UUID, uuid.UUID, float]]] = []
     for cfg in _FTS_CONFIGS:
-        regconfig = literal_column(f"'{cfg}'::regconfig")
+        regconfig: ColumnElement[Any] = literal_column(f"'{cfg}'::regconfig")
         tsquery = func.websearch_to_tsquery(regconfig, query_text)
         score = func.ts_rank_cd(Chunk.tsv, tsquery).label("score")
         arm = (
