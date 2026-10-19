@@ -383,7 +383,6 @@ async def test_hybrid_search_rejects_mismatched_vector_dimension() -> None:
             user_id=USER_ID,
             query_text="integral",
             query_vector=[0.1, 0.2, 0.3],
-            version=VERSION,
         )
     assert exc.value.details["reason"] == "bad_dim"
     assert exc.value.details["expected"] == 1536

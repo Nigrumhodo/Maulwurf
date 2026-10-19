@@ -50,7 +50,7 @@ from sqlalchemy import ColumnElement, Select, and_, func, literal_column, select
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Audio, Chunk, Embedding, IndexGeneration, Transcript
+from app.models import Audio, Chunk, Embedding, Transcript
 from app.services.indexing import active_generation
 
 logger = logging.getLogger(__name__)
@@ -446,7 +446,6 @@ async def hybrid_search(
             "La búsqueda híbrida necesita el vector de la consulta.",
             details={"reason": "missing_query_vector"},
         )
-    generation: IndexGeneration | None = None
     resolved = version
     if resolved is None:
         generation = await active_generation(db, user_id)
@@ -456,18 +455,15 @@ async def hybrid_search(
                 details={"reason": "no_active_generation"},
             )
         resolved = generation.version
-    else:
-        gen_stmt = (
-            select(IndexGeneration)
-            .where(IndexGeneration.user_id == user_id, IndexGeneration.version == resolved)
-        )
-        generation = (await db.execute(gen_stmt)).scalar_one_or_none()
-
-    if generation is not None and len(query_vector) != generation.dimension:
-        raise SearchInvalidQuery(
-            "Dimensión de vector inválida.",
-            details={"reason": "bad_dim", "expected": generation.dimension, "got": len(query_vector)},
-        )
+        if len(query_vector) != generation.dimension:
+            raise SearchInvalidQuery(
+                "Dimensión de vector inválida.",
+                details={
+                    "reason": "bad_dim",
+                    "expected": generation.dimension,
+                    "got": len(query_vector),
+                },
+            )
 
     lexical = await _candidates(
         db,
