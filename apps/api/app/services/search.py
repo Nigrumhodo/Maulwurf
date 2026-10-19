@@ -20,9 +20,13 @@ What this module guarantees (S2.md §1.3 and §L2.3, ESPECIFICACION §M6/DISENO 
   the total order is `score_rrf DESC, chunk_id ASC`, so the same input always produces the
   same output and the `chunk_id` tiebreaker doubles as the pagination cursor (L2.4).
 - **Dedupe and diversity before the top-k.** A chunk reached by both branches counts once
-  (natural dedupe by `chunk_id`); overlapping content collapses to a single survivor;
+  (natural dedupe by `chunk_id`); overlapping content (the same normalized text inside one
+  class) collapses to a single survivor, using the candidate content read before the fusion;
   diversity caps how many chunks a single class can contribute. Only then is the list cut to
   `top_k`, so diversity cannot leave the result set short.
+- **`iterative_scan` is enabled inside a SAVEPOINT.** An unsupported GUC (pgvector < 0.8)
+  rolls the savepoint back and surfaces as `SearchHnswUnsupported`, never as a poisoned
+  caller transaction.
 - **No content in logs.** Only counts, version and error codes; never `content`, the query
   text, vectors or the API key.
 
@@ -41,6 +45,7 @@ from typing import Any
 
 from sqlalchemy import ColumnElement, Select, and_, cast, func, select, text
 from sqlalchemy.dialects.postgresql import REGCONFIG
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
@@ -334,6 +339,51 @@ async def _candidates(
     ]
 
 
+async def _enable_iterative_scan(db: AsyncSession) -> None:
+    """Turn on the filtered HNSW scan without poisoning the caller's transaction.
+
+    `SET LOCAL` is transaction-scoped, so it is issued inside a **SAVEPOINT**: if the GUC does
+    not exist (pgvector < 0.8) PostgreSQL raises, the savepoint is rolled back and the caller's
+    transaction stays usable. The failure is re-raised as a typed domain error instead of a
+    driver error, so L2.4 can map it to `500 search_hnsw_unsupported` (contract §3.9 fails
+    closed rather than returning a short top-k).
+    """
+    try:
+        async with db.begin_nested():
+            await db.execute(ITERATIVE_SCAN_SQL)
+    except DBAPIError as exc:
+        raise SearchHnswUnsupported(
+            "pgvector >= 0.8 es necesario para hnsw.iterative_scan.",
+            details={"reason": "iterative_scan_unavailable"},
+        ) from exc
+
+
+def _normalize_content(text: str) -> str:
+    """Whitespace/case-insensitive key so overlapping chunks collapse regardless of spacing."""
+    return " ".join(text.split()).casefold()
+
+
+async def _content_keys(
+    db: AsyncSession, *, user_id: uuid.UUID, chunk_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """Normalized content of the candidate chunks, for the dedupe step of the fusion.
+
+    Read after both branches (their ids are already tenant/version filtered) and before the
+    fusion, so dedupe of overlapping content works in production, not only in unit tests. The
+    tenant predicate is repeated as defense in depth.
+    """
+    if not chunk_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(Chunk.id, Chunk.content).where(
+                Chunk.user_id == user_id, Chunk.id.in_(chunk_ids)
+            )
+        )
+    ).all()
+    return {row.id: _normalize_content(row.content) for row in rows}
+
+
 async def hybrid_search(
     db: AsyncSession,
     *,
@@ -384,8 +434,9 @@ async def hybrid_search(
             date_to=date_to,
         ),
     )
-    # Before the vector SELECT: the GUC is transaction-scoped and must cover that query.
-    await db.execute(ITERATIVE_SCAN_SQL)
+    # Before the vector SELECT: the GUC is transaction-scoped and must cover that query. The
+    # savepoint keeps a driver error (pgvector < 0.8) from aborting the caller's transaction.
+    await _enable_iterative_scan(db)
     vector = await _candidates(
         db,
         vector_candidates_statement(
@@ -398,7 +449,16 @@ async def hybrid_search(
             date_to=date_to,
         ),
     )
-    hits = merge([lexical, vector], top_k=top_k)
+    content = await _content_keys(
+        db,
+        user_id=user_id,
+        chunk_ids={candidate.chunk_id for candidate in (*lexical, *vector)},
+    )
+    hits = merge(
+        [lexical, vector],
+        top_k=top_k,
+        content_key=lambda chunk_id: content.get(chunk_id, f"missing:{chunk_id}"),
+    )
     logger.debug(
         "search.hybrid version=%s lexical=%d vector=%d hits=%d",
         resolved,

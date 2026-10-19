@@ -13,6 +13,7 @@ from typing import Any, cast
 
 import pytest
 from sqlalchemy import Select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services import search
@@ -22,6 +23,7 @@ SUBJECT_ID = uuid.uuid4()
 VERSION = "idx-1"
 
 _Row = namedtuple("_Row", "chunk_id audio_id score")
+_ContentRow = namedtuple("_ContentRow", "id content")
 
 
 def _chunk_id(suffix: int) -> uuid.UUID:
@@ -84,6 +86,16 @@ class _Rows:
         return self._scalar
 
 
+class _Nested:
+    """Async-context-manager stand-in for `AsyncSession.begin_nested()` (a SAVEPOINT)."""
+
+    async def __aenter__(self) -> "_Nested":
+        return self
+
+    async def __aexit__(self, *_: object) -> bool:
+        return False
+
+
 class StubSession:
     """Fake `AsyncSession`: routes by statement shape, never touches network or DB."""
 
@@ -92,12 +104,19 @@ class StubSession:
         *,
         lexical: list[Any] | None = None,
         vector: list[Any] | None = None,
+        content: list[Any] | None = None,
         generation: Any = None,
     ) -> None:
         self._lexical = lexical or []
         self._vector = vector or []
+        self._content = content or []
         self._generation = generation
         self.executed: list[str] = []
+        self.savepoints = 0
+
+    def begin_nested(self) -> _Nested:
+        self.savepoints += 1
+        return _Nested()
 
     async def execute(self, statement: Any, *_: Any, **__: Any) -> _Rows:
         sql = str(statement)
@@ -108,9 +127,22 @@ class StubSession:
             return _Rows(self._lexical)
         if "<=>" in sql:
             return _Rows(self._vector)
+        if "chunks.content" in sql:
+            return _Rows(self._content)
         if "FROM index_generations" in sql:
             return _Rows(scalar=self._generation)
         raise AssertionError(f"consulta no preparada en el stub: {sql}")
+
+
+class UnsupportedScanSession(StubSession):
+    """pgvector < 0.8: `SET LOCAL hnsw.iterative_scan` raises a driver error."""
+
+    async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> _Rows:
+        if "SET LOCAL hnsw.iterative_scan" in str(statement):
+            raise ProgrammingError(
+                str(statement), {}, Exception("unrecognized configuration parameter")
+            )
+        return await super().execute(statement, *args, **kwargs)
 
 
 def _db(session: StubSession) -> AsyncSession:
@@ -192,10 +224,11 @@ def test_limit_is_inside_each_branch_subquery() -> None:
 
 
 async def test_hybrid_search_runs_only_filtered_statements() -> None:
-    """Exactly two filtered SELECTs plus the GUC: no query after the fusion."""
+    """Two filtered SELECTs + content lookup + GUC: no query after the fusion."""
     db = StubSession(
         lexical=[_Row(_chunk_id(1), uuid.uuid4(), 0.9)],
         vector=[_Row(_chunk_id(2), uuid.uuid4(), 0.1)],
+        content=[_ContentRow(_chunk_id(1), "uno"), _ContentRow(_chunk_id(2), "dos")],
     )
 
     hits = await search.hybrid_search(
@@ -206,11 +239,37 @@ async def test_hybrid_search_runs_only_filtered_statements() -> None:
         version=VERSION,
     )
 
-    assert len(db.executed) == 3
+    assert len(db.executed) == 4
     assert "websearch_to_tsquery" in db.executed[0]
     assert db.executed[1].startswith("SET LOCAL")
     assert "<=>" in db.executed[2]
+    # The content lookup is still tenant-scoped and happens before the (pure) fusion.
+    assert "chunks.content" in db.executed[3]
+    assert "chunks.user_id =" in db.executed[3]
     assert [hit.chunk_id for hit in hits] == [_chunk_id(1), _chunk_id(2)]
+
+
+async def test_hybrid_search_dedupes_overlapping_content() -> None:
+    """Overlapping content read in production collapses: only the best-ranked survives."""
+    first, duplicate = _chunk_id(1), _chunk_id(2)
+    shared_audio = uuid.uuid4()
+    db = StubSession(
+        lexical=[_Row(first, shared_audio, 0.9), _Row(duplicate, shared_audio, 0.5)],
+        content=[
+            _ContentRow(first, "La integral   definida"),
+            _ContentRow(duplicate, "la integral definida"),
+        ],
+    )
+
+    hits = await search.hybrid_search(
+        _db(db),
+        user_id=USER_ID,
+        query_text="integral",
+        query_vector=[0.1, 0.2, 0.3],
+        version=VERSION,
+    )
+
+    assert [hit.chunk_id for hit in hits] == [first]
 
 
 # --- 9. GUC before the vector SELECT --------------------------------------------------
@@ -230,6 +289,29 @@ async def test_vector_branch_sets_iterative_scan_before_select() -> None:
     scan_index = next(i for i, sql in enumerate(db.executed) if sql.startswith("SET LOCAL"))
     vector_index = next(i for i, sql in enumerate(db.executed) if "<=>" in sql)
     assert scan_index < vector_index
+    # The GUC is issued inside a SAVEPOINT so a driver error cannot poison the transaction.
+    assert db.savepoints == 1
+
+
+async def test_iterative_scan_unsupported_is_a_typed_error() -> None:
+    """pgvector < 0.8 → `SearchHnswUnsupported`, not a raw driver error."""
+    db = UnsupportedScanSession()
+
+    with pytest.raises(search.SearchHnswUnsupported) as exc:
+        await search.hybrid_search(
+            _db(db),
+            user_id=USER_ID,
+            query_text="integral",
+            query_vector=[0.1, 0.2, 0.3],
+            version=VERSION,
+        )
+
+    assert exc.value.code == "search_hnsw_unsupported"
+    assert exc.value.details["reason"] == "iterative_scan_unavailable"
+    # The savepoint was used, so the failure did not run the vector branch or roll back the
+    # caller's session (no `rollback()` call is issued by the service).
+    assert db.savepoints == 1
+    assert not any("<=>" in sql for sql in db.executed)
 
 
 # --- 10. Per-document FTS configuration ----------------------------------------------
