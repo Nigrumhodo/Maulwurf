@@ -319,9 +319,11 @@ async def test_iterative_scan_unsupported_is_a_typed_error() -> None:
 
 def test_query_uses_document_fts_config() -> None:
     sql = _lexical()
-    assert "transcripts.fts_config" in sql
+    assert "transcripts.fts_config =" in sql
     assert "websearch_to_tsquery" in sql
-    # The language config is a column of the joined transcript, never a literal.
+    assert "spanish" in sql
+    assert "english" in sql
+    assert "simple" in sql
     assert "regconfig" in sql.lower()
 
 
@@ -371,8 +373,25 @@ async def test_hybrid_search_rejects_empty_query_vector() -> None:
     assert db.executed == []
 
 
+async def test_hybrid_search_rejects_mismatched_vector_dimension() -> None:
+    generation = SimpleGeneration(VERSION, dimension=1536)
+    db = StubSession(generation=generation)
+
+    with pytest.raises(search.SearchInvalidQuery) as exc:
+        await search.hybrid_search(
+            _db(db),
+            user_id=USER_ID,
+            query_text="integral",
+            query_vector=[0.1, 0.2, 0.3],
+            version=VERSION,
+        )
+    assert exc.value.details["reason"] == "bad_dim"
+    assert exc.value.details["expected"] == 1536
+    assert exc.value.details["got"] == 3
+
+
 async def test_hybrid_search_resolves_active_generation() -> None:
-    generation = SimpleGeneration(VERSION)
+    generation = SimpleGeneration(VERSION, dimension=3)
     db = StubSession(generation=generation)
 
     await search.hybrid_search(
@@ -398,7 +417,8 @@ async def test_hybrid_search_without_active_generation_fails_closed() -> None:
 
 
 class SimpleGeneration:
-    """Minimal stand-in for `IndexGeneration` (only `.version` is read)."""
+    """Minimal stand-in for `IndexGeneration` (only `.version` and `.dimension` are read)."""
 
-    def __init__(self, version: str) -> None:
+    def __init__(self, version: str, dimension: int = 3) -> None:
         self.version = version
+        self.dimension = dimension

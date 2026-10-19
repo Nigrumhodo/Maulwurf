@@ -46,13 +46,11 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-from sqlalchemy import ColumnElement, Select, and_, cast, func, select, text
-from sqlalchemy.dialects.postgresql import REGCONFIG
+from sqlalchemy import ColumnElement, Select, and_, func, literal_column, select, text, union_all
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import InstrumentedAttribute
 
-from app.models import Audio, Chunk, Embedding, Transcript
+from app.models import Audio, Chunk, Embedding, IndexGeneration, Transcript
 from app.services.indexing import active_generation
 
 logger = logging.getLogger(__name__)
@@ -166,10 +164,10 @@ def _transcript_join() -> ColumnElement[bool]:
     return and_(Transcript.user_id == Chunk.user_id, Transcript.id == Chunk.transcript_id)
 
 
-def _tsquery(query_text: str) -> ColumnElement[Any]:
-    """Per-document tsquery: the config comes from the transcript, never a global language."""
-    config: InstrumentedAttribute[str] = Transcript.fts_config
-    return func.websearch_to_tsquery(cast(config, REGCONFIG), query_text)
+# All known `fts_config` values (must match the CHECK constraint in 0002_s2_schema.py).
+# Using a fixed list of string literals lets the planner use chunks_fts (GIN): when the
+# config is a column expression the `@@` predicate cannot be indexed.
+_FTS_CONFIGS: tuple[str, ...] = ("spanish", "english", "simple")
 
 
 def lexical_candidates_statement(
@@ -182,28 +180,44 @@ def lexical_candidates_statement(
     date_from: date | None = None,
     date_to: date | None = None,
 ) -> Select[tuple[uuid.UUID, uuid.UUID, float]]:
-    """Filtered lexical candidates: `chunks.tsv @@ <query>` ordered by `ts_rank_cd`.
+    """Filtered lexical candidates: per-language UNION ALL ordered by `ts_rank_cd`.
 
-    The tenant/version filters and the `LIMIT` live in this single statement: the branch
-    yields at most `limit` already-authorized candidates, ordered `score DESC, chunk_id`.
+    Each arm of the UNION uses a *constant* `::regconfig` literal so the planner can apply
+    the `chunks_fts` GIN index for that arm's `@@` predicate.  The arm also filters
+    `transcripts.fts_config = '<lang>'` so a Spanish query is never matched against an
+    English tsvector and vice versa.  The results are merged, re-ranked by score and cut to
+    `limit` in an outer SELECT.
+
+    The per-language split is closed over the fixed `_FTS_CONFIGS` tuple; it cannot be
+    influenced by user input (no injection surface).
     """
-    tsquery = _tsquery(query_text)
-    score = func.ts_rank_cd(Chunk.tsv, tsquery).label("score")
-    return (
-        select(Chunk.id.label("chunk_id"), Chunk.audio_id, score)
-        .join(Audio, _audio_join())
-        .join(Transcript, _transcript_join())
-        .where(
-            Chunk.tsv.op("@@")(tsquery),
-            *_common_conditions(
-                user_id,
-                version,
-                subject_id=subject_id,
-                date_from=date_from,
-                date_to=date_to,
-            ),
+    common = _common_conditions(
+        user_id, version, subject_id=subject_id, date_from=date_from, date_to=date_to
+    )
+    arms: list[Select[tuple[uuid.UUID, uuid.UUID, float]]] = []
+    for cfg in _FTS_CONFIGS:
+        regconfig = literal_column(f"'{cfg}'::regconfig")
+        tsquery = func.websearch_to_tsquery(regconfig, query_text)
+        score = func.ts_rank_cd(Chunk.tsv, tsquery).label("score")
+        arm = (
+            select(Chunk.id.label("chunk_id"), Chunk.audio_id, score)
+            .join(Audio, _audio_join())
+            .join(Transcript, _transcript_join())
+            .where(
+                Transcript.fts_config == cfg,
+                Chunk.tsv.op("@@")(tsquery),
+                *common,
+            )
         )
-        .order_by(score.desc(), Chunk.id.asc())
+        arms.append(arm)
+    combined = union_all(*arms).subquery()
+    return (
+        select(
+            combined.c.chunk_id,
+            combined.c.audio_id,
+            combined.c.score,
+        )
+        .order_by(combined.c.score.desc(), combined.c.chunk_id.asc())
         .limit(limit)
     )
 
@@ -218,7 +232,12 @@ def vector_candidates_statement(
     date_from: date | None = None,
     date_to: date | None = None,
 ) -> Select[tuple[uuid.UUID, uuid.UUID, float]]:
-    """Filtered cosine candidates: `embeddings.vector <=> :query_vector` with the same filters."""
+    """Filtered cosine candidates: `embeddings.vector <=> :query_vector` with the same filters.
+
+    Only `distance ASC` in ORDER BY: a secondary sort key prevents the planner from using the
+    HNSW index (it expects a pure `<=>` order).  The `chunk_id` tiebreak happens in Python
+    inside `rrf_fuse`, which already sorts by `(-score_rrf, str(chunk_id))`.
+    """
     distance = Embedding.vector.cosine_distance(list(query_vector)).label("score")
     return (
         select(Chunk.id.label("chunk_id"), Chunk.audio_id, distance)
@@ -243,7 +262,7 @@ def vector_candidates_statement(
                 date_to=date_to,
             ),
         )
-        .order_by(distance.asc(), Chunk.id.asc())
+        .order_by(distance.asc())
         .limit(limit)
     )
 
@@ -427,6 +446,7 @@ async def hybrid_search(
             "La búsqueda híbrida necesita el vector de la consulta.",
             details={"reason": "missing_query_vector"},
         )
+    generation: IndexGeneration | None = None
     resolved = version
     if resolved is None:
         generation = await active_generation(db, user_id)
@@ -436,6 +456,18 @@ async def hybrid_search(
                 details={"reason": "no_active_generation"},
             )
         resolved = generation.version
+    else:
+        gen_stmt = (
+            select(IndexGeneration)
+            .where(IndexGeneration.user_id == user_id, IndexGeneration.version == resolved)
+        )
+        generation = (await db.execute(gen_stmt)).scalar_one_or_none()
+
+    if generation is not None and len(query_vector) != generation.dimension:
+        raise SearchInvalidQuery(
+            "Dimensión de vector inválida.",
+            details={"reason": "bad_dim", "expected": generation.dimension, "got": len(query_vector)},
+        )
 
     lexical = await _candidates(
         db,
