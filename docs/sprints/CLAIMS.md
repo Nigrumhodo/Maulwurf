@@ -110,6 +110,7 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | claim | S2.4 | satnovaOG | done | 2026-10-09 | pending | — / lead | Isolated Riva client; merged in #55. `P-S2-SG-12` is not executed. Cloud without a reviewer. |
 | claim | L2.10 | jpinillaz | done | 2026-10-11 | not applicable | — / lead | Web stack decision, ADR-0007; merged in #42 |
 | claim | A2.13 | jpinillaz | in progress | 2026-10-12 | not applicable | — / area A, area S | API↔ingest contract: ADR-0008 and plan `docs/plan/tickets/A2.13.md` in this PR; client code in a follow-up PR (I-S2-AN-12) |
+| claim | L2.3 | angalindog | in progress | 2026-10-19 | not applicable | — / area A, lead | Hybrid search: per-language FTS + pgvector cosine + deterministic RRF, tenant/version/tombstone filters in both branches before top-k. Branch `feature/L2.3-hybrid-search-rrf`, commits `1eb6c64`/`8f1e423`, PR #72. `U-S2-JL-03/04` green (538 unit passed); migration `0003_backfill_chunks_tsv`. `I-S2-JL-06` stays with L2.4/A2.11; moves to `done` on merge. |
 
 ## 4. Change history
 
@@ -139,3 +140,4 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | 2026-10-11 | The lead accepts the Vite + React web stack (ADR-0007, in #42). A1.3, D1.1, D1.2 and D1.3 are claimed by ARES313 (`in progress` until #42 merges); A1.3 keeps cloud eligibility `pending`. | This PR |
 | 2026-10-12 | A1.3, D1.1, D1.2 and D1.3 move to `done` (#42); A1.3 cloud eligibility `verified` after the lead observed a real Google login in local compose. A1.6 moves to `done` (#50). S2.3 and S2.4 move to `done` (#55); S2.4 keeps cloud `pending`. L2.10 is recorded as `done` (ADR-0007). A2.13 is claimed (`in progress`) with ADR-0008. | This PR |
 | 2026-10-15 | A2.9 is claimed (`in progress`): tenant listing, `GET /audios/{id}` detail, SSE progress and conditional txt/srt exports; tests I-S2-AN-07/09 green locally. | This PR |
+| 2026-10-19 | L2.3 is claimed by angalindog (`in progress`): hybrid search (FTS + pgvector + RRF), QA fixes and data migration `0003_backfill_chunks_tsv`; `U-S2-JL-03/04` green (538 unit passed), PR #72. `I-S2-JL-06` stays with L2.4/A2.11. Rows for L2.1/L2.2 remain missing from the registry. | This PR |

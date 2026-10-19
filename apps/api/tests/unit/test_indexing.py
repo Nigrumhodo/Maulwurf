@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from typing import Any, cast
 
 import pytest
+from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -500,6 +501,38 @@ async def test_indexing_uses_chunker_with_the_new_version() -> None:
     assert {chunk.index_version for chunk in chunks} == {VERSION}
     assert {chunk.id for chunk in chunks} == {row.chunk_id for row in embeddings}
     assert provider.calls == [[chunk.content for chunk in chunks]]
+
+
+# --- 17b. Lexical vector materialized (L2.3) ------------------------------------
+
+
+def test_indexing_chunk_tsvector_uses_the_transcript_config() -> None:
+    """`tsv` is built with the given `fts_config`, not with a global language."""
+    compiled = str(
+        indexing.chunk_tsvector("english", "trigonometric substitution").compile(
+            compile_kwargs={"literal_binds": True}
+        )
+    )
+
+    assert compiled == "to_tsvector(CAST('english' AS REGCONFIG), 'trigonometric substitution')"
+
+
+async def test_indexing_persists_chunk_tsv_from_transcript_config() -> None:
+    """Every persisted chunk carries its `tsv` so the lexical GIN index stays usable."""
+    user_id = uuid.uuid4()
+    db = _session_with_audio(user_id)
+
+    await indexing.build_generation(
+        _db(db), user_id=user_id, version=VERSION, provider=FakeProvider(), text_kind="synthetic"
+    )
+
+    (chunk,) = db.persisted_chunks()
+    assert chunk.tsv is not None
+    tsv = cast(ColumnElement[Any], chunk.tsv)
+    compiled = str(tsv.compile(compile_kwargs={"literal_binds": True}))
+    assert "to_tsvector" in compiled
+    assert "spanish" in compiled
+    assert chunk.content in compiled
 
 
 # --- 18. Tenant isolation --------------------------------------------------------

@@ -21,6 +21,9 @@ What this module guarantees:
   are checked against the generation and the provider before writing anything.
 - **Idempotency:** re-running `build_generation` duplicates neither chunks (already chunked
   classes are skipped for that version) nor embeddings (anti-join against `embeddings`).
+- **Lexical vector materialized (L2.3):** every persisted `chunk` carries its `tsv` built with
+  the document's `transcripts.fts_config` (`chunk_tsvector`), so the lexical search branch can
+  use the `chunks_fts` GIN index with a per-language configuration.
 - **Isolation:** every query and every written row carries the received `user_id`.
 - **No content in logs:** only version, model, counts and error codes.
 - **D3-Texto fail closed:** `text_kind="real"` is only accepted when the model is listed in
@@ -50,9 +53,12 @@ from sqlalchemy import (
     Update,
     and_,
     func,
+    literal,
     select,
     update,
 )
+from sqlalchemy import cast as sql_cast
+from sqlalchemy.dialects.postgresql import REGCONFIG
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -367,7 +373,13 @@ async def _chunk_generation(
             continue  # Already chunked in this version: a re-run does not duplicate chunks.
         segments = await _segments(db, user_id=user_id, transcript_id=transcript.id)
         for draft in _drafts(transcript, version=version, segments=segments):
-            _persist_draft(db, user_id=user_id, transcript_id=transcript.id, draft=draft)
+            _persist_draft(
+                db,
+                user_id=user_id,
+                transcript_id=transcript.id,
+                fts_config=transcript.fts_config,
+                draft=draft,
+            )
             created += 1
         # One commit per class: progress stays durable without a transaction spanning the whole
         # corpus (the provider network never happens here).
@@ -516,11 +528,23 @@ def _drafts(
         ) from exc
 
 
+def chunk_tsvector(fts_config: str, content: str) -> ColumnElement[Any]:
+    """`chunks.tsv` built with the document's `transcripts.fts_config` (M6, L2.3).
+
+    Materializing the vector at write time is what lets the lexical branch use the
+    `chunks_fts` GIN index (A2.1) with a per-language configuration: the query side then
+    only needs `chunks.tsv @@ <tsquery>`. The `regconfig` cast is explicit because the
+    column is `text` and PostgreSQL would not resolve `to_tsvector(text, text)`.
+    """
+    return func.to_tsvector(sql_cast(literal(fts_config), REGCONFIG), content)
+
+
 def _persist_draft(
     db: AsyncSession,
     *,
     user_id: uuid.UUID,
     transcript_id: uuid.UUID,
+    fts_config: str,
     draft: ChunkDraft,
 ) -> None:
     # PK generated here (not `server_default`) so `chunk_segments` can link without re-reading.
@@ -540,6 +564,7 @@ def _persist_draft(
             token_count=draft.token_count,
             t_start=draft.t_start,
             t_end=draft.t_end,
+            tsv=chunk_tsvector(fts_config, draft.content),
         )
     )
     for link in draft.segments:

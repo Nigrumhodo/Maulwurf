@@ -9,7 +9,7 @@ used by `infra/docker-compose.yml` and `.github/workflows/quality.yml`.
 | Python | 3.12 (`requires-python = ">=3.12"`) | `.python-version`, `apps/api/pyproject.toml`, `apps/ingest/pyproject.toml` |
 | Node.js | 22 (LTS; `engines.node` `>=22 <23`) | `.nvmrc`, `apps/web/package.json` |
 | PostgreSQL | 16 (`pgvector/pgvector:pg16`, pinned by digest) | `infra/docker-compose.yml` |
-| pgvector | included in `pgvector/pgvector:pg16` | `infra/docker-compose.yml` |
+| pgvector | 0.8.6 (in `pgvector/pgvector:pg16@sha256:ccc6e83d…`; ≥ 0.8 is required for `hnsw.iterative_scan`) | `infra/docker-compose.yml` |
 | Redis | 7.4-alpine, pinned by digest (`--save "" --appendonly no`) | `infra/docker-compose.yml`, [ADR-0005](adr/ADR-0005-redis.md) |
 | Caddy | 2.8-alpine, pinned by digest | `infra/docker-compose.yml`, `infra/Caddyfile` |
 | Riva client | `nvidia-riva-client==2.27.0` | `apps/ingest/pyproject.toml`, `requirements-riva.txt` |
@@ -23,6 +23,10 @@ Lockfiles that must be installed without blind resolution: `apps/api/uv.lock`,
 
 `espeak-ng` (required by the synthetic-audio tests, S1.A1) is installed by CI unpinned
 and is not part of the images: it stays out of the table until it is pinned.
+
+The pinned `pgvector` digest `sha256:ccc6e83d…` resolves (registry tag metadata, checked
+2026-10-19) to `pgvector/pgvector:0.8.6-pg16`, so `hnsw.iterative_scan = strict_order`
+(L2.3) is available; the digest stays authoritative even if the `pg16` tag is re-pointed.
 
 ## L1.1 verification
 
