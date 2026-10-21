@@ -598,6 +598,8 @@ week?").
 
 **Endpoints:** `GET /search?q=&subject_id=&from=&to=&limit=&cursor=` → paginated results
 with snippet, subject, class, segment, nullable `t_start/t_end`, and `score_rrf`.
+`next_cursor` is additive: an opaque keyset over the bounded RRF window; `limit` is 1..50
+(default 8) and there is no deep pagination beyond that window.
 
 ---
 

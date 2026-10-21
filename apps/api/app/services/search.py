@@ -33,24 +33,47 @@ What this module guarantees (S2.md §1.3 and §L2.3, ESPECIFICACION §M6/DISENO 
 - **No content in logs.** Only counts, version and error codes; never `content`, the query
   text, vectors or the API key.
 
-What it does NOT do (later tickets): the `GET /search` endpoint, snippet and cursor
-pagination (L2.4/A2.11), the reusable public `SearchService` contract wired into chat (L2.4/
-L2.5), validated citations (L2.6), embedding the question (L2.2 provider + L2.4/L2.5), the
-G4 metrics (L2.7) and the latency harness (L2.8). It never writes: read-only retrieval.
+L2.4/A2.11 adds the reusable public `SearchService` (chat calls `retrieve`, the endpoint
+calls `page`), hydration, plain-text snippets, honest segment times and an opaque keyset
+cursor over the bounded RRF window. What it still does NOT do (later tickets): the chat
+pipeline and prompt (L2.5), validated citations (L2.6), the G4 metrics (L2.7) and the
+latency harness (L2.8). It never writes: read-only retrieval.
 """
 
+import base64
+import binascii
+import json
 import logging
+import math
+import re
 import uuid
 from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass
 from datetime import date
+from time import perf_counter
 from typing import Any
 
 from sqlalchemy import ColumnElement, Select, and_, func, literal_column, select, text, union_all
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Audio, Chunk, Embedding, Transcript
+from app.models import (
+    Audio,
+    Chunk,
+    ChunkSegment,
+    Embedding,
+    IndexGeneration,
+    Segment,
+    Subject,
+    Transcript,
+)
+from app.services.embeddings import (
+    EmbeddingDimensionMismatch,
+    EmbeddingNotConfigured,
+    EmbeddingProvider,
+    EmbeddingProviderError,
+)
+from app.services.exports import EPS, EXPORTABLE_PRECISIONS
 from app.services.indexing import active_generation
 
 logger = logging.getLogger(__name__)
@@ -61,6 +84,18 @@ RRF_K = 60  # Cormack et al. RRF default; the k of `1 / (k + rank)`.
 CANDIDATES_PER_BRANCH = 30  # ~30 per branch (S2.md §1.3, ESPECIFICACION M7).
 DEFAULT_TOP_K = 8  # ~8 final chunks under the token budget (M7).
 MAX_CHUNKS_PER_AUDIO = 2  # diversity cap per class (plan §7, decisión 4).
+
+# `/search` contract (S2.md §1.3, DISENO §3.9, L2.4/A2.11). The page is intentionally
+# smaller than the global pagination convention: Ctrl+K is a quick lookup and the fused
+# window below is bounded.
+DEFAULT_PAGE_SIZE = DEFAULT_TOP_K
+MAX_PAGE_SIZE = 50
+MAX_RESULTS_WINDOW = CANDIDATES_PER_BRANCH * 2  # up to 60 fused hits, no deep pagination
+SNIPPET_RADIUS = 80
+SNIPPET_MAX_CHARS = 240
+QUERY_MAX_CHARS = 500
+CURSOR_VERSION = 1
+CURSOR_MAX_LENGTH = 512
 
 # Per-transaction GUC: with filters active, HNSW must keep scanning until it has `LIMIT`
 # candidates, otherwise the top-k comes back short (DISENO §2.5).
@@ -97,6 +132,20 @@ class SearchHnswUnsupported(SearchError):
     code = "search_hnsw_unsupported"
 
 
+class SearchInvalidCursor(SearchError):
+    code = "search_invalid_cursor"
+
+
+class SearchInvalidRange(SearchError):
+    code = "search_invalid_range"
+
+
+class SearchProviderMismatch(SearchError):
+    """The configured provider cannot read the active generation (configuration error)."""
+
+    code = "search_provider_mismatch"
+
+
 @dataclass(frozen=True)
 class Candidate:
     """One hit of a single branch, already filtered by tenant/version, with its 1-based rank.
@@ -120,6 +169,41 @@ class FusedHit:
     chunk_id: uuid.UUID
     audio_id: uuid.UUID
     score_rrf: float
+
+
+@dataclass(frozen=True)
+class SearchCursor:
+    """Opaque keyset position: generation, exact RRF score and `chunk_id` tiebreaker."""
+
+    index_version: str
+    score_rrf: float
+    chunk_id: uuid.UUID
+    version: int = CURSOR_VERSION
+
+
+@dataclass(frozen=True)
+class RetrievedChunk:
+    """Hydrated hit: chat reads `content`; `/search` serializes only `snippet`."""
+
+    chunk_id: uuid.UUID
+    audio_id: uuid.UUID
+    subject_id: uuid.UUID
+    subject_name: str
+    subject_color: str
+    class_date: date
+    content: str
+    snippet: str
+    segment_id: uuid.UUID | None
+    t_start: float | None
+    t_end: float | None
+    score_rrf: float
+
+
+@dataclass(frozen=True)
+class SearchPage:
+    results: list[RetrievedChunk]
+    took_ms: int
+    next_cursor: str | None
 
 
 ContentKey = Callable[[uuid.UUID], Hashable]
@@ -510,3 +594,489 @@ async def hybrid_search(
         len(hits),
     )
     return hits
+
+
+# --- L2.4 / A2.11: public service, cursor pagination, snippet and hydration ---------------
+
+
+def encode_cursor(cursor: SearchCursor) -> str:
+    """Opaque base64url cursor; `float.hex()` preserves the exact RRF score.
+
+    The cursor is not a secret and grants no access: every query still filters by `user_id`.
+    It only records where the previous page stopped.
+    """
+    payload = {
+        "v": cursor.version,
+        "g": cursor.index_version,
+        "s": cursor.score_rrf.hex(),
+        "c": str(cursor.chunk_id),
+    }
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+    if len(encoded) > CURSOR_MAX_LENGTH:
+        raise SearchInvalidCursor(
+            "El cursor excede la longitud máxima.",
+            details={"fields": {"cursor": "cursor inválido"}},
+        )
+    return encoded
+
+
+def decode_cursor(value: str) -> SearchCursor:
+    """Validate and decode an opaque cursor; any malformed value is a typed 422."""
+    invalid = SearchInvalidCursor(
+        "Cursor inválido.",
+        details={"fields": {"cursor": "cursor inválido"}},
+    )
+    if not value or len(value) > CURSOR_MAX_LENGTH:
+        raise invalid
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        raw = base64.b64decode(padded.encode("ascii"), altchars=b"-_", validate=True)
+        payload: Any = json.loads(raw.decode("utf-8"))
+    except (binascii.Error, UnicodeEncodeError, UnicodeDecodeError, ValueError) as exc:
+        raise invalid from exc
+    if not isinstance(payload, dict) or payload.get("v") != CURSOR_VERSION:
+        raise invalid
+    index_version = payload.get("g")
+    score_hex = payload.get("s")
+    chunk_raw = payload.get("c")
+    if not isinstance(index_version, str) or not index_version:
+        raise invalid
+    if not isinstance(score_hex, str) or not isinstance(chunk_raw, str):
+        raise invalid
+    try:
+        score = float.fromhex(score_hex)
+    except ValueError as exc:
+        raise invalid from exc
+    if not math.isfinite(score) or score < 0:
+        raise invalid
+    try:
+        chunk_id = uuid.UUID(chunk_raw)
+    except ValueError as exc:
+        raise invalid from exc
+    return SearchCursor(
+        index_version=index_version,
+        score_rrf=score,
+        chunk_id=chunk_id,
+    )
+
+
+def after_cursor(hit: FusedHit | RetrievedChunk, cursor: SearchCursor) -> bool:
+    """Keyset comparison over the total order `score_rrf DESC, chunk_id ASC`."""
+    if hit.score_rrf != cursor.score_rrf:
+        return hit.score_rrf < cursor.score_rrf
+    return str(hit.chunk_id) > str(cursor.chunk_id)
+
+
+def _query_terms(query: str) -> list[str]:
+    terms = {match.group(0) for match in re.finditer(r"\w+", query, re.UNICODE)}
+    # Longest term first: it is the most specific literal context available without a
+    # stemming-aware highlighter (`ts_headline` is a future alternative, L2.7/G4).
+    return sorted(terms, key=lambda term: (-len(term), term))
+
+
+def _word_start(text: str, index: int) -> int:
+    if index <= 0 or index >= len(text) or text[index - 1].isspace():
+        return index
+    space = text.find(" ", index)
+    return len(text) if space == -1 else space + 1
+
+
+def _word_end(text: str, index: int) -> int:
+    if index <= 0 or index >= len(text) or text[index].isspace():
+        return index
+    space = text.rfind(" ", 0, index)
+    return 0 if space == -1 else space
+
+
+def _window(text: str, *, match_start: int, match_end: int) -> tuple[int, int]:
+    start = max(0, match_start - SNIPPET_RADIUS)
+    end = min(len(text), match_end + SNIPPET_RADIUS)
+    start = _word_start(text, start)
+    end = _word_end(text, end)
+    if start > match_start:
+        start = match_start
+    if end < match_end:
+        end = match_end
+    if end - start <= SNIPPET_MAX_CHARS:
+        return start, end
+
+    # Keep the match visible while respecting the hard 240-character ceiling. The final
+    # ellipsis is added by the caller, so this budget is conservative.
+    budget = SNIPPET_MAX_CHARS - 2
+    match_length = match_end - match_start
+    if match_length >= budget:
+        start = match_start
+        end = min(len(text), start + budget)
+    else:
+        padding = (budget - match_length) // 2
+        start = max(0, match_start - padding)
+        end = min(len(text), start + budget)
+        if end == len(text):
+            start = max(0, end - budget)
+        start = _word_start(text, start)
+        end = _word_end(text, end)
+        if start > match_start:
+            start = match_start
+        if end < match_end:
+            end = match_end
+    return start, end
+
+
+def make_snippet(content: str, query: str) -> str:
+    """Plain-text context around the longest literal query term, bounded to 240 chars.
+
+    The snippet is not HTML: the React client escapes by default. If the lexical branch
+    matched only through stemming or accents, there is no literal match and the snippet
+    falls back to the start of the chunk instead of inventing a highlight.
+    """
+    text = " ".join(content.split())
+    if not text:
+        return ""
+    match: re.Match[str] | None = None
+    for term in _query_terms(query):
+        match = re.search(re.escape(term), text, re.IGNORECASE)
+        if match is not None:
+            break
+    if match is None:
+        end = min(len(text), SNIPPET_MAX_CHARS)
+        return text[:end] + ("…" if end < len(text) else "")
+    start, end = _window(text, match_start=match.start(), match_end=match.end())
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(text) else ""
+    snippet = prefix + text[start:end] + suffix
+    if len(snippet) > SNIPPET_MAX_CHARS:
+        keep = max(0, SNIPPET_MAX_CHARS - len(prefix) - 1)
+        snippet = prefix + text[start : start + keep] + "…"
+    return snippet
+
+
+def _reliable_times(
+    *,
+    precision: str,
+    t_start: float | None,
+    t_end: float | None,
+    duration_seconds: float | None,
+) -> tuple[float | None, float | None]:
+    """Return the segment times only when they are truthful; otherwise both are null."""
+    if precision not in EXPORTABLE_PRECISIONS:
+        return None, None
+    if t_start is None or t_end is None:
+        return None, None
+    if not (math.isfinite(t_start) and math.isfinite(t_end)):
+        return None, None
+    if not 0 <= t_start < t_end:
+        return None, None
+    if (
+        duration_seconds is not None
+        and math.isfinite(duration_seconds)
+        and t_end > duration_seconds + EPS
+    ):
+        return None, None
+    return t_start, t_end
+
+
+def _validated_query(query: str) -> str:
+    text_query = query.strip()
+    if not text_query or len(text_query) > QUERY_MAX_CHARS:
+        raise SearchInvalidQuery(
+            "La consulta está vacía o excede el máximo.",
+            details={"fields": {"q": "consulta inválida"}},
+        )
+    if any(ord(char) < 32 and char not in "\t\n\r" for char in text_query) or "\x7f" in text_query:
+        raise SearchInvalidQuery(
+            "La consulta contiene caracteres de control.",
+            details={"fields": {"q": "consulta inválida"}},
+        )
+    return text_query
+
+
+def _validated_range(date_from: date | None, date_to: date | None) -> None:
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise SearchInvalidRange(
+            "El rango de fechas está invertido.",
+            details={"fields": {"from": "from debe ser menor o igual que to"}},
+        )
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((perf_counter() - started) * 1000))
+
+
+async def _hydrate(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    query: str,
+    version: str,
+    hits: Sequence[FusedHit],
+) -> list[RetrievedChunk]:
+    """Hydrate fused hits in RRF order with tenant/version checks repeated in SQL."""
+    if not hits:
+        return []
+    statement = (
+        select(
+            Chunk.id.label("chunk_id"),
+            Chunk.audio_id,
+            Chunk.content,
+            Chunk.char_start.label("chunk_char_start"),
+            Chunk.char_end.label("chunk_char_end"),
+            Audio.subject_id,
+            Audio.class_date,
+            Audio.duration_seconds,
+            Subject.name.label("subject_name"),
+            Subject.color.label("subject_color"),
+            Transcript.timestamp_precision,
+            Segment.id.label("segment_id"),
+            Segment.ordinal.label("segment_ordinal"),
+            Segment.char_start.label("segment_char_start"),
+            Segment.char_end.label("segment_char_end"),
+            Segment.t_start.label("segment_t_start"),
+            Segment.t_end.label("segment_t_end"),
+        )
+        .select_from(Chunk)
+        .join(Audio, and_(Audio.user_id == Chunk.user_id, Audio.id == Chunk.audio_id))
+        .join(Subject, and_(Subject.user_id == Audio.user_id, Subject.id == Audio.subject_id))
+        .join(
+            Transcript,
+            and_(Transcript.user_id == Chunk.user_id, Transcript.id == Chunk.transcript_id),
+        )
+        .outerjoin(
+            ChunkSegment,
+            and_(ChunkSegment.user_id == Chunk.user_id, ChunkSegment.chunk_id == Chunk.id),
+        )
+        .outerjoin(
+            Segment,
+            and_(
+                Segment.user_id == ChunkSegment.user_id,
+                Segment.id == ChunkSegment.segment_id,
+                Segment.transcript_id == Chunk.transcript_id,
+            ),
+        )
+        .where(
+            Chunk.user_id == user_id,
+            Chunk.id.in_([hit.chunk_id for hit in hits]),
+            Chunk.index_version == version,
+            Chunk.transcript_version == Transcript.version,
+            Audio.user_id == user_id,
+            Audio.deleted_at.is_(None),
+            Subject.user_id == user_id,
+            Subject.deleted_at.is_(None),
+            Transcript.user_id == user_id,
+            Transcript.version == Audio.active_transcript_version,
+        )
+    )
+    rows = (await db.execute(statement)).all()
+    metadata: dict[uuid.UUID, Any] = {}
+    segments: dict[uuid.UUID, tuple[tuple[int, int], Any]] = {}
+    for row in rows:
+        chunk_id = row.chunk_id
+        metadata.setdefault(chunk_id, row)
+        if row.segment_id is None:
+            continue
+        overlap = min(row.chunk_char_end, row.segment_char_end) - max(
+            row.chunk_char_start, row.segment_char_start
+        )
+        if overlap <= 0:
+            continue
+        rank = (overlap, -int(row.segment_ordinal))
+        current = segments.get(chunk_id)
+        if current is None or rank > current[0]:
+            segments[chunk_id] = (rank, row)
+
+    hydrated: list[RetrievedChunk] = []
+    for hit in hits:
+        hydrated_row = metadata.get(hit.chunk_id)
+        if hydrated_row is None:
+            # Tombstoned or reindexed between retrieval and hydration: drop, never expose.
+            continue
+        selected = segments.get(hit.chunk_id)
+        segment = selected[1] if selected is not None else None
+        segment_id = segment.segment_id if segment is not None else None
+        t_start, t_end = _reliable_times(
+            precision=hydrated_row.timestamp_precision,
+            t_start=segment.segment_t_start if segment is not None else None,
+            t_end=segment.segment_t_end if segment is not None else None,
+            duration_seconds=hydrated_row.duration_seconds,
+        )
+        hydrated.append(
+            RetrievedChunk(
+                chunk_id=hydrated_row.chunk_id,
+                audio_id=hydrated_row.audio_id,
+                subject_id=hydrated_row.subject_id,
+                subject_name=hydrated_row.subject_name,
+                subject_color=hydrated_row.subject_color,
+                class_date=hydrated_row.class_date,
+                content=hydrated_row.content,
+                snippet=make_snippet(hydrated_row.content, query),
+                segment_id=segment_id,
+                t_start=t_start,
+                t_end=t_end,
+                score_rrf=hit.score_rrf,
+            )
+        )
+    return hydrated
+
+
+class SearchService:
+    """Reusable retrieval service: chat calls `retrieve`, `/search` calls `page`."""
+
+    def __init__(self, db: AsyncSession, *, provider: EmbeddingProvider | None) -> None:
+        self._db = db
+        self._provider = provider
+
+    async def retrieve(
+        self,
+        *,
+        user_id: uuid.UUID,
+        query: str,
+        subject_id: uuid.UUID | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        top_k: int = DEFAULT_TOP_K,
+    ) -> list[RetrievedChunk]:
+        """Return hydrated hits for chat; no active generation is an empty result."""
+        query_text = _validated_query(query)
+        _validated_range(date_from, date_to)
+        if top_k < 1 or top_k > MAX_RESULTS_WINDOW:
+            raise SearchInvalidQuery(
+                "El número de resultados está fuera de rango.",
+                details={"fields": {"limit": "limit fuera de rango"}},
+            )
+        generation = await active_generation(self._db, user_id)
+        if generation is None:
+            return []
+        results = await self._retrieve_for_generation(
+            generation,
+            user_id=user_id,
+            query_text=query_text,
+            subject_id=subject_id,
+            date_from=date_from,
+            date_to=date_to,
+            top_k=top_k,
+        )
+        logger.debug("search.retrieve version=%s hits=%d", generation.version, len(results))
+        return results
+
+    async def page(
+        self,
+        *,
+        user_id: uuid.UUID,
+        query: str,
+        subject_id: uuid.UUID | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        limit: int = DEFAULT_PAGE_SIZE,
+        cursor: str | None = None,
+    ) -> SearchPage:
+        """Paginated `/search` window: keyset over the bounded RRF window."""
+        started = perf_counter()
+        query_text = _validated_query(query)
+        _validated_range(date_from, date_to)
+        if limit < 1 or limit > MAX_RESULTS_WINDOW:
+            raise SearchInvalidQuery(
+                "El tamaño de página está fuera de rango.",
+                details={"fields": {"limit": "limit fuera de rango"}},
+            )
+        cursor_state = decode_cursor(cursor) if cursor is not None else None
+        generation = await active_generation(self._db, user_id)
+        if generation is None:
+            took_ms = _elapsed_ms(started)
+            logger.info("search.page version=- results=0 took_ms=%d", took_ms)
+            return SearchPage(results=[], took_ms=took_ms, next_cursor=None)
+        if cursor_state is not None and cursor_state.index_version != generation.version:
+            raise SearchInvalidCursor(
+                "El cursor pertenece a un índice anterior.",
+                details={
+                    "reason": "stale_generation",
+                    "fields": {"cursor": "cursor de otra generación"},
+                },
+            )
+        results = await self._retrieve_for_generation(
+            generation,
+            user_id=user_id,
+            query_text=query_text,
+            subject_id=subject_id,
+            date_from=date_from,
+            date_to=date_to,
+            top_k=MAX_RESULTS_WINDOW,
+        )
+        if cursor_state is not None:
+            results = [hit for hit in results if after_cursor(hit, cursor_state)]
+        page_results = results[:limit]
+        next_cursor = None
+        if len(results) > limit:
+            last = page_results[-1]
+            next_cursor = encode_cursor(
+                SearchCursor(
+                    index_version=generation.version,
+                    score_rrf=last.score_rrf,
+                    chunk_id=last.chunk_id,
+                )
+            )
+        took_ms = _elapsed_ms(started)
+        logger.info(
+            "search.page version=%s results=%d took_ms=%d",
+            generation.version,
+            len(page_results),
+            took_ms,
+        )
+        return SearchPage(results=page_results, took_ms=took_ms, next_cursor=next_cursor)
+
+    async def _retrieve_for_generation(
+        self,
+        generation: IndexGeneration,
+        *,
+        user_id: uuid.UUID,
+        query_text: str,
+        subject_id: uuid.UUID | None,
+        date_from: date | None,
+        date_to: date | None,
+        top_k: int,
+    ) -> list[RetrievedChunk]:
+        provider = self._provider
+        if provider is None:
+            raise EmbeddingNotConfigured(
+                "Falta configurar el proveedor de embeddings (MAULWURF_EMBEDDING_*)."
+            )
+        if provider.model != generation.model:
+            raise SearchProviderMismatch(
+                "El modelo del proveedor no coincide con la generación activa.",
+                details={"reason": "model_mismatch"},
+            )
+        if provider.dimension != generation.dimension:
+            raise SearchProviderMismatch(
+                "La dimensión del proveedor no coincide con la generación activa.",
+                details={"reason": "dimension_mismatch"},
+            )
+        vectors = await provider.embed([query_text])
+        if len(vectors) != 1:
+            raise EmbeddingProviderError(
+                "El proveedor devolvió un número de vectores inesperado.",
+                details={"expected": 1, "observed": len(vectors)},
+            )
+        vector = vectors[0]
+        if len(vector) != generation.dimension:
+            raise EmbeddingDimensionMismatch(
+                "El proveedor devolvió un vector de otra dimensión.",
+                details={"expected": generation.dimension, "observed": len(vector)},
+            )
+        hits = await hybrid_search(
+            self._db,
+            user_id=user_id,
+            query_text=query_text,
+            query_vector=vector,
+            version=generation.version,
+            top_k=top_k,
+            candidates_per_branch=CANDIDATES_PER_BRANCH,
+            subject_id=subject_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        return await _hydrate(
+            self._db,
+            user_id=user_id,
+            query=query_text,
+            version=generation.version,
+            hits=hits,
+        )

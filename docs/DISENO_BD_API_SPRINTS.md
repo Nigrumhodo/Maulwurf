@@ -1387,7 +1387,8 @@ It does not reactivate revisions, tombstoned tasks, or obsolete versions.
       "score_rrf": 0.031
     }
   ],
-  "took_ms": 120
+  "took_ms": 120,
+  "next_cursor": null
 }
 ```
 
@@ -1396,7 +1397,10 @@ It does not reactivate revisions, tombstoned tasks, or obsolete versions.
   vector branch requires `hnsw.iterative_scan = strict_order` and over-fetch (§2.5) to
   sustain that contract; measured alternative: exact scan on small corpora.
 - RRF fusion produces a deterministic total order: `ORDER BY score_rrf DESC, chunk_id`; the
-  pagination `cursor` includes the tiebreaker so no results are omitted or duplicated.
+  pagination `cursor` includes the generation and the tiebreaker so no results are omitted or
+  duplicated. `next_cursor` is additive to the frozen §1.3 example and is `null` when the
+  bounded 60-hit window is exhausted.
+- `limit` is 1..50 with default 8; there is no deep pagination beyond the 60 fused hits.
 - Without reliable offsets, `t_start/t_end` are `null` and the UI shows "segment N".
 - Target p95 ≤ 500 ms measured, not guaranteed (spec §8).
 

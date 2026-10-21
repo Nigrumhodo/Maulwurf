@@ -166,6 +166,9 @@ because this plan exists.
 
 - [ ] Token-based chunking with traceable spans; versioned embeddings, HNSW cosine, and
   per-language FTS with RRF. Tenant/version/tombstone filters in both branches.
+- [ ] `GET /search` exposes the shared `SearchService` with plain-text snippets, nullable
+  segment times only when reliable, and an opaque `next_cursor` over the bounded 60-hit RRF
+  window (`limit` 1..50, default 8; no deep pagination).
 - [ ] Publish the complete index atomically; idempotent retries from text and outbox-based
   reconstruction if Redis is lost. Evaluate HNSW recall with selective filters against exact
   search.
