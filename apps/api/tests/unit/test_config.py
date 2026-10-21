@@ -239,3 +239,12 @@ def test_embedding_concurrency_is_bounded_and_sequential_by_default() -> None:
         _settings(embedding_max_concurrency=0)
     with pytest.raises(ValidationError, match="embedding_max_concurrency"):
         _settings(embedding_max_concurrency=8)
+
+
+def test_search_quota_is_bounded_and_provisional() -> None:
+    # A2.11: 30/min is provisional until D5/F0 publishes the real provider quota.
+    assert _settings().search_rate_limit_per_minute == 30
+    with pytest.raises(ValidationError, match="search_rate_limit_per_minute"):
+        _settings(search_rate_limit_per_minute=0)
+    with pytest.raises(ValidationError, match="search_rate_limit_per_minute"):
+        _settings(search_rate_limit_per_minute=601)

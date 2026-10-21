@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     google_client_secret: SecretStr | None = None
     # Vida máxima de la sesión opaca (A1.4); el logout la revoca antes.
     session_ttl_hours: int = Field(default=168, ge=1, le=720)
+    # A2.11: provisional per-user search quota (one embeddings call per search). D5/F0
+    # must replace it with the provider quota measured by the contract spike.
+    search_rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
     # Contrato de ingesta S1 (A1.8). Valores provisionales hasta D2/D4 (S1.A8/A2.2):
     # allowlist propuesta por S1.A3 y límite de bytes de `.env.example` (200 MiB, no aprobado).
     privacy_notice_version: str = "2026-09-v1"

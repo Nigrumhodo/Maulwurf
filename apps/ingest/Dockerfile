@@ -6,13 +6,15 @@ FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4d
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    UV_PROJECT_ENVIRONMENT=/opt/venv \
-    TMPDIR=/work/tmp
+    UV_PROJECT_ENVIRONMENT=/opt/venv
+
+# TMPDIR must exist before apt-get runs: package post-install scripts use mktemp.
+RUN mkdir -p /work/tmp && chmod 1777 /work/tmp
+ENV TMPDIR=/work/tmp
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg=7:7.1.5-0+deb13u1 ca-certificates \
- && rm -rf /var/lib/apt/lists/* \
- && mkdir -p /work/tmp && chmod 1777 /work/tmp
+ && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.18@sha256:3adc3706091ce7c2fe595e669628caedd6d951551b92b258b7e7dbe06d9440bc /uv /usr/local/bin/uv
 

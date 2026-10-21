@@ -197,7 +197,7 @@ These associations complete the backlog references without changing the stable I
 | U-S2-JL-03 | U | RRF: deterministic fusion given the same input; documented `k`; tie-break by `chunk_id` (stable cursor); dedupe and diversity applied before the top-k | M6 |
 | U-S2-JL-04 | U | `user_id`/version/tombstone filters applied **in both branches** (lexical and vector) before the top-k | G3 |
 | U-S2-JL-05 | U | Citations: only towards IDs validated in the DB; without reliable offsets → "segment N"; the model never invents sources | M7/rule 5 |
-| I-S2-JL-06 | I | Hybrid search against real Postgres+pgvector with a test corpus (authored text) | M6 |
+| I-S2-JL-06 | I | Hybrid search against real Postgres+pgvector and Redis with a test corpus (authored text), including the per-user quota | M6 |
 | I-S2-JL-07 | I | SSE chat pipeline: `delta/citation/done/error` events in order; mid-stream cancellation cleans state | M7 |
 | I-S2-JL-08 | I | `message_sources` contains **all** sources given to the model, not only the cited ones | M7 |
 | E-S2-JL-09 | E | Question from the browser → answer with a clickable citation that opens the reader at the segment | G4/F1 |
