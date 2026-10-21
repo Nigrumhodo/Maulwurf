@@ -3,8 +3,8 @@
 The corpus is synthetic/redacted (invented text, no PII) and the embeddings provider is a
 deterministic fake: no network and no real class content while D3-Texto is open. The suite
 checks the HTTP contract, tenant isolation before the top-k, tombstone/version/generation
-filters, reliable segment times, cursor pagination, provider error mapping and the
-`hnsw.iterative_scan` capability of the pinned pgvector image.
+filters, reliable segment times, cursor pagination, the per-user Redis quota, provider
+error mapping and the `hnsw.iterative_scan` capability of the pinned pgvector image.
 """
 
 import logging
@@ -33,7 +33,7 @@ from app.models import (
 )
 from app.services.embeddings import EmbeddingProviderError, EmbeddingRateLimited
 from app.services.indexing import chunk_tsvector
-from app.services.search import SearchService
+from app.services.search import _CURSOR_INVALID, _CURSOR_STALE, SearchService
 from tests.integration import actors
 
 pytestmark = pytest.mark.integration
@@ -593,7 +593,7 @@ async def test_search_rejects_stale_cursor_after_generation_change(
 
     assert stale.status_code == 422
     assert stale.json()["error"]["code"] == "validation_failed"
-    assert "cursor" in stale.json()["error"]["details"]["fields"]
+    assert stale.json()["error"]["details"]["fields"]["cursor"] == _CURSOR_STALE
 
 
 # --- 9. No active generation -----------------------------------------------------------
@@ -657,7 +657,40 @@ async def test_search_maps_embedding_provider_failure_to_503(
     assert limited.headers["retry-after"] == "7"
 
 
-# --- 12. Validation --------------------------------------------------------------------
+# --- 12. Per-user quota before the embeddings provider ---------------------------------
+
+
+async def test_search_enforces_per_user_quota_before_embeddings(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    provider: FakeEmbeddingProvider,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "search_rate_limit_per_minute", 2)
+    actor = await actors.make_actor(db_session)
+    generation = await _make_generation(db_session, actor)
+    await _indexed_class(db_session, actor, generation=generation, content="alpha quota")
+
+    for _ in range(2):
+        allowed = await client.get("/search", params={"q": "alpha"}, cookies=actor.cookies)
+        assert allowed.status_code == 200
+    assert provider.calls == 2
+
+    limited = await client.get("/search", params={"q": "alpha"}, cookies=actor.cookies)
+
+    assert limited.status_code == 429
+    assert limited.json()["error"]["code"] == "rate_limited"
+    assert limited.json()["error"]["details"] == {"limit": 2, "window_seconds": 60}
+    assert 1 <= int(limited.headers["retry-after"]) <= 60
+    # The quota dependency runs before the handler: no extra paid embeddings call.
+    assert provider.calls == 2
+
+    other = await actors.make_actor(db_session)
+    unaffected = await client.get("/search", params={"q": "alpha"}, cookies=other.cookies)
+    assert unaffected.status_code == 200
+
+
+# --- 13. Validation --------------------------------------------------------------------
 
 
 async def test_search_validates_query_limit_dates_and_cursor(
@@ -680,8 +713,13 @@ async def test_search_validates_query_limit_dates_and_cursor(
         assert response.status_code == 422, params
         assert response.json()["error"]["code"] == "validation_failed", params
 
+    malformed = await client.get(
+        "/search", params={"q": "alpha", "cursor": "not-a-cursor"}, cookies=actor.cookies
+    )
+    assert malformed.json()["error"]["details"]["fields"]["cursor"] == _CURSOR_INVALID
 
-# --- 13. Authentication ----------------------------------------------------------------
+
+# --- 14. Authentication ----------------------------------------------------------------
 
 
 async def test_search_requires_authentication(client: AsyncClient) -> None:
@@ -691,7 +729,7 @@ async def test_search_requires_authentication(client: AsyncClient) -> None:
     assert response.json()["error"]["code"] == "auth_required"
 
 
-# --- 14. No content in logs ------------------------------------------------------------
+# --- 15. No content in logs ------------------------------------------------------------
 
 
 async def test_search_sets_no_store_and_does_not_log_content(
@@ -720,7 +758,7 @@ async def test_search_sets_no_store_and_does_not_log_content(
     assert "canarycontent" not in app_logs
 
 
-# --- 15. Pinned pgvector capability ----------------------------------------------------
+# --- 16. Pinned pgvector capability ----------------------------------------------------
 
 
 async def test_search_pinned_pgvector_supports_iterative_scan(
@@ -733,7 +771,7 @@ async def test_search_pinned_pgvector_supports_iterative_scan(
     assert value == "strict_order"
 
 
-# --- 16. Chat consumer gets the full content ------------------------------------------
+# --- 17. Chat consumer gets the full content ------------------------------------------
 
 
 async def test_search_service_returns_content_for_chat_consumers(

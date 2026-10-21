@@ -1401,6 +1401,9 @@ It does not reactivate revisions, tombstoned tasks, or obsolete versions.
   duplicated. `next_cursor` is additive to the frozen §1.3 example and is `null` when the
   bounded 60-hit window is exhausted.
 - `limit` is 1..50 with default 8; there is no deep pagination beyond the 60 fused hits.
+- A per-user Redis quota is checked before the embeddings call; exceeding it returns
+  `429 rate_limited` with `Retry-After`. The provisional 30/min limit
+  (`MAULWURF_SEARCH_RATE_LIMIT_PER_MINUTE`) waits for the D5/F0 provider quota.
 - Without reliable offsets, `t_start/t_end` are `null` and the UI shows "segment N".
 - Target p95 ≤ 500 ms measured, not guaranteed (spec §8).
 

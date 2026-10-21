@@ -10,11 +10,12 @@ import uuid
 from datetime import date
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Depends, Query, Response
 
 from app.core.deps import CurrentSession, DbSession
 from app.core.errors import ApiError, validation_failed
 from app.core.providers import EmbeddingProviderDep
+from app.core.redis import RedisDep
 from app.schemas.search import SearchResponseOut, SearchResultOut, SearchSubjectOut
 from app.services.embeddings import (
     EmbeddingDimensionMismatch,
@@ -24,6 +25,7 @@ from app.services.embeddings import (
     EmbeddingRateLimited,
 )
 from app.services.search import (
+    _CURSOR_INVALID,
     CURSOR_MAX_LENGTH,
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
@@ -37,16 +39,24 @@ from app.services.search import (
     SearchService,
     SearchVectorRequired,
 )
+from app.services.search_quota import enforce_search_quota
 
 router = APIRouter(tags=["search"])
 
 
-def _fields(exc: Any, fallback: str) -> dict[str, str]:
+def _fields(exc: Any, fallback: str, *, field: str = "q") -> dict[str, str]:
     details = getattr(exc, "details", {})
     fields = details.get("fields") if isinstance(details, dict) else None
     if not isinstance(fields, dict) or not fields:
-        return {"q": fallback}
+        return {field: fallback}
     return {str(key): str(value) for key, value in fields.items()}
+
+
+async def _search_quota(session: CurrentSession, redis: RedisDep) -> None:
+    await enforce_search_quota(redis, session.user_id)
+
+
+SearchQuota = Annotated[None, Depends(_search_quota)]
 
 
 def _provider_unavailable() -> ApiError:
@@ -64,9 +74,19 @@ def _provider_unavailable() -> ApiError:
         200: {"description": "Resultados híbridos paginados con snippet y tiempos honestos"},
         401: {"description": "Sin sesión (auth_required)"},
         422: {"description": "validation_failed: q, limit, fechas o cursor inválidos"},
-        429: {"description": "rate_limited: cuota del proveedor de embeddings, con Retry-After"},
+        429: {
+            "description": (
+                "rate_limited: cuota por usuario o del proveedor de embeddings, "
+                "con Retry-After"
+            )
+        },
         500: {"description": "internal_error | search_hnsw_unsupported"},
-        503: {"description": "provider_unavailable: embeddings sin configurar o caídos"},
+        503: {
+            "description": (
+                "provider_unavailable: embeddings sin configurar o caídos | "
+                "capacity_unavailable: limitador de búsquedas no disponible"
+            )
+        },
     },
 )
 async def search(
@@ -75,6 +95,7 @@ async def search(
     session: CurrentSession,
     db: DbSession,
     provider: EmbeddingProviderDep,
+    _quota: SearchQuota,
     subject_id: Annotated[uuid.UUID | None, Query()] = None,
     date_from: Annotated[date | None, Query(alias="from")] = None,
     date_to: Annotated[date | None, Query(alias="to")] = None,
@@ -83,8 +104,10 @@ async def search(
 ) -> SearchResponseOut:
     """Hybrid search over the session user's active index generation.
 
-    A foreign or unknown `subject_id` is an empty result, never a `404` (ADR-0006). Without
-    an active generation the answer is `200` with no results and the provider is not called.
+    The per-user Redis quota runs as a dependency before this handler, so an over-quota
+    request never reaches the embeddings provider. A foreign or unknown `subject_id` is an
+    empty result, never a `404` (ADR-0006). Without an active generation the answer is `200`
+    with no results and the provider is not called.
     """
     response.headers["Cache-Control"] = "no-store"
     service = SearchService(db, provider=provider)
@@ -103,7 +126,7 @@ async def search(
     except SearchInvalidRange as exc:
         raise validation_failed(_fields(exc, "rango de fechas inválido")) from exc
     except SearchInvalidCursor as exc:
-        raise validation_failed(_fields(exc, "cursor inválido")) from exc
+        raise validation_failed(_fields(exc, _CURSOR_INVALID, field="cursor")) from exc
     except EmbeddingInputTooLong as exc:
         raise validation_failed({"q": "consulta demasiado larga"}) from exc
     except EmbeddingNotConfigured as exc:

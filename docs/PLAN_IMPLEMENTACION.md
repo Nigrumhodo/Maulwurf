@@ -168,7 +168,8 @@ because this plan exists.
   per-language FTS with RRF. Tenant/version/tombstone filters in both branches.
 - [ ] `GET /search` exposes the shared `SearchService` with plain-text snippets, nullable
   segment times only when reliable, and an opaque `next_cursor` over the bounded 60-hit RRF
-  window (`limit` 1..50, default 8; no deep pagination).
+  window (`limit` 1..50, default 8; no deep pagination). A per-user Redis quota is checked
+  before the embeddings call; the provisional limit waits for D5/F0.
 - [ ] Publish the complete index atomically; idempotent retries from text and outbox-based
   reconstruction if Redis is lost. Evaluate HNSW recall with selective filters against exact
   search.

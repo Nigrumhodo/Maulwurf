@@ -16,7 +16,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services import search
 from app.services.search import (
+    _CURSOR_INVALID,
+    _CURSOR_STALE,
     CURSOR_MAX_LENGTH,
+    MAX_PAGE_SIZE,
     MAX_RESULTS_WINDOW,
     SNIPPET_MAX_CHARS,
     FusedHit,
@@ -106,8 +109,11 @@ def _encoded(payload: Any) -> str:
     ],
 )
 def test_cursor_rejects_malformed_payloads(value: str) -> None:
-    with pytest.raises(SearchInvalidCursor):
+    with pytest.raises(SearchInvalidCursor) as exc:
         decode_cursor(value)
+
+    assert exc.value.message == _CURSOR_INVALID
+    assert exc.value.details["fields"]["cursor"] == _CURSOR_INVALID
 
 
 # --- 3. Keyset order --------------------------------------------------------------------
@@ -254,7 +260,9 @@ async def test_page_rejects_stale_generation_cursor(
     with pytest.raises(SearchInvalidCursor) as exc:
         await service.page(user_id=USER_ID, query="integral", cursor=encode_cursor(stale))
 
+    assert exc.value.message == _CURSOR_STALE
     assert exc.value.details["reason"] == "stale_generation"
+    assert exc.value.details["fields"]["cursor"] == _CURSOR_STALE
 
 
 async def test_page_rejects_out_of_range_limit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -265,4 +273,19 @@ async def test_page_rejects_out_of_range_limit(monkeypatch: pytest.MonkeyPatch) 
     service = _PageService([])
 
     with pytest.raises(SearchInvalidQuery):
-        await service.page(user_id=USER_ID, query="integral", limit=MAX_RESULTS_WINDOW + 1)
+        await service.page(user_id=USER_ID, query="integral", limit=MAX_PAGE_SIZE + 1)
+
+
+async def test_page_accepts_the_router_maximum_page_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def active(_: AsyncSession, __: uuid.UUID) -> _Generation:
+        return _Generation()
+
+    monkeypatch.setattr(search, "active_generation", active)
+    service = _PageService([])
+
+    page = await service.page(user_id=USER_ID, query="integral", limit=MAX_PAGE_SIZE)
+
+    assert page.results == []
+    assert service.seen_top_k == MAX_RESULTS_WINDOW

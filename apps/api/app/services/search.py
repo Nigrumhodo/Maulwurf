@@ -96,6 +96,9 @@ SNIPPET_MAX_CHARS = 240
 QUERY_MAX_CHARS = 500
 CURSOR_VERSION = 1
 CURSOR_MAX_LENGTH = 512
+# Human-readable cursor errors: the router publishes these in `details.fields.cursor`.
+_CURSOR_INVALID = "cursor inválido o malformado"
+_CURSOR_STALE = "el cursor pertenece a un índice anterior; reinicia la búsqueda"
 
 # Per-transaction GUC: with filters active, HNSW must keep scanning until it has `LIMIT`
 # candidates, otherwise the top-k comes back short (DISENO §2.5).
@@ -616,7 +619,7 @@ def encode_cursor(cursor: SearchCursor) -> str:
     if len(encoded) > CURSOR_MAX_LENGTH:
         raise SearchInvalidCursor(
             "El cursor excede la longitud máxima.",
-            details={"fields": {"cursor": "cursor inválido"}},
+            details={"fields": {"cursor": _CURSOR_INVALID}},
         )
     return encoded
 
@@ -624,8 +627,8 @@ def encode_cursor(cursor: SearchCursor) -> str:
 def decode_cursor(value: str) -> SearchCursor:
     """Validate and decode an opaque cursor; any malformed value is a typed 422."""
     invalid = SearchInvalidCursor(
-        "Cursor inválido.",
-        details={"fields": {"cursor": "cursor inválido"}},
+        _CURSOR_INVALID,
+        details={"fields": {"cursor": _CURSOR_INVALID}},
     )
     if not value or len(value) > CURSOR_MAX_LENGTH:
         raise invalid
@@ -973,7 +976,7 @@ class SearchService:
         started = perf_counter()
         query_text = _validated_query(query)
         _validated_range(date_from, date_to)
-        if limit < 1 or limit > MAX_RESULTS_WINDOW:
+        if limit < 1 or limit > MAX_PAGE_SIZE:
             raise SearchInvalidQuery(
                 "El tamaño de página está fuera de rango.",
                 details={"fields": {"limit": "limit fuera de rango"}},
@@ -986,10 +989,10 @@ class SearchService:
             return SearchPage(results=[], took_ms=took_ms, next_cursor=None)
         if cursor_state is not None and cursor_state.index_version != generation.version:
             raise SearchInvalidCursor(
-                "El cursor pertenece a un índice anterior.",
+                _CURSOR_STALE,
                 details={
                     "reason": "stale_generation",
-                    "fields": {"cursor": "cursor de otra generación"},
+                    "fields": {"cursor": _CURSOR_STALE},
                 },
             )
         results = await self._retrieve_for_generation(
