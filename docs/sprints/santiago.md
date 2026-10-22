@@ -44,6 +44,8 @@
 | S2.2 | S | done | 2026-10-09 UTC. Merge #54. Bounded ffmpeg and 30 s fragmentation. A `-fs` cut does not end as a success. |
 | S2.3 | S | in progress | 2026-10-09 UTC, WSL, `apps/ingest/.venv`. One active fragment, `-ss` before `-i`. `ruff check .` and `mypy .` clean. `pytest -m "not integration and not provider and not load"` → 126 passed, 33 deselected. |
 | S2.4 | S | in progress | 2026-10-09 UTC, same environment. Client isolated from the event loop; retries classified with a test double, no NVIDIA channel. `P-S2-SG-12` is not executed. Cloud `pending`. |
+| S2.5 | S | in progress | Claim in `CLAIMS.md` (2026-10-22). Branch `feature/S2.5-S2.6-atomic-commit-cleanup`. 2026-10-22, WSL: `ruff` and `mypy` clean. Unit suite 134 passed. `I-S2-SG-06`: `MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@127.0.0.1:55432/maulwurf .venv/bin/pytest -m integration tests/test_commit.py -q` → 4 passed against `pgvector/pgvector:pg16` (`mw-test-pg`). No Riva call. |
+| S2.6 | S | in progress | Same branch and date. On this WSL host, cleanup stays unverified (`unreadable_processes` > 0), the same limit as S1.B4/B5. `I-S2-SG-07` and the supervisor matrix passed inside `python:3.12-slim` with its own `/proc` and ffmpeg, Postgres on `127.0.0.1:55432`: `pytest -m integration tests/test_supervisor.py tests/test_failure_matrix.py tests/test_no_audio_persistence.py -q` → 24 passed, 6 deselected, 28.18 s. |
 
 ## Blockers and dependencies
 

@@ -19,6 +19,7 @@ from pathlib import Path
 import asyncpg
 import pytest
 from test_supervisor import (  # noqa: E402
+    SYNTHETIC_TEXT,
     _config,
     _row,
     _seed,
@@ -52,7 +53,7 @@ async def test_scenario_1_success_commits_then_cleans(
     attempt = await _seed(pool)
     result = await run_attempt(
         pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
-        config=_config(tmpfs_dir),
+        config=_config(tmpfs_dir, stub_transcript=SYNTHETIC_TEXT),
     )
     row = await _row(pool, attempt)
     assert result.outcome is Outcome.SUCCEEDED
@@ -200,7 +201,7 @@ async def test_scenario_7_after_commit_open_descriptor_is_not_verified(
     try:
         result = await run_attempt(
             pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
-            config=_config(tmpfs_dir),
+            config=_config(tmpfs_dir, stub_transcript=SYNTHETIC_TEXT),
             on_child=lambda _pid, workdir: held.append(os.open(workdir / "original", os.O_RDONLY)),
         )
     finally:

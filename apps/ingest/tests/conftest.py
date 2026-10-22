@@ -7,6 +7,7 @@ variable, los tests que la piden se saltan.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import uuid
@@ -73,9 +74,30 @@ def migrated_database_url() -> Iterator[str]:
         asyncio.run(_admin(url, f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
 
 
+def _encode_jsonb(value: object) -> bytes:
+    # jsonb binary is a version byte plus UTF-8 JSON. asyncpg uses that format on read.
+    return b"\x01" + json.dumps(value).encode()
+
+
+def _decode_jsonb_bytes(value: bytes) -> object:
+    return json.loads(value[1:])
+
+
+async def _decode_jsonb(conn: asyncpg.Connection) -> None:
+    await conn.set_type_codec(
+        "jsonb",
+        encoder=_encode_jsonb,
+        decoder=_decode_jsonb_bytes,
+        schema="pg_catalog",
+        format="binary",
+    )
+
+
 @pytest.fixture
 async def pool(migrated_database_url: str) -> AsyncIterator[asyncpg.Pool]:
-    created = await asyncpg.create_pool(_plain_dsn(migrated_database_url), min_size=1, max_size=4)
+    created = await asyncpg.create_pool(
+        _plain_dsn(migrated_database_url), min_size=1, max_size=4, init=_decode_jsonb,
+    )
     try:
         yield created
     finally:
