@@ -18,6 +18,7 @@ import asyncio
 import html
 import logging
 import re
+import unicodedata
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 from contextlib import suppress
@@ -231,6 +232,21 @@ def load_system_prompt(path: Path = SYSTEM_PROMPT_PATH) -> str:
         raise RuntimeError("No se pudo cargar prompts/v1/chat_system.txt.") from exc
 
 
+def _neutralize(text: str) -> str:
+    """Remove prompt-control markers until no nested variant can reassemble them.
+
+    A single substitution pass is insufficient: removing the inner marker from
+    `[S[S1]1]` or the inner tag from `<sou<source>rce>` leaves a valid marker behind.
+    NFKC also catches full-width characters that would otherwise bypass the regex.
+    """
+    normalized = unicodedata.normalize("NFKC", text)
+    while True:
+        cleaned = _MARKER_RE.sub("", normalized)
+        if cleaned == normalized:
+            return cleaned
+        normalized = cleaned
+
+
 def render_source(index: int, chunk: RetrievedChunk) -> str:
     """One untrusted evidence block inside an explicit source envelope.
 
@@ -242,7 +258,7 @@ def render_source(index: int, chunk: RetrievedChunk) -> str:
         parts.append(format_timestamp(chunk.t_start))
     elif chunk.segment_ordinal is not None:
         parts.append(f"segment {chunk.segment_ordinal}")
-    safe_content = _MARKER_RE.sub("", chunk.content.strip())
+    safe_content = _neutralize(chunk.content.strip())
     meta = html.escape(" · ".join(parts), quote=True)
     return f'<source id="S{index}" meta="{meta}">\n{safe_content}\n</source>'
 

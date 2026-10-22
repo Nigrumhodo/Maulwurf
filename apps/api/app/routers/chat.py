@@ -6,12 +6,14 @@ session factory for checkpoints, cancellation polls and replay reads, so a slow 
 hold a request-scoped database connection.
 """
 
+import threading
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Request, Response, status
 from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 
 from app.core.config import settings
 from app.core.deps import ChatSessions, DbSession, MutationSession, resolve_mutation_session
@@ -36,27 +38,49 @@ SSE_HEADERS = {
 
 MAX_STREAMS_PER_USER = 2
 _active: dict[uuid.UUID, int] = {}
+# BackgroundTask runs sync callables in a worker thread, so slot bookkeeping must be
+# thread-safe even though the endpoint and generator run on the event-loop thread.
+_active_lock = threading.Lock()
 
 
 def _acquire_stream(user_id: uuid.UUID) -> None:
-    active = _active.get(user_id, 0)
-    if active >= MAX_STREAMS_PER_USER:
-        raise ApiError(429, "rate_limited", "Demasiadas conexiones de chat simultáneas.")
-    _active[user_id] = active + 1
+    with _active_lock:
+        active = _active.get(user_id, 0)
+        if active >= MAX_STREAMS_PER_USER:
+            raise ApiError(429, "rate_limited", "Demasiadas conexiones de chat simultáneas.")
+        _active[user_id] = active + 1
 
 
 def _release_stream(user_id: uuid.UUID) -> None:
-    active = _active.get(user_id, 0)
-    if active <= 1:
-        _active.pop(user_id, None)
-    else:
-        _active[user_id] = active - 1
+    with _active_lock:
+        active = _active.get(user_id, 0)
+        if active <= 1:
+            _active.pop(user_id, None)
+        else:
+            _active[user_id] = active - 1
+
+
+class _Slot:
+    """Idempotent lease for one per-user concurrent stream slot."""
+
+    def __init__(self, user_id: uuid.UUID) -> None:
+        self.user_id = user_id
+        self.released = False
+        self._lock = threading.Lock()
+
+    def release(self) -> None:
+        with self._lock:
+            if self.released:
+                return
+            self.released = True
+            _release_stream(self.user_id)
 
 
 async def _release_stream_when_done(
-    events: AsyncGenerator[str, None], user_id: uuid.UUID
+    events: AsyncGenerator[str, None], slot: _Slot | uuid.UUID
 ) -> AsyncGenerator[str, None]:
     """Forward SSE frames, close the producer and release the slot on every exit path."""
+    lease = slot if isinstance(slot, _Slot) else _Slot(slot)
     try:
         async for event in events:
             yield event
@@ -64,7 +88,7 @@ async def _release_stream_when_done(
         try:
             await events.aclose()
         finally:
-            _release_stream(user_id)
+            lease.release()
 
 
 def _last_event_id(raw: str | None) -> int:
@@ -122,13 +146,13 @@ async def send_message(
     are therefore terminal `error` events, never a half-started 500.
     """
     user_id: uuid.UUID | None = None
-    acquired = False
+    slot: _Slot | None = None
     try:
         async with factory() as db:
             session = await resolve_mutation_session(db, request)
             user_id = session.user_id
             _acquire_stream(user_id)
-            acquired = True
+            slot = _Slot(user_id)
             service = _service(factory, embeddings, llm)
             try:
                 prepared = await service.prepare(
@@ -145,16 +169,19 @@ async def send_message(
 
         events = _release_stream_when_done(
             service.stream_events(prepared, last_event_id=_last_event_id(last_event_id)),
-            user_id,
+            slot,
         )
         return StreamingResponse(
             events,
             media_type="text/event-stream",
             headers=SSE_HEADERS,
+            # A disconnect before the generator's first iteration skips its `finally`;
+            # the response background releases the same idempotent lease.
+            background=BackgroundTask(slot.release),
         )
     except BaseException:
-        if acquired and user_id is not None:
-            _release_stream(user_id)
+        if slot is not None:
+            slot.release()
         raise
 
 

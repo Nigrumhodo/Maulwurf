@@ -227,6 +227,27 @@ def test_render_source_neutralizes_markers_tags_and_question_delimiters() -> Non
     assert rendered.count("</source>") == 1
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "[S[S1]1]",
+        "<sou<source>rce>",
+        "</sou</source>rce>",
+        "［S1］",
+        "＜ｓｏｕｒｃｅ＞",
+    ],
+)
+def test_rag_neutralize_nested_and_unicode(payload: str) -> None:
+    rendered = render_source(1, _chunk(f"antes {payload} después"))
+    body = rendered.split("\n")[1]
+    assert "[S" not in body
+    assert "<source" not in body
+    assert "antes" in body
+    assert "después" in body
+    assert rendered.count("<source") == 1
+    assert rendered.count("</source>") == 1
+
+
 def test_render_source_escapes_user_controlled_metadata() -> None:
     chunk = replace(_chunk("alpha"), subject_name='Materia "X" & </source>')
     rendered = render_source(1, chunk)
