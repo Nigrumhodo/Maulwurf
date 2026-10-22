@@ -14,6 +14,7 @@ from pathlib import Path
 import asyncpg
 import pytest
 from test_supervisor import (  # noqa: E402
+    SYNTHETIC_TEXT,
     _config,
     _seed,
     audio,
@@ -143,7 +144,7 @@ async def _run(
     try:
         result = await run_attempt(
             pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
-            config=_config(tmpfs_dir), on_child=on_child,
+            config=_config(tmpfs_dir, stub_transcript=SYNTHETIC_TEXT), on_child=on_child,
         )
     finally:
         logger.removeHandler(handler)

@@ -33,9 +33,9 @@ from pathlib import Path
 
 import asyncpg
 
-from maulwurf_ingest import admission, cleanup
+from maulwurf_ingest import admission, cleanup, persistence
 from maulwurf_ingest import lease as leases
-from maulwurf_ingest.asr_job import ORIGINAL
+from maulwurf_ingest.asr_job import ORIGINAL, STUB_TRANSCRIPT_NAME
 from maulwurf_ingest.audio.validate import probe_file
 from maulwurf_ingest.config import settings
 from maulwurf_ingest.receiver import PayloadTooLarge, iter_bytes, receive
@@ -68,6 +68,8 @@ class SupervisorConfig:
     realtime: bool = False  # solo pruebas: ffmpeg a velocidad real
     # Defecto: INGEST_FRAGMENT_SECONDS (30). effective_fragment_seconds lo recorta al piso.
     fragment_seconds: int = field(default_factory=_default_fragment_seconds)
+    # Test double. Production leaves this unset, so the child never reads a fixture.
+    stub_transcript: str | None = None
 
 
 @dataclass
@@ -120,15 +122,52 @@ class _Job:
     starttime: int | None = None  # para descartar el reciclado teórico del pgid
 
 
+def _stub_document(text: str) -> bytes:
+    """Fixture for the test double. The model name is the provisional contract, not a Riva reply."""
+    body = {
+        "text": text,
+        "precision": "none",
+        "words": [],
+        "model": "whisper-large-v3",
+        "client_version": "2.27.0",
+    }
+    return json.dumps(body).encode()
+
+
+def _job_payload(stdout: bytes) -> dict[str, object]:
+    # The stdout can carry the transcript. A decode error must not echo it into the log.
+    try:
+        parsed: object = json.loads(stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError("asr_result") from None
+    if not isinstance(parsed, dict):
+        raise RuntimeError("asr_result")
+    payload: dict[str, object] = {}
+    for key, value in parsed.items():
+        if not isinstance(key, str):
+            raise RuntimeError("asr_result")
+        payload[key] = value
+    return payload
+
+
+def _fragment_count(payload: dict[str, object]) -> int:
+    raw = payload.get("fragments")
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise RuntimeError("asr_result")
+    return raw
+
+
 async def _run_asr(
     workdir: Path, config: SupervisorConfig, keeper: _LeaseKeeper, on_child: ChildHook | None,
     job: _Job,
-) -> tuple[Outcome | None, int | None]:
-    """Ejecuta el trabajo ASR; devuelve (fallo o None, fragmentos)."""
+) -> tuple[Outcome | None, dict[str, object] | None]:
+    """Ejecuta el trabajo ASR; devuelve (fallo o None, JSON de stdout)."""
     argv = [sys.executable, "-m", "maulwurf_ingest.asr_job", str(workdir),
             "--fragment-seconds", str(config.fragment_seconds)]
     if config.realtime:
         argv.append("--realtime")
+    if config.stub_transcript is not None:
+        argv.append("--read-stub-transcript")
     proc = await asyncio.create_subprocess_exec(
         *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         start_new_session=True,  # grupo propio: el supervisor puede matar hijo y nietos
@@ -158,7 +197,63 @@ async def _run_asr(
     stdout, _ = output.result()
     if proc.returncode != 0:
         return Outcome.ASR_FAILED, None
-    return None, int(json.loads(stdout)["fragments"])
+    return None, _job_payload(stdout)
+
+
+async def _note_cleanup_failure(
+    pool: asyncpg.Pool, lease: leases.Lease, attempt_id: uuid.UUID, *,
+    owned_audio: bool, exc: Exception, result: RunResult,
+) -> None:
+    """A cleanup exception is not verified deletion.
+
+    Admission closes only when this run still owns the row.
+    """
+    logger.error(
+        "supervisor.cleanup_error attempt_id=%s error=%s", attempt_id, type(exc).__name__,
+    )
+    result.evidence = {"verified": False, "error": type(exc).__name__}
+    recorded = False
+    if owned_audio:
+        recorded = await leases.record_cleanup(
+            pool, lease, verified=False, evidence=result.evidence,
+        )
+    if recorded:
+        admission.halt(attempt_id)
+    if result.outcome is Outcome.SUCCEEDED:
+        result.outcome = Outcome.CLEANUP_FAILED
+
+
+async def _note_cleanup_evidence(
+    pool: asyncpg.Pool, lease: leases.Lease, attempt_id: uuid.UUID,
+    evidence: cleanup.CleanupEvidence, *, owned_audio: bool, committed: bool,
+    result: RunResult, audio_id: uuid.UUID | None, version: int | None,
+) -> None:
+    """Record this run's evidence. Enable the text outbox only after a verified commit."""
+    result.evidence = evidence.as_json()
+    # La evidencia de ESTE directorio solo acredita audio que este run escribió;
+    # en un takeover sin trabajo propio el intento queda `pending` para B4/B6.
+    recorded = (
+        await leases.record_cleanup(
+            pool, lease, verified=evidence.verified, evidence=result.evidence,
+        )
+        if owned_audio else False
+    )
+    if not evidence.verified:
+        logger.error("supervisor.cleanup_failed attempt_id=%s", attempt_id)
+        # Solo un `failed` persistido con el token de este run. Si el lease
+        # ya no es nuestro, la fila sigue `pending` y la admisión no se cierra.
+        if recorded:
+            admission.halt(attempt_id)
+        if result.outcome is Outcome.SUCCEEDED:
+            result.outcome = Outcome.CLEANUP_FAILED
+        return
+    if not committed or audio_id is None or version is None:
+        return
+    enabled = recorded and await persistence.enable_text_outbox(
+        pool, lease, audio_id=audio_id, version=version,
+    )
+    if not enabled:
+        result.outcome = Outcome.LEASE_LOST
 
 
 async def run_attempt(
@@ -179,6 +274,8 @@ async def run_attempt(
     keeper = _LeaseKeeper(pool, lease, config.heartbeat_interval_s)
     job = _Job()
     committed = False
+    published_audio_id: uuid.UUID | None = None
+    published_version: int | None = None
     owned_audio = False  # solo el run que escribió el audio puede acreditar su limpieza
     try:
         if not await leases.transition(
@@ -217,7 +314,11 @@ async def run_attempt(
         ):
             return result
 
-        failure, fragments = await _run_asr(workdir, config, keeper, on_child, job)
+        if config.stub_transcript is not None:
+            cleanup.write_private(
+                workdir / STUB_TRANSCRIPT_NAME, _stub_document(config.stub_transcript),
+            )
+        failure, payload = await _run_asr(workdir, config, keeper, on_child, job)
         if failure is not None:
             result.outcome = failure
             if failure is not Outcome.LEASE_LOST:
@@ -226,15 +327,52 @@ async def run_attempt(
                     error_code=failure.value,
                 )
             return result
-
-        # "Commit" de S1: aún no hay tabla de transcript (A2.1); se publican los conteos.
-        committed = await leases.transition(
-            pool, lease, from_status="transcribing",
-            to_status="transcript_committed_cleanup_pending",
-            fragments_done=fragments, fragments_total=fragments,
+        if payload is None:
+            raise RuntimeError("asr_result")
+        fragments = _fragment_count(payload)
+        draft = persistence.draft_from_job(payload.get("transcript"))
+        if draft is None:
+            result.outcome = Outcome.SUPERVISOR_ERROR
+            if not await leases.transition(
+                pool, lease, from_status="transcribing", to_status="requires_reupload",
+                error_code=Outcome.SUPERVISOR_ERROR.value,
+            ):
+                result.outcome = Outcome.LEASE_LOST
+            return result
+        published = await persistence.commit_transcript(
+            pool, lease, draft, fragments=fragments,
+            fragment_seconds=config.fragment_seconds, overlap_s=settings.fragment_overlap_s,
+            duration_s=result.duration_s,
         )
         result.fragments = fragments
-        result.outcome = Outcome.SUCCEEDED if committed else Outcome.LEASE_LOST
+        if (
+            published.outcome is persistence.CommitOutcome.COMMITTED
+            and published.audio_id is not None
+            and published.version is not None
+        ):
+            committed = True
+            published_audio_id = published.audio_id
+            published_version = published.version
+            result.outcome = Outcome.SUCCEEDED
+            return result
+        if published.outcome is persistence.CommitOutcome.NO_USABLE_TEXT:
+            result.outcome = Outcome.REJECTED
+            if not await leases.transition(
+                pool, lease, from_status="transcribing", to_status="rejected",
+                error_code="no_usable_text",
+                fragments_done=fragments, fragments_total=fragments,
+            ):
+                result.outcome = Outcome.LEASE_LOST
+            return result
+        if published.outcome is persistence.CommitOutcome.NOT_OWNER:
+            result.outcome = Outcome.LEASE_LOST
+            return result
+        result.outcome = Outcome.SUPERVISOR_ERROR
+        if not await leases.transition(
+            pool, lease, from_status="transcribing", to_status="requires_reupload",
+            error_code=Outcome.SUPERVISOR_ERROR.value,
+        ):
+            result.outcome = Outcome.LEASE_LOST
         return result
     except asyncio.CancelledError:
         raise
@@ -256,48 +394,41 @@ async def run_attempt(
         # cancelación no relanza dentro del finally; una segunda puede cortar
         # el await antes de que el hilo arranque y dejar el audio en tmpfs.
         # Una tarea propia con shield termina destroy_and_verify aunque
-        # cancelen otra vez.
+        # cancelen otra vez. Cualquier otra excepción deja cleanup_status=failed:
+        # si no, el heartbeat seguiría renovando el lease.
         cleanup_task = asyncio.create_task(
             asyncio.to_thread(
                 cleanup.destroy_and_verify, workdir, job.pgid, starttime=job.starttime
             )
         )
-        evidence = None
+        evidence: cleanup.CleanupEvidence | None = None
+        cleanup_error: Exception | None = None
+        cancelled = False
         try:
             evidence = await asyncio.shield(cleanup_task)
         except asyncio.CancelledError:
-            with contextlib.suppress(asyncio.CancelledError):
-                evidence = await cleanup_task
-        if evidence is None:
-            await keeper.stop()
-        else:
-            result.evidence = evidence.as_json()
+            cancelled = True
             try:
-                # La evidencia de ESTE directorio solo acredita audio que este run escribió;
-                # en un takeover sin trabajo propio el intento queda `pending` para B4/B6
-                # (nadie pudo acreditar el audio real). Que el lease venza nunca marca
-                # `verified` por sí mismo: esto lo mantiene así.
-                recorded = (
-                    await leases.record_cleanup(
-                        pool, lease, verified=evidence.verified, evidence=result.evidence,
-                    )
-                    if owned_audio else False
+                evidence = await cleanup_task
+            except asyncio.CancelledError:
+                evidence = None
+            except Exception as exc:
+                cleanup_error = exc
+        except Exception as exc:
+            cleanup_error = exc
+        try:
+            if cleanup_error is not None:
+                await _note_cleanup_failure(
+                    pool, lease, attempt_id, owned_audio=owned_audio, exc=cleanup_error,
+                    result=result,
                 )
-                if not evidence.verified:
-                    logger.error("supervisor.cleanup_failed attempt_id=%s", attempt_id)
-                    # Solo un `failed` persistido con el token de este run. Si el lease
-                    # ya no es nuestro, la fila sigue `pending` y la admisión no se cierra.
-                    if recorded:
-                        admission.halt(attempt_id)
-                    if result.outcome is Outcome.SUCCEEDED:
-                        result.outcome = Outcome.CLEANUP_FAILED
-                elif committed and not (
-                    recorded
-                    and await leases.transition(
-                        pool, lease, from_status="transcript_committed_cleanup_pending",
-                        to_status="succeeded",
-                    )
-                ):
-                    result.outcome = Outcome.LEASE_LOST
-            finally:
-                await keeper.stop()
+            elif evidence is not None:
+                await _note_cleanup_evidence(
+                    pool, lease, attempt_id, evidence, owned_audio=owned_audio,
+                    committed=committed, result=result, audio_id=published_audio_id,
+                    version=published_version,
+                )
+        finally:
+            await keeper.stop()
+        if cancelled:
+            raise asyncio.CancelledError

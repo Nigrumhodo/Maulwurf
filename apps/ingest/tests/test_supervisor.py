@@ -12,6 +12,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import threading
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -21,7 +22,7 @@ from pathlib import Path
 import asyncpg
 import pytest
 
-from maulwurf_ingest import cleanup, hardening, lease
+from maulwurf_ingest import admission, cleanup, hardening, lease
 from maulwurf_ingest.asr_job import ACTIVE_FRAGMENT, ORIGINAL
 from maulwurf_ingest.supervisor import Outcome, SupervisorConfig, run_attempt
 
@@ -137,7 +138,7 @@ async def test_success_commits_then_verifies_cleanup(
     attempt = await _seed(pool)
     result = await run_attempt(
         pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
-        config=_config(tmpfs_dir),
+        config=_config(tmpfs_dir, stub_transcript=SYNTHETIC_TEXT),
     )
     row = await _row(pool, attempt)
 
@@ -206,7 +207,7 @@ async def test_open_descriptor_to_deleted_audio_is_not_verified(
     try:
         result = await run_attempt(
             pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
-            config=_config(tmpfs_dir),
+            config=_config(tmpfs_dir, stub_transcript=SYNTHETIC_TEXT),
             on_child=lambda _pid, workdir: held.append(os.open(workdir / ORIGINAL, os.O_RDONLY)),
         )
     finally:
@@ -330,6 +331,137 @@ async def test_only_one_supervisor_acquires_the_lease(pool: asyncpg.Pool) -> Non
     winners = [r for r in results if r is not None]
     assert len(winners) == 1
     assert winners[0].fencing_token == 2
+
+
+async def _audio_id(pool: asyncpg.Pool, attempt: Attempt) -> uuid.UUID:
+    value = await pool.fetchval(
+        "SELECT audio_id FROM ingestion_attempts WHERE id = $1", attempt.attempt_id,
+    )
+    assert isinstance(value, uuid.UUID)
+    return value
+
+
+async def test_empty_transcript_is_rejected_without_padding(
+    pool: asyncpg.Pool, audio: bytes, tmpfs_dir: Path,
+) -> None:
+    """I-S2-SG-07: silence is rejected. Nothing is stored to fill the gap."""
+    admission.reset()
+    attempt = await _seed(pool)
+    try:
+        result = await run_attempt(
+            pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+            config=_config(tmpfs_dir),
+        )
+        row = await _row(pool, attempt)
+        audio_id = await _audio_id(pool, attempt)
+        transcripts = await pool.fetchval(
+            "SELECT count(*) FROM transcripts WHERE audio_id = $1", audio_id,
+        )
+        events = await pool.fetchval(
+            "SELECT count(*) FROM outbox_events WHERE resource_id = $1", audio_id,
+        )
+        assert result.outcome is Outcome.REJECTED
+        assert (row["status"], row["error_code"]) == ("rejected", "no_usable_text")
+        assert transcripts == 0
+        assert events == 0
+        if result.evidence.get("unreadable_processes") == 0:
+            assert row["cleanup_status"] == "verified"
+    finally:
+        admission.reset()
+
+
+async def test_succeeded_only_after_verified_cleanup(
+    pool: asyncpg.Pool, audio: bytes, tmpfs_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """I-S2-SG-07: succeeded and the text outbox wait until cleanup is verified."""
+    entered = threading.Event()
+    release = threading.Event()
+    real = cleanup.destroy_and_verify
+
+    def _spy(
+        workdir: Path, pgid: int | None, *, starttime: int | None = None, settle_s: float = 5.0,
+    ) -> cleanup.CleanupEvidence:
+        entered.set()
+        assert release.wait(timeout=20)
+        return real(workdir, pgid, starttime=starttime, settle_s=settle_s)
+
+    monkeypatch.setattr(cleanup, "destroy_and_verify", _spy)
+    attempt = await _seed(pool)
+    task = asyncio.create_task(run_attempt(
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+        config=_config(tmpfs_dir, stub_transcript=SYNTHETIC_TEXT),
+    ))
+    try:
+        assert await asyncio.to_thread(entered.wait, 60)
+        during = await _row(pool, attempt)
+        assert during["status"] == "transcript_committed_cleanup_pending"
+    finally:
+        release.set()
+        result = await task
+    row = await _row(pool, attempt)
+    audio_id = await _audio_id(pool, attempt)
+    stored = await pool.fetchrow("SELECT text FROM transcripts WHERE audio_id = $1", audio_id)
+    event = await pool.fetchrow(
+        """SELECT type, enabled, blocked_reason, payload::text AS payload
+             FROM outbox_events WHERE resource_id = $1""",
+        audio_id,
+    )
+
+    assert result.outcome is Outcome.SUCCEEDED
+    assert row["status"] == "succeeded"
+    assert row["cleanup_status"] == "verified"
+    assert stored is not None and stored["text"] == SYNTHETIC_TEXT
+    assert event is not None
+    assert event["type"] == "index_requested"
+    assert event["enabled"] is True and event["blocked_reason"] is None
+    assert SYNTHETIC_TEXT not in event["payload"]
+
+
+async def test_cleanup_exception_fails_closed_and_stops_the_keeper(
+    pool: asyncpg.Pool, audio: bytes, tmpfs_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """I-S2-SG-07: an error from destroy_and_verify records failed and drops the lease."""
+    def _boom(
+        workdir: Path, _pgid: int | None, *, starttime: int | None = None, settle_s: float = 5.0,
+    ) -> cleanup.CleanupEvidence:
+        shutil.rmtree(workdir, ignore_errors=True)
+        raise OSError(1)
+
+    monkeypatch.setattr(cleanup, "destroy_and_verify", _boom)
+    admission.reset()
+    attempt = await _seed(pool)
+    try:
+        result = await run_attempt(
+            pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+            config=_config(
+                tmpfs_dir, stub_transcript=SYNTHETIC_TEXT,
+                heartbeat_interval_s=0.2, lease_ttl=timedelta(seconds=30),
+            ),
+        )
+        row = await _row(pool, attempt)
+        audio_id = await _audio_id(pool, attempt)
+        event = await pool.fetchrow(
+            "SELECT enabled FROM outbox_events WHERE resource_id = $1", audio_id,
+        )
+        expires = await pool.fetchval(
+            "SELECT lease_expires_at FROM ingestion_attempts WHERE id = $1", attempt.attempt_id,
+        )
+        await asyncio.sleep(0.8)
+        expires_after = await pool.fetchval(
+            "SELECT lease_expires_at FROM ingestion_attempts WHERE id = $1", attempt.attempt_id,
+        )
+        halted = not admission.uploads_admitted()
+        alert_ids = [item.attempt_id for item in admission.alerts()]
+        assert result.outcome is Outcome.CLEANUP_FAILED
+        assert result.evidence == {"verified": False, "error": "OSError"}
+        assert row["status"] == "transcript_committed_cleanup_pending"
+        assert row["cleanup_status"] == "failed"
+        assert halted
+        assert attempt.attempt_id in alert_ids
+        assert event is not None and event["enabled"] is False
+        assert expires_after == expires
+    finally:
+        admission.reset()
 
 
 async def test_lease_is_scoped_to_the_owning_user(pool: asyncpg.Pool) -> None:
