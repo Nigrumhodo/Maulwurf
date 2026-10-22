@@ -174,7 +174,8 @@ because this plan exists.
   reconstruction if Redis is lost. Evaluate HNSW recall with selective filters against exact
   search.
 - [ ] Chat `fetch` + SSE POST with snapshot, monotonic IDs, and one terminal `done|error`;
-  context budget, idempotent `client_message_id`, cancellation, and partial states.
+  context budget, idempotent `client_message_id`, cancellation, and partial states. At most
+  two concurrent streams per user; a third returns `429 rate_limited` before persisting.
   Reconnection consults the persisted result and does not re-execute. Citations from the
   allowed registry, safe Markdown, and links only after validation.
 - [ ] Persist provenance for all sources from context and history; delete/invalidate derived

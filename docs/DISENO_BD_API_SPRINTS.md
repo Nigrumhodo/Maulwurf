@@ -1414,7 +1414,7 @@ It does not reactivate revisions, tombstoned tasks, or obsolete versions.
 | `POST` | `/chat/conversations` | S2 | Creates a conversation (`mode: all\|subject\|class` + `subject_id`/`audio_id` per mode) | `201` · `422 chat_mode_invalid` |
 | `GET` | `/chat/conversations` | S2 | Tenant list | `200` |
 | `GET` | `/chat/conversations/{id}/messages` | S2 | Paginated history | `200` |
-| `POST` | `/chat/conversations/{id}/messages` | S2 | Sends a question; **SSE consumed with `fetch`**; an idempotent `client_message_id` returns the existing message without re-executing | `200 text/event-stream` |
+| `POST` | `/chat/conversations/{id}/messages` | S2 | Sends a question; **SSE consumed with `fetch`**; an idempotent `client_message_id` returns the existing message without re-executing; at most two concurrent streams per user | `200 text/event-stream` · `429 rate_limited` |
 | `DELETE` | `/chat/conversations/{id}` | S2 | Tombstone and purge of content/sources | `204` |
 | `POST` | `/chat/conversations/{id}/messages/{message_id}/cancel` | S2 | Cancels the in-flight stream; the partial is left `cancelled` | `202` |
 

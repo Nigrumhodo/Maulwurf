@@ -36,6 +36,7 @@ from app.models import (
     Subject,
     Transcript,
 )
+from app.routers import chat as chat_router
 from app.services.indexing import chunk_tsvector
 from app.services.llm import ChatMessage, LLMProviderError
 from app.services.rag import RAGService, cancel_message
@@ -372,6 +373,31 @@ async def test_chat_stream_emits_ordered_deltas_citations_and_one_done(
     assert done["sources"] == [{"kind": "transcript", "audio_id": str(citation["audio_id"])}]
 
 
+async def test_chat_rejects_a_third_stream_before_any_work(chat_sse: Harness) -> None:
+    actor, conversation, _, _ = await _setup_corpus(chat_sse.factory)
+    async with chat_sse.factory() as db:
+        before = await db.scalar(
+            select(func.count()).select_from(Message).where(Message.user_id == actor.user_id)
+        )
+
+    chat_router._active[actor.user_id] = chat_router.MAX_STREAMS_PER_USER
+    try:
+        response = await _post(chat_sse, actor, conversation.id)
+    finally:
+        chat_router._active.pop(actor.user_id, None)
+
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "rate_limited"
+    assert response.json()["error"]["message"] == "Demasiadas conexiones de chat simultáneas."
+    async with chat_sse.factory() as db:
+        after = await db.scalar(
+            select(func.count()).select_from(Message).where(Message.user_id == actor.user_id)
+        )
+    assert after == before
+    assert chat_sse.llm is not None and chat_sse.llm.calls == 0
+    assert chat_sse.embeddings.calls == 0
+
+
 async def test_chat_ignores_last_event_id_for_a_new_turn(chat_sse: Harness) -> None:
     actor, conversation, _, _ = await _setup_corpus(chat_sse.factory)
     response = await _post(
@@ -470,10 +496,10 @@ async def test_chat_selects_at_most_eight_chunks_under_budget(chat_sse: Harness)
 
     assert chat_sse.llm.calls == 1
     final_prompt = chat_sse.llm.last_messages[-1].content
-    assert "[S1]" in final_prompt
-    assert "[S8]" in final_prompt
-    assert "[S9]" not in final_prompt
-    assert "[S10]" not in final_prompt
+    assert '<source id="S1"' in final_prompt
+    assert '<source id="S8"' in final_prompt
+    assert '<source id="S9"' not in final_prompt
+    assert '<source id="S10"' not in final_prompt
     async with chat_sse.factory() as db:
         count = await db.scalar(
             select(func.count())

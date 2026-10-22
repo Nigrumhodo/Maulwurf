@@ -18,6 +18,7 @@ from app.routers import (
     search,
     subjects,
 )
+from app.services.llm import close_llm_http_client
 
 try:
     __version__ = version("maulwurf-api")
@@ -30,6 +31,7 @@ except PackageNotFoundError:
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
     # Cierra el pool al parar (compose stop / SIGTERM) en vez de abandonar conexiones.
+    await close_llm_http_client()
     await engine.dispose()
 
 

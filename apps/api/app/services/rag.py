@@ -15,6 +15,7 @@ the stream polls that state, persists its latest partial text and closes with
 """
 
 import asyncio
+import html
 import logging
 import re
 import uuid
@@ -96,6 +97,11 @@ SYSTEM_PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "v1" / "c
 # avoids waiting for the next poll. Entries disappear when the stream closes.
 _CANCEL_EVENTS: dict[uuid.UUID, asyncio.Event] = {}
 _HISTORY_MARKER = re.compile(r"\[S[1-9][0-9]*\]")
+# Transcript content is untrusted: remove strings that could impersonate the evidence
+# wrapper, the model's citation contract, or the prompt's final question delimiter.
+_MARKER_RE = re.compile(
+    r"\[S[1-9][0-9]*\]|</?source[^>]*>|^Question:", re.IGNORECASE | re.MULTILINE
+)
 
 
 class ChatError(Exception):
@@ -226,13 +232,19 @@ def load_system_prompt(path: Path = SYSTEM_PROMPT_PATH) -> str:
 
 
 def render_source(index: int, chunk: RetrievedChunk) -> str:
-    """One untrusted evidence block; the `[Sn]` marker is the only citation instruction."""
+    """One untrusted evidence block inside an explicit source envelope.
+
+    The `id` attribute is the only citation identity; content that looks like a marker,
+    an envelope tag or the final question delimiter is neutralized before insertion.
+    """
     parts = [chunk.subject_name, chunk.class_date.isoformat()]
     if chunk.t_start is not None and chunk.t_end is not None:
         parts.append(format_timestamp(chunk.t_start))
     elif chunk.segment_ordinal is not None:
         parts.append(f"segment {chunk.segment_ordinal}")
-    return f"[S{index}] {' · '.join(parts)}\n{chunk.content.strip()}"
+    safe_content = _MARKER_RE.sub("", chunk.content.strip())
+    meta = html.escape(" · ".join(parts), quote=True)
+    return f'<source id="S{index}" meta="{meta}">\n{safe_content}\n</source>'
 
 
 def render_user_prompt(question: str, sources: Sequence[SourceItem]) -> str:

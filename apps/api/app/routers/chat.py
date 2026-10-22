@@ -7,6 +7,7 @@ hold a request-scoped database connection.
 """
 
 import uuid
+from collections.abc import AsyncGenerator
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Request, Response, status
@@ -32,6 +33,38 @@ SSE_HEADERS = {
     "Cache-Control": "no-store",
     "X-Accel-Buffering": "no",
 }
+
+MAX_STREAMS_PER_USER = 2
+_active: dict[uuid.UUID, int] = {}
+
+
+def _acquire_stream(user_id: uuid.UUID) -> None:
+    active = _active.get(user_id, 0)
+    if active >= MAX_STREAMS_PER_USER:
+        raise ApiError(429, "rate_limited", "Demasiadas conexiones de chat simultáneas.")
+    _active[user_id] = active + 1
+
+
+def _release_stream(user_id: uuid.UUID) -> None:
+    active = _active.get(user_id, 0)
+    if active <= 1:
+        _active.pop(user_id, None)
+    else:
+        _active[user_id] = active - 1
+
+
+async def _release_stream_when_done(
+    events: AsyncGenerator[str, None], user_id: uuid.UUID
+) -> AsyncGenerator[str, None]:
+    """Forward SSE frames, close the producer and release the slot on every exit path."""
+    try:
+        async for event in events:
+            yield event
+    finally:
+        try:
+            await events.aclose()
+        finally:
+            _release_stream(user_id)
 
 
 def _last_event_id(raw: str | None) -> int:
@@ -70,6 +103,7 @@ def _service(
         403: {"description": "Origin/CSRF inválidos (csrf_invalid)"},
         404: {"description": "Conversación inexistente o ajena (not_found)"},
         422: {"description": "validation_failed: contenido o client_message_id inválidos"},
+        429: {"description": "rate_limited: demasiados streams simultáneos"},
     },
 )
 async def send_message(
@@ -87,27 +121,41 @@ async def send_message(
     HTTP statuses. Retrieval, provider and budget failures happen after the message exists and
     are therefore terminal `error` events, never a half-started 500.
     """
-    async with factory() as db:
-        session = await resolve_mutation_session(db, request)
-        service = _service(factory, embeddings, llm)
-        try:
-            prepared = await service.prepare(
-                db,
-                user_id=session.user_id,
-                conversation_id=conversation_id,
-                content=body.content,
-                client_message_id=body.client_message_id,
-            )
-        except ChatConversationNotFound as exc:
-            raise not_found() from exc
-        except ChatContextExceeded as exc:
-            raise validation_failed({"content": exc.message}) from exc
+    user_id: uuid.UUID | None = None
+    acquired = False
+    try:
+        async with factory() as db:
+            session = await resolve_mutation_session(db, request)
+            user_id = session.user_id
+            _acquire_stream(user_id)
+            acquired = True
+            service = _service(factory, embeddings, llm)
+            try:
+                prepared = await service.prepare(
+                    db,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    content=body.content,
+                    client_message_id=body.client_message_id,
+                )
+            except ChatConversationNotFound as exc:
+                raise not_found() from exc
+            except ChatContextExceeded as exc:
+                raise validation_failed({"content": exc.message}) from exc
 
-    return StreamingResponse(
-        service.stream_events(prepared, last_event_id=_last_event_id(last_event_id)),
-        media_type="text/event-stream",
-        headers=SSE_HEADERS,
-    )
+        events = _release_stream_when_done(
+            service.stream_events(prepared, last_event_id=_last_event_id(last_event_id)),
+            user_id,
+        )
+        return StreamingResponse(
+            events,
+            media_type="text/event-stream",
+            headers=SSE_HEADERS,
+        )
+    except BaseException:
+        if acquired and user_id is not None:
+            _release_stream(user_id)
+        raise
 
 
 @router.post(

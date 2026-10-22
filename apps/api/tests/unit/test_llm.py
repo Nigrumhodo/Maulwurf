@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from app.core.config import Settings
+from app.services import llm as llm_module
 from app.services.llm import (
     ChatMessage,
     HttpChatProvider,
@@ -14,6 +15,8 @@ from app.services.llm import (
     LLMNotConfigured,
     LLMProviderError,
     LLMRateLimited,
+    close_llm_http_client,
+    get_llm_http_client,
 )
 
 SECRETS = {
@@ -222,3 +225,20 @@ async def test_rate_limited_is_the_typed_error_for_429_after_retries() -> None:
     provider = _provider(httpx.MockTransport(handler), max_retries=0)
     with pytest.raises(LLMRateLimited):
         await _collect(provider)
+
+
+async def test_shared_http_client_is_bounded_reused_and_closed() -> None:
+    await close_llm_http_client()
+    try:
+        first = get_llm_http_client()
+        assert first is get_llm_http_client()
+        assert llm_module.LLM_HTTP_LIMITS.max_connections == 20
+        assert llm_module.LLM_HTTP_LIMITS.max_keepalive_connections == 10
+
+        await close_llm_http_client()
+        assert first.is_closed
+
+        second = get_llm_http_client()
+        assert second is not first
+    finally:
+        await close_llm_http_client()

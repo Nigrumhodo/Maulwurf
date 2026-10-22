@@ -24,6 +24,8 @@ from app.core.config import settings as live_settings
 logger = logging.getLogger(__name__)
 
 CHAT_COMPLETIONS_PATH = "chat/completions"
+LLM_HTTP_LIMITS = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+_shared_client: httpx.AsyncClient | None = None
 _BACKOFF_BASE_SECONDS = 0.5
 _MAX_RETRY_AFTER_SECONDS = 60.0
 _RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
@@ -106,6 +108,28 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
     return min(seconds, _MAX_RETRY_AFTER_SECONDS)
 
 
+def get_llm_http_client() -> httpx.AsyncClient:
+    """Return the process-wide client so requests reuse one bounded connection pool."""
+    global _shared_client
+    client = _shared_client
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(
+            limits=LLM_HTTP_LIMITS,
+            timeout=httpx.Timeout(60.0, connect=10.0),
+        )
+        _shared_client = client
+    return client
+
+
+async def close_llm_http_client() -> None:
+    """Close the shared pool during app shutdown, if it was ever created."""
+    global _shared_client
+    client = _shared_client
+    _shared_client = None
+    if client is not None:
+        await client.aclose()
+
+
 class HttpChatProvider:
     """Streaming client for LiteLLM/OpenAI `POST <base>/chat/completions`."""
 
@@ -119,11 +143,14 @@ class HttpChatProvider:
         max_retries: int = 2,
         timeout_seconds: float = 60.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        client: httpx.AsyncClient | None = None,
         sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
         jitter: Callable[[], float] = _unit_interval,
     ) -> None:
         if context_window <= 0:
             raise ValueError("context_window debe ser positivo")
+        if client is not None and transport is not None:
+            raise ValueError("client y transport son mutuamente exclusivos")
         self._endpoint = f"{base_url.rstrip('/')}/{CHAT_COMPLETIONS_PATH}"
         self._api_key = api_key
         self._model = model
@@ -131,6 +158,8 @@ class HttpChatProvider:
         self._max_attempts = max_retries + 1
         self._timeout = timeout_seconds
         self._transport = transport
+        self._client = client
+        self._owns_client = False
         self._sleep = sleeper
         self._jitter = jitter
 
@@ -160,6 +189,29 @@ class HttpChatProvider:
     def context_window(self) -> int:
         return self._context_window
 
+    def _client_for_stream(self) -> httpx.AsyncClient:
+        """Use the injected/shared pool; only tests with a transport own a private client."""
+        if self._client is not None:
+            return self._client
+        if self._transport is not None:
+            self._client = httpx.AsyncClient(
+                transport=self._transport,
+                limits=LLM_HTTP_LIMITS,
+                timeout=httpx.Timeout(self._timeout, connect=min(10.0, self._timeout)),
+            )
+            self._owns_client = True
+        else:
+            self._client = get_llm_http_client()
+        return self._client
+
+    async def aclose(self) -> None:
+        """Close a test-owned transport client; the shared production pool is app-owned."""
+        if self._owns_client and self._client is not None:
+            client = self._client
+            self._client = None
+            self._owns_client = False
+            await client.aclose()
+
     async def stream(
         self, messages: Sequence[ChatMessage], *, max_tokens: int
     ) -> AsyncIterator[str]:
@@ -188,34 +240,35 @@ class HttpChatProvider:
         while True:
             attempt += 1
             try:
-                async with httpx.AsyncClient(
-                    transport=self._transport,
+                client = self._client_for_stream()
+                async with client.stream(
+                    "POST",
+                    self._endpoint,
+                    json=payload,
+                    headers=headers,
                     timeout=httpx.Timeout(self._timeout, connect=min(10.0, self._timeout)),
-                ) as client:
-                    async with client.stream(
-                        "POST", self._endpoint, json=payload, headers=headers
-                    ) as response:
-                        if response.status_code != httpx.codes.OK:
-                            error = await self._status_error(response, attempt)
-                            if (
-                                response.status_code in _RETRYABLE_STATUS
-                                and attempt < self._max_attempts
-                            ):
-                                await self._pause(attempt, _retry_after_seconds(response))
-                                continue
-                            raise error
-                        async for line in response.aiter_lines():
-                            data = _sse_data(line)
-                            if data is None:
-                                continue
-                            if data == "[DONE]":
-                                return
-                            delta = _parse_delta(data)
-                            if delta is None:
-                                continue
-                            first_delta_sent = True
-                            yield delta
-                        return
+                ) as response:
+                    if response.status_code != httpx.codes.OK:
+                        error = await self._status_error(response, attempt)
+                        if (
+                            response.status_code in _RETRYABLE_STATUS
+                            and attempt < self._max_attempts
+                        ):
+                            await self._pause(attempt, _retry_after_seconds(response))
+                            continue
+                        raise error
+                    async for line in response.aiter_lines():
+                        data = _sse_data(line)
+                        if data is None:
+                            continue
+                        if data == "[DONE]":
+                            return
+                        delta = _parse_delta(data)
+                        if delta is None:
+                            continue
+                        first_delta_sent = True
+                        yield delta
+                    return
             except httpx.HTTPError as exc:
                 if first_delta_sent or attempt >= self._max_attempts:
                     raise LLMProviderError(

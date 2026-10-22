@@ -19,6 +19,7 @@ persisted tables is ticket L2.9, which is still open. The drafts below are shape
 tables instead, so they persist with no extra mapping once L2.2 consumes them.
 """
 
+import math
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -27,6 +28,11 @@ from uuid import UUID
 # Contract defaults (ESPECIFICACION.md M6 / S2.md §1.1).
 TARGET_TOKENS = 800
 OVERLAP_TOKENS = 100
+
+# Regex token counters undercount BPE tokens for short words, Spanish text and code. Until
+# D5 wires the provider tokenizer, inflate the deterministic count so prompt budgets stay
+# conservative enough to avoid an avoidable `context_length_exceeded` response.
+TOKEN_SAFETY_FACTOR = 1.5
 
 TokenCounter = Callable[[str], int]
 
@@ -44,8 +50,8 @@ _SENTENCE_BOUNDARY = re.compile(r"[.!?\u2026\u3002\uff01\uff1f]+[)\]\"'\u201d\u2
 
 
 def count_tokens_default(text: str) -> int:
-    """Approximate token count used until the provider tokenizer (D5) is wired in."""
-    return len(_TOKEN_RE.findall(text))
+    """Conservative token estimate used until the provider tokenizer (D5) is wired in."""
+    return math.ceil(len(_TOKEN_RE.findall(text)) * TOKEN_SAFETY_FACTOR)
 
 
 def split_sentences(text: str) -> list[tuple[int, int]]:
