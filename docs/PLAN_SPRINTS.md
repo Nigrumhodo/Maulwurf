@@ -231,7 +231,7 @@ remain open S1 tickets and the slice cannot run without them.
 | L2.2 | Versioned embeddings + cosine HNSW; index generation with atomic activation | A2.1 | U-S2-JL-02, P-S2-JL-10 |
 | L2.3 | Per-language FTS + pgvector + RRF fusion; tenant filters in both branches before top-k | A2.1 | U-S2-JL-03/04 |
 | L2.4 | `SearchService` + `GET /search` (paired with A2.11) | L2.3 | I-S2-JL-06 |
-| L2.5 | Chat SSE: embedding → 30/branch → RRF → ~8 chunks under budget; streaming | L2.4 | I-S2-JL-07/08 |
+| L2.5 | Chat SSE: embedding → 30/branch → RRF → ~8 chunks under budget; streaming POST + cancel with minimal turn persistence | L2.4 | I-S2-JL-07/08 |
 | L2.6 | Citations only to IDs validated in the DB; "segment N" without offsets; complete `message_sources` | L2.5 | U-S2-JL-05 |
 | L2.7 | G4 evaluation on the S1 dataset (Recall@8 with active filters ≥ 0.85, citations ≥ 0.95, abstention ≥ 0.90) | L2.1–L2.6 | G4 |
 | L2.8 | Retrieval p95 ≤ 500 ms and chat first token p95 ≤ 5 s, measured | L2.4 | G4 |
@@ -254,7 +254,7 @@ remain open S1 tickets and the slice cannot run without them.
 | A2.9 | Listing, `GET /audios/{id}`, SSE progress from the DB, conditional `txt`/`srt` exports | A2.6 | I-S2-AN-07/09 |
 | A2.10 | Atomic commit + `cleanup_pending` state; outbox gate only for index/analyze | S2.5 | I-S2-AN-10 |
 | A2.11 | `GET /search` (paired with L2.4) | L2.3 | I-S2-JL-06 |
-| A2.12 | `conversations`/`messages`/`message_sources` tables + M7 endpoints: conversation CRUD (all/subject/class modes), history, idempotent `client_message_id`, streaming cancellation | A2.1, L2.5 (contract) | I-S2-AN-11 |
+| A2.12 | M7 conversation CRUD (all/subject/class modes), paginated history, and delete/purge; L2.5 already provides the streaming `POST .../messages` and `.../cancel` | A2.1, L2.5 (contract) | I-S2-AN-11 |
 | A2.13 | *(gap, P0)* API↔ingest reception contract: ADR on where the `PUT` terminates, `ReceptionSink` client, internal credential (pairs with S2.11) | A2.4; S2.1 | I-S2-AN-12 |
 | A2.14 | *(gap, P1)* Reservation lifecycle and `PUT` concurrency: row lock and `receiving` transition, atomic quota/slot, stale-reservation expiry | A2.3, A2.4 | I-S2-AN-13 |
 | A2.15 | *(gap, P2)* Error envelope on 404, 405 and unhandled exceptions | A2.4 | U-S2-AN-14 |

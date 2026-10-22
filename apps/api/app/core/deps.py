@@ -88,6 +88,22 @@ def _origin_allowed(request: Request) -> bool:
     )
 
 
+async def resolve_mutation_session(db: AsyncSession, request: Request) -> Session:
+    """Authenticated + same-origin + CSRF session on a caller-provided short session.
+
+    Streaming POSTs cannot use the request-scoped `get_session` yield dependency: FastAPI
+    keeps it open for the whole response. This helper performs the exact same checks as
+    `require_mutation` before the stream starts, then the caller closes the session.
+    """
+    session = await resolve_authenticated_session(db, request)
+    cookie_token = request.cookies.get(COOKIE_NAME, "")
+    if not _origin_allowed(request) or not sessions.csrf_matches(
+        session, cookie_token, request.headers.get(CSRF_HEADER)
+    ):
+        raise csrf_invalid()
+    return session
+
+
 async def require_mutation(request: Request, session: CurrentSession) -> Session:
     """Sesión válida + Origin same-origin + `X-CSRF-Token` de esa sesión; si no, 401/403."""
     if request.method not in MUTATING_METHODS:
@@ -114,3 +130,15 @@ def progress_session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 ProgressSessions = Annotated[async_sessionmaker[AsyncSession], Depends(progress_session_factory)]
+
+
+def chat_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Session factory for the chat SSE stream (L2.5).
+
+    Same rationale as `progress_session_factory`: prepare/checkpoint/cancel/replay each use a
+    short-lived session, never the request session for the lifetime of the SSE connection.
+    """
+    return SessionFactory
+
+
+ChatSessions = Annotated[async_sessionmaker[AsyncSession], Depends(chat_session_factory)]

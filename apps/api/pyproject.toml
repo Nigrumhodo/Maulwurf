@@ -23,6 +23,7 @@ dependencies = [
   # (Windows, runners CI sin tzdata del sistema). Sin este paquete,
   # `ZoneInfo("America/Bogota")` lanza `ZoneInfoNotFoundError` en todos esos entornos.
   "tzdata>=2024.1",
+  "tiktoken>=0.7",
 ]
 
 [project.optional-dependencies]
@@ -58,4 +59,9 @@ markers = [
   "integration: pruebas de integración contra servicios reales de compose",
   "provider: pruebas provider-contract protegidas (nunca en CI de MR)",
   "load: pruebas de carga (local/protegida)",
+]
+
+[dependency-groups]
+dev = [
+    "fakeredis[lua]>=2.23",
 ]

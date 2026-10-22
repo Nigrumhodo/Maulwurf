@@ -14,16 +14,24 @@ import time
 from uuid import uuid4
 
 import pytest
+import tiktoken
 
 from app.services.chunking import (
+    _TOKEN_RE,
     OVERLAP_TOKENS,
     TARGET_TOKENS,
+    TOKEN_SAFETY_FACTOR,
     ChunkDraft,
     SegmentInput,
     chunk_segments,
     count_tokens_default,
     split_sentences,
 )
+
+
+def _raw_count(text: str) -> int:
+    """Unscaled counter for boundary tests; the default applies the safety factor."""
+    return len(_TOKEN_RE.findall(text))
 
 
 def _segment(
@@ -70,6 +78,7 @@ def _run(
         segments=segments,
         target_tokens=target_tokens,
         overlap_tokens=overlap_tokens,
+        count_tokens=_raw_count,
     )
 
 
@@ -77,9 +86,11 @@ def _sentences(count: int, words: int) -> str:
     return " ".join(" ".join(f"w{i}_{k}" for k in range(words)) + "." for i in range(count))
 
 
-def test_count_tokens_treats_cjk_each_as_one_and_words_as_runs() -> None:
-    assert count_tokens_default("微積分。") == 4  # three ideographs + full stop
-    assert count_tokens_default("café día") == 2
+def test_chunking_exact_tokenizer_counts_unicode_numbers_and_code() -> None:
+    assert TOKEN_SAFETY_FACTOR == 1.5
+    text = "微積分 🎓 café 3.141592653589793\ndef fib(n): return n if n < 2 else fib(n-1)+fib(n-2)"
+    expected = len(tiktoken.get_encoding("cl100k_base").encode(text, disallowed_special=()))
+    assert count_tokens_default(text) == expected
     assert count_tokens_default("") == 0
 
 
@@ -106,7 +117,7 @@ def test_target_and_overlap_are_respected() -> None:
         assert chunk.content == text[chunk.char_start : chunk.char_end]
     for previous, current in zip(chunks, chunks[1:], strict=False):
         assert current.char_start < previous.char_end  # positive overlap
-        overlap = count_tokens_default(text[current.char_start : previous.char_end])
+        overlap = _raw_count(text[current.char_start : previous.char_end])
         assert 0 < overlap <= OVERLAP_TOKENS
 
 

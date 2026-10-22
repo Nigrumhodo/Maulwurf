@@ -248,3 +248,46 @@ def test_search_quota_is_bounded_and_provisional() -> None:
         _settings(search_rate_limit_per_minute=0)
     with pytest.raises(ValidationError, match="search_rate_limit_per_minute"):
         _settings(search_rate_limit_per_minute=601)
+
+
+# --- Streaming LLM budget (L2.5) ------------------------------------------------------
+
+
+def test_llm_url_key_and_window_are_required_together() -> None:
+    with pytest.raises(ValidationError, match="llm_base_url"):
+        _settings(llm_base_url="https://api.openai.com/v1")
+    with pytest.raises(ValidationError, match="llm_api_key"):
+        _settings(llm_api_key="only-the-key")
+    with pytest.raises(ValidationError, match="llm_model_window"):
+        _settings(
+            llm_base_url="https://api.openai.com/v1",
+            llm_api_key="llm-value-for-test",
+        )
+
+
+def test_llm_budget_must_fit_inside_the_window() -> None:
+    with pytest.raises(ValidationError, match="llm_model_window"):
+        _settings(
+            llm_base_url="https://api.openai.com/v1",
+            llm_api_key="llm-value-for-test",
+            llm_model_window=1536,
+            llm_output_reserve_tokens=1024,
+            llm_context_margin_tokens=512,
+        )
+
+
+def test_llm_secret_is_not_exposed_in_repr() -> None:
+    settings = _settings(
+        llm_base_url="https://api.openai.com/v1",
+        llm_api_key="llm-value-for-test",
+        llm_model_window=8192,
+    )
+    rendered = f"{settings!r} {settings} {settings.model_dump()} {settings.model_dump_json()}"
+    assert "llm-value-for-test" not in rendered
+
+
+def test_llm_defaults_are_fail_closed() -> None:
+    settings = _settings()
+    assert settings.llm_base_url is None
+    assert settings.llm_api_key is None
+    assert settings.llm_model_window is None

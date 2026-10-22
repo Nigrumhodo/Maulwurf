@@ -97,6 +97,21 @@ class EmbeddingProvider(Protocol):
     async def embed(self, texts: Sequence[str]) -> list[list[float]]: ...
 
 
+async def embed_query(provider: EmbeddingProvider, text: str) -> list[float]:
+    """Embed exactly one query string and validate the adapter's one-vector contract.
+
+    Keeping this helper outside `SearchService` lets callers run the network call while no
+    database session is open and still share the same strict response validation.
+    """
+    vectors = await provider.embed([text])
+    if len(vectors) != 1:
+        raise EmbeddingProviderError(
+            "El proveedor devolvió un número de vectores inesperado.",
+            details={"expected": 1, "observed": len(vectors)},
+        )
+    return vectors[0]
+
+
 def _unit_interval() -> float:
     return secrets.randbelow(1_000_000) / 1_000_000
 

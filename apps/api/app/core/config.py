@@ -43,6 +43,7 @@ _SECRET_FIELDS = (
     "oauth_state_secret",
     "google_client_secret",
     "embedding_api_key",
+    "llm_api_key",
 )
 # Pinned by `embeddings.vector vector(1536)` in migration 0002 (M6). Changing it requires a
 # migration and a whole new index generation, so startup validates it instead of silently
@@ -122,6 +123,20 @@ class Settings(BaseSettings):
     # pendiente (D5, guardia 10), así que el paralelismo no se activa por defecto; el techo
     # (4) acota cualquier ráfaga cuando D5 fije el límite real.
     embedding_max_concurrency: int = Field(default=1, ge=1, le=4)
+    # Versioned chat/LLM provider (L2.5, M7/D5). Same fail-closed rule as embeddings: without
+    # base_url + api_key there is no provider and the SSE pipeline publishes
+    # `provider_unavailable` instead of inventing a completion. The window is required with a
+    # provider because the token budget cannot be enforced without it.
+    llm_base_url: AnyHttpUrl | None = None
+    llm_api_key: SecretStr | None = None
+    llm_model: str = Field(default="gpt-4o-mini", min_length=1)
+    llm_model_window: int | None = Field(default=None, ge=1)
+    # Provisional until D5/F0 publishes the provider's real limits. They are configuration,
+    # not a hidden default: the composition of window - reserve - margin is the contract.
+    llm_output_reserve_tokens: int = Field(default=1024, ge=1)
+    llm_context_margin_tokens: int = Field(default=512, ge=0)
+    llm_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
+    llm_max_retries: int = Field(default=2, ge=0, le=5)
     # D3-Texto: models/providers whose decision is closed (ESPECIFICACION §12). Empty by
     # default — fail closed: with the decision open only synthetic or redacted text is
     # indexed (S2.md §0.6, rule 6). Only the lead's recorded closure fills it in.
@@ -183,6 +198,28 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"embedding_dimension debe ser {EMBEDDING_DIMENSION} "
                 "(dimensión fijada en la migración 0002)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_incomplete_llm_config(self) -> "Settings":
+        if (self.llm_base_url is None) != (self.llm_api_key is None):
+            raise ValueError("llm_base_url y llm_api_key van juntos")
+        if self.llm_base_url is not None and self.llm_model_window is None:
+            raise ValueError(
+                "llm_model_window es obligatorio cuando el proveedor LLM está configurado"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_llm_budget(self) -> "Settings":
+        if self.llm_model_window is None:
+            return self
+        minimum = self.llm_output_reserve_tokens + self.llm_context_margin_tokens + 1
+        if self.llm_model_window < minimum:
+            raise ValueError(
+                "llm_model_window debe superar llm_output_reserve_tokens + "
+                "llm_context_margin_tokens"
             )
         return self
 
