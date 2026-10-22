@@ -123,9 +123,6 @@ async def chat_sse(migrated_database_url: str) -> AsyncIterator[Harness]:
     embeddings = FakeEmbeddingProvider()
     llm = FakeLLM()
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
-    harness = Harness(
-        client=None, factory=factory, embeddings=embeddings, llm=llm, redis=redis
-    )  # type: ignore[arg-type]
 
     async def test_get_session() -> AsyncIterator[AsyncSession]:
         async with factory() as session:
@@ -134,7 +131,8 @@ async def chat_sse(migrated_database_url: str) -> AsyncIterator[Harness]:
     app.dependency_overrides[get_session] = test_get_session
     app.dependency_overrides[chat_session_factory] = lambda: factory
     app.dependency_overrides[get_embedding_provider] = lambda: embeddings
-    app.dependency_overrides[get_llm_provider] = lambda: harness.llm
+    app.dependency_overrides[get_llm_provider] = lambda: llm
+
     async def test_get_redis() -> AsyncIterator[fakeredis.aioredis.FakeRedis]:
         yield redis
 
@@ -143,7 +141,13 @@ async def chat_sse(migrated_database_url: str) -> AsyncIterator[Harness]:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url=settings.allowed_origin
         ) as client:
-            harness.client = client
+            harness = Harness(
+                client=client,
+                factory=factory,
+                embeddings=embeddings,
+                llm=llm,
+                redis=redis,
+            )
             yield harness
     finally:
         app.dependency_overrides.clear()
