@@ -200,6 +200,12 @@ class RetrievedChunk:
     t_start: float | None
     t_end: float | None
     score_rrf: float
+    # Chat needs the durable source identity to persist `message_sources` and the citation
+    # event. They are optional only for backwards-compatible unit-test construction; SQL
+    # hydration always fills them.
+    transcript_id: uuid.UUID | None = None
+    transcript_version: int | None = None
+    segment_ordinal: int | None = None
 
 
 @dataclass(frozen=True)
@@ -217,6 +223,7 @@ def _common_conditions(
     version: str,
     *,
     subject_id: uuid.UUID | None,
+    audio_id: uuid.UUID | None = None,
     date_from: date | None,
     date_to: date | None,
 ) -> list[ColumnElement[bool]]:
@@ -236,6 +243,9 @@ def _common_conditions(
     ]
     if subject_id is not None:
         conditions.append(Audio.subject_id == subject_id)
+    if audio_id is not None:
+        # Chat mode `class`: the filter must run inside both branches before their LIMIT.
+        conditions.append(Audio.id == audio_id)
     if date_from is not None:
         conditions.append(Audio.class_date >= date_from)
     if date_to is not None:
@@ -264,6 +274,7 @@ def lexical_candidates_statement(
     query_text: str,
     limit: int = CANDIDATES_PER_BRANCH,
     subject_id: uuid.UUID | None = None,
+    audio_id: uuid.UUID | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
 ) -> Select[tuple[uuid.UUID, uuid.UUID, float]]:
@@ -279,7 +290,12 @@ def lexical_candidates_statement(
     influenced by user input (no injection surface).
     """
     common = _common_conditions(
-        user_id, version, subject_id=subject_id, date_from=date_from, date_to=date_to
+        user_id,
+        version,
+        subject_id=subject_id,
+        audio_id=audio_id,
+        date_from=date_from,
+        date_to=date_to,
     )
     arms: list[Select[tuple[uuid.UUID, uuid.UUID, float]]] = []
     for cfg in _FTS_CONFIGS:
@@ -316,6 +332,7 @@ def vector_candidates_statement(
     query_vector: Sequence[float],
     limit: int = CANDIDATES_PER_BRANCH,
     subject_id: uuid.UUID | None = None,
+    audio_id: uuid.UUID | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
 ) -> Select[tuple[uuid.UUID, uuid.UUID, float]]:
@@ -345,6 +362,7 @@ def vector_candidates_statement(
                 user_id,
                 version,
                 subject_id=subject_id,
+                audio_id=audio_id,
                 date_from=date_from,
                 date_to=date_to,
             ),
@@ -513,6 +531,7 @@ async def hybrid_search(
     top_k: int = DEFAULT_TOP_K,
     candidates_per_branch: int = CANDIDATES_PER_BRANCH,
     subject_id: uuid.UUID | None = None,
+    audio_id: uuid.UUID | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
 ) -> list[FusedHit]:
@@ -560,6 +579,7 @@ async def hybrid_search(
             query_text=text_query,
             limit=candidates_per_branch,
             subject_id=subject_id,
+            audio_id=audio_id,
             date_from=date_from,
             date_to=date_to,
         ),
@@ -575,6 +595,7 @@ async def hybrid_search(
             query_vector=query_vector,
             limit=candidates_per_branch,
             subject_id=subject_id,
+            audio_id=audio_id,
             date_from=date_from,
             date_to=date_to,
         ),
@@ -779,9 +800,9 @@ def _reliable_times(
     return t_start, t_end
 
 
-def _validated_query(query: str) -> str:
+def _validated_query(query: str, *, max_chars: int = QUERY_MAX_CHARS) -> str:
     text_query = query.strip()
-    if not text_query or len(text_query) > QUERY_MAX_CHARS:
+    if not text_query or len(text_query) > max_chars:
         raise SearchInvalidQuery(
             "La consulta está vacía o excede el máximo.",
             details={"fields": {"q": "consulta inválida"}},
@@ -821,6 +842,8 @@ async def _hydrate(
         select(
             Chunk.id.label("chunk_id"),
             Chunk.audio_id,
+            Chunk.transcript_id,
+            Chunk.transcript_version,
             Chunk.content,
             Chunk.char_start.label("chunk_char_start"),
             Chunk.char_end.label("chunk_char_end"),
@@ -916,6 +939,9 @@ async def _hydrate(
                 t_start=t_start,
                 t_end=t_end,
                 score_rrf=hit.score_rrf,
+                transcript_id=hydrated_row.transcript_id,
+                transcript_version=hydrated_row.transcript_version,
+                segment_ordinal=segment.segment_ordinal if segment is not None else None,
             )
         )
     return hydrated
@@ -934,12 +960,19 @@ class SearchService:
         user_id: uuid.UUID,
         query: str,
         subject_id: uuid.UUID | None = None,
+        audio_id: uuid.UUID | None = None,
         date_from: date | None = None,
         date_to: date | None = None,
         top_k: int = DEFAULT_TOP_K,
+        max_query_chars: int = QUERY_MAX_CHARS,
     ) -> list[RetrievedChunk]:
-        """Return hydrated hits for chat; no active generation is an empty result."""
-        query_text = _validated_query(query)
+        """Return hydrated hits for chat; no active generation is an empty result.
+
+        `audio_id` is chat's `class` mode filter; it is applied inside both retrieval branches
+        before their LIMIT, never as a post-filter over the top-k. `max_query_chars` lets chat
+        accept its own question limit while `/search` keeps the frozen 500-character contract.
+        """
+        query_text = _validated_query(query, max_chars=max_query_chars)
         _validated_range(date_from, date_to)
         if top_k < 1 or top_k > MAX_RESULTS_WINDOW:
             raise SearchInvalidQuery(
@@ -954,6 +987,7 @@ class SearchService:
             user_id=user_id,
             query_text=query_text,
             subject_id=subject_id,
+            audio_id=audio_id,
             date_from=date_from,
             date_to=date_to,
             top_k=top_k,
@@ -1036,6 +1070,7 @@ class SearchService:
         date_from: date | None,
         date_to: date | None,
         top_k: int,
+        audio_id: uuid.UUID | None = None,
     ) -> list[RetrievedChunk]:
         provider = self._provider
         if provider is None:
@@ -1073,6 +1108,7 @@ class SearchService:
             top_k=top_k,
             candidates_per_branch=CANDIDATES_PER_BRANCH,
             subject_id=subject_id,
+            audio_id=audio_id,
             date_from=date_from,
             date_to=date_to,
         )

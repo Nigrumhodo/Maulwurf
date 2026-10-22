@@ -1463,6 +1463,10 @@ Contract rules:
   `propose_task()`; none writes Calendar or sends email; iterations/time are bounded;
   ranges and schemas validated by the backend.
 - Modes validated by the `conversations` CHECK; everything within the tenant.
+- L2.5 implements `POST .../messages` and `.../cancel` with the minimal turn persistence;
+  conversation create/list/history/delete remain A2.12. `Last-Event-ID` is the last received
+  character offset: every connect/reconnect re-sends `snapshot` and skips that prefix from the
+  persisted message.
 
 ### 3.11 M8/M9 — Notifications and dashboard (S4)
 

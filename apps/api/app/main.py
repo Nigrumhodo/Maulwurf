@@ -7,7 +7,17 @@ from fastapi import FastAPI
 
 from app.core.db import engine
 from app.core.errors import install_error_handlers
-from app.routers import audios, auth, health, ingestion, integrations, me, search, subjects
+from app.routers import (
+    audios,
+    auth,
+    chat,
+    health,
+    ingestion,
+    integrations,
+    me,
+    search,
+    subjects,
+)
 
 try:
     __version__ = version("maulwurf-api")
@@ -33,3 +43,4 @@ app.include_router(audios.router)
 app.include_router(integrations.router)
 app.include_router(subjects.router)
 app.include_router(search.router)
+app.include_router(chat.router)
