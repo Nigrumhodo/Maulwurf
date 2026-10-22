@@ -14,6 +14,7 @@ import time
 from uuid import uuid4
 
 import pytest
+import tiktoken
 
 from app.services.chunking import (
     _TOKEN_RE,
@@ -85,11 +86,11 @@ def _sentences(count: int, words: int) -> str:
     return " ".join(" ".join(f"w{i}_{k}" for k in range(words)) + "." for i in range(count))
 
 
-def test_count_tokens_default_applies_the_safety_factor() -> None:
+def test_chunking_exact_tokenizer_counts_unicode_numbers_and_code() -> None:
     assert TOKEN_SAFETY_FACTOR == 1.5
-    # Raw regex counts are 4 (three ideographs + full stop) and 2; ceil(1.5x) = 6 and 3.
-    assert count_tokens_default("微積分。") == 6
-    assert count_tokens_default("café día") == 3
+    text = "微積分 🎓 café 3.141592653589793\ndef fib(n): return n if n < 2 else fib(n-1)+fib(n-2)"
+    expected = len(tiktoken.get_encoding("cl100k_base").encode(text, disallowed_special=()))
+    assert count_tokens_default(text) == expected
     assert count_tokens_default("") == 0
 
 

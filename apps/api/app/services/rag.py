@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.chat import Conversation, Message, MessageSource
 from app.models.chunk import Chunk
-from app.services.chunking import count_tokens_default
+from app.services.chunking import count_tokens_default, tokenizer_is_exact
 from app.services.citations import (
     CitationBuffer,
     CitationRef,
@@ -49,6 +49,7 @@ from app.services.embeddings import (
     EmbeddingProvider,
     EmbeddingProviderError,
     EmbeddingRateLimited,
+    embed_query,
 )
 from app.services.llm import (
     ChatMessage,
@@ -360,6 +361,24 @@ def group_history(messages: Sequence[HistoryMessage]) -> list[HistoryTurn]:
     return turns
 
 
+def _effective_context_margin(
+    context_margin_tokens: int, count_tokens: Callable[[str], int]
+) -> int:
+    """Double the safety margin when the exact tokenizer is unavailable.
+
+    The regex fallback is already conservative, but it is not BPE-aware for every language or
+    code fragment. Keeping the configured margin as an additional reserve makes the degraded
+    path fail safe rather than risking a provider `context_length_exceeded`.
+    """
+    if (
+        context_margin_tokens > 0
+        and count_tokens is count_tokens_default
+        and not tokenizer_is_exact()
+    ):
+        return context_margin_tokens * 2
+    return context_margin_tokens
+
+
 def build_chat_prompt(
     *,
     system: str,
@@ -373,7 +392,11 @@ def build_chat_prompt(
     max_chunks: int = MAX_CHUNKS,
 ) -> PromptPlan:
     """Assemble system + history + one final user message under the model window."""
-    input_budget = context_window - output_reserve_tokens - context_margin_tokens
+    input_budget = (
+        context_window
+        - output_reserve_tokens
+        - _effective_context_margin(context_margin_tokens, count_tokens)
+    )
     if input_budget <= 0:
         raise ChatContextExceeded("El presupuesto de entrada del modelo no es positivo.")
     base_tokens = (
@@ -468,60 +491,40 @@ class RAGService:
 
     async def prepare(
         self,
-        db: AsyncSession,
         *,
         user_id: uuid.UUID,
         conversation_id: uuid.UUID,
         content: str,
         client_message_id: str | None,
     ) -> PreparedStream:
-        """Persist the turn, retrieve evidence and return everything the stream needs."""
+        """Persist the turn, retrieve evidence and return everything the stream needs.
+
+        The query embedding is deliberately made before the database session. It is remote
+        I/O and must never occupy a pooled SQL connection while the provider is slow.
+        """
         question = content.strip()
         if not question:
             raise ChatContextExceeded("La pregunta está vacía.")
-        conversation = await self._owned_conversation(db, user_id, conversation_id)
-        subject_id = conversation.subject_id
-        audio_id = conversation.audio_id if conversation.mode == "class" else None
-        if client_message_id is not None:
-            existing = await self._existing_assistant(
-                db,
-                user_id=user_id,
-                conversation_id=conversation_id,
-                client_message_id=client_message_id,
-            )
-            if existing is not None:
-                return await self._replay_prepared(db, existing)
 
-        model = self._llm.model if self._llm is not None else None
-        user_message = Message(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            role="user",
-            content=question,
-            status="completed",
-            citas=[],
-        )
-        assistant = Message(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            role="assistant",
-            content="",
-            client_message_id=client_message_id,
-            status="streaming",
-            citas=[],
-            model=model,
-            prompt_version=PROMPT_VERSION,
-            input_tokens=0,
-            output_tokens=0,
-        )
-        db.add_all([user_message, assistant])
-        try:
-            await db.flush()
-            user_message_id = user_message.id
-            assistant_id = assistant.id
-            await db.commit()
-        except IntegrityError:
-            await db.rollback()
+        # This is the only provider call in preparation and runs with no SQL session open.
+        query_vector: list[float] | None = None
+        embedding_error: Exception | None = None
+        if self._embedding_provider is None:
+            embedding_error = EmbeddingNotConfigured(
+                "El proveedor de embeddings no está configurado."
+            )
+        else:
+            try:
+                query_vector = await embed_query(self._embedding_provider, question)
+            except Exception as exc:  # noqa: BLE001 - mapped to the terminal SSE error below
+                embedding_error = exc
+
+        async with self._session_factory() as db:
+            # Ownership and idempotency are checked before persistence.  The unique index
+            # remains the final arbiter if two concurrent requests share a client-message id.
+            conversation = await self._owned_conversation(db, user_id, conversation_id)
+            subject_id = conversation.subject_id
+            audio_id = conversation.audio_id if conversation.mode == "class" else None
             if client_message_id is not None:
                 existing = await self._existing_assistant(
                     db,
@@ -531,136 +534,189 @@ class RAGService:
                 )
                 if existing is not None:
                     return await self._replay_prepared(db, existing)
-            raise
 
-        try:
-            hits = await SearchService(db, provider=self._embedding_provider).retrieve(
-                user_id=user_id,
-                query=question,
-                subject_id=subject_id,
-                audio_id=audio_id,
-                max_query_chars=MESSAGE_MAX_CHARS,
-            )
-        except Exception as exc:  # noqa: BLE001 - every pre-stream failure becomes SSE error
-            await db.rollback()
-            error = _map_search_error(exc)
-            await self._fail_message(db, user_id=user_id, message_id=assistant_id)
-            return self._error_prepared(
+            model = self._llm.model if self._llm is not None else None
+            user_message = Message(
                 user_id=user_id,
                 conversation_id=conversation_id,
-                message_id=assistant_id,
-                error=error,
+                role="user",
+                content=question,
+                status="completed",
+                citas=[],
+            )
+            assistant = Message(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                role="assistant",
+                content="",
+                client_message_id=client_message_id,
+                status="streaming",
+                citas=[],
                 model=model,
+                prompt_version=PROMPT_VERSION,
+                input_tokens=0,
+                output_tokens=0,
             )
+            db.add_all([user_message, assistant])
+            try:
+                await db.flush()
+                user_message_id = user_message.id
+                assistant_id = assistant.id
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+                if client_message_id is not None:
+                    existing = await self._existing_assistant(
+                        db,
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        client_message_id=client_message_id,
+                    )
+                    if existing is not None:
+                        return await self._replay_prepared(db, existing)
+                raise
 
-        if not hits:
-            await db.execute(
-                update(Message)
-                .where(Message.user_id == user_id, Message.id == assistant_id)
-                .values(
-                    content=ABSTENTION_TEXT,
-                    status="completed",
-                    citas=[],
-                    output_tokens=self._count_tokens(ABSTENTION_TEXT),
+            if embedding_error is not None or query_vector is None:
+                await self._fail_message(db, user_id=user_id, message_id=assistant_id)
+                return self._error_prepared(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    message_id=assistant_id,
+                    error=_map_search_error(embedding_error or EmbeddingProviderError("")),
+                    model=model,
                 )
-            )
-            await db.commit()
+
+            try:
+                hits = await SearchService(
+                    db, provider=self._embedding_provider
+                ).retrieve_with_vector(
+                    user_id=user_id,
+                    query_text=question,
+                    query_vector=query_vector,
+                    subject_id=subject_id,
+                    audio_id=audio_id,
+                    max_query_chars=MESSAGE_MAX_CHARS,
+                )
+            except Exception as exc:  # noqa: BLE001 - every pre-stream failure becomes SSE error
+                await db.rollback()
+                error = _map_search_error(exc)
+                await self._fail_message(db, user_id=user_id, message_id=assistant_id)
+                return self._error_prepared(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    message_id=assistant_id,
+                    error=error,
+                    model=model,
+                )
+
+            if not hits:
+                await db.execute(
+                    update(Message)
+                    .where(Message.user_id == user_id, Message.id == assistant_id)
+                    .values(
+                        content=ABSTENTION_TEXT,
+                        status="completed",
+                        citas=[],
+                        output_tokens=self._count_tokens(ABSTENTION_TEXT),
+                    )
+                )
+                await db.commit()
+                return PreparedStream(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    assistant_message_id=assistant_id,
+                    sources_payload=(),
+                    model=model,
+                    abstention_text=ABSTENTION_TEXT,
+                )
+
+            if self._llm is None or self._context_window is None:
+                await db.rollback()
+                await self._fail_message(db, user_id=user_id, message_id=assistant_id)
+                return self._error_prepared(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    message_id=assistant_id,
+                    error=ChatStreamError(
+                        code="provider_unavailable",
+                        message="El proveedor LLM no está configurado.",
+                    ),
+                    model=model,
+                )
+
+            try:
+                system = load_system_prompt()
+                history = await self._load_history(
+                    db,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    current_ids=(user_message_id, assistant_id),
+                )
+                plan = build_chat_prompt(
+                    system=system,
+                    question=question,
+                    chunks=hits,
+                    history=history,
+                    context_window=self._context_window,
+                    output_reserve_tokens=self._output_reserve_tokens,
+                    context_margin_tokens=self._context_margin_tokens,
+                    count_tokens=self._count_tokens,
+                )
+                await self._insert_sources(
+                    db,
+                    user_id=user_id,
+                    message_id=assistant_id,
+                    current=plan.sources,
+                    history=plan.history,
+                )
+                await db.execute(
+                    update(Message)
+                    .where(Message.user_id == user_id, Message.id == assistant_id)
+                    .values(
+                        model=self._llm.model,
+                        prompt_version=PROMPT_VERSION,
+                        input_tokens=plan.input_tokens,
+                    )
+                )
+                await db.commit()
+                sources_payload = await self._message_sources_payload(
+                    db, user_id=user_id, message_id=assistant_id
+                )
+            except ChatContextExceeded as exc:
+                await db.rollback()
+                await self._fail_message(db, user_id=user_id, message_id=assistant_id)
+                return self._error_prepared(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    message_id=assistant_id,
+                    error=ChatStreamError(code=exc.code, message=exc.message),
+                    model=model,
+                )
+            except Exception as exc:  # noqa: BLE001 - no half-written prompt reaches the model
+                logger.error("chat.prepare.prompt_failed error=%s", type(exc).__name__)
+                await db.rollback()
+                await self._fail_message(db, user_id=user_id, message_id=assistant_id)
+                return self._error_prepared(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    message_id=assistant_id,
+                    error=ChatStreamError(
+                        code="internal_error",
+                        message="No se pudo preparar la respuesta.",
+                    ),
+                    model=model,
+                )
+
             return PreparedStream(
                 user_id=user_id,
                 conversation_id=conversation_id,
                 assistant_message_id=assistant_id,
-                sources_payload=(),
-                model=model,
-                abstention_text=ABSTENTION_TEXT,
+                messages=plan.messages,
+                sources=plan.sources,
+                sources_payload=sources_payload,
+                input_tokens=plan.input_tokens,
+                model=self._llm.model,
             )
-
-        if self._llm is None or self._context_window is None:
-            await db.rollback()
-            await self._fail_message(db, user_id=user_id, message_id=assistant_id)
-            return self._error_prepared(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                message_id=assistant_id,
-                error=ChatStreamError(
-                    code="provider_unavailable",
-                    message="El proveedor LLM no está configurado.",
-                ),
-                model=model,
-            )
-
-        try:
-            system = load_system_prompt()
-            history = await self._load_history(
-                db,
-                user_id=user_id,
-                conversation_id=conversation_id,
-                current_ids=(user_message_id, assistant_id),
-            )
-            plan = build_chat_prompt(
-                system=system,
-                question=question,
-                chunks=hits,
-                history=history,
-                context_window=self._context_window,
-                output_reserve_tokens=self._output_reserve_tokens,
-                context_margin_tokens=self._context_margin_tokens,
-                count_tokens=self._count_tokens,
-            )
-            await self._insert_sources(
-                db,
-                user_id=user_id,
-                message_id=assistant_id,
-                current=plan.sources,
-                history=plan.history,
-            )
-            await db.execute(
-                update(Message)
-                .where(Message.user_id == user_id, Message.id == assistant_id)
-                .values(
-                    model=self._llm.model,
-                    prompt_version=PROMPT_VERSION,
-                    input_tokens=plan.input_tokens,
-                )
-            )
-            await db.commit()
-            sources_payload = await self._message_sources_payload(
-                db, user_id=user_id, message_id=assistant_id
-            )
-        except ChatContextExceeded as exc:
-            await db.rollback()
-            await self._fail_message(db, user_id=user_id, message_id=assistant_id)
-            return self._error_prepared(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                message_id=assistant_id,
-                error=ChatStreamError(code=exc.code, message=exc.message),
-                model=model,
-            )
-        except Exception as exc:  # noqa: BLE001 - no half-written prompt reaches the model
-            logger.error("chat.prepare.prompt_failed error=%s", type(exc).__name__)
-            await db.rollback()
-            await self._fail_message(db, user_id=user_id, message_id=assistant_id)
-            return self._error_prepared(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                message_id=assistant_id,
-                error=ChatStreamError(
-                    code="internal_error",
-                    message="No se pudo preparar la respuesta.",
-                ),
-                model=model,
-            )
-
-        return PreparedStream(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            assistant_message_id=assistant_id,
-            messages=plan.messages,
-            sources=plan.sources,
-            sources_payload=sources_payload,
-            input_tokens=plan.input_tokens,
-            model=self._llm.model,
-        )
 
     async def stream_events(
         self, prepared: PreparedStream, *, last_event_id: int = 0

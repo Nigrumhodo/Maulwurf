@@ -6,19 +6,22 @@ session factory for checkpoints, cancellation polls and replay reads, so a slow 
 hold a request-scoped database connection.
 """
 
-import threading
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Request, Response, status
 from fastapi.responses import StreamingResponse
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from starlette.background import BackgroundTask
 
 from app.core.config import settings
 from app.core.deps import ChatSessions, DbSession, MutationSession, resolve_mutation_session
 from app.core.errors import ApiError, not_found, validation_failed
 from app.core.providers import EmbeddingProviderDep, LLMProviderDep
+from app.core.redis import RedisDep
 from app.schemas.chat import CancelMessageOut, SendMessageIn
 from app.services.rag import (
     ChatContextExceeded,
@@ -28,6 +31,13 @@ from app.services.rag import (
     RAGService,
     cancel_message,
 )
+from app.services.rate_limiter import (
+    MAX_STREAMS_PER_USER,
+    acquire_stream,
+    release_stream,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["chat"])
 
@@ -36,51 +46,34 @@ SSE_HEADERS = {
     "X-Accel-Buffering": "no",
 }
 
-MAX_STREAMS_PER_USER = 2
-_active: dict[uuid.UUID, int] = {}
-# BackgroundTask runs sync callables in a worker thread, so slot bookkeeping must be
-# thread-safe even though the endpoint and generator run on the event-loop thread.
-_active_lock = threading.Lock()
-
-
-def _acquire_stream(user_id: uuid.UUID) -> None:
-    with _active_lock:
-        active = _active.get(user_id, 0)
-        if active >= MAX_STREAMS_PER_USER:
-            raise ApiError(429, "rate_limited", "Demasiadas conexiones de chat simultáneas.")
-        _active[user_id] = active + 1
-
-
-def _release_stream(user_id: uuid.UUID) -> None:
-    with _active_lock:
-        active = _active.get(user_id, 0)
-        if active <= 1:
-            _active.pop(user_id, None)
-        else:
-            _active[user_id] = active - 1
-
 
 class _Slot:
     """Idempotent lease for one per-user concurrent stream slot."""
 
-    def __init__(self, user_id: uuid.UUID) -> None:
+    def __init__(self, redis: Redis, user_id: uuid.UUID) -> None:
+        self._redis = redis
         self.user_id = user_id
         self.released = False
-        self._lock = threading.Lock()
 
-    def release(self) -> None:
-        with self._lock:
-            if self.released:
-                return
-            self.released = True
-            _release_stream(self.user_id)
+    async def release(self) -> None:
+        """Release the slot once, even when the generator and background both call this."""
+        if self.released:
+            return
+        # Mark before awaiting: two tasks on the same event loop cannot both pass the check.
+        self.released = True
+        try:
+            await release_stream(self._redis, self.user_id)
+        except RedisError:
+            # Allow the other exit path (or a later retry) to try again; the key TTL is the
+            # final cleanup if Redis never recovers.
+            self.released = False
+            logger.warning("chat.stream_release_failed user=%s", self.user_id)
 
 
 async def _release_stream_when_done(
-    events: AsyncGenerator[str, None], slot: _Slot | uuid.UUID
+    events: AsyncGenerator[str, None], slot: _Slot
 ) -> AsyncGenerator[str, None]:
     """Forward SSE frames, close the producer and release the slot on every exit path."""
-    lease = slot if isinstance(slot, _Slot) else _Slot(slot)
     try:
         async for event in events:
             yield event
@@ -88,7 +81,7 @@ async def _release_stream_when_done(
         try:
             await events.aclose()
         finally:
-            lease.release()
+            await slot.release()
 
 
 def _last_event_id(raw: str | None) -> int:
@@ -119,15 +112,18 @@ def _service(
     "/chat/conversations/{conversation_id}/messages",
     responses={
         200: {
-            "description": (
-                "text/event-stream: snapshot, delta, citation, ping and one done|error"
-            )
+            "description": ("text/event-stream: snapshot, delta, citation, ping and one done|error")
         },
         401: {"description": "Sin sesión (auth_required)"},
         403: {"description": "Origin/CSRF inválidos (csrf_invalid)"},
         404: {"description": "Conversación inexistente o ajena (not_found)"},
         422: {"description": "validation_failed: contenido o client_message_id inválidos"},
-        429: {"description": "rate_limited: demasiados streams simultáneos"},
+        429: {
+            "description": (
+                f"rate_limited: más de {MAX_STREAMS_PER_USER} streams simultáneos "
+                "para el mismo usuario"
+            )
+        },
     },
 )
 async def send_message(
@@ -137,35 +133,35 @@ async def send_message(
     factory: ChatSessions,
     embeddings: EmbeddingProviderDep,
     llm: LLMProviderDep,
+    redis: RedisDep,
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
 ) -> Response:
     """Persist one turn and stream its answer over SSE.
 
-    Auth, CSRF and ownership are resolved before the response starts, so they remain honest
-    HTTP statuses. Retrieval, provider and budget failures happen after the message exists and
-    are therefore terminal `error` events, never a half-started 500.
+    Auth and CSRF run on a short request session. The stream slot is acquired next, before
+    any embedding or LLM work, and released on every exit path. The database request session
+    is closed before `RAGService.prepare` starts, so embedding I/O never holds a connection.
     """
-    user_id: uuid.UUID | None = None
     slot: _Slot | None = None
     try:
         async with factory() as db:
             session = await resolve_mutation_session(db, request)
             user_id = session.user_id
-            _acquire_stream(user_id)
-            slot = _Slot(user_id)
-            service = _service(factory, embeddings, llm)
-            try:
-                prepared = await service.prepare(
-                    db,
-                    user_id=user_id,
-                    conversation_id=conversation_id,
-                    content=body.content,
-                    client_message_id=body.client_message_id,
-                )
-            except ChatConversationNotFound as exc:
-                raise not_found() from exc
-            except ChatContextExceeded as exc:
-                raise validation_failed({"content": exc.message}) from exc
+        await acquire_stream(redis, user_id)
+        slot = _Slot(redis, user_id)
+
+        service = _service(factory, embeddings, llm)
+        try:
+            prepared = await service.prepare(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                content=body.content,
+                client_message_id=body.client_message_id,
+            )
+        except ChatConversationNotFound as exc:
+            raise not_found() from exc
+        except ChatContextExceeded as exc:
+            raise validation_failed({"content": exc.message}) from exc
 
         events = _release_stream_when_done(
             service.stream_events(prepared, last_event_id=_last_event_id(last_event_id)),
@@ -181,7 +177,7 @@ async def send_message(
         )
     except BaseException:
         if slot is not None:
-            slot.release()
+            await slot.release()
         raise
 
 

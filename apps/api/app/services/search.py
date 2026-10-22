@@ -71,7 +71,7 @@ from app.services.embeddings import (
     EmbeddingDimensionMismatch,
     EmbeddingNotConfigured,
     EmbeddingProvider,
-    EmbeddingProviderError,
+    embed_query,
 )
 from app.services.exports import EPS, EXPORTABLE_PRECISIONS
 from app.services.indexing import active_generation
@@ -215,7 +215,29 @@ class SearchPage:
     next_cursor: str | None
 
 
+@dataclass(frozen=True)
+class QueryVectorTarget:
+    """Metadata needed to embed a query without holding a database transaction.
+
+    `prepare_query` reads only this generation metadata; the caller closes the session,
+    calls the embedding provider, and then opens a new session for `retrieve_with_vector`.
+    The target deliberately carries no page, chunk or transcript data.
+    """
+
+    query_text: str
+    model: str
+    dimension: int
+
+
 ContentKey = Callable[[uuid.UUID], Hashable]
+
+
+def _validated_top_k(top_k: int) -> None:
+    if top_k < 1 or top_k > MAX_RESULTS_WINDOW:
+        raise SearchInvalidQuery(
+            "El número de resultados está fuera de rango.",
+            details={"fields": {"limit": "limit fuera de rango"}},
+        )
 
 
 def _common_conditions(
@@ -974,11 +996,7 @@ class SearchService:
         """
         query_text = _validated_query(query, max_chars=max_query_chars)
         _validated_range(date_from, date_to)
-        if top_k < 1 or top_k > MAX_RESULTS_WINDOW:
-            raise SearchInvalidQuery(
-                "El número de resultados está fuera de rango.",
-                details={"fields": {"limit": "limit fuera de rango"}},
-            )
+        _validated_top_k(top_k)
         generation = await active_generation(self._db, user_id)
         if generation is None:
             return []
@@ -993,6 +1011,86 @@ class SearchService:
             top_k=top_k,
         )
         logger.debug("search.retrieve version=%s hits=%d", generation.version, len(results))
+        return results
+
+    async def prepare_query(
+        self,
+        *,
+        user_id: uuid.UUID,
+        query: str,
+        max_query_chars: int = QUERY_MAX_CHARS,
+    ) -> QueryVectorTarget | None:
+        """Validate a query and return the generation metadata needed to embed it.
+
+        This method performs no network call. The caller must close the database session
+        before invoking the embedding provider; the returned target is valid for
+        `retrieve_with_vector`, which re-reads the active generation in its own session.
+        """
+        query_text = _validated_query(query, max_chars=max_query_chars)
+        generation = await active_generation(self._db, user_id)
+        if generation is None:
+            return None
+        self._require_provider(generation)
+        return QueryVectorTarget(
+            query_text=query_text,
+            model=generation.model,
+            dimension=generation.dimension,
+        )
+
+    async def retrieve_with_vector(
+        self,
+        *,
+        user_id: uuid.UUID,
+        query_text: str,
+        query_vector: Sequence[float],
+        subject_id: uuid.UUID | None = None,
+        audio_id: uuid.UUID | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        top_k: int = DEFAULT_TOP_K,
+        max_query_chars: int = QUERY_MAX_CHARS,
+    ) -> list[RetrievedChunk]:
+        """Run retrieval with a vector embedded outside the current database session.
+
+        The active generation is read again here, so a generation retired meanwhile produces
+        an empty result instead of a stale read. The provider model/dimension and the vector
+        length are still validated before SQL executes.
+        """
+        text_query = _validated_query(query_text, max_chars=max_query_chars)
+        _validated_range(date_from, date_to)
+        _validated_top_k(top_k)
+        generation = await active_generation(self._db, user_id)
+        if generation is None:
+            return []
+        self._require_provider(generation)
+        if len(query_vector) != generation.dimension:
+            raise EmbeddingDimensionMismatch(
+                "El proveedor devolvió un vector de otra dimensión.",
+                details={"expected": generation.dimension, "observed": len(query_vector)},
+            )
+        hits = await hybrid_search(
+            self._db,
+            user_id=user_id,
+            query_text=text_query,
+            query_vector=query_vector,
+            version=generation.version,
+            top_k=top_k,
+            candidates_per_branch=CANDIDATES_PER_BRANCH,
+            subject_id=subject_id,
+            audio_id=audio_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        results = await _hydrate(
+            self._db,
+            user_id=user_id,
+            query=text_query,
+            version=generation.version,
+            hits=hits,
+        )
+        logger.debug(
+            "search.retrieve_precomputed version=%s hits=%d", generation.version, len(results)
+        )
         return results
 
     async def page(
@@ -1060,18 +1158,8 @@ class SearchService:
         )
         return SearchPage(results=page_results, took_ms=took_ms, next_cursor=next_cursor)
 
-    async def _retrieve_for_generation(
-        self,
-        generation: IndexGeneration,
-        *,
-        user_id: uuid.UUID,
-        query_text: str,
-        subject_id: uuid.UUID | None,
-        date_from: date | None,
-        date_to: date | None,
-        top_k: int,
-        audio_id: uuid.UUID | None = None,
-    ) -> list[RetrievedChunk]:
+    def _require_provider(self, generation: IndexGeneration) -> EmbeddingProvider:
+        """Validate the configured provider against the active generation, fail closed."""
         provider = self._provider
         if provider is None:
             raise EmbeddingNotConfigured(
@@ -1087,13 +1175,22 @@ class SearchService:
                 "La dimensión del proveedor no coincide con la generación activa.",
                 details={"reason": "dimension_mismatch"},
             )
-        vectors = await provider.embed([query_text])
-        if len(vectors) != 1:
-            raise EmbeddingProviderError(
-                "El proveedor devolvió un número de vectores inesperado.",
-                details={"expected": 1, "observed": len(vectors)},
-            )
-        vector = vectors[0]
+        return provider
+
+    async def _retrieve_for_generation(
+        self,
+        generation: IndexGeneration,
+        *,
+        user_id: uuid.UUID,
+        query_text: str,
+        subject_id: uuid.UUID | None,
+        date_from: date | None,
+        date_to: date | None,
+        top_k: int,
+        audio_id: uuid.UUID | None = None,
+    ) -> list[RetrievedChunk]:
+        provider = self._require_provider(generation)
+        vector = await embed_query(provider, query_text)
         if len(vector) != generation.dimension:
             raise EmbeddingDimensionMismatch(
                 "El proveedor devolvió un vector de otra dimensión.",

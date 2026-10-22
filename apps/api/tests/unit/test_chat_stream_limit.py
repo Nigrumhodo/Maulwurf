@@ -1,68 +1,50 @@
-"""L2.5 QA: bounded concurrent SSE streams per user."""
+"""L2.5 QA: Redis-backed concurrent SSE stream slots."""
 
 import asyncio
 import uuid
-from collections.abc import AsyncGenerator
 
-import pytest
+import fakeredis.aioredis
 
 from app.core.errors import ApiError
-from app.routers import chat as chat_router
+from app.services.rate_limiter import (
+    MAX_STREAMS_PER_USER,
+    STREAM_SLOT_TTL_SECONDS,
+    acquire_stream,
+    release_stream,
+    stream_key,
+)
 
 
-def setup_function() -> None:
-    chat_router._active.clear()
-
-
-def teardown_function() -> None:
-    chat_router._active.clear()
-
-
-def test_a_user_cannot_exceed_the_two_stream_limit() -> None:
+async def test_chat_redis_stream_limit_is_atomic_and_has_a_crash_ttl() -> None:
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     user_id = uuid.uuid4()
-    chat_router._acquire_stream(user_id)
-    chat_router._acquire_stream(user_id)
 
-    with pytest.raises(ApiError) as raised:
-        chat_router._acquire_stream(user_id)
+    results = await asyncio.gather(
+        *(acquire_stream(redis, user_id) for _ in range(MAX_STREAMS_PER_USER + 1)),
+        return_exceptions=True,
+    )
 
-    assert raised.value.status_code == 429
-    assert raised.value.code == "rate_limited"
-    assert raised.value.message == "Demasiadas conexiones de chat simultáneas."
+    rejected = [result for result in results if isinstance(result, ApiError)]
+    assert len(rejected) == 1
+    assert rejected[0].status_code == 429
+    assert rejected[0].code == "rate_limited"
+    assert await redis.get(stream_key(user_id)) == str(MAX_STREAMS_PER_USER)
+    ttl = await redis.ttl(stream_key(user_id))
+    assert 0 < ttl <= STREAM_SLOT_TTL_SECONDS
 
-    chat_router._release_stream(user_id)
-    chat_router._acquire_stream(user_id)
-    assert chat_router._active[user_id] == 2
+    await release_stream(redis, user_id)
+    await release_stream(redis, user_id)
+    assert await redis.get(stream_key(user_id)) is None
+    await redis.aclose()
 
 
-async def test_release_happens_when_the_stream_finishes() -> None:
+async def test_release_floors_at_zero_after_duplicate_cleanup() -> None:
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     user_id = uuid.uuid4()
-    chat_router._acquire_stream(user_id)
 
-    async def events() -> AsyncGenerator[str, None]:
-        yield "one"
-        yield "two"
-
-    wrapped = chat_router._release_stream_when_done(events(), user_id)
-    assert [event async for event in wrapped] == ["one", "two"]
-    assert user_id not in chat_router._active
-
-
-async def test_release_and_producer_close_happen_on_early_consumer_close() -> None:
-    user_id = uuid.uuid4()
-    chat_router._acquire_stream(user_id)
-    producer_closed = False
-
-    async def events() -> AsyncGenerator[str, None]:
-        nonlocal producer_closed
-        try:
-            yield "one"
-            await asyncio.sleep(3600)
-        finally:
-            producer_closed = True
-
-    wrapped = chat_router._release_stream_when_done(events(), user_id)
-    assert await anext(wrapped) == "one"
-    await wrapped.aclose()
-    assert producer_closed
-    assert user_id not in chat_router._active
+    assert await release_stream(redis, user_id) == 0
+    await acquire_stream(redis, user_id)
+    assert await release_stream(redis, user_id) == 0
+    assert await release_stream(redis, user_id) == 0
+    assert await redis.get(stream_key(user_id)) is None
+    await redis.aclose()

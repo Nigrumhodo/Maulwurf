@@ -1,26 +1,21 @@
-"""L2.5 QA: release of concurrent SSE stream slots on every exit path."""
+"""L2.5 QA: stream-slot cleanup on response exit paths."""
 
 import uuid
 from collections.abc import AsyncGenerator
 
+import fakeredis.aioredis
 from starlette.background import BackgroundTask
 from starlette.responses import StreamingResponse
 
 from app.routers import chat as chat_router
-
-
-def setup_function() -> None:
-    chat_router._active.clear()
-
-
-def teardown_function() -> None:
-    chat_router._active.clear()
+from app.services.rate_limiter import acquire_stream, stream_key
 
 
 async def test_chat_slot_release_on_early_abort() -> None:
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     user_id = uuid.uuid4()
-    chat_router._acquire_stream(user_id)
-    slot = chat_router._Slot(user_id)
+    await acquire_stream(redis, user_id)
+    slot = chat_router._Slot(redis, user_id)
 
     async def events() -> AsyncGenerator[str, None]:
         yield "never iterated"
@@ -32,23 +27,25 @@ async def test_chat_slot_release_on_early_abort() -> None:
         background=BackgroundTask(slot.release),
     )
 
-    assert chat_router._active[user_id] == 1
+    assert await redis.get(stream_key(user_id)) == "1"
     background = response.background
     assert background is not None
     await background()
-    assert user_id not in chat_router._active
+    assert await redis.get(stream_key(user_id)) is None
     assert slot.released
-
     await stream.aclose()
+    await redis.aclose()
 
 
-def test_chat_slot_release_is_idempotent() -> None:
+async def test_chat_slot_release_is_idempotent() -> None:
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     user_id = uuid.uuid4()
-    chat_router._acquire_stream(user_id)
-    chat_router._acquire_stream(user_id)
-    slot = chat_router._Slot(user_id)
+    await acquire_stream(redis, user_id)
+    await acquire_stream(redis, user_id)
+    slot = chat_router._Slot(redis, user_id)
 
-    slot.release()
-    slot.release()
+    await slot.release()
+    await slot.release()
 
-    assert chat_router._active[user_id] == 1
+    assert await redis.get(stream_key(user_id)) == "1"
+    await redis.aclose()

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
+import fakeredis.aioredis
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select, update
@@ -22,6 +23,7 @@ from app.core.config import settings
 from app.core.db import get_session
 from app.core.deps import chat_session_factory
 from app.core.providers import get_embedding_provider, get_llm_provider
+from app.core.redis import get_redis
 from app.main import app
 from app.models import (
     Audio,
@@ -36,10 +38,10 @@ from app.models import (
     Subject,
     Transcript,
 )
-from app.routers import chat as chat_router
 from app.services.indexing import chunk_tsvector
 from app.services.llm import ChatMessage, LLMProviderError
 from app.services.rag import RAGService, cancel_message
+from app.services.rate_limiter import acquire_stream
 from tests.integration import actors
 
 pytestmark = pytest.mark.integration
@@ -111,6 +113,7 @@ class Harness:
     factory: async_sessionmaker[AsyncSession]
     embeddings: FakeEmbeddingProvider
     llm: FakeLLM | None
+    redis: Any
 
 
 @pytest.fixture
@@ -119,7 +122,10 @@ async def chat_sse(migrated_database_url: str) -> AsyncIterator[Harness]:
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
     embeddings = FakeEmbeddingProvider()
     llm = FakeLLM()
-    harness = Harness(client=None, factory=factory, embeddings=embeddings, llm=llm)  # type: ignore[arg-type]
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    harness = Harness(
+        client=None, factory=factory, embeddings=embeddings, llm=llm, redis=redis
+    )  # type: ignore[arg-type]
 
     async def test_get_session() -> AsyncIterator[AsyncSession]:
         async with factory() as session:
@@ -129,6 +135,10 @@ async def chat_sse(migrated_database_url: str) -> AsyncIterator[Harness]:
     app.dependency_overrides[chat_session_factory] = lambda: factory
     app.dependency_overrides[get_embedding_provider] = lambda: embeddings
     app.dependency_overrides[get_llm_provider] = lambda: harness.llm
+    async def test_get_redis() -> AsyncIterator[fakeredis.aioredis.FakeRedis]:
+        yield redis
+
+    app.dependency_overrides[get_redis] = test_get_redis
     try:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url=settings.allowed_origin
@@ -137,6 +147,7 @@ async def chat_sse(migrated_database_url: str) -> AsyncIterator[Harness]:
             yield harness
     finally:
         app.dependency_overrides.clear()
+        await redis.aclose()
         await engine.dispose()
 
 
@@ -380,11 +391,9 @@ async def test_chat_rejects_a_third_stream_before_any_work(chat_sse: Harness) ->
             select(func.count()).select_from(Message).where(Message.user_id == actor.user_id)
         )
 
-    chat_router._active[actor.user_id] = chat_router.MAX_STREAMS_PER_USER
-    try:
-        response = await _post(chat_sse, actor, conversation.id)
-    finally:
-        chat_router._active.pop(actor.user_id, None)
+    await acquire_stream(chat_sse.redis, actor.user_id)
+    await acquire_stream(chat_sse.redis, actor.user_id)
+    response = await _post(chat_sse, actor, conversation.id)
 
     assert response.status_code == 429
     assert response.json()["error"]["code"] == "rate_limited"
@@ -562,14 +571,12 @@ async def test_chat_history_is_trimmed_by_complete_turns(chat_sse: Harness) -> N
     )
     assert chat_sse.llm is not None
     chat_sse.llm.context_window = 800
-    async with chat_sse.factory() as db:
-        prepared = await service.prepare(
-            db,
-            user_id=actor.user_id,
-            conversation_id=conversation.id,
-            content="¿Qué es la integral?",
-            client_message_id="history-trim",
-        )
+    prepared = await service.prepare(
+        user_id=actor.user_id,
+        conversation_id=conversation.id,
+        content="¿Qué es la integral?",
+        client_message_id="history-trim",
+    )
     assert prepared.error is None
     assert all(message.content != "pregunta vieja" for message in prepared.messages)
     async with chat_sse.factory() as db:
@@ -859,14 +866,12 @@ async def test_chat_cancellation_mid_stream_leaves_partial_cancelled(
         heartbeat_seconds=10.0,
         checkpoint_seconds=10.0,
     )
-    async with chat_sse.factory() as db:
-        prepared = await service.prepare(
-            db,
-            user_id=actor.user_id,
-            conversation_id=conversation.id,
-            content="¿Qué hace la integral?",
-            client_message_id="cancel-1",
-        )
+    prepared = await service.prepare(
+        user_id=actor.user_id,
+        conversation_id=conversation.id,
+        content="¿Qué hace la integral?",
+        client_message_id="cancel-1",
+    )
     stream = service.stream_events(prepared)
     assert _event_name(await anext(stream)) == "snapshot"
     delta = await anext(stream)
@@ -906,14 +911,12 @@ async def test_chat_client_disconnect_leaves_partial_cancelled(chat_sse: Harness
         heartbeat_seconds=30.0,
         checkpoint_seconds=30.0,
     )
-    async with chat_sse.factory() as db:
-        prepared = await service.prepare(
-            db,
-            user_id=actor.user_id,
-            conversation_id=conversation.id,
-            content="¿Qué hace la integral?",
-            client_message_id="disconnect-1",
-        )
+    prepared = await service.prepare(
+        user_id=actor.user_id,
+        conversation_id=conversation.id,
+        content="¿Qué hace la integral?",
+        client_message_id="disconnect-1",
+    )
     stream = service.stream_events(prepared)
     assert _event_name(await anext(stream)) == "snapshot"
     assert _event_data(await anext(stream))["text"] == "parcial"
