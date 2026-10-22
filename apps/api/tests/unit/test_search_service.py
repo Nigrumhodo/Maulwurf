@@ -190,6 +190,7 @@ class _PageService(SearchService):
         date_from: date | None,
         date_to: date | None,
         top_k: int,
+        audio_id: uuid.UUID | None = None,
     ) -> list[RetrievedChunk]:
         self.seen_top_k = top_k
         return list(self.hits)

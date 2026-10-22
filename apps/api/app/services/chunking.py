@@ -11,31 +11,49 @@ i.e. a Unicode code point, never a UTF-16 unit — an emoji counts as one. ``con
 always exactly ``transcript.text[char_start:char_end]``.
 
 Token counting is injected (``count_tokens``) because D5 (the provider tokenizer) is not
-closed yet; the default is a deterministic, offline heuristic. The definitive
-``token_count`` semantics arrive with L2.2/D5.
+closed yet. The default now uses the official BPE tokenizer (`tiktoken`, cl100k_base) and
+keeps the old deterministic heuristic only as a conservative fallback when the tokenizer
+cannot be loaded. The definitive ``token_count`` model mapping still arrives with L2.2/D5.
 
 This module deliberately does NOT import the §M6 Pydantic schema: reconciling it with the
 persisted tables is ticket L2.9, which is still open. The drafts below are shaped after the
 tables instead, so they persist with no extra mapping once L2.2 consumes them.
 """
 
+import logging
+import math
 import re
+import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 # Contract defaults (ESPECIFICACION.md M6 / S2.md §1.1).
 TARGET_TOKENS = 800
 OVERLAP_TOKENS = 100
 
+# `cl100k_base` is the OpenAI-compatible BPE table used by GPT-4/GPT-3.5 and most compatible
+# providers. D5 may pin another encoding when the production text model is closed; keep the
+# name in one place so the fallback and the exact path cannot diverge.
+TIKTOKEN_ENCODING_NAME = "cl100k_base"
+# Only the fallback uses this inflation factor: regex counts undercount BPE tokens for short
+# words, Spanish text and code. The exact tokenizer path never scales its count.
+TOKEN_SAFETY_FACTOR = 1.5
+
 TokenCounter = Callable[[str], int]
 
-# Deterministic offline token approximation used until D5 fixes the provider tokenizer.
-# Each CJK ideograph/kana/hangul is one token (real tokenizers treat them individually); a
-# run of other word characters is one token; every other non-space code point (punctuation,
-# emoji) is one token.
+# Deterministic offline fallback. Each CJK ideograph/kana/hangul is one token (real tokenizers
+# treat them individually); a run of other word characters is one token; every other non-space
+# code point (punctuation, emoji) is one token. This table is never used when tiktoken loads.
 _CJK = "\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af"
 _TOKEN_RE = re.compile(rf"[{_CJK}]|[^\W_]+|\S", re.UNICODE)
+
+_encoding: Any | None = None
+_encoding_loaded = False
+_encoding_lock = threading.Lock()
 
 # A sentence ends after a run of terminal punctuation (optionally followed by closing
 # quotes/brackets) or after a newline run. Trailing whitespace is left to the next span so
@@ -43,9 +61,54 @@ _TOKEN_RE = re.compile(rf"[{_CJK}]|[^\W_]+|\S", re.UNICODE)
 _SENTENCE_BOUNDARY = re.compile(r"[.!?\u2026\u3002\uff01\uff1f]+[)\]\"'\u201d\u2019\u00bb]*|\n+")
 
 
+def _load_encoding() -> Any | None:
+    """Load the BPE table once; return `None` when this host must use the fallback."""
+    global _encoding, _encoding_loaded
+    if _encoding_loaded:
+        return _encoding
+    with _encoding_lock:
+        if _encoding_loaded:
+            return _encoding
+        try:
+            import tiktoken
+
+            _encoding = tiktoken.get_encoding(TIKTOKEN_ENCODING_NAME)
+        except Exception as exc:  # noqa: BLE001 - any load failure must use the fallback
+            logger.warning(
+                "chunking.tokenizer_unavailable encoding=%s error=%s",
+                TIKTOKEN_ENCODING_NAME,
+                type(exc).__name__,
+            )
+            _encoding = None
+        _encoding_loaded = True
+    return _encoding
+
+
+def tokenizer_is_exact() -> bool:
+    """Whether `count_tokens_default` is backed by the official tokenizer on this host."""
+    return _load_encoding() is not None
+
+
+def _heuristic_count(text: str) -> int:
+    return math.ceil(len(_TOKEN_RE.findall(text)) * TOKEN_SAFETY_FACTOR)
+
+
 def count_tokens_default(text: str) -> int:
-    """Approximate token count used until the provider tokenizer (D5) is wired in."""
-    return len(_TOKEN_RE.findall(text))
+    """Count BPE tokens with an offline, conservative fallback.
+
+    `tiktoken` fetches and caches the encoding data on first use. If that fails (offline host,
+    missing package, unsupported tokenizer), the fallback keeps prompt budgets safe instead of
+    crashing the request; the RAG layer reserves an extra `context_margin_tokens` in that mode.
+    """
+    if not text:
+        return 0
+    encoding = _load_encoding()
+    if encoding is not None:
+        try:
+            return len(encoding.encode(text, disallowed_special=()))
+        except Exception as exc:  # noqa: BLE001 - malformed text must not break indexing
+            logger.warning("chunking.tokenizer_encode_failed error=%s", type(exc).__name__)
+    return _heuristic_count(text)
 
 
 def split_sentences(text: str) -> list[tuple[int, int]]:

@@ -642,6 +642,8 @@ provisional 30/min value is replaced by the D5/F0 measured provider quota.
   messages isolated per tenant. Idempotent `client_message_id`; states
   `streaming|completed|failed|cancelled`, cancellation, and explicit partial-response
   handling.
+- At most two concurrent SSE streams per user. A third `POST` is rejected with
+  `429 rate_limited` before the turn is persisted.
 - Modes: all subjects, a subject, or a class, always within the tenant. Tutor system prompt
   with guidance without claiming more than the sources.
 

@@ -71,7 +71,7 @@ from app.services.embeddings import (
     EmbeddingDimensionMismatch,
     EmbeddingNotConfigured,
     EmbeddingProvider,
-    EmbeddingProviderError,
+    embed_query,
 )
 from app.services.exports import EPS, EXPORTABLE_PRECISIONS
 from app.services.indexing import active_generation
@@ -200,6 +200,12 @@ class RetrievedChunk:
     t_start: float | None
     t_end: float | None
     score_rrf: float
+    # Chat needs the durable source identity to persist `message_sources` and the citation
+    # event. They are optional only for backwards-compatible unit-test construction; SQL
+    # hydration always fills them.
+    transcript_id: uuid.UUID | None = None
+    transcript_version: int | None = None
+    segment_ordinal: int | None = None
 
 
 @dataclass(frozen=True)
@@ -209,7 +215,29 @@ class SearchPage:
     next_cursor: str | None
 
 
+@dataclass(frozen=True)
+class QueryVectorTarget:
+    """Metadata needed to embed a query without holding a database transaction.
+
+    `prepare_query` reads only this generation metadata; the caller closes the session,
+    calls the embedding provider, and then opens a new session for `retrieve_with_vector`.
+    The target deliberately carries no page, chunk or transcript data.
+    """
+
+    query_text: str
+    model: str
+    dimension: int
+
+
 ContentKey = Callable[[uuid.UUID], Hashable]
+
+
+def _validated_top_k(top_k: int) -> None:
+    if top_k < 1 or top_k > MAX_RESULTS_WINDOW:
+        raise SearchInvalidQuery(
+            "El número de resultados está fuera de rango.",
+            details={"fields": {"limit": "limit fuera de rango"}},
+        )
 
 
 def _common_conditions(
@@ -217,6 +245,7 @@ def _common_conditions(
     version: str,
     *,
     subject_id: uuid.UUID | None,
+    audio_id: uuid.UUID | None = None,
     date_from: date | None,
     date_to: date | None,
 ) -> list[ColumnElement[bool]]:
@@ -236,6 +265,9 @@ def _common_conditions(
     ]
     if subject_id is not None:
         conditions.append(Audio.subject_id == subject_id)
+    if audio_id is not None:
+        # Chat mode `class`: the filter must run inside both branches before their LIMIT.
+        conditions.append(Audio.id == audio_id)
     if date_from is not None:
         conditions.append(Audio.class_date >= date_from)
     if date_to is not None:
@@ -264,6 +296,7 @@ def lexical_candidates_statement(
     query_text: str,
     limit: int = CANDIDATES_PER_BRANCH,
     subject_id: uuid.UUID | None = None,
+    audio_id: uuid.UUID | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
 ) -> Select[tuple[uuid.UUID, uuid.UUID, float]]:
@@ -279,7 +312,12 @@ def lexical_candidates_statement(
     influenced by user input (no injection surface).
     """
     common = _common_conditions(
-        user_id, version, subject_id=subject_id, date_from=date_from, date_to=date_to
+        user_id,
+        version,
+        subject_id=subject_id,
+        audio_id=audio_id,
+        date_from=date_from,
+        date_to=date_to,
     )
     arms: list[Select[tuple[uuid.UUID, uuid.UUID, float]]] = []
     for cfg in _FTS_CONFIGS:
@@ -316,6 +354,7 @@ def vector_candidates_statement(
     query_vector: Sequence[float],
     limit: int = CANDIDATES_PER_BRANCH,
     subject_id: uuid.UUID | None = None,
+    audio_id: uuid.UUID | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
 ) -> Select[tuple[uuid.UUID, uuid.UUID, float]]:
@@ -345,6 +384,7 @@ def vector_candidates_statement(
                 user_id,
                 version,
                 subject_id=subject_id,
+                audio_id=audio_id,
                 date_from=date_from,
                 date_to=date_to,
             ),
@@ -513,6 +553,7 @@ async def hybrid_search(
     top_k: int = DEFAULT_TOP_K,
     candidates_per_branch: int = CANDIDATES_PER_BRANCH,
     subject_id: uuid.UUID | None = None,
+    audio_id: uuid.UUID | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
 ) -> list[FusedHit]:
@@ -560,6 +601,7 @@ async def hybrid_search(
             query_text=text_query,
             limit=candidates_per_branch,
             subject_id=subject_id,
+            audio_id=audio_id,
             date_from=date_from,
             date_to=date_to,
         ),
@@ -575,6 +617,7 @@ async def hybrid_search(
             query_vector=query_vector,
             limit=candidates_per_branch,
             subject_id=subject_id,
+            audio_id=audio_id,
             date_from=date_from,
             date_to=date_to,
         ),
@@ -779,9 +822,9 @@ def _reliable_times(
     return t_start, t_end
 
 
-def _validated_query(query: str) -> str:
+def _validated_query(query: str, *, max_chars: int = QUERY_MAX_CHARS) -> str:
     text_query = query.strip()
-    if not text_query or len(text_query) > QUERY_MAX_CHARS:
+    if not text_query or len(text_query) > max_chars:
         raise SearchInvalidQuery(
             "La consulta está vacía o excede el máximo.",
             details={"fields": {"q": "consulta inválida"}},
@@ -821,6 +864,8 @@ async def _hydrate(
         select(
             Chunk.id.label("chunk_id"),
             Chunk.audio_id,
+            Chunk.transcript_id,
+            Chunk.transcript_version,
             Chunk.content,
             Chunk.char_start.label("chunk_char_start"),
             Chunk.char_end.label("chunk_char_end"),
@@ -916,6 +961,9 @@ async def _hydrate(
                 t_start=t_start,
                 t_end=t_end,
                 score_rrf=hit.score_rrf,
+                transcript_id=hydrated_row.transcript_id,
+                transcript_version=hydrated_row.transcript_version,
+                segment_ordinal=segment.segment_ordinal if segment is not None else None,
             )
         )
     return hydrated
@@ -934,18 +982,21 @@ class SearchService:
         user_id: uuid.UUID,
         query: str,
         subject_id: uuid.UUID | None = None,
+        audio_id: uuid.UUID | None = None,
         date_from: date | None = None,
         date_to: date | None = None,
         top_k: int = DEFAULT_TOP_K,
+        max_query_chars: int = QUERY_MAX_CHARS,
     ) -> list[RetrievedChunk]:
-        """Return hydrated hits for chat; no active generation is an empty result."""
-        query_text = _validated_query(query)
+        """Return hydrated hits for chat; no active generation is an empty result.
+
+        `audio_id` is chat's `class` mode filter; it is applied inside both retrieval branches
+        before their LIMIT, never as a post-filter over the top-k. `max_query_chars` lets chat
+        accept its own question limit while `/search` keeps the frozen 500-character contract.
+        """
+        query_text = _validated_query(query, max_chars=max_query_chars)
         _validated_range(date_from, date_to)
-        if top_k < 1 or top_k > MAX_RESULTS_WINDOW:
-            raise SearchInvalidQuery(
-                "El número de resultados está fuera de rango.",
-                details={"fields": {"limit": "limit fuera de rango"}},
-            )
+        _validated_top_k(top_k)
         generation = await active_generation(self._db, user_id)
         if generation is None:
             return []
@@ -954,11 +1005,92 @@ class SearchService:
             user_id=user_id,
             query_text=query_text,
             subject_id=subject_id,
+            audio_id=audio_id,
             date_from=date_from,
             date_to=date_to,
             top_k=top_k,
         )
         logger.debug("search.retrieve version=%s hits=%d", generation.version, len(results))
+        return results
+
+    async def prepare_query(
+        self,
+        *,
+        user_id: uuid.UUID,
+        query: str,
+        max_query_chars: int = QUERY_MAX_CHARS,
+    ) -> QueryVectorTarget | None:
+        """Validate a query and return the generation metadata needed to embed it.
+
+        This method performs no network call. The caller must close the database session
+        before invoking the embedding provider; the returned target is valid for
+        `retrieve_with_vector`, which re-reads the active generation in its own session.
+        """
+        query_text = _validated_query(query, max_chars=max_query_chars)
+        generation = await active_generation(self._db, user_id)
+        if generation is None:
+            return None
+        self._require_provider(generation)
+        return QueryVectorTarget(
+            query_text=query_text,
+            model=generation.model,
+            dimension=generation.dimension,
+        )
+
+    async def retrieve_with_vector(
+        self,
+        *,
+        user_id: uuid.UUID,
+        query_text: str,
+        query_vector: Sequence[float],
+        subject_id: uuid.UUID | None = None,
+        audio_id: uuid.UUID | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        top_k: int = DEFAULT_TOP_K,
+        max_query_chars: int = QUERY_MAX_CHARS,
+    ) -> list[RetrievedChunk]:
+        """Run retrieval with a vector embedded outside the current database session.
+
+        The active generation is read again here, so a generation retired meanwhile produces
+        an empty result instead of a stale read. The provider model/dimension and the vector
+        length are still validated before SQL executes.
+        """
+        text_query = _validated_query(query_text, max_chars=max_query_chars)
+        _validated_range(date_from, date_to)
+        _validated_top_k(top_k)
+        generation = await active_generation(self._db, user_id)
+        if generation is None:
+            return []
+        self._require_provider(generation)
+        if len(query_vector) != generation.dimension:
+            raise EmbeddingDimensionMismatch(
+                "El proveedor devolvió un vector de otra dimensión.",
+                details={"expected": generation.dimension, "observed": len(query_vector)},
+            )
+        hits = await hybrid_search(
+            self._db,
+            user_id=user_id,
+            query_text=text_query,
+            query_vector=query_vector,
+            version=generation.version,
+            top_k=top_k,
+            candidates_per_branch=CANDIDATES_PER_BRANCH,
+            subject_id=subject_id,
+            audio_id=audio_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        results = await _hydrate(
+            self._db,
+            user_id=user_id,
+            query=text_query,
+            version=generation.version,
+            hits=hits,
+        )
+        logger.debug(
+            "search.retrieve_precomputed version=%s hits=%d", generation.version, len(results)
+        )
         return results
 
     async def page(
@@ -1026,17 +1158,8 @@ class SearchService:
         )
         return SearchPage(results=page_results, took_ms=took_ms, next_cursor=next_cursor)
 
-    async def _retrieve_for_generation(
-        self,
-        generation: IndexGeneration,
-        *,
-        user_id: uuid.UUID,
-        query_text: str,
-        subject_id: uuid.UUID | None,
-        date_from: date | None,
-        date_to: date | None,
-        top_k: int,
-    ) -> list[RetrievedChunk]:
+    def _require_provider(self, generation: IndexGeneration) -> EmbeddingProvider:
+        """Validate the configured provider against the active generation, fail closed."""
         provider = self._provider
         if provider is None:
             raise EmbeddingNotConfigured(
@@ -1052,13 +1175,22 @@ class SearchService:
                 "La dimensión del proveedor no coincide con la generación activa.",
                 details={"reason": "dimension_mismatch"},
             )
-        vectors = await provider.embed([query_text])
-        if len(vectors) != 1:
-            raise EmbeddingProviderError(
-                "El proveedor devolvió un número de vectores inesperado.",
-                details={"expected": 1, "observed": len(vectors)},
-            )
-        vector = vectors[0]
+        return provider
+
+    async def _retrieve_for_generation(
+        self,
+        generation: IndexGeneration,
+        *,
+        user_id: uuid.UUID,
+        query_text: str,
+        subject_id: uuid.UUID | None,
+        date_from: date | None,
+        date_to: date | None,
+        top_k: int,
+        audio_id: uuid.UUID | None = None,
+    ) -> list[RetrievedChunk]:
+        provider = self._require_provider(generation)
+        vector = await embed_query(provider, query_text)
         if len(vector) != generation.dimension:
             raise EmbeddingDimensionMismatch(
                 "El proveedor devolvió un vector de otra dimensión.",
@@ -1073,6 +1205,7 @@ class SearchService:
             top_k=top_k,
             candidates_per_branch=CANDIDATES_PER_BRANCH,
             subject_id=subject_id,
+            audio_id=audio_id,
             date_from=date_from,
             date_to=date_to,
         )

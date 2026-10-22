@@ -33,7 +33,7 @@ ticket is [../PLAN_TESTS.md](../PLAN_TESTS.md); the contracts source is
 | Person | Suggested profile (not ownership) | Logbook | Handle in CLAIMS |
 |---|---|---|---|
 | José Leonardo Pinilla Zamora | Technical leadership · RAG | [jose-leonardo.md](jose-leonardo.md) | `jpinillaz` |
-| Andres Felipe | API · Database | [andres.md](andres.md) | no claims yet |
+| Andres Felipe | API · Database | [andres.md](andres.md) | `angalindog` |
 | Santiago Montealegre | Ingestion · Audio · ASR | [santiago.md](santiago.md) | `satnovaOG` |
 | Jefferson Figueroa | Infra · Workers · Integrations | [jefferson.md](jefferson.md) | no claims yet |
 | Daniel Samaca | Web · UX | [daniel.md](daniel.md) | no claims yet |
