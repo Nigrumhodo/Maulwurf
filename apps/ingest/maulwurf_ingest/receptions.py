@@ -11,6 +11,7 @@ import asyncio
 import hmac
 import logging
 import os
+import shutil
 import tempfile
 import time
 import uuid
@@ -256,6 +257,52 @@ async def _terminal(pool: asyncpg.Pool, hold: _Hold, *, code: str, from_status: 
     return await _cleanup(pool, hold)
 
 
+async def _force_release(hold: _Hold) -> str:
+    """Drop the tmpfs file and the slot when recording cleanup has already failed.
+
+    The keeper must stop here. If it kept renewing the lease, the audio would
+    sit in tmpfs until the process restarted.
+    """
+    if hold.phase == "closed":
+        return hold.cleanup_status or "failed"
+    hold.phase = "closed"
+    hold.finished.set()
+    try:
+        await hold.keeper.stop()
+    except Exception as exc:  # noqa: BLE001 — stopping the keeper must not keep the slot
+        logger.warning("reception.keeper_stop_failed error=%s", type(exc).__name__)
+    shutil.rmtree(hold.workdir, ignore_errors=True)
+    hold.cleanup_status = "failed"
+    _finished[hold.lease.attempt_id] = "failed"
+    _holds.pop(hold.lease.attempt_id, None)
+    await _gate.release(hold.lease.user_id)
+    return "failed"
+
+
+async def _safe_cleanup(pool: asyncpg.Pool, hold: _Hold) -> str:
+    try:
+        return await _cleanup(pool, hold)
+    except Exception as exc:  # noqa: BLE001 — the file and the slot still have to go
+        logger.warning(
+            "reception.cleanup_failed attempt_id=%s error=%s",
+            hold.lease.attempt_id, type(exc).__name__,
+        )
+        return await _force_release(hold)
+
+
+async def _safe_terminal(
+    pool: asyncpg.Pool, hold: _Hold, *, code: str, from_status: str,
+) -> str:
+    try:
+        return await _terminal(pool, hold, code=code, from_status=from_status)
+    except Exception as exc:  # noqa: BLE001 — a database error must not keep the audio
+        logger.warning(
+            "reception.terminal_failed attempt_id=%s error=%s",
+            hold.lease.attempt_id, type(exc).__name__,
+        )
+        return await _force_release(hold)
+
+
 async def _expire(pool: asyncpg.Pool, hold: _Hold) -> None:
     try:
         await asyncio.wait_for(hold.finished.wait(), HOLD_TIMEOUT_S)
@@ -268,7 +315,7 @@ async def _expire(pool: asyncpg.Pool, hold: _Hold) -> None:
             return
         hold.phase = "discarding"
         hold.finished.set()
-    await _terminal(pool, hold, code="reception_abandoned", from_status="receiving")
+    await _safe_terminal(pool, hold, code="reception_abandoned", from_status="receiving")
     logger.info("reception.abandoned attempt_id=%s", hold.lease.attempt_id)
 
 
@@ -286,24 +333,40 @@ def _declared_too_big(request: Request) -> bool:
 async def _open_hold(
     pool: asyncpg.Pool, *, claims: CredentialClaims, instance: str,
 ) -> _Hold | JSONResponse:
-    lease = await leases.acquire_bound(
-        pool, user_id=claims.user_id, audio_id=claims.audio_id, attempt_id=claims.attempt_id,
-        expected_token=claims.fencing_token, instance=instance,
-        ttl=timedelta(seconds=LEASE_TTL_S),
-    )
+    try:
+        lease = await leases.acquire_bound(
+            pool, user_id=claims.user_id, audio_id=claims.audio_id,
+            attempt_id=claims.attempt_id, expected_token=claims.fencing_token,
+            instance=instance, ttl=timedelta(seconds=LEASE_TTL_S),
+        )
+    except Exception:  # noqa: BLE001 — any acquire failure must return the slot
+        await _gate.release(claims.user_id)
+        raise
     if lease is None:
         await _gate.release(claims.user_id)
         return _error(409, "attempt_not_active")
+    workdir: Path | None = None
     try:
         workdir = cleanup.create_workdir(str(claims.attempt_id), None)
-    except OSError:
-        await leases.transition(
-            pool, lease, from_status="receiving", to_status="requires_reupload",
-            error_code="supervisor_error",
+        keeper = _LeaseKeeper(pool, lease, 10.0)
+    except Exception as exc:  # noqa: BLE001 — the slot is already taken
+        # The slot was taken before the lease. A failure here must give it back
+        # even when the status write itself fails.
+        logger.warning(
+            "reception.open_failed attempt_id=%s error=%s",
+            claims.attempt_id, type(exc).__name__,
         )
         await _gate.release(claims.user_id)
+        if workdir is not None:
+            shutil.rmtree(workdir, ignore_errors=True)
+        try:
+            await leases.transition(
+                pool, lease, from_status="receiving", to_status="requires_reupload",
+                error_code="supervisor_error",
+            )
+        except Exception as write_exc:  # noqa: BLE001 — the slot is already released
+            logger.warning("reception.open_status_failed error=%s", type(write_exc).__name__)
         return _error(500, "internal_error")
-    keeper = _LeaseKeeper(pool, lease, 10.0)
     return _Hold(
         lease=lease, workdir=workdir, keeper=keeper, sha256="", received_bytes=0,
         duration_s=0.0, audio_id=claims.audio_id,
@@ -327,49 +390,55 @@ async def put_receive(attempt_id: uuid.UUID, request: Request) -> JSONResponse:
     if isinstance(opened, JSONResponse):
         return opened
     hold = opened
+    failure = "supervisor_error"
+    disconnected: BaseException | None = None
     try:
         if _declared_too_big(request):
-            await _terminal(pool, hold, code="payload_too_large", from_status="receiving")
-            return _from_spec(CATALOG["payload_too_large"])
-        received = await receive(
-            request.stream(), hold.workdir / "original", max_bytes=settings.max_upload_bytes,
-        )
+            failure = "payload_too_large"
+        else:
+            received = await receive(
+                request.stream(), hold.workdir / "original", max_bytes=settings.max_upload_bytes,
+            )
+            decision = await asyncio.to_thread(probe_file, hold.workdir / "original")
+            if decision.decision == "reject" or decision.duration_s is None:
+                failure = decision.reason if decision.reason in CATALOG else "supervisor_error"
+            else:
+                hold.sha256 = received.sha256
+                hold.received_bytes = received.received_bytes
+                hold.duration_s = decision.duration_s
+                _holds[attempt_id] = hold
+                _track(asyncio.create_task(_expire(pool, hold)))
+                logger.info(
+                    "reception.held attempt_id=%s bytes=%s duration_s=%s",
+                    attempt_id, received.received_bytes, decision.duration_s,
+                )
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "fencing_token": hold.lease.fencing_token,
+                        "instance": _instance_id(request),
+                        "sha256": received.sha256,
+                        "received_bytes": received.received_bytes,
+                        "duration_s": decision.duration_s,
+                    },
+                )
     except PayloadTooLarge:
-        await _terminal(pool, hold, code="payload_too_large", from_status="receiving")
-        return _from_spec(CATALOG["payload_too_large"])
-    except (ClientDisconnect, asyncio.CancelledError):
-        await _terminal(pool, hold, code="reception_interrupted", from_status="receiving")
-        raise
+        failure = "payload_too_large"
+    except (ClientDisconnect, asyncio.CancelledError) as exc:
+        failure = "reception_interrupted"
+        disconnected = exc
     except Exception as exc:
         logger.warning("reception.failed attempt_id=%s error=%s", attempt_id, type(exc).__name__)
-        await _terminal(pool, hold, code="supervisor_error", from_status="receiving")
-        return _error(500, "internal_error")
-    decision = await asyncio.to_thread(probe_file, hold.workdir / "original")
-    if decision.decision == "reject" or decision.duration_s is None:
-        code = decision.reason if decision.reason in CATALOG else "supervisor_error"
-        spec = CATALOG[code]
-        await _terminal(pool, hold, code=code, from_status="receiving")
-        reason = code if spec.http_code == "unsupported_format" else None
-        return _from_spec(spec, reason=reason)
-    hold.sha256 = received.sha256
-    hold.received_bytes = received.received_bytes
-    hold.duration_s = decision.duration_s
-    _holds[attempt_id] = hold
-    _track(asyncio.create_task(_expire(pool, hold)))
-    logger.info(
-        "reception.held attempt_id=%s bytes=%s duration_s=%s",
-        attempt_id, received.received_bytes, decision.duration_s,
+        failure = "supervisor_error"
+    # Probe sits in the same try as the stream. A cancel there still deletes the file.
+    await asyncio.shield(
+        _safe_terminal(pool, hold, code=failure, from_status="receiving"),
     )
-    return JSONResponse(
-        status_code=200,
-        content={
-            "fencing_token": hold.lease.fencing_token,
-            "instance": _instance_id(request),
-            "sha256": received.sha256,
-            "received_bytes": received.received_bytes,
-            "duration_s": decision.duration_s,
-        },
-    )
+    if disconnected is not None:
+        raise disconnected
+    spec = CATALOG[failure]
+    reason = failure if spec.http_code == "unsupported_format" else None
+    return _from_spec(spec, reason=reason)
 
 
 def _matches(hold: _Hold, claims: CredentialClaims) -> bool:
@@ -396,32 +465,37 @@ async def post_admit(attempt_id: uuid.UUID, request: Request) -> JSONResponse:
     except Exception:  # noqa: BLE001 — a malformed body is an integrity failure
         body = None
     sha, count = _admit_body(body)
-    if sha is None or count is None or count != hold.received_bytes or not hmac.compare_digest(
-        sha, hold.sha256,
-    ):
-        async with hold.lock:
-            if hold.phase != "holding":
-                return _error(409, "reception_not_held")
-            hold.phase = "discarding"
-            hold.finished.set()
-        pool = await _service_pool(request)
-        if pool is None:
-            return _error(503, "capacity_unavailable")
-        await _terminal(pool, hold, code="reception_integrity_failed", from_status="receiving")
-        return _error(409, "reception_integrity_failed")
-    async with hold.lock:
-        if hold.phase != "holding":
-            return _error(409, "reception_not_held")
-        hold.phase = "admitted"
-        hold.finished.set()
+    mismatch = (
+        sha is None or count is None or count != hold.received_bytes
+        or not hmac.compare_digest(sha, hold.sha256)
+    )
+    # The expiry timer is the rescue while the phase is still "holding".
+    # Marking the hold finished before the pool exists cancels that rescue.
     pool = await _service_pool(request)
     if pool is None:
         return _error(503, "capacity_unavailable")
-    moved = await leases.transition(
-        pool, hold.lease, from_status="receiving", to_status="transcribing",
-    )
+    async with hold.lock:
+        if hold.phase != "holding":
+            return _error(409, "reception_not_held")
+        hold.phase = "discarding" if mismatch else "admitted"
+        hold.finished.set()
+    if mismatch:
+        await _safe_terminal(
+            pool, hold, code="reception_integrity_failed", from_status="receiving",
+        )
+        return _error(409, "reception_integrity_failed")
+    try:
+        moved = await leases.transition(
+            pool, hold.lease, from_status="receiving", to_status="transcribing",
+        )
+    except Exception as exc:  # noqa: BLE001 — the phase already consumed the hold timer
+        logger.warning(
+            "reception.admit_failed attempt_id=%s error=%s", attempt_id, type(exc).__name__,
+        )
+        await _safe_cleanup(pool, hold)
+        return _error(500, "internal_error")
     if not moved:
-        await _cleanup(pool, hold)
+        await _safe_cleanup(pool, hold)
         return _error(409, "reception_not_held")
 
     async def _admitted() -> None:
@@ -473,6 +547,9 @@ async def post_discard(attempt_id: uuid.UUID, request: Request) -> JSONResponse:
     reason = body.get("reason") if isinstance(body, dict) else None
     if not isinstance(reason, str) or reason not in DISCARD_REASONS:
         return _error(422, "validation_failed")
+    pool = await _service_pool(request)
+    if pool is None:
+        return _error(503, "capacity_unavailable")
     async with hold.lock:
         if hold.phase != "holding":
             recorded_now = hold.cleanup_status or _finished.get(attempt_id)
@@ -481,8 +558,5 @@ async def post_discard(attempt_id: uuid.UUID, request: Request) -> JSONResponse:
             return _error(409, "reception_not_held")
         hold.phase = "discarding"
         hold.finished.set()
-    pool = await _service_pool(request)
-    if pool is None:
-        return _error(503, "capacity_unavailable")
-    status = await _terminal(pool, hold, code=reason, from_status="receiving")
+    status = await _safe_terminal(pool, hold, code=reason, from_status="receiving")
     return JSONResponse(status_code=200, content={"cleanup_status": status})
