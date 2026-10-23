@@ -16,9 +16,13 @@ from maulwurf_ingest.config import settings
 from maulwurf_ingest.credential import CredentialClaims, mint
 from maulwurf_ingest.lease import Lease
 from maulwurf_ingest.receptions import (
+    _finished,
     _gate,
     _holds,
     _open_hold,
+    _remember,
+    _service_pool,
+    open_service_pool,
     post_admit,
     post_discard,
     put_receive,
@@ -213,3 +217,35 @@ async def test_probe_cancel_deletes_the_audio(
     assert closed
     assert not (tmp_path / "original").exists()
     assert await _gate.take(user_id)
+
+
+def test_finished_map_drops_the_oldest(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("maulwurf_ingest.receptions._FINISHED_MAX", 2)
+    first, second, third = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    _remember(first, "verified")
+    _remember(second, "verified")
+    _remember(third, "failed")
+    assert len(_finished) == 2
+    assert first not in _finished
+    assert list(_finished) == [second, third]
+
+
+async def test_requests_do_not_open_a_second_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = 0
+
+    async def slow_create(*_args: object, **_kwargs: object) -> object:
+        nonlocal created
+        created += 1
+        await asyncio.sleep(0.05)
+        return object()
+
+    monkeypatch.setattr("asyncpg.create_pool", slow_create)
+    monkeypatch.setattr(settings, "database_url", "postgresql://127.0.0.1/maulwurf")
+    app = SimpleNamespace(state=SimpleNamespace(pool=None))
+    await open_service_pool(app)
+    request = SimpleNamespace(app=app)
+    await asyncio.gather(
+        _service_pool(request),  # type: ignore[arg-type]
+        _service_pool(request),  # type: ignore[arg-type]
+    )
+    assert created == 1

@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 from maulwurf_ingest import admission, hardening
 from maulwurf_ingest.config import settings
 from maulwurf_ingest.credential import decode_secret
+from maulwurf_ingest.receptions import open_service_pool
 from maulwurf_ingest.receptions import router as receptions_router
 from maulwurf_ingest.reconciler import reconcile_committed
 
@@ -110,6 +111,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.instance_id = secrets.token_hex(16)
     app.state.pool = None
     await reconcile_on_startup()
+    await open_service_pool(app)
     yield
     pool = getattr(app.state, "pool", None)
     if isinstance(pool, asyncpg.Pool):

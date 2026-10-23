@@ -15,6 +15,7 @@ import shutil
 import tempfile
 import time
 import uuid
+from collections import OrderedDict
 from datetime import timedelta
 from pathlib import Path
 
@@ -109,7 +110,9 @@ class _Hold:
 
 _gate = _Gate(ACTIVE_SLOTS)
 _holds: dict[uuid.UUID, _Hold] = {}
-_finished: dict[uuid.UUID, str] = {}
+# A discard retry only needs recent attempts. Older rows are already terminal.
+_FINISHED_MAX = 1024
+_finished: OrderedDict[uuid.UUID, str] = OrderedDict()
 
 
 def reset_state() -> None:
@@ -183,27 +186,47 @@ def _read_claims(
     return claims
 
 
+def _remember(attempt_id: uuid.UUID, status: str) -> None:
+    """Keep the latest cleanup result and drop the oldest past the cap."""
+    _finished[attempt_id] = status
+    _finished.move_to_end(attempt_id)
+    while len(_finished) > _FINISHED_MAX:
+        _finished.popitem(last=False)
+
+
 def _track(task: asyncio.Task[object]) -> None:
     _TASKS.add(task)
     task.add_done_callback(_TASKS.discard)
+
+
+async def open_service_pool(app: object) -> None:
+    """Open the process pool once, during startup.
+
+    A request must not call ``create_pool``: two cold requests used to each
+    open one, and the loser was never closed.
+    """
+    state = getattr(app, "state", None)
+    current = getattr(state, "pool", None)
+    if isinstance(current, asyncpg.Pool):
+        return
+    if not settings.database_url:
+        return
+    dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    try:
+        created = await asyncpg.create_pool(dsn, min_size=1, max_size=4, timeout=2.0)
+    except Exception as exc:  # noqa: BLE001 — a down database is capacity, and the message may hold the DSN
+        logger.warning("reception.pool_failed error=%s", type(exc).__name__)
+        return
+    if created is None or state is None:
+        return
+    state.pool = created
 
 
 async def _service_pool(request: Request) -> asyncpg.Pool | None:
     current = getattr(request.app.state, "pool", None)
     if isinstance(current, asyncpg.Pool):
         return current
-    if not settings.database_url:
-        return None
-    dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
-    try:
-        created = await asyncpg.create_pool(dsn, min_size=1, max_size=4)
-    except Exception as exc:  # noqa: BLE001 — a down database is capacity, and the message may hold the DSN
-        logger.warning("reception.pool_failed error=%s", type(exc).__name__)
-        return None
-    if created is None:
-        return None
-    request.app.state.pool = created
-    return created
+    return None
 
 
 def _writable_tmp() -> bool:
@@ -243,7 +266,7 @@ async def _cleanup(pool: asyncpg.Pool, hold: _Hold) -> str:
     )
     recorded = "verified" if result.evidence.get("verified") is True else "failed"
     hold.cleanup_status = recorded
-    _finished[hold.lease.attempt_id] = recorded
+    _remember(hold.lease.attempt_id, recorded)
     _holds.pop(hold.lease.attempt_id, None)
     await _gate.release(hold.lease.user_id)
     return recorded
@@ -273,7 +296,7 @@ async def _force_release(hold: _Hold) -> str:
         logger.warning("reception.keeper_stop_failed error=%s", type(exc).__name__)
     shutil.rmtree(hold.workdir, ignore_errors=True)
     hold.cleanup_status = "failed"
-    _finished[hold.lease.attempt_id] = "failed"
+    _remember(hold.lease.attempt_id, "failed")
     _holds.pop(hold.lease.attempt_id, None)
     await _gate.release(hold.lease.user_id)
     return "failed"

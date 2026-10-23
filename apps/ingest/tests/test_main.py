@@ -39,6 +39,10 @@ async def _skip_reconcile() -> None:
     return None
 
 
+async def _skip_pool(_app: object) -> None:
+    return None
+
+
 def test_report_mode_starts_but_is_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(hardening, "check", lambda _: ["swap_allowed"])
     monkeypatch.setattr(settings, "ingest_hardening", "report")
@@ -78,6 +82,7 @@ def test_readyz_ready_when_every_check_passes(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(hardening, "check", _no_failures)
     monkeypatch.setattr(settings, "database_url", DATABASE_URL)
     monkeypatch.setattr(main, "reconcile_on_startup", _skip_reconcile)
+    monkeypatch.setattr(main, "open_service_pool", _skip_pool)
     monkeypatch.setattr(main, "CHECKS", {"hardening": _ok, "tmpfs": _ok, "postgres": _ok})
     with TestClient(main.app) as client:
         response = client.get("/readyz")
@@ -91,6 +96,7 @@ def test_readyz_logs_only_the_error_type(
     monkeypatch.setattr(hardening, "check", _no_failures)
     monkeypatch.setattr(settings, "database_url", DATABASE_URL)
     monkeypatch.setattr(main, "reconcile_on_startup", _skip_reconcile)
+    monkeypatch.setattr(main, "open_service_pool", _skip_pool)
     monkeypatch.setattr(main, "CHECKS", {"hardening": _ok, "tmpfs": _ok, "postgres": _boom})
     with TestClient(main.app) as client:
         response = client.get("/readyz")
