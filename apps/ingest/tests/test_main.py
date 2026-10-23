@@ -8,7 +8,7 @@ import asyncpg
 import pytest
 from fastapi.testclient import TestClient
 
-from maulwurf_ingest import hardening, main
+from maulwurf_ingest import admission, hardening, main
 from maulwurf_ingest.config import settings
 
 
@@ -187,3 +187,4 @@ async def test_startup_reconcile_failure_hides_the_dsn(
     await main.reconcile_on_startup()
     assert "reconciler.startup_failed error=OSError" in caplog.text
     assert "CANARIO-9d1e" not in caplog.text
+    admission.reset()

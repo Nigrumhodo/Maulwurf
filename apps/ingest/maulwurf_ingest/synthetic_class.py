@@ -2,10 +2,8 @@
 
 One known phrase is synthesized in memory and committed through the supervisor's
 test double. Nothing here calls Riva, opens a browser, or treats a null published
-limit as an approved maximum. The 1 h class through Caddy stays blocked: the
-pipeline is not wired to Riva (S2.10), ingest has no streaming receive (S2.11),
-compose has no Riva credentials (J2.8), the web upload and progress UI are open
-(D2.2/D2.3), and D2/D6 are not approved.
+limit as an approved maximum. The 1 h class through Caddy was not used. That demo
+stays blocked on J2.8, D2.2/D2.3, and D2/D6.
 """
 
 from __future__ import annotations
@@ -27,6 +25,7 @@ from maulwurf_ingest.asr import riva_client
 from maulwurf_ingest.audio.synthetic import DEFAULT_PHRASE_ES, generate_synthetic_utterance
 from maulwurf_ingest.audio_absence import report_from_tree
 from maulwurf_ingest.capabilities import spike_capabilities
+from maulwurf_ingest.receiver import iter_bytes
 from maulwurf_ingest.supervisor import SupervisorConfig, run_attempt
 
 _BLOCKED = (
@@ -131,7 +130,8 @@ async def run_synthetic_class(pool: asyncpg.Pool, *, tmp_dir: str) -> HarnessRep
     riva_client.NvidiaRivaTranscriptionService.__init__ = trap  # type: ignore[method-assign]
     try:
         await run_attempt(
-            pool, user_id=user_id, attempt_id=attempt_id, audio=utterance.wav_bytes,
+            pool, user_id=user_id, attempt_id=attempt_id,
+            audio=iter_bytes(utterance.wav_bytes),
             config=SupervisorConfig(
                 instance="ingest:e2e", tmp_dir=tmp_dir, stub_transcript=utterance.expected_text,
             ),

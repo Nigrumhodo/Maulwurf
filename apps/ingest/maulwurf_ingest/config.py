@@ -31,6 +31,16 @@ class Settings(BaseSettings):
     fragment_seconds: int = Field(
         default=30, ge=1, validation_alias="INGEST_FRAGMENT_SECONDS"
     )
+    # Unset: internal routes answer 503 and /readyz reports credential.
+    # Set but short, non-hex, or containing change-me: the process refuses to start.
+    credential_secret: str | None = Field(default=None, validation_alias="INGEST_CREDENTIAL_SECRET")
+    credential_kid: str = Field(default="k1", validation_alias="INGEST_CREDENTIAL_KID")
+    credential_previous_secret: str | None = Field(
+        default=None, validation_alias="INGEST_CREDENTIAL_PREVIOUS_SECRET",
+    )
+    credential_previous_kid: str | None = Field(
+        default=None, validation_alias="INGEST_CREDENTIAL_PREVIOUS_KID",
+    )
 
 
 settings = Settings()

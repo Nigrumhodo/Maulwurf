@@ -334,9 +334,8 @@ async def enable_text_outbox(
 
 
 def _no_usable_text(draft: TranscriptDraft) -> bool:
-    if draft.text.strip():
-        return False
-    return not any(word.text.strip() for word in draft.words)
+    """Blank text is not a transcript, even when the pipeline also returned words."""
+    return not draft.text.strip()
 
 
 def _valid_span(word: TranscriptWord) -> bool:

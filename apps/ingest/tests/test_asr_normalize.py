@@ -48,5 +48,5 @@ def test_overflow_stops_before_writing_a_truncated_wav(tmp_path: Path) -> None:
     _tone(tmp_path / ORIGINAL, seconds=10.0)
     limits = replace(DEFAULT_LIMITS, output_bytes=100_000)
     with pytest.raises(RuntimeError, match="normalization_output_overflow"):
-        run(tmp_path, realtime=False, limits=limits)
+        run(tmp_path, realtime=False, limits=limits, language="es", deadline_s=30)
     assert not (tmp_path / "converted.wav").exists()

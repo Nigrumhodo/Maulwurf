@@ -19,6 +19,7 @@ from maulwurf_ingest.persistence import (
     CommitResult,
     TranscriptDraft,
     TranscriptWord,
+    _no_usable_text,
     commit_transcript,
     draft_from_job,
     enable_text_outbox,
@@ -52,6 +53,9 @@ def _draft(text: str = "Hoy repasamos", *, precision: str = "word") -> Transcrip
 def test_blank_text_is_not_padded() -> None:
     assert prepare_transcript(_draft("   ", precision="none")) is None
     assert prepare_transcript(TranscriptDraft("", "none", (), "whisper-large-v3")) is None
+    assert _no_usable_text(TranscriptDraft(
+        "  ", "word", (TranscriptWord("Hoy", 0.0, 0.4),), "whisper-large-v3",
+    ))
     prepared = prepare_transcript(_draft("  hola  ", precision="none"))
     assert prepared is not None
     assert prepared.text == "hola"
@@ -210,6 +214,8 @@ async def test_blank_and_refused_commits_write_nothing(pool: asyncpg.Pool) -> No
     _attempt, owned, audio_id = await _ready(pool)
     blank = await _commit(pool, owned, _draft("   ", precision="none"))
     assert blank.outcome is CommitOutcome.NO_USABLE_TEXT
+    words = await _commit(pool, owned, _draft("   ", precision="word"))
+    assert words.outcome is CommitOutcome.NO_USABLE_TEXT
     assert await pool.fetchval(
         "SELECT count(*) FROM transcripts WHERE audio_id = $1", audio_id,
     ) == 0

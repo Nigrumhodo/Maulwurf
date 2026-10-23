@@ -1064,6 +1064,24 @@ Typed codes (no PII or sensitive content):
 | `provider_unavailable` | 503 | LLM/embeddings/Google down |
 | `internal_error` | 500 | No sensitive details |
 
+Ingest persists a smaller set (S2.13, `maulwurf_ingest/outcomes.py`). The public `PUT`
+uses the row below; the stored `error_code` can be more specific than the public code.
+`probe_unavailable` is an infrastructure fault and ends `requires_reupload`, not `rejected`.
+
+| Stored `error_code` | Attempt status | Public code |
+|---|---|---|
+| `url`, `playlist`, `malformed`, `unverified_container`, `not_pcm_s16`, `multi_channel`, `unexpected_container` | `rejected` | `415 unsupported_format` |
+| `payload_too_large` | `rejected` | `413 payload_too_large` |
+| `no_usable_text` | `rejected` | `409 transcript_unavailable` |
+| `variant_hash_mismatch` | `rejected` | `422 variant_hash_mismatch` |
+| `probe_unavailable` | `requires_reupload` | `503 capacity_unavailable` |
+| `asr_failed`, `asr_timeout`, `asr_rejected`, `supervisor_error`, `reception_abandoned`, `reception_integrity_failed`, `api_error` | `requires_reupload` | `500 internal_error` |
+| `reception_interrupted`, `client_disconnected`, `duplicate_exact`, `duplicate_variant` | `cancelled` | no body, or `500 internal_error` |
+
+`401 internal_credential_invalid` is not stored and is not shown to the browser; the public
+answer is `500 internal_error`. `409 wrong_instance` and `409 reception_not_held` on admit
+are `503 capacity_unavailable`.
+
 ### 3.3 M1 — Authentication, profile, and integrations (S1; connect/reconnect in S3)
 
 | Method | Route | Sprint | Description | Response |

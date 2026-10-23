@@ -153,11 +153,22 @@ def effective_upload_limit() -> int:
     return settings.upload_max_bytes
 
 
-def _sink_api_error(exc: SinkError) -> ApiError:
-    """Solo códigos del catálogo §3.2: un código desconocido del sink jamás se expone."""
-    if exc.code == "unsupported_format":
+def map_ingest_code(code: str) -> ApiError:
+    """Public mapping of an ingest answer (ADR-0008 §8, S2.13).
+
+    Format reasons collapse to ``415``. An internal credential failure is
+    ``500`` and is never shown as ``401``. Unknown codes stay ``500``.
+    """
+    if code in {
+        "unsupported_format", "url", "playlist", "malformed", "unverified_container",
+        "not_pcm_s16", "multi_channel", "unexpected_container",
+    }:
         return ApiError(415, "unsupported_format", "La ingesta rechazó el formato del audio.")
-    if exc.code == "capacity_unavailable":
+    if code == "payload_too_large":
+        return ApiError(413, "payload_too_large", "El audio supera el límite de recepción.")
+    if code in {
+        "capacity_unavailable", "probe_unavailable", "wrong_instance", "reception_not_held",
+    }:
         return ApiError(
             503,
             "capacity_unavailable",
@@ -165,7 +176,16 @@ def _sink_api_error(exc: SinkError) -> ApiError:
             {"retryable": False},
             headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
         )
+    if code == "attempt_not_active":
+        return ApiError(409, "attempt_not_active", "El intento de subida ya no admite audio.")
+    if code == "variant_hash_mismatch":
+        return variant_hash_mismatch()
     return ApiError(500, "internal_error", "No se pudo procesar la recepción.")
+
+
+def _sink_api_error(exc: SinkError) -> ApiError:
+    """Solo códigos del catálogo §3.2: un código desconocido del sink jamás se expone."""
+    return map_ingest_code(exc.code)
 
 
 async def _discard_lenient(sink: ReceptionSink) -> None:
