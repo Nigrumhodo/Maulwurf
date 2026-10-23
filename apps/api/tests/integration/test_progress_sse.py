@@ -17,11 +17,12 @@ todo el stream (fix de agotamiento de pool de A2.9).
 import json
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
@@ -245,3 +246,48 @@ async def test_progress_is_owner_only(
     assert (
         await client.get(f"/audios/{uuid.uuid4()}/progress", cookies=owner.cookies)
     ).status_code == 404
+
+
+async def test_closing_the_progress_stream_does_not_cancel(
+    sse: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
+) -> None:
+    """I-S2-SG-10: closing the tab or the SSE after reception does not cancel ASR."""
+    _client, factory = sse
+    async with factory() as setup:
+        actor = await actors.make_actor(setup)
+        audio = await actors.make_audio(setup, actor)
+        attempt = await actors.make_attempt(setup, actor, audio=audio)
+        attempt.status = "transcribing"
+        attempt.fencing_token = 7
+        attempt.lease_expires_at = datetime.now(UTC) + timedelta(minutes=5)
+        await setup.commit()
+        user_id, audio_id, attempt_id = actor.user_id, audio.id, attempt.id
+
+    stream = library.stream_progress(
+        factory,
+        user_id=user_id,
+        audio_id=audio_id,
+        poll_seconds=0.05,
+        heartbeat_seconds=60.0,
+        max_seconds=30.0,
+    )
+    try:
+        snapshot = await anext(stream)
+        assert _event_name(snapshot) == "snapshot"
+        assert _event_data(snapshot)["attempt"]["status"] == "transcribing"
+    finally:
+        await stream.aclose()
+
+    async with factory() as check:
+        row = (
+            await check.execute(
+                select(
+                    IngestionAttempt.status,
+                    IngestionAttempt.fencing_token,
+                    IngestionAttempt.lease_expires_at,
+                ).where(IngestionAttempt.id == attempt_id)
+            )
+        ).one()
+    assert row.status == "transcribing"
+    assert row.fencing_token == 7
+    assert row.lease_expires_at is not None

@@ -35,9 +35,14 @@ def test_startup_refuses_to_serve_when_not_hardened(monkeypatch: pytest.MonkeyPa
             pass
 
 
+async def _skip_reconcile() -> None:
+    return None
+
+
 def test_report_mode_starts_but_is_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(hardening, "check", lambda _: ["swap_allowed"])
     monkeypatch.setattr(settings, "ingest_hardening", "report")
+    monkeypatch.setattr(main, "reconcile_on_startup", _skip_reconcile)
     checks: dict[str, Callable[[], Awaitable[None]]] = {
         "hardening": main.check_hardening, "tmpfs": _ok, "postgres": _ok,
     }
@@ -72,6 +77,7 @@ def test_report_mode_starts_without_database_url(monkeypatch: pytest.MonkeyPatch
 def test_readyz_ready_when_every_check_passes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(hardening, "check", _no_failures)
     monkeypatch.setattr(settings, "database_url", DATABASE_URL)
+    monkeypatch.setattr(main, "reconcile_on_startup", _skip_reconcile)
     monkeypatch.setattr(main, "CHECKS", {"hardening": _ok, "tmpfs": _ok, "postgres": _ok})
     with TestClient(main.app) as client:
         response = client.get("/readyz")
@@ -84,6 +90,7 @@ def test_readyz_logs_only_the_error_type(
 ) -> None:
     monkeypatch.setattr(hardening, "check", _no_failures)
     monkeypatch.setattr(settings, "database_url", DATABASE_URL)
+    monkeypatch.setattr(main, "reconcile_on_startup", _skip_reconcile)
     monkeypatch.setattr(main, "CHECKS", {"hardening": _ok, "tmpfs": _ok, "postgres": _boom})
     with TestClient(main.app) as client:
         response = client.get("/readyz")
@@ -134,3 +141,49 @@ async def test_postgres_check_bounds_concurrent_connections(
     monkeypatch.setattr(settings, "database_url", DATABASE_URL)
     await asyncio.gather(*(main.check_postgres() for _ in range(6)))
     assert peak == 2  # acotado y sin serializar de más
+
+
+def test_lifespan_runs_one_reconcile_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    async def mark() -> None:
+        nonlocal calls
+        calls += 1
+
+    monkeypatch.setattr(hardening, "check", _no_failures)
+    monkeypatch.setattr(settings, "ingest_hardening", "report")
+    monkeypatch.setattr(settings, "database_url", None)
+    monkeypatch.setattr(main, "reconcile_on_startup", mark)
+    with TestClient(main.app):
+        pass
+    assert calls == 1
+
+
+async def test_startup_reconcile_skips_without_a_database_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    async def boom(*_args: object, **_kwargs: object) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(settings, "database_url", None)
+    monkeypatch.setattr(asyncpg, "create_pool", boom)
+    await main.reconcile_on_startup()
+    assert called is False
+
+
+async def test_startup_reconcile_failure_hides_the_dsn(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("down")
+
+    monkeypatch.setattr(
+        settings, "database_url", "postgresql+asyncpg://maulwurf:CANARIO-9d1e@db/maulwurf",
+    )
+    monkeypatch.setattr(asyncpg, "create_pool", boom)
+    await main.reconcile_on_startup()
+    assert "reconciler.startup_failed error=OSError" in caplog.text
+    assert "CANARIO-9d1e" not in caplog.text
