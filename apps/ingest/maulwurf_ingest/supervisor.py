@@ -25,7 +25,7 @@ import logging
 import sys
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import StrEnum
@@ -33,7 +33,7 @@ from pathlib import Path
 
 import asyncpg
 
-from maulwurf_ingest import admission, cleanup, persistence
+from maulwurf_ingest import admission, cancel, cleanup, persistence
 from maulwurf_ingest import lease as leases
 from maulwurf_ingest.asr_job import ORIGINAL, STUB_TRANSCRIPT_NAME
 from maulwurf_ingest.audio.validate import probe_file
@@ -55,6 +55,7 @@ class Outcome(StrEnum):
     REJECTED = "rejected"
     TIMEOUT = "asr_timeout"
     CLEANUP_FAILED = "cleanup_failed"
+    CANCELLED = "cancelled"
     SUPERVISOR_ERROR = "supervisor_error"  # fallo imprevisto del propio supervisor
 
 
@@ -256,8 +257,31 @@ async def _note_cleanup_evidence(
         result.outcome = Outcome.LEASE_LOST
 
 
+async def _note_cancelled_cleanup(
+    pool: asyncpg.Pool, lease: leases.Lease, attempt_id: uuid.UUID, *,
+    evidence: cleanup.CleanupEvidence | None, exc: Exception | None, result: RunResult,
+) -> None:
+    """The attempt is already ``cancelled``. Record cleanup and do not publish."""
+    if exc is not None:
+        result.evidence = {"verified": False, "error": type(exc).__name__}
+        verified = False
+    elif evidence is None:
+        result.outcome = Outcome.CANCELLED
+        return
+    else:
+        result.evidence = evidence.as_json()
+        verified = evidence.verified
+    recorded = await cancel.record_cancelled_cleanup(
+        pool, lease, verified=verified, evidence=result.evidence,
+    )
+    if recorded and not verified:
+        admission.halt(attempt_id)
+    result.outcome = Outcome.CANCELLED
+
+
 async def run_attempt(
-    pool: asyncpg.Pool, *, user_id: uuid.UUID, attempt_id: uuid.UUID, audio: bytes,
+    pool: asyncpg.Pool, *, user_id: uuid.UUID, attempt_id: uuid.UUID,
+    audio: bytes | AsyncIterator[bytes],
     config: SupervisorConfig, on_child: ChildHook | None = None,
 ) -> RunResult:
     lease = await leases.acquire(
@@ -284,12 +308,14 @@ async def run_attempt(
             return result
         # El tope es el provisional de recepción, no un máximo aprobado. El hash sale
         # de los bytes escritos; ffprobe, no un Content-Length, decide duración y formato.
+        # owned_audio antes de leer: un corte a media recepción ya escribió bytes.
+        owned_audio = True
+        source = iter_bytes(audio) if isinstance(audio, bytes) else audio
         try:
             received = await receive(
-                iter_bytes(audio), workdir / ORIGINAL, max_bytes=settings.max_upload_bytes
+                source, workdir / ORIGINAL, max_bytes=settings.max_upload_bytes
             )
         except PayloadTooLarge:
-            owned_audio = True
             result.outcome = Outcome.REJECTED
             if not await leases.transition(
                 pool, lease, from_status="receiving", to_status="rejected",
@@ -297,7 +323,11 @@ async def run_attempt(
             ):
                 result.outcome = Outcome.LEASE_LOST
             return result
-        owned_audio = True
+        except cancel.ReceptionInterrupted:
+            result.outcome = Outcome.CANCELLED
+            if not await cancel.invalidate_reception(pool, lease):
+                result.outcome = Outcome.LEASE_LOST
+            return result
         result.sha256 = received.sha256
         decision = await asyncio.to_thread(probe_file, workdir / ORIGINAL)
         if decision.decision == "reject":
@@ -417,7 +447,12 @@ async def run_attempt(
         except Exception as exc:
             cleanup_error = exc
         try:
-            if cleanup_error is not None:
+            if owned_audio and await cancel.is_cancelled(pool, lease):
+                await _note_cancelled_cleanup(
+                    pool, lease, attempt_id, evidence=evidence, exc=cleanup_error,
+                    result=result,
+                )
+            elif cleanup_error is not None:
                 await _note_cleanup_failure(
                     pool, lease, attempt_id, owned_audio=owned_audio, exc=cleanup_error,
                     result=result,

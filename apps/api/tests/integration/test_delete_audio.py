@@ -475,6 +475,7 @@ async def test_cancel_endpoint_invalidates_fencing_and_is_idempotent(
 async def test_cancel_after_the_commit_is_409_and_keeps_the_transcript(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
+    """I-S2-SG-10: cancel after the commit conflicts and does not destroy the transcript."""
     actor = await actors.make_actor(db_session)
     seeded = await _seed_class(
         db_session, actor, attempt_status="transcript_committed_cleanup_pending"

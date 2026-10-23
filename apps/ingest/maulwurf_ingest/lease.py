@@ -108,3 +108,32 @@ async def record_cleanup(
         "verified" if verified else "failed", json.dumps(evidence),
     )
     return bool(status == "UPDATE 1")
+
+
+async def reclaim_committed(
+    pool: asyncpg.Pool, *, user_id: uuid.UUID, attempt_id: uuid.UUID, instance: str,
+    ttl: timedelta,
+) -> Lease | None:
+    """Take a committed attempt whose lease has expired, and only that attempt.
+
+    ``acquire`` also takes ``receiving`` and ``transcribing``. Using it here would
+    let a recovery pass look like a new ASR owner. This statement refuses those
+    rows, and it refuses ``cleanup_status=failed``: a failed cleanup stays failed.
+    The token still increments, so the owner that died cannot publish afterwards.
+    """
+    row = await pool.fetchrow(
+        """
+        UPDATE ingestion_attempts
+           SET owner_instance = $3, fencing_token = fencing_token + 1,
+               lease_expires_at = now() + $4, heartbeat_at = now(), updated_at = now()
+         WHERE id = $1 AND user_id = $2
+           AND status = 'transcript_committed_cleanup_pending'
+           AND cleanup_status = ANY($5::text[])
+           AND (lease_expires_at IS NULL OR lease_expires_at <= now())
+        RETURNING fencing_token
+        """,
+        attempt_id, user_id, instance, ttl, ["pending", "verified"],
+    )
+    if row is None:
+        return None
+    return Lease(attempt_id, user_id, instance, row["fencing_token"], ttl)

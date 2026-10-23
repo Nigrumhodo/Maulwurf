@@ -11,6 +11,7 @@ fallo impide servir, así un contenedor mal configurado no llega a aceptar audio
 import asyncio
 import logging
 import os
+import socket
 import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -21,6 +22,7 @@ from fastapi.responses import JSONResponse
 
 from maulwurf_ingest import hardening
 from maulwurf_ingest.config import settings
+from maulwurf_ingest.reconciler import reconcile_committed
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +47,36 @@ def enforce_hardening() -> None:
         raise HardeningError(f"endurecimiento incompleto: {', '.join(failures)}")
 
 
+async def reconcile_on_startup() -> None:
+    """One recovery pass. A database miss leaves the outbox blocked and the process up.
+
+    There is no sweeper loop here: repeating this pass on a timer is S4.2.
+    """
+    if not settings.database_url:
+        return
+    dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    created: asyncpg.Pool | None = None
+    try:
+        created = await asyncpg.create_pool(
+            dsn, min_size=1, max_size=1, timeout=CHECK_TIMEOUT_S, command_timeout=CHECK_TIMEOUT_S,
+        )
+        if created is None:
+            return
+        await reconcile_committed(
+            created, instance=f"ingest:{socket.gethostname()}", tmp_dir=tempfile.gettempdir(),
+        )
+    except Exception as exc:
+        # The DSN is in the exception text. Log only the type.
+        logger.warning("reconciler.startup_failed error=%s", type(exc).__name__)
+    finally:
+        if created is not None:
+            await created.close()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     enforce_hardening()
+    await reconcile_on_startup()
     yield
 
 
