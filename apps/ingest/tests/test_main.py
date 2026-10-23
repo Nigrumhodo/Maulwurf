@@ -8,7 +8,7 @@ import asyncpg
 import pytest
 from fastapi.testclient import TestClient
 
-from maulwurf_ingest import hardening, main
+from maulwurf_ingest import admission, hardening, main
 from maulwurf_ingest.config import settings
 
 
@@ -36,6 +36,10 @@ def test_startup_refuses_to_serve_when_not_hardened(monkeypatch: pytest.MonkeyPa
 
 
 async def _skip_reconcile() -> None:
+    return None
+
+
+async def _skip_pool(_app: object) -> None:
     return None
 
 
@@ -78,6 +82,7 @@ def test_readyz_ready_when_every_check_passes(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(hardening, "check", _no_failures)
     monkeypatch.setattr(settings, "database_url", DATABASE_URL)
     monkeypatch.setattr(main, "reconcile_on_startup", _skip_reconcile)
+    monkeypatch.setattr(main, "open_service_pool", _skip_pool)
     monkeypatch.setattr(main, "CHECKS", {"hardening": _ok, "tmpfs": _ok, "postgres": _ok})
     with TestClient(main.app) as client:
         response = client.get("/readyz")
@@ -91,6 +96,7 @@ def test_readyz_logs_only_the_error_type(
     monkeypatch.setattr(hardening, "check", _no_failures)
     monkeypatch.setattr(settings, "database_url", DATABASE_URL)
     monkeypatch.setattr(main, "reconcile_on_startup", _skip_reconcile)
+    monkeypatch.setattr(main, "open_service_pool", _skip_pool)
     monkeypatch.setattr(main, "CHECKS", {"hardening": _ok, "tmpfs": _ok, "postgres": _boom})
     with TestClient(main.app) as client:
         response = client.get("/readyz")
@@ -187,3 +193,4 @@ async def test_startup_reconcile_failure_hides_the_dsn(
     await main.reconcile_on_startup()
     assert "reconciler.startup_failed error=OSError" in caplog.text
     assert "CANARIO-9d1e" not in caplog.text
+    admission.reset()

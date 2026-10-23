@@ -9,12 +9,16 @@ from __future__ import annotations
 import io
 import json
 import math
+import os
 import shutil
+import signal
 import subprocess
 import sys
 import wave
 from dataclasses import dataclass
 from pathlib import Path
+
+from maulwurf_ingest.audio.ffmpeg import DEFAULT_LIMITS, _limit_child
 
 _URL_PREFIXES = (b"http://", b"https://")
 _PROBE_TIMEOUT_S = 30.0
@@ -148,7 +152,12 @@ def decision_from_payload(payload: object) -> ProbeDecision:
 
 
 def probe_file(path: Path) -> ProbeDecision:
-    """Probe `path`. Playlists and URLs never reach ffprobe. stderr is discarded."""
+    """Probe ``path``. Playlists and URLs never reach ffprobe. stderr is discarded.
+
+    The child runs in its own process group with the same CPU and address-space
+    limits as ffmpeg. A hang is killed with its children and reported as
+    ``probe_unavailable`` (the binary failed), not as a bad file.
+    """
     sniffed = sniff_prefix(_read_prefix(path))
     if sniffed is not None:
         return ProbeDecision(sniffed.decision, sniffed.reason)
@@ -169,34 +178,70 @@ def probe_file(path: Path) -> ProbeDecision:
         str(path),
     ]
     try:
-        if sys.platform == "win32":
-            completed = subprocess.run(  # noqa: S603 — argv list, no shell
-                argv,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                timeout=_PROBE_TIMEOUT_S,
-                check=False,
-                shell=False,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
-        else:
-            completed = subprocess.run(  # noqa: S603 — argv list, no shell
-                argv,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                timeout=_PROBE_TIMEOUT_S,
-                check=False,
-                shell=False,
-            )
-    except (OSError, subprocess.TimeoutExpired):
-        return ProbeDecision("reject", "malformed")
-    if completed.returncode != 0 or not completed.stdout:
+        stdout = _run_ffprobe(argv)
+    except _ProbeCrashed:
+        return ProbeDecision("reject", "probe_unavailable")
+    if not stdout:
         return ProbeDecision("reject", "malformed")
     try:
-        parsed: object = json.loads(completed.stdout.decode("utf-8"))
+        parsed: object = json.loads(stdout.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return ProbeDecision("reject", "malformed")
     return decision_from_payload(parsed)
+
+
+class _ProbeCrashed(Exception):
+    """ffprobe did not exit by itself. The group has already been killed."""
+
+
+def _run_ffprobe(argv: list[str]) -> bytes:
+    if os.name == "posix":
+        proc = subprocess.Popen(  # noqa: S603 — argv list, no shell
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            shell=False,
+            start_new_session=True,
+            preexec_fn=_limit_child(DEFAULT_LIMITS),
+        )
+    elif sys.platform == "win32":
+        proc = subprocess.Popen(  # noqa: S603 — argv list, no shell
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            shell=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    else:
+        proc = subprocess.Popen(  # noqa: S603 — argv list, no shell
+            argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, shell=False,
+        )
+    try:
+        stdout, _ = proc.communicate(timeout=_PROBE_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        _kill_probe(proc)
+        raise _ProbeCrashed from None
+    except OSError:
+        _kill_probe(proc)
+        raise _ProbeCrashed from None
+    if proc.returncode != 0 or not isinstance(stdout, bytes) or not stdout:
+        return b""
+    return stdout
+
+
+def _kill_probe(proc: subprocess.Popen[bytes]) -> None:
+    if os.name == "posix" and proc.pid:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            proc.kill()
+    else:
+        proc.kill()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
 
 
 def _normalize_reason(names: set[str], codec: str) -> str | None:

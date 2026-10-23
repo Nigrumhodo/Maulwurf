@@ -11,6 +11,8 @@ import logging
 import uuid
 from dataclasses import dataclass
 
+import asyncpg
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,6 +41,35 @@ def halt(attempt_id: uuid.UUID) -> None:
     _halted = True
     _alerts.append(Alert("cleanup_failed", attempt_id))
     logger.error("ingest.alert code=cleanup_failed attempt_id=%s", attempt_id)
+
+
+def close() -> None:
+    """Fail closed when the persisted latch cannot be read. No attempt id is invented."""
+    global _halted
+    _halted = True
+    logger.error("ingest.alert code=cleanup_failed")
+
+
+async def restore_from_database(pool: asyncpg.Pool) -> None:
+    """A persisted ``cleanup_status=failed`` keeps admission closed across restarts.
+
+    A database error also closes it. An empty result leaves the in-memory latch as it is,
+    so a process that already halted does not reopen itself.
+    """
+    try:
+        row = await pool.fetchrow(
+            """
+            SELECT id FROM ingestion_attempts
+             WHERE cleanup_status = 'failed'
+             LIMIT 1
+            """
+        )
+    except Exception:  # noqa: BLE001 — a failed read must not reopen admission
+        logger.error("admission.restore_failed")
+        close()
+        return
+    if row is not None and isinstance(row["id"], uuid.UUID):
+        halt(row["id"])
 
 
 def reset() -> None:

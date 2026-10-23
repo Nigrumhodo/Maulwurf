@@ -26,6 +26,7 @@ from test_supervisor import (  # noqa: E402
 
 from maulwurf_ingest import admission, lease
 from maulwurf_ingest.asr_job import ORIGINAL
+from maulwurf_ingest.receiver import iter_bytes
 from maulwurf_ingest.supervisor import Outcome, run_attempt
 
 _ = (audio, tmpfs_dir)
@@ -88,8 +89,12 @@ async def test_cleanup_failure_halts_admission_and_alerts(
     try:
         with caplog.at_level(logging.ERROR, logger="maulwurf_ingest.admission"):
             result = await run_attempt(
-                pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
-                config=_config(tmpfs_dir, stub_transcript=SYNTHETIC_TEXT), on_child=_hold,
+                pool,
+                user_id=attempt.user_id,
+                attempt_id=attempt.attempt_id,
+                audio=iter_bytes(audio),
+                config=_config(tmpfs_dir, stub_transcript=SYNTHETIC_TEXT),
+                on_child=_hold,
             )
     finally:
         for fd in held:

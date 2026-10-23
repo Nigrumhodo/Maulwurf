@@ -65,8 +65,8 @@ def process_ram_bytes(
 ) -> int:
     """RAM del proceso que el slot de tmpfs no cuenta.
 
-    ``run_attempt`` retiene ``audio: bytes`` en el heap. El pico del hijo
-    ffmpeg no entra aquí: hay que medirlo aparte.
+    La recepción escribe el upload por bloques; no lo retiene como un solo
+    ``bytes``. El pico del hijo ffmpeg no entra aquí: hay que medirlo aparte.
     """
     parts = {
         "heap_upload_copies": heap_upload_copies,

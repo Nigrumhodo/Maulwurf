@@ -24,6 +24,7 @@ import pytest
 
 from maulwurf_ingest import admission, cleanup, hardening, lease
 from maulwurf_ingest.asr_job import ACTIVE_FRAGMENT, ORIGINAL
+from maulwurf_ingest.receiver import iter_bytes
 from maulwurf_ingest.supervisor import Outcome, SupervisorConfig, run_attempt
 
 pytestmark = [
@@ -137,7 +138,7 @@ async def test_success_commits_then_verifies_cleanup(
 ) -> None:
     attempt = await _seed(pool)
     result = await run_attempt(
-        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
         config=_config(tmpfs_dir, stub_transcript=SYNTHETIC_TEXT),
     )
     row = await _row(pool, attempt)
@@ -162,7 +163,7 @@ async def test_sigkill_to_asr_process_still_cleans_up(
     attempt = await _seed(pool)
     started: asyncio.Queue[tuple[int, Path]] = asyncio.Queue()
     run = asyncio.create_task(run_attempt(
-        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
         config=_config(tmpfs_dir, realtime=True),
         on_child=lambda pid, workdir: started.put_nowait((pid, workdir)),
     ))
@@ -187,7 +188,7 @@ async def test_timeout_kills_the_job_and_cleans_up(
 ) -> None:
     attempt = await _seed(pool)
     result = await run_attempt(
-        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
         config=_config(tmpfs_dir, realtime=True, asr_timeout_s=0.5),
     )
     row = await _row(pool, attempt)
@@ -206,7 +207,7 @@ async def test_open_descriptor_to_deleted_audio_is_not_verified(
     held: list[int] = []
     try:
         result = await run_attempt(
-            pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+            pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
             config=_config(tmpfs_dir, stub_transcript=SYNTHETIC_TEXT),
             on_child=lambda _pid, workdir: held.append(os.open(workdir / ORIGINAL, os.O_RDONLY)),
         )
@@ -229,7 +230,7 @@ async def test_fenced_owner_cannot_publish_and_expiry_does_not_verify(
     attempt = await _seed(pool)
     started: asyncio.Queue[tuple[int, Path]] = asyncio.Queue()
     run = asyncio.create_task(run_attempt(
-        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
         config=_config(tmpfs_dir, realtime=True, heartbeat_interval_s=0.2),
         on_child=lambda pid, workdir: started.put_nowait((pid, workdir)),
     ))
@@ -306,7 +307,7 @@ async def test_takeover_of_in_flight_attempt_does_not_credit_its_cleanup(
 
     # El supervisor de B es el que toma el intento en vuelo (lease vencido reasignado).
     result = await run_attempt(
-        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
         config=_config(tmpfs_dir, instance="ingest:b"),
     )
     row = await _row(pool, attempt)
@@ -349,8 +350,11 @@ async def test_empty_transcript_is_rejected_without_padding(
     attempt = await _seed(pool)
     try:
         result = await run_attempt(
-            pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
-            config=_config(tmpfs_dir),
+            pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
+            config=_config(
+                tmpfs_dir,
+                scripted_transport='{"text": "", "block": false, "words": []}',
+            ),
         )
         row = await _row(pool, attempt)
         audio_id = await _audio_id(pool, attempt)
@@ -388,7 +392,7 @@ async def test_succeeded_only_after_verified_cleanup(
     monkeypatch.setattr(cleanup, "destroy_and_verify", _spy)
     attempt = await _seed(pool)
     task = asyncio.create_task(run_attempt(
-        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
         config=_config(tmpfs_dir, stub_transcript=SYNTHETIC_TEXT),
     ))
     try:
@@ -432,7 +436,7 @@ async def test_cleanup_exception_fails_closed_and_stops_the_keeper(
     attempt = await _seed(pool)
     try:
         result = await run_attempt(
-            pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+            pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
             config=_config(
                 tmpfs_dir, stub_transcript=SYNTHETIC_TEXT,
                 heartbeat_interval_s=0.2, lease_ttl=timedelta(seconds=30),

@@ -27,6 +27,7 @@ from test_supervisor import (  # noqa: E402
 
 from maulwurf_ingest.cancel import ReceptionInterrupted
 from maulwurf_ingest.persistence import CommitOutcome
+from maulwurf_ingest.receiver import iter_bytes
 from maulwurf_ingest.supervisor import Outcome, run_attempt
 
 # Re-export fixtures so this module collects them.
@@ -102,7 +103,7 @@ async def test_asr_continues_under_the_lease_when_another_task_is_cancelled(
         asyncio.get_running_loop().create_task(snapshot())
 
     result = await run_attempt(
-        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
         config=_config(
             tmpfs_dir, realtime=True, heartbeat_interval_s=0.2,
             lease_ttl=timedelta(seconds=30), stub_transcript=SYNTHETIC_TEXT,
@@ -144,7 +145,7 @@ async def test_explicit_cancel_during_asr_cleans_and_keeps_no_transcript(
         asyncio.get_running_loop().create_task(cancel_row())
 
     result = await run_attempt(
-        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
         config=_config(
             tmpfs_dir, realtime=True, heartbeat_interval_s=0.2,
             lease_ttl=timedelta(seconds=30), stub_transcript=SYNTHETIC_TEXT,
