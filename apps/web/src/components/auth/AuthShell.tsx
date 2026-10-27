@@ -29,13 +29,13 @@ export function AuthShell({ title, children }: AuthShellProps) {
         <img
           src={loginuposcuro}
           alt=""
-          className="img-dark-only pointer-events-none h-48 w-48"
+          className="img-dark-only pointer-events-none h-48 w-124"
           style={{ imageRendering: "pixelated" }}
         />
         <img
           src={loginup}
           alt=""
-          className="img-light-only pointer-events-none h-48 w-48"
+          className="img-light-only pointer-events-none h-48 w-124"
           style={{ imageRendering: "pixelated" }}
         />
       </div>

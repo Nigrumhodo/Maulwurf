@@ -4,8 +4,16 @@ import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { folder, madriguera } from "@/components/Visual";
 import { Clock } from "./Clock";
 
-// D- (Dashboard) — Header global: brand + reloj a la izquierda, dos botones con
-// logo centrados y, a la derecha, toggle de tema + "salir". Sustituye al Navbar.
+function navClass({ isActive }: { isActive: boolean }): string {
+  return `lowercase font-pixel flex items-center gap-2 border-2 border-pure-black px-3 py-1 text-lavender hover:text-mint ${
+    isActive ? "bg-mint text-on-accent" : ""
+  }`;
+}
+
+// D- (Dashboard) — Header global: brand + reloj a la izquierda, "inicio" y el
+// botón "gestión" (hub académico con menú lateral) centrados y, a la derecha,
+// ajustes, toggle de tema + "salir". El menú desplegable "académico" pasó a ser
+// la página `/gestion` con su propia navegación colapsable.
 export function Header() {
   const { logout } = useAuth();
 
@@ -22,29 +30,21 @@ export function Header() {
         </div>
 
         <div className="flex items-center gap-2">
-          <NavLink
-            to="/"
-            end
-            className={({ isActive }) =>
-              `lowercase font-pixel flex items-center gap-2 border-2 border-pure-black px-3 py-1 text-lavender hover:text-mint ${
-                isActive ? "bg-mint text-on-accent" : ""
-              }`
-            }
-          >
+          <NavLink to="/" end className={navClass}>
             <img src={madriguera} alt="" className="h-9 w-9" style={{ imageRendering: "pixelated" }} />
             inicio
           </NavLink>
 
-          <button
-            type="button"
-            className="lowercase font-pixel flex items-center gap-2 border-2 border-pure-black px-3 py-1 text-lavender hover:text-mint"
-          >
+          <NavLink to="/gestion" className={navClass}>
             <img src={folder} alt="" className="h-9 w-9" style={{ imageRendering: "pixelated" }} />
-            transcripción<span className="hidden sm:inline"> y asignaturas</span>
-          </button>
+            <span className="capitalize">gestión</span>
+          </NavLink>
         </div>
 
         <div className="flex items-center justify-end gap-2">
+          <NavLink to="/settings" className={navClass}>
+            ajustes
+          </NavLink>
           <ThemeToggle />
           <button
             type="button"

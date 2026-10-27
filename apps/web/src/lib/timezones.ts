@@ -1,0 +1,28 @@
+// D1.5 — Zonas horarias IANA (identificadores `Area/City`). Lista de trabajo para
+// el select; el valor guardado es el identificador completo, no una abreviatura.
+export const TIMEZONES = [
+  "America/Bogota",
+  "America/Mexico_City",
+  "America/Argentina/Buenos_Aires",
+  "America/Santiago",
+  "America/Lima",
+  "America/Caracas",
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Los_Angeles",
+  "America/Sao_Paulo",
+  "Europe/Madrid",
+  "Europe/Paris",
+  "Europe/Berlin",
+  "Europe/London",
+  "Europe/Lisbon",
+  "Africa/Casablanca",
+  "Asia/Tokyo",
+  "Asia/Seoul",
+  "Asia/Shanghai",
+  "Asia/Kolkata",
+  "Australia/Sydney",
+  "Pacific/Auckland",
+  "UTC",
+] as const;

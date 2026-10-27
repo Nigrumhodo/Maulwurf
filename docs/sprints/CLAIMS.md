@@ -88,6 +88,7 @@ de este PR de planificación.
 | claim | D1.2 | ARES313 | en curso | 2026-10-03 | no aplica | — / área D | Rutas base (`/biblioteca`, `/chat`, `/materias`, `/settings`) y layout protegido. `34701c1`, restyle `c168669`. Pendiente de PR a `develop`. |
 | claim | D1.3 | ARES313 | en curso | 2026-10-03 | no aplica | — / área D | Login Google (redirección/callback/logout, estados carga/error) sobre OAuth backend A1.3. `b164313`, `6a6c4da`. Pendiente de PR a `develop`. |
 | claim | D1.4 | ARES313 | en curso | 2026-10-17 | no aplica | — / área D | Cliente HTTP same-origin con CSRF en mutaciones e interceptores 401/403/429 (`ad75e7c`); U-S1-DA-01: 15 tests verde. Pendiente de PR a `develop`. |
+| claim | D1.5 | ARES313 | hecho | 2026-10-18 | no aplica | — / área D | Componentes base: `DateInput`/`TimezoneSelect`/`LanguageSelect` (idioma sin preselección), `StatusBadge` (valores exactos §1.4/§2.10), `EmptyState`, `Toast`+`ToastProvider`; `lib/{status,languages,timezones,validation}.ts`. U-S1-DA-02: 9 y C-S1-DA-03: 5 tests verde. Pendiente de PR a `develop`. |
 
 ## 4. Historial de cambios
 
@@ -111,3 +112,4 @@ de este PR de planificación.
 | 2026-09-28 | A1.2, A1.4, A1.7, A1.8, J1.5, S1.B1 y S1.B3 pasan a `hecho` tras fusionar #22, #23, #26, #28–#30, #33 y #34 en `develop`. L1.6 sigue `en curso` hasta que se fusione su PR. | Este PR |
 | 2026-09-28 | L1.6 pasa a `hecho`: el PR `s1/l1.6-freeze` (#38) se fusionó en `develop` (35e4d70) tras #39/#40. La congelación `S1-v1` está publicada en `docs/plan/S1.md`. | Este PR |
 | 2026-10-17 | Se registran D1.1–D1.4 (área Web) de ARES313 en la rama `frontJJ`, `en curso` pendientes de PR a `develop`. D1.4 cierra el cliente HTTP (U-S1-DA-01, 15 tests). | Este cambio |
+| 2026-10-18 | Se reclama y cierra D1.5 (área Web) de ARES313: componentes base (fecha/zona/idioma sin preselección, badges con valores del contrato, empty states, toasts) con U-S1-DA-02 (9) y C-S1-DA-03 (5) en verde. | Este cambio |

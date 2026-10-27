@@ -145,6 +145,28 @@
   }
 }
 
+/* Cinta de estado del dashboard: desplaza el contenido duplicado a -50%
+   para un bucle sin salto. */
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* Barras del ecualizador (frecuencias de audio). */
+@keyframes eq {
+  0%,
+  100% {
+    transform: scaleY(0.25);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
 @layer base {
   :root {
     color-scheme: dark;
@@ -215,5 +237,19 @@
   }
   :root.light .img-light-only {
     display: block;
+  }
+
+  /* Cinta de estado (StatusTicker): una sola línea, dos copias enlazadas. */
+  .marquee {
+    display: inline-flex;
+    animation: marquee 18s linear infinite;
+  }
+
+  /* Barra del ecualizador: el retardo/duración se fijan inline por barra.
+     `center` hace que cada barra pulse en torno al eje central (onda centrada),
+     no desde abajo. */
+  .eq-bar {
+    transform-origin: center;
+    animation: eq 1.4s ease-in-out infinite;
   }
 }
