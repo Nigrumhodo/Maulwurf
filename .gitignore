@@ -30,6 +30,9 @@ docs/PLANE_MCP.md
 # --- Configuración local de Kiro (editor/agentes) ---
 .kiro/
 
+# --- Informes y notas de trabajo locales de agentes (no versionar) ---
+.agents/
+
 # --- Datos locales ---
 *.db
 *.sqlite3
@@ -57,3 +60,6 @@ pgdata/
 Thumbs.db
 .idea/
 .vscode/
+A2.3_CONTEXT.md
+A2.4_CONTEXT.md
+docs/context/

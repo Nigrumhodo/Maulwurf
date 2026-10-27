@@ -1,0 +1,44 @@
+@startuml
+!theme plain
+!pragma layout smetana
+skinparam defaultFontName "Noto Sans"
+skinparam defaultFontSize 12
+skinparam componentStyle rectangle
+skinparam ArrowColor #444444
+title Figure 7.1 · Maulwurf software architecture
+
+actor "Student browser" as browser
+cloud "Google OAuth / Calendar / Gmail" as google
+cloud "NVIDIA Riva\nwhisper-large-v3" as riva
+cloud "LLM + embeddings\nproviders" as providers
+
+node "Caddy\nTLS reverse proxy\n:80/:443" as caddy {
+  component "same-origin routing" as routing
+}
+node "edge network" as edge {
+  component "web\nReact + Vite SPA\nExpress static server :3000" as web
+  component "api\nFastAPI :8000\nOAuth, sessions, REST, SSE" as api
+  component "ingest\nFastAPI :8000\nUID 10001 · read-only root\nprivate tmpfs" as ingest
+}
+node "data network" as data {
+  database "PostgreSQL 16\n+ pgvector" as pg
+  queue "Redis 7.4\nnoeviction · IDs only" as redis
+  component "worker\nARQ jobs" as worker
+  component "scheduler\nARQ cron" as scheduler
+}
+
+browser --> caddy : HTTPS
+caddy --> web : fallback / static
+caddy --> api : REST, SSE,\nPUT upload
+api --> ingest : internal HTTP/1.1\nstream + credential
+ingest --> riva : gRPC TLS\nephemeral fragments
+api --> google : OAuth and\nintegration calls
+worker --> providers : text only\nembeddings / LLM
+worker --> google : confirmed Calendar\nand opt-in Gmail
+api --> pg : tenant data
+api --> redis : health / IDs
+ingest --> pg : lease, transcript, cleanup
+worker --> pg : index, analysis, outbox
+scheduler --> pg : notification state
+api --> worker : outbox / ARQ
+@enduml

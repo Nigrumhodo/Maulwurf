@@ -1,0 +1,23 @@
+@startsalt
+<style>
+saltDiagram { FontName "Noto Sans"; FontSize 13 }
+</style>
+{+
+  {* <b>Maulwurf</b> | Dashboard | Library | Subjects | Chat | Inbox | Settings | maria@unal.edu.co }
+  ==
+  { <b><size:16>Library | ^All subjects^ | "Search classes… (Ctrl+K)" }
+  {+
+    <b>Class 03 — integrals · Calculus II · 2026-10-08 · Spanish
+    Uploading… 84.2 of 96.0 MiB received
+    [===================================      ]
+    [Cancel upload]
+  }
+  {#
+    <b>Class | <b>Subject | <b>Date | <b>Transcript | <b>Index | <b>Analysis | <b>Status
+    Class 02 | Physics I | 10-06 | succeeded | succeeded | succeeded | <color:#006600>ready</color>
+    Class 01 | Calculus II | 10-01 | succeeded | <color:#AA0000>failed</color> | succeeded | <color:#AA6600>partial</color> · [Retry index]
+    Class 01 | History | 09-29 | <color:#AA0000>audio lost</color> | — | — | <color:#AA0000>failed</color> · [Upload again]
+  }
+  <i>Audio is not retained: only transcripts, indexes and tasks are stored.</i>
+}
+@endsalt

@@ -92,7 +92,7 @@ its foundation as local Compose services (`web`, `api`, `ingest`, `worker`, `sch
 
 ```mermaid
 flowchart TD
-    U[Student] --> WEB[Next.js PWA]
+    U[Student] --> WEB[React SPA, Vite]
     WEB -->|Same-origin REST and SSE| API[FastAPI API]
     API -->|Backend-owned OAuth and session| GO[Google OAuth]
     API --> PG[(PostgreSQL + pgvector)]
@@ -113,7 +113,7 @@ flowchart TD
 
 | Layer | Planned choice | Purpose |
 | --- | --- | --- |
-| Frontend | Next.js App Router, TypeScript, Tailwind, shadcn/ui | Web UI and installable PWA path |
+| Frontend | Vite, React, React Router, TypeScript, Tailwind ([ADR-0007](docs/adr/ADR-0007-web-stack.md)) | Web UI and optional PWA path |
 | Backend | FastAPI, Pydantic v2, SQLAlchemy 2 async | API, authentication, and orchestration |
 | Database | PostgreSQL 16 | Tenant data, transcripts, outbox, and metadata |
 | Vector search | pgvector with cosine HNSW indexes | Versioned semantic retrieval |
@@ -211,12 +211,12 @@ complete.
 ├── apps/
 │   ├── api/                       # FastAPI: routers, core, models, workers, alembic, tests
 │   ├── ingest/                    # Ingestion: admission, lease, cleanup, hardening, tests
-│   └── web/                       # Next.js scaffold (area D- unclaimed)
+│   └── web/                       # React SPA (Vite): login, base routes, theme (D1.1–D1.3)
 ├── docs/                          # Specification, plans, ADRs, F0 spike, runbook, sprints
 ├── infra/                         # docker-compose.yml (8 services) and Caddyfile
 ├── scripts/                       # scaffold (historical), provider/ (Riva spike), load/ helpers
 ├── AGENTS.md                      # Repository guidance for coding agents
-├── LICENSE                        # GNU GPL v3
+├── LICENSE                        # GNU AGPL v3
 ├── README.md
 └── requirements-riva.txt          # Pinned Riva client dependency
 ```
@@ -228,8 +228,11 @@ in [docs/RUNBOOK-dev.md](docs/RUNBOOK-dev.md). Quick start:
 
 ```bash
 cp .env.example .env   # complete the MAULWURF_* secrets
-cd infra && docker compose up -d --build --wait
+cd infra && docker compose --env-file ../.env up -d --build --wait
 ```
+
+If ports 80/443 are taken, set `CADDY_HTTPS_PORT` in `.env`. To try the Google login you need a test OAuth client; the steps and the exact redirect
+URI are in the [runbook](docs/RUNBOOK-dev.md#google-login-a13).
 
 The pinned Riva client can also be installed standalone for provider work (authorized key and
 test audio required; never a real class recording):
@@ -343,6 +346,10 @@ must establish quotas, rate limits, alerts, retention policies, and provider ter
 ## Further documentation
 
 - [Functional and technical specification](docs/ESPECIFICACION.md)
+- [System architecture](docs/ARCH.md) — context, containers, components and trust zones, with
+  implementation status
+- [Process diagrams](docs/PROCESOS.md) — upload, transcription, search, chat, Calendar, reminders,
+  deletion and team workflow
 - [Development runbook](docs/RUNBOOK-dev.md) — local stack, healthchecks, tests, lint, migrations
 - [Implementation and validation plan](docs/PLAN_IMPLEMENTACION.md)
 - [Team sprint plan (S1–S4)](docs/PLAN_SPRINTS.md) — open weekly backlogs with ticket
@@ -357,4 +364,6 @@ must establish quotas, rate limits, alerts, retention policies, and provider ter
 
 ## License
 
-Maulwurf is distributed under the [GNU General Public License, version 3](LICENSE).
+Maulwurf is distributed under the [GNU Affero General Public License, version 3](LICENSE).
+If you run a modified version as a network service, you must offer its source code to the
+users who interact with it (AGPL-3.0 §13).

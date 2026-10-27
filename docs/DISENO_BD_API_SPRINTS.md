@@ -1,84 +1,85 @@
-# Maulwurf — Diseño de base de datos, contrato de API y sprints detallados
+# Maulwurf — Database design, API contract, and detailed sprints
 
-> **Estado: documento de diseño.** Derivado de
-> [ESPECIFICACION.md](ESPECIFICACION.md) (fuente de verdad de contratos),
-> [PLAN_IMPLEMENTACION.md](PLAN_IMPLEMENTACION.md) (puertas G1–G8, decisiones D1–D8) y
-> [PLAN_SPRINTS.md](PLAN_SPRINTS.md) (backlog por sprint con claiming). Nada de lo que sigue está
-> implementado; este documento define **lo que se va a construir**, no evidencia de que
-> exista. Si contradice la especificación, gana la especificación y este archivo se corrige
-> en la misma revisión.
+> **Status: design document.** Derived from
+> [ESPECIFICACION.md](ESPECIFICACION.md) (source of truth for contracts),
+> [PLAN_IMPLEMENTACION.md](PLAN_IMPLEMENTACION.md) (gates G1–G8, decisions D1–D8), and
+> [PLAN_SPRINTS.md](PLAN_SPRINTS.md) (per-sprint backlog with claiming). Nothing that
+> follows is implemented; this document defines **what is going to be built**, not evidence
+> that it exists. If it contradicts the specification, the specification wins and this file
+> is corrected in the same revision.
 
 ---
 
-## 1. Estado actual del proyecto (revisión 2026-09-19)
+## 1. Current project status (review 2026-09-19)
 
-| Área | Estado observado en el repositorio |
+| Area | Status observed in the repository |
 |---|---|
-| Código de aplicación | Esqueleto mínimo: `apps/api` expone health checks y configuración; `apps/ingest` es un paquete vacío; `apps/web` es un scaffold Next.js. No hay funcionalidad, compose, migraciones, suites de tests ni pipeline CI de calidad. |
-| Manifests y dependencias | Existen `apps/api/pyproject.toml` + `uv.lock`, `apps/ingest/pyproject.toml` + `uv.lock`, `apps/web/package.json` + `package-lock.json`, y `requirements-riva.txt`. El cliente Riva está fijado a `2.27.0`; los demás rangos pertenecen al scaffold y no demuestran instalación, build ni compatibilidad E2E. |
-| Contratos funcionales | `docs/ESPECIFICACION.md` — módulos M1–M9, modelo de datos §6, NFRs §8 |
-| Plan de entrega | `docs/PLAN_IMPLEMENTACION.md` — fases F0–F3, puertas G1–G8, decisiones D1–D8 |
-| Plan de equipo | `docs/PLAN_SPRINTS.md` — S1–S4 backlog por sprint con claiming en `docs/sprints/` |
-| Catálogo de pruebas | `docs/PLAN_TESTS.md` — capas de prueba, fixtures, cobertura por sprint |
-| Proveedor ASR | `docs/NVIDIA_RIVA.md` — parámetros auditados; límites reales pendientes del spike S1 |
+| Application code | Minimal skeleton: `apps/api` exposes health checks and configuration; `apps/ingest` is an empty package; `apps/web` is a Next.js scaffold. There is no functionality, compose, migrations, test suites, or quality CI pipeline. |
+| Manifests and dependencies | `apps/api/pyproject.toml` + `uv.lock`, `apps/ingest/pyproject.toml` + `uv.lock`, `apps/web/package.json` + `package-lock.json`, and `requirements-riva.txt` exist. The Riva client is pinned to `2.27.0`; the other ranges belong to the scaffold and do not demonstrate installation, build, or E2E compatibility. |
+| Functional contracts | `docs/ESPECIFICACION.md` — modules M1–M9, data model §6, NFRs §8 |
+| Delivery plan | `docs/PLAN_IMPLEMENTACION.md` — phases F0–F3, gates G1–G8, decisions D1–D8 |
+| Team plan | `docs/PLAN_SPRINTS.md` — S1–S4 backlog per sprint with claiming in `docs/sprints/` |
+| Test catalog | `docs/PLAN_TESTS.md` — test layers, fixtures, coverage per sprint |
+| ASR provider | `docs/NVIDIA_RIVA.md` — audited parameters; real limits pending the S1 spike |
 
-**Sprints propuestos actualmente** (PLAN_SPRINTS §0):
+**Sprints currently proposed** (PLAN_SPRINTS §0):
 
-| Semana | Nombre | Objetivo en una frase | Puerta de salida |
+| Week | Name | One-sentence goal | Exit gate |
 |---|---|---|---|
-| S1 | **Fundación + spike** | Monorepo, auth, esquema y contrato Riva probado | F0: G1 y exactamente G2-T o G2-X; D2/D3-Audio/D4/D6 |
-| S2 | **Conocimiento (F1)** | Upload → transcript → índice híbrido → chat con citas | G1, G2-T o G2-X, G3, G4 y G5-F1 |
-| S3 | **Acción (F2)** | Extracción, revisión, Calendar idempotente y tools de lectura | G5-F2, G6 y G7-CAL |
-| S4 | **Recordatorios y cierre (F3)** | Gmail opt-in, recordatorios/digests, dashboard y hardening | G7-MAIL y G8 |
+| S1 | **Foundation + spike** | Monorepo, auth, schema, and proven Riva contract | F0: G1 and exactly G2-T or G2-X; D2/D3-Audio/D4/D6 |
+| S2 | **Knowledge (F1)** | Upload → transcript → hybrid index → chat with citations | G1, G2-T or G2-X, G3, G4, and G5-F1 |
+| S3 | **Action (F2)** | Extraction, review, idempotent Calendar, and read tools | G5-F2, G6, and G7-CAL |
+| S4 | **Reminders and close (F3)** | Gmail opt-in, reminders/digests, dashboard, and hardening | G7-MAIL and G8 |
 
-Regla dura vigente: **nada de ingesta real antes de que S1 cierre la puerta F0**
-(retención D3, límites D2/D4, timestamps D6).
+Hard rule in force: **no real ingestion before S1 closes the F0 gate**
+(retention D3, limits D2/D4, timestamps D6).
 
-Este documento fija:
+This document establishes:
 
-1. **§2** — diseño completo de la base de datos (tablas, constraints, índices, máquinas de
-   estado) y a qué sprint pertenece cada pieza.
-2. **§3** — contrato de todos los endpoints propuestos (M1–M9) con shapes de
-   request/respuesta, errores y SSE.
-3. **§4** — una secuencia diaria sugerida por área y ticket. No asigna personas: el owner
-   real de cada ticket nace exclusivamente del claiming y se registra según
-   [PLAN_SPRINTS.md](PLAN_SPRINTS.md) §0, conservando los identificadores del backlog
+1. **§2** — full database design (tables, constraints, indexes, state machines) and which
+   sprint each piece belongs to.
+2. **§3** — the contract of every proposed endpoint (M1–M9) with request/response shapes,
+   errors, and SSE.
+3. **§4** — a suggested daily sequence by area and ticket. It assigns no people: the real
+   owner of each ticket comes exclusively from claiming and is recorded per
+   [PLAN_SPRINTS.md](PLAN_SPRINTS.md) §0, keeping the backlog identifiers
    (`A1.3`, `S1.A6`, `J2.4`, `D3.2`, `L3.4`, …).
 
 ---
 
-## 2. Diseño de la base de datos
+## 2. Database design
 
-### 2.1 Convenciones generales
+### 2.1 General conventions
 
-1. **Motor:** PostgreSQL 16 con `pgvector` (`pgvector/pgvector:pg16`, versión fijada). Una
-   sola BD para datos, vectores y outbox.
-2. **Multi-tenancy desde F0:** toda tabla de negocio lleva `user_id`; las referencias entre
-   tablas de tenant usan **FKs compuestas `(user_id, recurso_id)`** para evitar referencias
-   cruzadas; la autorización se valida además en servicios (API, SSE, tools y jobs). RLS es
-   defensa adicional con `SET LOCAL app.user_id` transaccional y rol de aplicación sin
-   `BYPASSRLS` (probar también el pool de conexiones y los workers).
-3. **Claves y tiempo:** PK `uuid` con `gen_random_uuid()`; `created_at`/`updated_at`
-   `timestamptz NOT NULL DEFAULT now()`; `updated_at` mantenido por la capa de persistencia.
-4. **Borrado lógico:** `deleted_at timestamptz` (tombstone) en `users`, `subjects`, `audios`,
-   `conversations`. Borrar una clase purga además los derivados (transcripts, segments,
-   chunks, embeddings, tasks, resumen, citas/snippets de mensajes asociados o el mensaje
-   completo si no puede purgarse con seguridad).
-5. **Enums como `TEXT` + `CHECK`:** valores cerrados por contrato; facilitar ampliaciones
-   controladas sin reescribir tipos.
-6. **Sin audio durable:** `audios` no tiene `storage_key`, blob ni ruta; outbox contiene solo
-   IDs y configuración no sensible; nada de audio en disco, S3/MinIO, Redis, logs, trazas,
-   cachés ni backups.
-7. **Versionado:** transcript por `(audio_id, version)`; chunks por `(transcript_id,
-   index_version, ordinal)`; embeddings por `(chunk_id, index_version)` con modelo/dimensión
-   registrados; análisis por `processing_runs` `(audio_id, stage, transcript_version,
-   config_version)`. Las versiones activas se publican atómicamente (mismas transacción).
-8. **Índices de soporte para FKs:** PostgreSQL no indexa el lado referenciante; toda FK
-   compuesta o `ON DELETE` lleva índice en la tabla hija. Las purgas de clase y de cuenta
-   recorren cascadas y no pueden degenerar en seq-scan.
+1. **Engine:** PostgreSQL 16 with `pgvector` (`pgvector/pgvector:pg16`, pinned version). One
+   database for data, vectors, and outbox.
+2. **Multi-tenancy from F0:** every business table carries `user_id`; references between
+   tenant tables use **composite FKs `(user_id, resource_id)`** to avoid cross references;
+   authorization is additionally validated in services (API, SSE, tools, and jobs). RLS is
+   additional defense with transactional `SET LOCAL app.user_id` and an application role
+   without `BYPASSRLS` (test the connection pool and workers too).
+3. **Keys and time:** `uuid` PK with `gen_random_uuid()`; `created_at`/`updated_at`
+   `timestamptz NOT NULL DEFAULT now()`; `updated_at` maintained by the persistence layer.
+4. **Soft delete:** `deleted_at timestamptz` (tombstone) on `users`, `subjects`, `audios`,
+   `conversations`. Deleting a class also purges the derivatives (transcripts, segments,
+   chunks, embeddings, tasks, summary, associated message citations/snippets, or the whole
+   message if it cannot be purged safely).
+5. **Enums as `TEXT` + `CHECK`:** contract-closed values; makes controlled extensions easy
+   without rewriting types.
+6. **No durable audio:** `audios` has no `storage_key`, blob, or path; the outbox contains
+   only IDs and non-sensitive configuration; no audio on disk, S3/MinIO, Redis, logs,
+   traces, caches, or backups.
+7. **Versioning:** transcript by `(audio_id, version)`; chunks by `(transcript_id,
+   index_version, ordinal)`; embeddings by `(chunk_id, index_version)` with
+   model/dimension recorded; analysis by `processing_runs` `(audio_id, stage,
+   transcript_version, config_version)`. Active versions are published atomically (same
+   transaction).
+8. **Supporting indexes for FKs:** PostgreSQL does not index the referencing side; every
+   composite FK or `ON DELETE` gets an index on the child table. Class and account purges
+   walk cascades and must not degrade into seq-scans.
 
-RLS base (defensa adicional) en cada tabla tenant, con `USING` y `WITH CHECK` (en `users`,
-sobre `id`). Sin `missing_ok`: si `app.user_id` no está fijado, la consulta falla
+Base RLS (additional defense) on every tenant table, with `USING` and `WITH CHECK` (on
+`users`, over `id`). Without `missing_ok`: if `app.user_id` is not set, the query fails
 (fail-closed):
 
 ```sql
@@ -88,80 +89,80 @@ CREATE POLICY tenant_isolation ON audios
   WITH CHECK (user_id = current_setting('app.user_id')::uuid);
 ```
 
-Misma plantilla `FOR ALL` en `subjects`, `audios`, `transcripts`, `segments`, `chunks`,
+Same `FOR ALL` template on `subjects`, `audios`, `transcripts`, `segments`, `chunks`,
 `chunk_segments`, `embeddings`, `index_generations`, `processing_runs`, `outbox_events`,
 `ingestion_attempts`, `variant_confirmation_tokens`, `conversations`, `messages`,
 `message_sources`, `tasks`, `task_evidence`, `task_sources`, `task_revisions`,
-`calendar_events`, `google_remote_operations`, `notifications`, `sessions` y
-`google_credentials`. Cada transacción abre con `SET LOCAL app.user_id = '<uuid>'`
-(transaccional, por tanto compatible con el pool); los workers lo fijan igual y lo cubren
-I-S1-AN-05 y G3.
+`calendar_events`, `google_remote_operations`, `notifications`, `sessions`, and
+`google_credentials`. Each transaction opens with `SET LOCAL app.user_id = '<uuid>'`
+(transactional, hence pool-compatible); workers set it the same way, covered by
+I-S1-AN-05 and G3.
 
-### 2.1.1 Extensiones
+### 2.1.1 Extensions
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-Los índices HNSW y GIN se crean en S2. **No se declara ningún índice sin probar planes y
-recall con datos representativos** ([ESPECIFICACION.md](ESPECIFICACION.md) §6.2); los
-candidatos se detallan en §2.5 y los índices de tareas en §2.8.
+HNSW and GIN indexes are created in S2. **No index is declared without testing plans and
+recall with representative data** ([ESPECIFICACION.md](ESPECIFICACION.md) §6.2); the
+candidates are detailed in §2.5 and task indexes in §2.8.
 
-### 2.2 Diagrama ER completo
+### 2.2 Complete ER diagram
 
 ```mermaid
 erDiagram
-    USERS ||--o{ SUBJECTS : crea
-    USERS ||--o{ SESSIONS : inicia
-    USERS ||--o| GOOGLE_CREDENTIALS : conecta
-    USERS ||--|| SETTINGS : configura
-    SUBJECTS ||--o{ AUDIOS : agrupa
-    AUDIOS ||--o{ INGESTION_ATTEMPTS : intenta
-    AUDIOS ||--o{ TRANSCRIPTS : versiona
-    AUDIOS ||--o{ PROCESSING_RUNS : procesa
-    TRANSCRIPTS ||--o{ SEGMENTS : contiene
-    TRANSCRIPTS ||--o{ CHUNKS : divide
-    CHUNKS ||--o{ CHUNK_SEGMENTS : referencia
-    SEGMENTS ||--o{ CHUNK_SEGMENTS : evidencia
-    CHUNKS ||--o{ EMBEDDINGS : versiona
-    INDEX_GENERATIONS ||--o{ CHUNKS : publica
-    AUDIOS o|--o{ TASK_SOURCES : origina
-    TASKS ||--o{ TASK_SOURCES : documenta
-    TASKS ||--o{ TASK_REVISIONS : revisa
-    TASKS |o--o| CALENDAR_EVENTS : vincula
-    USERS ||--o{ GOOGLE_REMOTE_OPERATIONS : autoriza
-    USERS ||--o{ OUTBOX_EVENTS : publica
-    USERS ||--o{ CONVERSATIONS : abre
-    CONVERSATIONS ||--o{ MESSAGES : contiene
-    MESSAGES ||--o{ MESSAGE_SOURCES : cita
-    USERS ||--o{ NOTIFICATIONS : recibe
+    USERS ||--o{ SUBJECTS : creates
+    USERS ||--o{ SESSIONS : starts
+    USERS ||--o| GOOGLE_CREDENTIALS : connects
+    USERS ||--|| SETTINGS : configures
+    SUBJECTS ||--o{ AUDIOS : groups
+    AUDIOS ||--o{ INGESTION_ATTEMPTS : attempts
+    AUDIOS ||--o{ TRANSCRIPTS : versions
+    AUDIOS ||--o{ PROCESSING_RUNS : processes
+    TRANSCRIPTS ||--o{ SEGMENTS : contains
+    TRANSCRIPTS ||--o{ CHUNKS : splits
+    CHUNKS ||--o{ CHUNK_SEGMENTS : references
+    SEGMENTS ||--o{ CHUNK_SEGMENTS : evidences
+    CHUNKS ||--o{ EMBEDDINGS : versions
+    INDEX_GENERATIONS ||--o{ CHUNKS : publishes
+    AUDIOS o|--o{ TASK_SOURCES : originates
+    TASKS ||--o{ TASK_SOURCES : documents
+    TASKS ||--o{ TASK_REVISIONS : reviews
+    TASKS |o--o| CALENDAR_EVENTS : links
+    USERS ||--o{ GOOGLE_REMOTE_OPERATIONS : authorizes
+    USERS ||--o{ OUTBOX_EVENTS : publishes
+    USERS ||--o{ CONVERSATIONS : opens
+    CONVERSATIONS ||--o{ MESSAGES : contains
+    MESSAGES ||--o{ MESSAGE_SOURCES : cites
+    USERS ||--o{ NOTIFICATIONS : receives
 ```
 
-Todas las relaciones de tenant añaden la FK compuesta `(user_id, recurso_id)`; el diagrama
-la omite por legibilidad.
+All tenant relations add the composite FK `(user_id, resource_id)`; the diagram omits it
+for readability.
 
-### 2.3 S1 — Identidad, sesión y materias (steward técnico: API/BD)
+### 2.3 S1 — Identity, session, and subjects (technical steward: API/DB)
 
 ```sql
 CREATE TABLE users (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  google_sub     text NOT NULL UNIQUE,          -- identidad: sub de Google, no el email
+  google_sub     text NOT NULL UNIQUE,          -- identity: Google sub, not the email
   email          text NOT NULL,
   email_verified boolean NOT NULL DEFAULT false,
-  timezone       text NOT NULL DEFAULT 'UTC',   -- IANA; afecta digests, no fechas de clase
+  timezone       text NOT NULL DEFAULT 'UTC',   -- IANA; affects digests, not class dates
   display_name   text,
   status         text NOT NULL DEFAULT 'active'
                    CHECK (status IN ('active','deleting','deleted')),
   created_at     timestamptz NOT NULL DEFAULT now(),
   updated_at     timestamptz NOT NULL DEFAULT now(),
-  deleted_at     timestamptz                    -- tombstone de cuenta (S4)
+  deleted_at     timestamptz                    -- account tombstone (S4)
 );
 
 CREATE TABLE sessions (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id      uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  token_hash   text NOT NULL UNIQUE,            -- SHA-256 del identificador opaco
-  csrf_hash    text NOT NULL,                   -- SHA-256 del token CSRF de la sesión
+  token_hash   text NOT NULL UNIQUE,            -- SHA-256 of the opaque identifier
+  csrf_hash    text NOT NULL,                   -- SHA-256 of the session CSRF token
   created_at   timestamptz NOT NULL DEFAULT now(),
   expires_at   timestamptz NOT NULL,
   revoked_at   timestamptz,
@@ -171,11 +172,11 @@ CREATE INDEX sessions_user ON sessions (user_id, expires_at);
 
 CREATE TABLE google_credentials (
   user_id           uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  access_token_enc  bytea NOT NULL,             -- AES-GCM con nonce único
-  refresh_token_enc bytea,                      -- preservar el anterior si Google no devuelve otro
-  -- Cada blob es nonce(12 B) || ciphertext+tag con su propio nonce: un nonce compartido
-  -- entre access y refresh reutilizaría el nonce bajo la misma clave, lo que rompe AES-GCM.
-  key_version       integer NOT NULL,           -- rotación de claves
+  access_token_enc  bytea NOT NULL,             -- AES-GCM with a unique nonce
+  refresh_token_enc bytea,                      -- keep the previous one if Google returns no new one
+  -- Each blob is nonce(12 B) || ciphertext+tag with its own nonce: a nonce shared
+  -- between access and refresh would reuse the nonce under the same key, breaking AES-GCM.
+  key_version       integer NOT NULL,           -- key rotation
   scopes            text[] NOT NULL DEFAULT '{}',
   token_expires_at  timestamptz,
   status            text NOT NULL DEFAULT 'connected'
@@ -199,22 +200,23 @@ CREATE UNIQUE INDEX subjects_active_name
   ON subjects (user_id, lower(name)) WHERE deleted_at IS NULL;
 ```
 
-Notas:
+Notes:
 
-- `sessions.token_hash` nunca guarda el valor plano de la cookie y `csrf_hash` nunca guarda
-  el token CSRF plano. `GET /me` entrega el token CSRF plano únicamente al navegador de esa
-  sesión con `Cache-Control: no-store`; no rota por cada lectura.
-- El token CSRF rota al crear o rotar la sesión, se comparte entre las pestañas que usan la
-  misma cookie y queda inválido al cerrar, revocar o reemplazar esa sesión. La rotación se
-  confirma en una sola transacción que invalida el hash anterior antes de exponer el nuevo
-  token; una pestaña con el valor anterior recibe `403 csrf_invalid` y debe repetir `GET /me`.
-- Tokens de Google cifrados AES-GCM con nonce único por blob, AAD `user_id:campo` y
-  `key_version`; `invalid_grant` mueve el estado a `disconnected` sin cerrar necesariamente la
-  sesión de la aplicación.
-- La zona horaria de cada clase se captura como snapshot en `audios`; cambiar el perfil no
-  altera fechas ya extraídas.
+- `sessions.token_hash` never stores the raw cookie value and `csrf_hash` never stores the
+  plain CSRF token. `GET /me` delivers the plain CSRF token only to that session's browser
+  with `Cache-Control: no-store`; it does not rotate on every read.
+- The CSRF token rotates when the session is created or rotated, is shared across the tabs
+  that use the same cookie, and becomes invalid when that session is closed, revoked, or
+  replaced. Rotation is confirmed in a single transaction that invalidates the previous
+  hash before exposing the new token; a tab holding the previous value receives
+  `403 csrf_invalid` and must repeat `GET /me`.
+- Google tokens are encrypted with AES-GCM, a unique nonce per blob, AAD `user_id:field`,
+  and `key_version`; `invalid_grant` moves the status to `disconnected` without necessarily
+  closing the application session.
+- Each class's timezone is captured as a snapshot in `audios`; changing the profile does
+  not alter already-extracted dates.
 
-### 2.4 S1 esqueleto → S2 completo — Ingesta y audios (API/BD + Ingesta/ASR)
+### 2.4 S1 skeleton → S2 full — Ingestion and audios (API/DB + Ingestion/ASR)
 
 ```sql
 CREATE TABLE audios (
@@ -225,23 +227,23 @@ CREATE TABLE audios (
   FOREIGN KEY (user_id, subject_id) REFERENCES subjects (user_id, id),
   title                     text,
   teacher                   text,
-  sha256                    text,                -- desconocido al reservar; se decide en PUT
+  sha256                    text,                -- unknown at reservation; decided on PUT
   class_date                date NOT NULL,
-  class_timezone            text NOT NULL,       -- snapshot IANA de la clase
-  language_code             text NOT NULL,       -- allowlist comprobada; sin 'multi'
+  class_timezone            text NOT NULL,       -- IANA snapshot of the class
+  language_code             text NOT NULL,       -- checked allowlist; no 'multi'
   original_bytes            bigint,
-  duration_seconds          double precision,    -- validada con ffprobe, no con Content-Length
+  duration_seconds          double precision,    -- validated with ffprobe, not Content-Length
   required_stages           text[] NOT NULL DEFAULT '{index}',
-                            -- F1: '{index}'; desde F2: '{index,analyze}'; backfill explícito
+                            -- F1: '{index}'; from F2 on: '{index,analyze}'; explicit backfill
   active_transcript_version integer,
   active_analysis_version   integer,
   active_index_version      text,
   created_at                timestamptz NOT NULL DEFAULT now(),
   updated_at                timestamptz NOT NULL DEFAULT now(),
-  deleted_at                timestamptz          -- tombstone: cancela intentos/jobs tardíos
+  deleted_at                timestamptz          -- tombstone: cancels late attempts/jobs
 );
 
--- Identidad exacta: hash + idioma + materia + fecha + zona; se resuelve al finalizar el PUT.
+-- Exact identity: hash + language + subject + date + timezone; resolved when the PUT finishes.
 CREATE UNIQUE INDEX audios_dedupe_identity
   ON audios (user_id, sha256, language_code, subject_id, class_date, class_timezone)
   WHERE deleted_at IS NULL AND sha256 IS NOT NULL;
@@ -259,12 +261,12 @@ CREATE TABLE ingestion_attempts (
   privacy_notice_version            text NOT NULL,
   cloud_processing_accepted_at      timestamptz NOT NULL,
   third_party_voice_acknowledged_at timestamptz NOT NULL,
-  declared_providers                jsonb NOT NULL, -- nombres/versiones mostrados, sin secretos
+  declared_providers                jsonb NOT NULL, -- shown names/versions, no secrets
   status                            text NOT NULL
     CHECK (status IN ('awaiting_upload','receiving','transcribing',
                       'transcript_committed_cleanup_pending','succeeded',
                       'requires_reupload','rejected','cancelled')),
-  owner_instance                    text NOT NULL,  -- instancia que posee reserva/temporal
+  owner_instance                    text NOT NULL,  -- instance owning the reservation/temporary
   fencing_token                     bigint NOT NULL,
   lease_expires_at                  timestamptz,
   heartbeat_at                      timestamptz,
@@ -285,7 +287,7 @@ CREATE TABLE ingestion_attempts (
   updated_at                        timestamptz NOT NULL DEFAULT now()
 );
 
--- Solo se guarda el hash del token opaco. La fila caduca y se purga; no retiene audio.
+-- Only the opaque token's hash is stored. The row expires and is purged; it holds no audio.
 CREATE TABLE variant_confirmation_tokens (
   id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id               uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -299,7 +301,7 @@ CREATE TABLE variant_confirmation_tokens (
   class_date            date NOT NULL,
   class_timezone        text NOT NULL,
   language_code         text NOT NULL,
-  metadata_digest       text NOT NULL, -- HMAC de metadatos normalizados mostrados al usuario
+  metadata_digest       text NOT NULL, -- HMAC of the normalized metadata shown to the user
   expires_at            timestamptz NOT NULL,
   consumed_at           timestamptz,
   reserved_audio_id     uuid,
@@ -312,7 +314,7 @@ CREATE INDEX variant_tokens_expiry
 CREATE INDEX variant_tokens_by_canonical
   ON variant_confirmation_tokens (user_id, canonical_audio_id);
 
--- Un único intento activo por clase; cleanup pendiente sigue siendo trabajo activo.
+-- A single active attempt per class; pending cleanup is still active work.
 CREATE UNIQUE INDEX attempts_one_active
   ON ingestion_attempts (audio_id)
   WHERE status IN ('awaiting_upload','receiving','transcribing',
@@ -320,32 +322,44 @@ CREATE UNIQUE INDEX attempts_one_active
 CREATE INDEX attempts_by_audio ON ingestion_attempts (user_id, audio_id);
 ```
 
-Notas de diseño ([ESPECIFICACION.md](ESPECIFICACION.md) §6.2):
+Design notes ([ESPECIFICACION.md](ESPECIFICACION.md) §6.2):
 
-- `POST /audios` crea una reserva con `sha256=NULL`: no puede prometer dedupe antes de recibir
-  bytes. El primer `PUT` calcula el hash, limpia el temporal y decide de forma transaccional
-  `duplicate_exact`, `duplicate_variant` o admisión a ASR. Una reserva provisional absorbida
-  por dedupe se elimina después del cleanup; no queda como una clase duplicada.
-- Para una variante, el primer `PUT` devuelve un token plano solo en esa respuesta; BD guarda
-  `token_hash`. El segundo `POST` consume una única vez el token vigente, comprueba tenant y
-  metadatos, liga la nueva reserva mediante `reserved_audio_id` y exige reupload. El segundo
-  `PUT` vuelve a calcular el hash; una diferencia termina en `rejected` sin ASR. Ni el token
-  ni la decisión humana prolongan la vida del audio del primer upload.
-- Los consentimientos versionados son snapshot por intento. Una versión ausente u obsoleta o
-  cualquiera de los dos reconocimientos en `false` se rechaza antes de reservar capacidad.
-- `audios` **no** tiene `storage_key`, blob ni ruta durable. El hash se borra con la clase;
-  reupload sin transcript reutiliza el registro canónico, salvo una variante confirmada que
-  crea deliberadamente otra clase.
-- Estado agregado (`processing|ready|partial|failed`) es derivado desde el intento y
-  `processing_runs`; `not_requested` nunca equivale a éxito.
-- Tras el commit, el estado interno es `transcript_committed_cleanup_pending`; no se expone
-  como éxito. Lease vencido no prueba borrado: sin evidencia, `cleanup_status` sigue `pending`
-  y solo la outbox de índice/análisis permanece bloqueada. `cleanup_status='failed'` detiene
-  la admisión local y genera alerta.
-- Los TTL candidatos se fijan únicamente después del benchmark F0; hasta entonces
-  `GET /ingestion/capabilities` devuelve `null` y `limits_validated=false`.
+- `POST /audios` creates a reservation with `sha256=NULL`: it cannot promise dedupe before
+  receiving bytes. The first `PUT` computes the hash, cleans up the temporary, and decides
+  transactionally between `duplicate_exact`, `duplicate_variant`, or admission to ASR. A
+  provisional reservation absorbed by dedupe is removed after cleanup; it is not left
+  behind as a duplicate class.
+- For a variant, the first `PUT` returns a plain token only in that response; the DB stores
+  `token_hash`. The second `POST` consumes the current token exactly once, checks tenant
+  and metadata, links the new reservation via `reserved_audio_id`, and requires re-upload.
+  The second `PUT` recomputes the hash; a mismatch ends in `rejected` without ASR. Neither
+  the token nor the human decision extends the life of the first upload's audio.
+- Versioned consents are a snapshot per attempt. A missing or outdated version, or either
+  acknowledgement set to `false`, is rejected before reserving capacity.
+- `audios` has **no** `storage_key`, blob, or durable path. The hash is deleted with the
+  class; re-upload without a transcript reuses the canonical record, except a confirmed
+  variant which deliberately creates another class.
+- Aggregate status (`processing|ready|partial|failed`) is derived from the attempt and
+  `processing_runs`; `not_requested` never counts as success.
+- After the commit, the internal status is `transcript_committed_cleanup_pending`; it is
+  not exposed as success. An expired lease does not prove deletion: without evidence,
+  `cleanup_status` stays `pending` and only the index/analyze outbox remains blocked.
+  `cleanup_status='failed'` stops local admission and raises an alert.
+- Candidate TTLs are set only after the F0 benchmark; until then
+  `GET /ingestion/capabilities` returns `null` and `limits_validated=false`.
+- Class purge order, fixed by `DELETE /audios/{id}` (A2.7, one transaction, always explicit
+  deletes and never the FK cascade, so every count in the `202` body is verifiable):
+  conditional `audios.deleted_at` (a second concurrent DELETE loses and gets `404`) →
+  active `ingestion_attempts` to `cancelled` with `fencing_token + 1` (a late `ingest`
+  commit fails its token check) → `outbox_events` `pending` to `skipped` (never
+  `enabled=false`, which the `cleanup_gate` CHECK would reject as a lie) →
+  `processing_runs` `pending|running` to `cancelled` → `message_sources` of the class →
+  content-free `messages` (`content=''`, `citas='[]'`) → `embeddings` → `chunk_segments`
+  → `chunks` → `segments` → `transcripts` (summary and topics go with the transcript).
+  Final attempts keep their `error_code`; existing Google events are kept by default.
+  Proven by `I-S2-AN-06` in `apps/api/tests/integration/test_delete_audio.py`.
 
-### 2.5 S2 — Transcript, chunks, embeddings e índice (API/BD + RAG)
+### 2.5 S2 — Transcript, chunks, embeddings, and index (API/DB + RAG)
 
 ```sql
 CREATE TABLE transcripts (
@@ -358,18 +372,18 @@ CREATE TABLE transcripts (
   language_requested  text NOT NULL,
   provider            text NOT NULL DEFAULT 'nvidia-riva',
   model               text NOT NULL,             -- provisional: whisper-large-v3
-  model_config        jsonb NOT NULL,            -- sample rate, fragmentación, overlap, ffprobe
+  model_config        jsonb NOT NULL,            -- sample rate, fragmentation, overlap, ffprobe
   client_version      text,
   timestamp_precision text NOT NULL
                         CHECK (timestamp_precision IN ('word','segment','none')),
-  text                text NOT NULL,             -- fuente durable completa del transcript
+  text                text NOT NULL,             -- full durable source of the transcript
   char_count          integer NOT NULL DEFAULT 0
                         CHECK (char_count = char_length(text)),
-  quality_flags       jsonb NOT NULL DEFAULT '[]',  -- repeticiones/silencios detectados
+  quality_flags       jsonb NOT NULL DEFAULT '[]',  -- detected repetitions/silences
   warnings            jsonb NOT NULL DEFAULT '[]',
   fts_config          text NOT NULL,             -- 'spanish' | 'english' | 'simple'
-  summary             text,                      -- F2: 3–5 frases, con analysis_version
-  topics              text[],                    -- F2: versionados
+  summary             text,                      -- F2: 3–5 sentences, with analysis_version
+  topics              text[],                    -- F2: versioned
   analysis_version    integer,
   created_at          timestamptz NOT NULL DEFAULT now(),
   UNIQUE (audio_id, version)
@@ -382,11 +396,11 @@ CREATE TABLE segments (
   transcript_id  uuid NOT NULL,
   FOREIGN KEY (user_id, transcript_id)
     REFERENCES transcripts (user_id, id) ON DELETE CASCADE,
-  ordinal        integer NOT NULL,               -- ID estable dentro de la versión
+  ordinal        integer NOT NULL,               -- stable ID within the version
   text           text NOT NULL,
-  char_start     integer NOT NULL,               -- puntos de código Unicode, no bytes/UTF-16
+  char_start     integer NOT NULL,               -- Unicode code points, not bytes/UTF-16
   char_end       integer NOT NULL,
-  t_start        double precision,               -- nullable: la precisión real del ASR manda
+  t_start        double precision,               -- nullable: the ASR's real precision governs
   t_end          double precision,
   CHECK (char_start < char_end),
   CHECK ((t_start IS NULL AND t_end IS NULL)
@@ -405,16 +419,16 @@ CREATE TABLE chunks (
   FOREIGN KEY (user_id, transcript_id)
     REFERENCES transcripts (user_id, id) ON DELETE CASCADE,
   transcript_version integer NOT NULL,
-  index_version      text NOT NULL,              -- generación de índice
+  index_version      text NOT NULL,              -- index generation
   ordinal            integer NOT NULL,
   content            text NOT NULL,
-  char_start         integer NOT NULL,           -- offsets preservados sobre el texto íntegro
+  char_start         integer NOT NULL,           -- offsets preserved over the full text
   char_end           integer NOT NULL,
-  token_count        integer NOT NULL,           -- objetivo ~800, overlap ~100; contado con
-                                                 -- el tokenizador del proveedor (D5)
-  t_start            double precision,           -- derivados, nullable
+  token_count        integer NOT NULL,           -- target ~800, overlap ~100; counted with
+                                                 -- the provider's tokenizer (D5)
+  t_start            double precision,           -- derived, nullable
   t_end              double precision,
-  tsv                tsvector,                   -- construido con transcripts.fts_config
+  tsv                tsvector,                   -- built with transcripts.fts_config
   UNIQUE (transcript_id, index_version, ordinal)
 );
 CREATE INDEX chunks_fts ON chunks USING GIN (tsv);
@@ -428,7 +442,7 @@ CREATE TABLE chunk_segments (
   segment_id   uuid NOT NULL,
   FOREIGN KEY (user_id, segment_id)
     REFERENCES segments (user_id, id) ON DELETE CASCADE,
-  overlap_span jsonb,                           -- offsets del solapamiento, para la evidencia
+  overlap_span jsonb,                           -- overlap offsets, for evidence
   PRIMARY KEY (user_id, chunk_id, segment_id)
 );
 CREATE INDEX chunk_segments_by_segment ON chunk_segments (user_id, segment_id);
@@ -445,8 +459,8 @@ CREATE TABLE embeddings (
   created_at    timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, chunk_id, index_version)
 );
--- HNSW global y coseno (coherente con el embedding); el recall con filtros de
--- tenant/versión se garantiza en la consulta (§3.9), no en el índice.
+-- Global HNSW and cosine (consistent with the embedding); recall with tenant/version
+-- filters is guaranteed by the query (§3.9), not by the index.
 CREATE INDEX embeddings_hnsw ON embeddings USING hnsw (vector vector_cosine_ops);
 
 CREATE TABLE index_generations (
@@ -461,7 +475,7 @@ CREATE TABLE index_generations (
   created_at   timestamptz NOT NULL DEFAULT now(),
   UNIQUE (user_id, version)
 );
--- una sola generación activa por usuario; la activación es atómica (G5-F1)
+-- a single active generation per user; activation is atomic (G5-F1)
 CREATE UNIQUE INDEX index_generations_one_active
   ON index_generations (user_id) WHERE status = 'active';
 
@@ -486,25 +500,30 @@ CREATE TABLE processing_runs (
 );
 ```
 
-Notas:
+Notes:
 
-- Un chunk **no** es la unidad mínima de evidencia: `chunk_segments` conserva los segmentos y
-  sus spans aunque haya solapamiento entre chunks.
-- Chunks y generaciones: reindexar con una `index_version` nueva re-chunkea — crea filas
-  nuevas de `chunks`/`chunk_segments` para esa generación y purga los embeddings retirados.
-  Un `chunk_id` pertenece a exactamente una generación; el `index_version` de `embeddings`
-  es redundancia defensiva y debe coincidir con el del chunk.
-- Recuperación vectorial con filtros (contrato §3.9): la consulta exige
-  `hnsw.iterative_scan = strict_order` (pgvector ≥ 0.8; versión fijada) y over-fetch
-  (los ~30 candidatos por rama) para que los filtros `user_id`/versión no dejen el top-k
-  con menos de k candidatos; en corpus pequeños, escaneo exacto. G4 evalúa recall **con
-  filtros activos**, no solo global.
-- Cambiar el modelo/dimensión/versión de embeddings exige una **generación nueva de índice**
-  y reindexación completa; nunca se mezclan versiones ni se expone un índice parcial.
-- Borrar una clase purga chunks → embeddings y los caches/citas derivadas; los jobs
-  re-verifican propiedad, tombstone y versión antes de publicar.
+- A chunk is **not** the minimal unit of evidence: `chunk_segments` keeps the segments and
+  their spans even when chunks overlap.
+- Chunks and generations: reindexing with a new `index_version` re-chunks — it creates new
+  `chunks`/`chunk_segments` rows for that generation and **retires** the previous one
+  (`status = 'retired'`). The retired generation keeps its chunks and embeddings
+  materialized: they are never deleted inside the activation transaction, so a rollback to
+  that version stays possible and a failed activation leaves no half-deleted index. Searches
+  already exclude them because they filter by the active generation. Physical cleanup of
+  retired generations is a retention policy (J2.4, plan §5), not part of activation. A
+  `chunk_id` belongs to exactly one generation; the `index_version` of `embeddings` is
+  defensive redundancy and must match the chunk's.
+- Vector retrieval with filters (contract §3.9): the query requires
+  `hnsw.iterative_scan = strict_order` (pgvector ≥ 0.8; pinned version) and over-fetch
+  (the ~30 candidates per branch) so that `user_id`/version filters do not leave the top-k
+  with fewer than k candidates; on small corpora, exact scan. G4 evaluates recall **with
+  filters active**, not only globally.
+- Changing the embedding model/dimension/version requires a **new index generation** and a
+  full reindex; versions are never mixed and a partial index is never exposed.
+- Deleting a class purges chunks → embeddings and the derived caches/citations; jobs
+  re-verify ownership, tombstone, and version before publishing.
 
-### 2.6 S1 (shape congelado) → S2 dispatcher — Outbox
+### 2.6 S1 (frozen shape) → S2 dispatcher — Outbox
 
 ```sql
 CREATE TABLE outbox_events (
@@ -515,8 +534,8 @@ CREATE TABLE outbox_events (
   -- | 'task_cancelled' | 'notify' | 'send_digest' | 'delete_event' | 'account_deleted'
   resource_type    text NOT NULL,               -- 'audio' | 'task' | 'user'
   resource_id      uuid NOT NULL,
-  resource_version integer,                     -- versión del recurso al emitir
-  payload          jsonb NOT NULL DEFAULT '{}', -- solo IDs/config NO sensible; jamás audio/tokens
+  resource_version integer,                     -- resource version at emit time
+  payload          jsonb NOT NULL DEFAULT '{}', -- only NON-sensitive IDs/config; never audio/tokens
   enabled          boolean NOT NULL,
   blocked_reason   text CHECK (blocked_reason IN ('cleanup_pending')),
   status           text NOT NULL DEFAULT 'pending'
@@ -524,7 +543,7 @@ CREATE TABLE outbox_events (
   attempts         integer NOT NULL DEFAULT 0,
   max_attempts     integer NOT NULL DEFAULT 3,
   next_attempt_at  timestamptz,
-  dedupe_key       text,                        -- idempotencia del consumidor
+  dedupe_key       text,                        -- consumer idempotency
   published_at     timestamptz,
   completed_at     timestamptz,
   created_at       timestamptz NOT NULL DEFAULT now(),
@@ -532,8 +551,8 @@ CREATE TABLE outbox_events (
   CHECK (
     (type IN ('index_requested','analyze_requested')
       AND ((enabled AND blocked_reason IS NULL)
-        -- IS NOT DISTINCT FROM: con `=` un blocked_reason NULL daría NULL y el CHECK
-        -- aceptaría un index/analyze deshabilitado sin motivo.
+        -- IS NOT DISTINCT FROM: with `=`, a NULL blocked_reason would yield NULL and the CHECK
+        -- would accept a disabled index/analyze without cause.
         OR (NOT enabled AND blocked_reason IS NOT DISTINCT FROM 'cleanup_pending')))
     OR
     (type NOT IN ('index_requested','analyze_requested')
@@ -545,16 +564,19 @@ CREATE INDEX outbox_pending
 CREATE INDEX outbox_by_user ON outbox_events (user_id) WHERE status <> 'completed';
 ```
 
-- El **shape** se congela el lunes S1. El área API/BD mantiene tabla y emisores; el área
-  Infra/Workers mantiene dispatcher y ejecución (regla anti-ciclo de `PLAN_SPRINTS.md` §6a).
-- Solo `index_requested` y `analyze_requested` nacen deshabilitados con
-  `blocked_reason='cleanup_pending'` en la transacción del transcript. Cleanup verificado los
-  habilita y borra el motivo en una transacción; no se habilitan por expiración de lease.
-- Calendar, notificaciones y borrados nacen `enabled=true`, `blocked_reason=NULL` en la misma
-  transacción que autoriza su efecto. No dependen del cleanup de una ingesta anterior.
-- Los consumidores son idempotentes y re-verifican tenant, autorización, tombstone y versión.
+- The **shape** is frozen on S1 Monday. The API/DB area maintains the table and emitters;
+  the Infra/Workers area maintains the dispatcher and execution (anti-cycle rule of
+  `PLAN_SPRINTS.md` §6a).
+- Only `index_requested` and `analyze_requested` are born disabled with
+  `blocked_reason='cleanup_pending'` in the transcript transaction. Verified cleanup
+  enables them and clears the reason in one transaction; they are never enabled by lease
+  expiry.
+- Calendar, notifications, and deletions are born `enabled=true`, `blocked_reason=NULL` in
+  the same transaction that authorizes their effect. They do not depend on the cleanup of
+  a previous ingestion.
+- Consumers are idempotent and re-verify tenant, authorization, tombstone, and version.
 
-### 2.7 S2 — Chat (API/BD + RAG)
+### 2.7 S2 — Chat (API/DB + RAG)
 
 ```sql
 CREATE TABLE conversations (
@@ -584,20 +606,20 @@ CREATE TABLE messages (
     REFERENCES conversations (user_id, id) ON DELETE CASCADE,
   role              text NOT NULL CHECK (role IN ('user','assistant','system')),
   content           text NOT NULL DEFAULT '',
-  client_message_id text,                        -- idempotencia de envío
+  client_message_id text,                        -- send idempotency
   status            text NOT NULL DEFAULT 'completed'
                       CHECK (status IN ('streaming','completed','failed','cancelled')),
   citas             jsonb NOT NULL DEFAULT '[]',
   -- [{audio_id, transcript_version, chunk_id, segment_id, t_start, t_end, quote}]
-  -- únicamente referencias validadas en BD; nunca timestamps/IDs inventados por el LLM
+  -- only references validated in the DB; never timestamps/IDs invented by the LLM
   model             text,
   prompt_version    text,
   input_tokens      integer,
   output_tokens     integer,
   created_at        timestamptz NOT NULL DEFAULT now()
 );
--- Idempotencia solo para peticiones del usuario: NULLS NOT DISTINCT colisionaría todos los
--- mensajes con client_message_id NULL y bloquearía el segundo turno del asistente.
+-- Idempotency only for user requests: NULLS NOT DISTINCT would collide every message with a
+-- NULL client_message_id and would block the assistant's second turn.
 CREATE UNIQUE INDEX messages_client_idem
   ON messages (conversation_id, client_message_id)
   WHERE client_message_id IS NOT NULL;
@@ -628,25 +650,25 @@ CREATE INDEX message_sources_by_audio ON message_sources (user_id, audio_id);
 CREATE INDEX message_sources_by_message ON message_sources (user_id, message_id);
 ```
 
-- `message_sources` registra **todas** las fuentes entregadas al modelo (también las de
-  tools y las heredadas del historial) para purgar respuestas descendientes al borrar una
-  fuente (G5-F1/G5-F2). El texto ya visto no puede retirarse; se informa ese límite.
-- Historial con presupuesto de tokens y retención configurable por conversación. Presupuesto
-  por turno: `ventana_del_modelo − reserva_de_salida − margen`; la evidencia (≤ ~8 chunks ×
-  ~800 tokens) manda y el historial se recorta de forma determinista (turnos completos, del
-  más antiguo; nunca a mitad). El presupuesto se verifica con el tokenizador real del
-  proveedor antes de cada llamada; si ni con el historial mínimo cabe, `context_exceeded`.
+- `message_sources` records **all** sources delivered to the model (including tool sources
+  and the ones inherited from history) so descendant answers can be purged when a source is
+  deleted (G5-F1/G5-F2). Already-seen text cannot be retracted; that limit is reported.
+- History with a token budget and retention configurable per conversation. Per-turn budget:
+  `model_window − output_reserve − margin`; evidence (≤ ~8 chunks × ~800 tokens) takes
+  precedence and history is trimmed deterministically (whole turns, oldest first; never
+  mid-turn). The budget is verified with the provider's real tokenizer before each call; if
+  even the minimal history does not fit, `context_exceeded`.
 
-### 2.8 S3 — Tareas, fuentes, revisiones, Calendar y settings (API/BD + Integraciones)
+### 2.8 S3 — Tasks, sources, revisions, Calendar, and settings (API/DB + Integrations)
 
 ```sql
 CREATE TABLE tasks (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id     uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   UNIQUE (user_id, id),
-  audio_id    uuid,                              -- nullable: tareas manuales/chat
+  audio_id    uuid,                              -- nullable: manual/chat tasks
   FOREIGN KEY (user_id, audio_id) REFERENCES audios (user_id, id),
-  subject_id  uuid,                              -- denormalizado para filtros/bandeja
+  subject_id  uuid,                              -- denormalized for filters/inbox
   FOREIGN KEY (user_id, subject_id) REFERENCES subjects (user_id, id),
   source      text NOT NULL DEFAULT 'extraction'
                 CHECK (source IN ('extraction','chat','manual')),
@@ -655,25 +677,25 @@ CREATE TABLE tasks (
                                 'recordatorio','recomendacion','proyecto')),
   titulo      text NOT NULL,
   detalle     text,
-  due_date    date,                              -- día completo
-  due_at      timestamptz,                       -- instante; mutuamente excluyentes
-  timezone    text NOT NULL,                     -- snapshot de la clase
+  due_date    date,                              -- full day
+  due_at      timestamptz,                       -- instant; mutually exclusive
+  timezone    text NOT NULL,                     -- class snapshot
   all_day     boolean NOT NULL,
   date_status text NOT NULL CHECK (date_status IN ('resolved','ambiguous','missing')),
-  date_text   text,                              -- texto original ("el viernes que viene")
-  date_reason text,                              -- motivo de needs_review (DST, ambiguo…)
+  date_text   text,                              -- original text ("next Friday")
+  date_reason text,                              -- reason for needs_review (DST, ambiguous…)
   confidence_score double precision
     CHECK (confidence_score >= 0 AND confidence_score <= 1),
-  -- señal NO calibrada; nunca permiso de auto-agendar
+  -- UNCALIBRATED signal; never permission to auto-schedule
   status      text NOT NULL DEFAULT 'needs_review'
                 CHECK (status IN ('pending','needs_review','confirmed','dismissed','completed')),
   calendar_sync_status text NOT NULL DEFAULT 'not_requested'
     CHECK (calendar_sync_status IN ('not_requested','pending','synced','failed','blocked')),
-  version     integer NOT NULL DEFAULT 1,        -- locking optimista (PATCH/confirm)
-  due_version integer NOT NULL DEFAULT 1,        -- versión de vencimiento (recordatorios)
-  event_start_at             timestamptz,        -- bloque Calendar con hora
+  version     integer NOT NULL DEFAULT 1,        -- optimistic locking (PATCH/confirm)
+  due_version integer NOT NULL DEFAULT 1,        -- due version (reminders)
+  event_start_at             timestamptz,        -- Calendar block with time
   event_end_at               timestamptz,
-  event_start_date           date,               -- bloque Calendar all-day, fin exclusivo
+  event_start_date           date,               -- all-day Calendar block, exclusive end
   event_end_date_exclusive   date,
   calendar_id text,
   calendar_event_id text,
@@ -682,7 +704,7 @@ CREATE TABLE tasks (
   dismissed_at timestamptz,
   created_at  timestamptz NOT NULL DEFAULT now(),
   updated_at  timestamptz NOT NULL DEFAULT now(),
-  -- CHECK de fecha (spec §6.2):
+  -- date CHECK (spec §6.2):
   CHECK (
        (date_status = 'resolved' AND all_day
           AND due_date IS NOT NULL AND due_at IS NULL)
@@ -702,7 +724,8 @@ CREATE TABLE tasks (
           AND event_start_date < event_end_date_exclusive)
   )
 );
--- `date` y `timestamptz` no se mezclan en una expresión de índice: la zona de sesión sería ambigua.
+-- `date` and `timestamptz` are not mixed in an index expression: the session timezone would
+-- be ambiguous.
 CREATE INDEX tasks_inbox_due_at ON tasks (user_id, status, due_at) WHERE due_at IS NOT NULL;
 CREATE INDEX tasks_inbox_due_date ON tasks (user_id, status, due_date) WHERE due_date IS NOT NULL;
 
@@ -716,14 +739,14 @@ CREATE TABLE task_evidence (
   FOREIGN KEY (user_id, transcript_id) REFERENCES transcripts (user_id, id),
   segment_id     uuid NOT NULL,
   FOREIGN KEY (user_id, segment_id) REFERENCES segments (user_id, id),
-  char_start     integer NOT NULL,               -- offsets Unicode sobre el texto del segmento
+  char_start     integer NOT NULL,               -- Unicode offsets over the segment text
   char_end       integer NOT NULL,
-  quote          text NOT NULL,                  -- cita textual comprobada contra el segmento
+  quote          text NOT NULL,                  -- verbatim quote checked against the segment
   CHECK (char_start < char_end)
 );
 CREATE INDEX task_evidence_by_task ON task_evidence (user_id, task_id, task_version);
 
--- Una propuesta basada en transcript/chat puede referenciar varias clases; la tarea manual usa cero filas.
+-- A transcript/chat-based proposal may reference several classes; the manual task uses zero rows.
 CREATE TABLE task_sources (
   user_id            uuid NOT NULL,
   task_id            uuid NOT NULL,
@@ -752,7 +775,7 @@ CREATE TABLE task_revisions (
   FOREIGN KEY (user_id, run_id) REFERENCES processing_runs (user_id, id),
   base_task_version  integer NOT NULL,
   revision_type      text NOT NULL CHECK (revision_type IN ('reanalysis','edit_of_confirmed')),
-  proposed_fields    jsonb NOT NULL,             -- nunca muta la tarea activa
+  proposed_fields    jsonb NOT NULL,             -- never mutates the active task
   evidence_validated boolean NOT NULL DEFAULT false,
   status             text NOT NULL DEFAULT 'pending_confirmation'
                        CHECK (status IN ('pending_confirmation','activated','discarded')),
@@ -765,14 +788,14 @@ CREATE TABLE calendar_events (
   id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id            uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   calendar_id        text NOT NULL,
-  event_id           text NOT NULL,              -- ID remoto de Google
+  event_id           text NOT NULL,              -- remote Google ID
   source             text NOT NULL CHECK (source IN ('google','maulwurf')),
-  task_id            uuid,                       -- nullable: la mayoría de eventos no tienen tarea
+  task_id            uuid,                       -- nullable: most events have no task
   FOREIGN KEY (user_id, task_id) REFERENCES tasks (user_id, id),
   title              text NOT NULL,
-  start_at           timestamptz,                -- par con end_at: eventos con hora
+  start_at           timestamptz,                -- pairs with end_at: events with time
   end_at             timestamptz,
-  start_date         date,                       -- par all-day (fin exclusivo)
+  start_date         date,                       -- all-day pair (exclusive end)
   end_date_exclusive date,
   timezone           text,
   etag               text,
@@ -788,7 +811,7 @@ CREATE TABLE calendar_events (
   CHECK (start_at IS NULL OR start_at < end_at),
   CHECK (start_date IS NULL OR start_date < end_date_exclusive)
 );
--- una tarea tiene como máximo un evento vinculado
+-- a task has at most one linked event
 CREATE UNIQUE INDEX calendar_events_one_link
   ON calendar_events (task_id) WHERE task_id IS NOT NULL;
 
@@ -798,7 +821,7 @@ CREATE TABLE google_remote_operations (
   kind        text NOT NULL CHECK (kind IN ('delete_event','delete_calendar','account_cleanup')),
   calendar_id text,
   event_id    text,
-  authorized  boolean NOT NULL DEFAULT false,    -- opción explícita del usuario
+  authorized  boolean NOT NULL DEFAULT false,    -- explicit user choice
   status      text NOT NULL CHECK (status IN ('pending','running','succeeded','failed')),
   attempts    integer NOT NULL DEFAULT 0,
   error_code  text,
@@ -806,7 +829,8 @@ CREATE TABLE google_remote_operations (
   finished_at timestamptz
 );
 
--- Registro residual sin FK: sobrevive a la purga para informar el resultado sin retener perfil/texto.
+-- Residual record without FK: it survives the purge to report the outcome without retaining
+-- profile/text.
 CREATE TABLE account_deletions (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   former_user_id uuid NOT NULL,
@@ -821,25 +845,25 @@ CREATE TABLE account_deletions (
 CREATE INDEX account_deletions_expiry ON account_deletions (expires_at);
 ```
 
-- El ciclo de vida de la tarea (`status`) está **separado** de `calendar_sync_status`;
-  `scheduled` no es un estado de tarea. Una tarea manual tiene cero `task_sources`; una
-  extracción/chat fundada en corpus debe tener al menos una fila validada antes de publicarse.
-- Confirmar exige fecha válida + evidencia comprobada para tareas extraídas. Un `PATCH` de una
-  tarea confirmada crea `task_revisions(status='pending_confirmation')` con
-  `base_task_version`, sin mutar campos activos ni escribir Google. `confirm` recibe
-  `revision_id` y `expected_version`, activa exactamente esa revisión, incrementa versión y
-  crea/reutiliza la outbox de Calendar en una sola transacción.
-- El borrado remoto de clase/tarea vive en `google_remote_operations` y **sobrevive** a su
-  purga hasta resolverse. El borrado de cuenta crea `account_deletions`, que conserva solo ID
-  previo, estado, error redactado y expiración; permite `GET /me/deletion/{id}` después de
-  purgar perfil/tokens.
-- Completar/descartar cancela recordatorios futuros pero conserva el evento con aviso, salvo
-  petición explícita de eliminación remota.
+- The task lifecycle (`status`) is **separate** from `calendar_sync_status`; `scheduled` is
+  not a task status. A manual task has zero `task_sources`; an extraction/chat grounded in
+  the corpus must have at least one validated row before being published.
+- Confirming requires a valid date + checked evidence for extracted tasks. A `PATCH` of a
+  confirmed task creates `task_revisions(status='pending_confirmation')` with
+  `base_task_version`, without mutating active fields or writing to Google. `confirm`
+  receives `revision_id` and `expected_version`, activates exactly that revision, bumps the
+  version, and creates/reuses the Calendar outbox in a single transaction.
+- Remote class/task deletion lives in `google_remote_operations` and **survives** its purge
+  until resolved. Account deletion creates `account_deletions`, which keeps only the former
+  ID, status, redacted error, and expiry; it allows `GET /me/deletion/{id}` after profile
+  and tokens are purged.
+- Complete/dismiss cancels future reminders but keeps the event with a notice, unless
+  remote deletion is explicitly requested.
 
-### 2.9 S3 settings Calendar → S4 notificaciones (stewards: API/BD + Infra)
+### 2.9 S3 settings Calendar → S4 notifications (stewards: API/DB + Infra)
 
 ```sql
--- S3: persiste el calendario de escritura/lectura antes de conectar Google.
+-- S3: persists the write/read calendar before connecting Google.
 CREATE TABLE settings (
   user_id                    uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   calendar_write_calendar_id text,
@@ -848,7 +872,7 @@ CREATE TABLE settings (
   updated_at                 timestamptz NOT NULL DEFAULT now()
 );
 
--- S4: amplía la misma fila; no crea una segunda tabla de settings.
+-- S4: extends the same row; it does not create a second settings table.
 ALTER TABLE settings
   ADD COLUMN gmail_opt_in boolean NOT NULL DEFAULT false,
   ADD COLUMN digest_daily_enabled boolean NOT NULL DEFAULT false,
@@ -861,22 +885,22 @@ ALTER TABLE settings
 CREATE TABLE notifications (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id             uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  task_id             uuid,                       -- nullable: digests y prueba no dependen de tarea
+  task_id             uuid,                       -- nullable: digests and test do not depend on a task
   FOREIGN KEY (user_id, task_id) REFERENCES tasks (user_id, id) ON DELETE SET NULL,
   type                text NOT NULL CHECK (type IN
     ('reminder_t48','reminder_t24','reminder_t2',
      'reminder_t3d','reminder_t1d','digest_daily','digest_weekly','test')),
-  occurrence          date,                       -- fecha local objetivo
+  occurrence          date,                       -- target local date
   due_version         integer,
   scheduled_at        timestamptz NOT NULL,
   dedupe_key          text NOT NULL,              -- (user_id, type, task_id, due_version, occurrence)
   status              text NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending','sending','sent','failed','delivery_unknown','cancelled')),
-  lease_expires_at    timestamptz,                -- 'sending' vencido = entrega incierta
+  lease_expires_at    timestamptz,                -- expired 'sending' = uncertain delivery
   attempts            integer NOT NULL DEFAULT 0,
   sent_at             timestamptz,
   provider_message_id text,
-  last_error_code     text,                       -- redactado, sin PII
+  last_error_code     text,                       -- redacted, no PII
   created_at          timestamptz NOT NULL DEFAULT now(),
   updated_at          timestamptz NOT NULL DEFAULT now(),
   UNIQUE NULLS NOT DISTINCT (user_id, type, task_id, due_version, occurrence)
@@ -884,35 +908,35 @@ CREATE TABLE notifications (
 CREATE INDEX notifications_due ON notifications (status, scheduled_at) WHERE status = 'pending';
 ```
 
-- Dedupe persistente `(user_id, tipo, task_id, due_version, occurrence)`; cambiar vencimiento
-  o preferencias cancela las ocurrencias futuras obsoletas; **nunca** ráfaga retrospectiva al
-  confirmar tarde.
-- DST: hora inexistente → siguiente instante válido; hora repetida → una sola ocurrencia
-  local. Tareas sin fecha no tienen recordatorios escalados.
-- Gmail no garantiza exactamente una entrega: respuesta perdida o lease `sending` vencido →
-  `delivery_unknown`, **sin reintento automático**; visible en panel; reexpedición manual
-  advierte del riesgo.
+- Persistent dedupe `(user_id, type, task_id, due_version, occurrence)`; changing the due
+  date or preferences cancels obsolete future occurrences; **never** a retrospective burst
+  when confirming late.
+- DST: nonexistent time → next valid instant; repeated time → a single local occurrence.
+  Tasks without a date have no scaled reminders.
+- Gmail does not guarantee exactly-once delivery: lost response or expired `sending` lease
+  → `delivery_unknown`, **no automatic retry**; visible in the panel; manual resending
+  warns about the risk.
 
-### 2.10 Máquinas de estado (contratos congelados)
+### 2.10 State machines (frozen contracts)
 
 ```mermaid
 stateDiagram-v2
     direction LR
-    state "Intento de ingesta (M2)" as A {
+    state "Ingestion attempt (M2)" as A {
         [*] --> awaiting_upload
-        awaiting_upload --> receiving: PUT binario autenticado
-        receiving --> transcribing: 202 + admisión supervisada
-        transcribing --> transcript_committed_cleanup_pending: commit transcript + segmentos
-        transcript_committed_cleanup_pending --> succeeded: cleanup verified + habilitar index/analyze
-        receiving --> rejected: formato inválido
-        transcribing --> rejected: silencio / no_usable_text
-        receiving --> requires_reupload: temporal perdido
-        transcribing --> requires_reupload: deadline o proceso perdido antes de commit
-        awaiting_upload --> cancelled: TTL de inicio
-        receiving --> cancelled: desconexión / cancelación
-        transcribing --> cancelled: cancelación (invalida fencing)
+        awaiting_upload --> receiving: authenticated binary PUT
+        receiving --> transcribing: 202 + supervised admission
+        transcribing --> transcript_committed_cleanup_pending: transcript + segments commit
+        transcript_committed_cleanup_pending --> succeeded: cleanup verified + enable index/analyze
+        receiving --> rejected: invalid format
+        transcribing --> rejected: silence / no_usable_text
+        receiving --> requires_reupload: temporary lost
+        transcribing --> requires_reupload: deadline or process lost before commit
+        awaiting_upload --> cancelled: start TTL
+        receiving --> cancelled: disconnect / cancellation
+        transcribing --> cancelled: cancellation (invalidates fencing)
     }
-    state "Etapa de texto: index | analyze" as B {
+    state "Text stage: index | analyze" as B {
         [*] --> stage_not_requested
         stage_not_requested --> stage_pending
         stage_pending --> stage_running
@@ -920,152 +944,173 @@ stateDiagram-v2
         stage_running --> stage_failed
         stage_pending --> stage_cancelled
     }
-    state "Tarea (M4)" as C {
+    state "Task (M4)" as C {
         [*] --> t_pending_or_review
-        t_pending_or_review --> t_confirmed: confirmar (fecha válida + evidencia)
+        t_pending_or_review --> t_confirmed: confirm (valid date + evidence)
         t_pending_or_review --> t_dismissed
         t_confirmed --> t_completed
         t_confirmed --> t_dismissed
     }
     state "calendar_sync_status (M5)" as D {
-        cs_not_requested --> cs_pending: confirmación
+        cs_not_requested --> cs_pending: confirmation
         cs_pending --> cs_synced
         cs_pending --> cs_failed
-        cs_pending --> cs_blocked: sin integración o invalid_grant
-        cs_blocked --> cs_pending: reconnect, versión vigente y nueva/reutilizada outbox
-        cs_failed --> cs_pending: retry explícito de versión vigente
+        cs_pending --> cs_blocked: no integration or invalid_grant
+        cs_blocked --> cs_pending: reconnect, current version, and new/reused outbox
+        cs_failed --> cs_pending: explicit retry of the current version
     }
-    state "Notificación (M8)" as E {
+    state "Notification (M8)" as E {
         nt_pending --> nt_sending
         nt_sending --> nt_sent
-        nt_sending --> nt_unknown: lease vencido / respuesta perdida
+        nt_sending --> nt_unknown: expired lease / lost response
         nt_pending --> nt_failed
         nt_pending --> nt_cancelled
         note right of nt_unknown
-          No vuelve a pending.
-          Resend crea una fila nueva
-          tras acknowledgement explícito.
+          Does not return to pending.
+          Resend creates a new row
+          after explicit acknowledgement.
         end note
     }
 ```
 
-(Las etiquetas abrevian los estados reales definidos en los CHECK; el contrato normativo
-son los valores de las columnas, no el diagrama.)
+(The labels abbreviate the real statuses defined in the CHECKs; the normative contract
+is the column values, not the diagram.)
 
-### 2.11 Matriz tabla → sprint → stewardship técnico
+### 2.11 Table → sprint → technical stewardship matrix
 
-`Steward técnico` indica el área que congela el contrato de datos; **no** asigna persona ni
-propiedad de ticket. El owner efectivo se consulta en `sprints/CLAIMS.md`.
+`Technical steward` indicates the area that freezes the data contract; it does **not**
+assign a person or ticket ownership. The effective owner is looked up in
+`sprints/CLAIMS.md`.
 
-| Tabla | Sprint | Steward técnico | Áreas consumidoras |
+| Table | Sprint | Technical steward | Consuming areas |
 |---|---|---|---|
-| `users`, `sessions`, `google_credentials`, `subjects` | S1 | API/BD | Todas |
-| `audios`, `ingestion_attempts`, `variant_confirmation_tokens` | S1 shape → S2 completo | API/BD + Ingesta | Ingesta, Web, Infra/Workers |
-| `outbox_events` | S1 shape → S2 dispatcher | API/BD | Infra/Workers |
-| `transcripts`, `segments` | S2 | API/BD + Ingesta | RAG, Web |
-| `chunks`, `chunk_segments`, `embeddings`, `index_generations` | S2 | API/BD + RAG | RAG, Web |
-| `processing_runs` | S2 | API/BD | RAG, Infra/Workers, Ingesta |
-| `conversations`, `messages`, `message_sources` | S2 | API/BD + RAG | RAG, Web |
-| `tasks`, `task_evidence`, `task_sources`, `task_revisions`, `calendar_events`, `google_remote_operations`, `settings` | S3 | API/BD + Integraciones | Web, Infra/Workers, RAG |
-| `notifications` y extensión Gmail/digests de `settings` | S4 | API/BD + Infra/Workers | Infra/Workers, Web |
+| `users`, `sessions`, `google_credentials`, `subjects` | S1 | API/DB | All |
+| `audios`, `ingestion_attempts`, `variant_confirmation_tokens` | S1 shape → S2 full | API/DB + Ingestion | Ingestion, Web, Infra/Workers |
+| `outbox_events` | S1 shape → S2 dispatcher | API/DB | Infra/Workers |
+| `transcripts`, `segments` | S2 | API/DB + Ingestion | RAG, Web |
+| `chunks`, `chunk_segments`, `embeddings`, `index_generations` | S2 | API/DB + RAG | RAG, Web |
+| `processing_runs` | S2 | API/DB | RAG, Infra/Workers, Ingestion |
+| `conversations`, `messages`, `message_sources` | S2 | API/DB + RAG | RAG, Web |
+| `tasks`, `task_evidence`, `task_sources`, `task_revisions`, `calendar_events`, `google_remote_operations`, `settings` | S3 | API/DB + Integrations | Web, Infra/Workers, RAG |
+| `notifications` and the Gmail/digest extension of `settings` | S4 | API/DB + Infra/Workers | Infra/Workers, Web |
 
 ---
 
-## 3. Contrato de la API
+## 3. API contract
 
-### 3.1 Convenciones comunes
+### 3.1 Common conventions
 
-| Aspecto | Contrato |
+| Aspect | Contract |
 |---|---|
-| Origen | Same-origin detrás de Caddy; rutas absolutas como en la especificación (sin prefijo `/api`) |
-| Sesión | Cookie opaca `mw_session` (`Secure`, `HttpOnly`, `SameSite=Lax`); el servidor solo guarda el hash |
-| CSRF | `GET /me` entrega el token plano bajo `Cache-Control: no-store`; el servidor conserva solo `csrf_hash`. Toda mutación (`POST`/`PUT`/`PATCH`/`DELETE`, incluido el binario) exige `X-CSRF-Token` válido y `Origin` coincidente. Rota con la sesión, no por lectura. |
-| Privacidad HTTP | `Cache-Control: no-store` en contenido privado; el service worker (si existe, S4) excluye upload/API/transcripts/chat/SSE |
-| Identidad | `user_id` siempre desde la sesión del backend; nunca de un payload ni de salida del LLM |
-| Trazas | Logs JSON con `request_id`, `audio_id`, `attempt_id`, `run_id`; sin payloads sensibles |
-| Paginación | `limit` (1–200, default 50) + `cursor` opaco |
-| Cuotas | `429` con `Retry-After` para cuota por usuario; `503` con `Retry-After` para capacidad de ingesta. Valores efectivos TBD tras F0 |
-| Idioma | Sin preselección ni autodetección; `multi` y traducción fuera de MVP/v1 |
+| Origin | Same-origin behind Caddy; absolute routes as in the specification (no `/api` prefix) |
+| Session | Opaque cookie `mw_session` (`Secure`, `HttpOnly`, `SameSite=Lax`); the server stores only the hash |
+| CSRF | `GET /me` delivers the plain token under `Cache-Control: no-store`; the server keeps only `csrf_hash`. Every mutation (`POST`/`PUT`/`PATCH`/`DELETE`, including binary) requires a valid `X-CSRF-Token` and a matching `Origin`. Rotates with the session, not per read. |
+| HTTP privacy | `Cache-Control: no-store` on private content; the service worker (if any, S4) excludes upload/API/transcripts/chat/SSE |
+| Identity | `user_id` always from backend session state; never from a payload or LLM output |
+| Tracing | JSON logs with `request_id`, `audio_id`, `attempt_id`, `run_id`; no sensitive payloads |
+| Pagination | `limit` (1–200, default 50) + opaque `cursor` |
+| Quotas | `429` with `Retry-After` for per-user quota; `503` with `Retry-After` for ingestion capacity. Effective values TBD after F0 |
+| Language | No preselection or autodetection; `multi` and translation out of MVP/v1 |
 
-### 3.2 Envelope de error y códigos
+### 3.2 Error envelope and codes
 
-Éxitos con semántica especial (no son errores; se documentan aparte para que el manejo de
-excepciones no los trate como fallos):
+Successes with special semantics (not errors; documented separately so exception handling
+does not treat them as failures):
 
-| Código | HTTP | Uso |
+| Code | HTTP | Usage |
 |---|---|---|
-| `duplicate_exact` | 200 | Dedupe exacto: devuelve la clase canónica |
-| `calendar_blocked` | 202 | Confirmada sin integración: sync queda `blocked` |
+| `duplicate_exact` | 200 | Exact dedupe: returns the canonical class |
+| `calendar_blocked` | 202 | Confirmed without integration: sync stays `blocked` |
 
 ```json
 {
   "error": {
     "code": "duplicate_variant",
-    "message": "Existe una clase con el mismo hash y otro idioma. Requiere confirmación.",
+    "message": "A class with the same hash and a different language exists. Confirmation required.",
     "details": { "existing_audio_id": "8f0c…" }
   }
 }
 ```
 
-Códigos tipados (sin PII ni contenido sensible):
+Typed codes (no PII or sensitive content):
 
-| Código | HTTP | Uso |
+| Code | HTTP | Usage |
 |---|---|---|
-| `auth_required` | 401 | Sin sesión o expirada |
-| `csrf_invalid` | 403 | Falta/invalida `X-CSRF-Token` u Origin |
-| `forbidden` | 403 | Recurso de otro tenant |
-| `not_found` | 404 | Inexistente o tombstoned |
-| `validation_failed` | 422 | Campos inválidos (detalle por campo) |
-| `language_not_allowed` | 422 | Código fuera de la allowlist probada |
-| `consent_required` | 422 | Falta aceptación de tratamiento cloud |
-| `upload_expired` | 410 | TTL de la sesión de ingesta vencido |
-| `attempt_not_active` | 409 | Intento no está en `awaiting_upload` |
-| `payload_too_large` | 413 | Límite de bytes/duración superado |
-| `unsupported_format` | 415 | Contenedor/codec no probado o malformado |
-| `duplicate_variant` | 409 | Mismo hash, contexto distinto: exige confirmación |
-| `capacity_unavailable` | 503 | Sin slot de RAM/concurrencia |
-| `rate_limited` | 429 | Cuota por usuario |
-| `tombstoned` | 409 | Operación sobre clase eliminada |
-| `version_conflict` | 409 | Locking optimista (tasks) |
-| `invalid_transition` | 409 | Estado destino no permitido |
-| `transcript_unavailable` | 409 | Sin transcript utilizable (reupload); 404 si el recurso no existe para el tenant |
-| `srt_unavailable` | 409 | Timestamps inválidos para SRT |
-| `session_conflict` | 409 | La sesión ya fue rotada o revocada por otra petición; repetir `GET /me` |
-| `evidence_invalid` | 422 | Span/cita no reconstruible desde BD |
-| `context_exceeded` | 422 | Historial + evidencia no caben tras recorte determinista |
-| `date_unresolved` | 422 | Confirmar exige fecha válida |
-| `provider_unavailable` | 503 | LLM/embeddings/Google caídos |
-| `internal_error` | 500 | Sin detalles sensibles |
+| `auth_required` | 401 | No session or expired |
+| `csrf_invalid` | 403 | Missing/invalid `X-CSRF-Token` or Origin |
+| `forbidden` | 403 | Another tenant's resource |
+| `not_found` | 404 | Nonexistent or tombstoned |
+| `validation_failed` | 422 | Invalid fields (per-field detail) |
+| `language_not_allowed` | 422 | Code outside the tested allowlist |
+| `consent_required` | 422 | Missing cloud-processing acceptance |
+| `upload_expired` | 410 | Ingestion session TTL expired |
+| `attempt_not_active` | 409 | The attempt is not in `awaiting_upload` |
+| `payload_too_large` | 413 | Byte/duration limit exceeded |
+| `unsupported_format` | 415 | Untested or malformed container/codec |
+| `duplicate_variant` | 409 | Same hash, different context: requires confirmation |
+| `capacity_unavailable` | 503 | No RAM/concurrency slot |
+| `rate_limited` | 429 | Per-user quota |
+| `tombstoned` | 409 | Operation on a deleted class |
+| `version_conflict` | 409 | Optimistic locking (tasks) |
+| `invalid_transition` | 409 | Target status not allowed |
+| `transcript_unavailable` | 409 | No usable transcript (re-upload); 404 if the resource does not exist for the tenant |
+| `srt_unavailable` | 409 | Invalid timestamps for SRT |
+| `session_conflict` | 409 | The session was already rotated or revoked by another request; repeat `GET /me` |
+| `subject_name_taken` | 409 | The user already has an active subject with that name (case-insensitive) |
+| `subject_has_active_audios` | 409 | The subject has active classes; `details.class_count` says how many |
+| `evidence_invalid` | 422 | Span/quote not reconstructible from the DB |
+| `context_exceeded` | 422 | History + evidence do not fit after deterministic trimming |
+| `date_unresolved` | 422 | Confirming requires a valid date |
+| `provider_unavailable` | 503 | LLM/embeddings/Google down |
+| `internal_error` | 500 | No sensitive details |
 
-### 3.3 M1 — Autenticación, perfil e integraciones (S1; connect/reconnect en S3)
+Ingest persists a smaller set (S2.13, `maulwurf_ingest/outcomes.py`). The public `PUT`
+uses the row below; the stored `error_code` can be more specific than the public code.
+`probe_unavailable` is an infrastructure fault and ends `requires_reupload`, not `rejected`.
 
-| Método | Ruta | Sprint | Descripción | Respuesta |
+| Stored `error_code` | Attempt status | Public code |
+|---|---|---|
+| `url`, `playlist`, `malformed`, `unverified_container`, `not_pcm_s16`, `multi_channel`, `unexpected_container` | `rejected` | `415 unsupported_format` |
+| `payload_too_large` | `rejected` | `413 payload_too_large` |
+| `no_usable_text` | `rejected` | `409 transcript_unavailable` |
+| `variant_hash_mismatch` | `rejected` | `422 variant_hash_mismatch` |
+| `probe_unavailable` | `requires_reupload` | `503 capacity_unavailable` |
+| `asr_failed`, `asr_timeout`, `asr_rejected`, `supervisor_error`, `reception_abandoned`, `reception_integrity_failed`, `api_error` | `requires_reupload` | `500 internal_error` |
+| `reception_interrupted`, `client_disconnected`, `duplicate_exact`, `duplicate_variant` | `cancelled` | no body, or `500 internal_error` |
+
+`401 internal_credential_invalid` is not stored and is not shown to the browser; the public
+answer is `500 internal_error`. `409 wrong_instance` and `409 reception_not_held` on admit
+are `503 capacity_unavailable`.
+
+### 3.3 M1 — Authentication, profile, and integrations (S1; connect/reconnect in S3)
+
+| Method | Route | Sprint | Description | Response |
 |---|---|---|---|---|
-| `GET` | `/auth/google/start` | S1 | OAuth Authorization Code con `state`, PKCE y `nonce`; scopes `openid email profile` | `302` a Google |
-| `GET` | `/auth/google/callback` | S1 | Valida `nonce`/issuer/audience; crea usuario por `sub`; emite sesión opaca | `302` a `/` con cookie |
-| `POST` | `/auth/logout` | S1 | Revoca la sesión | `204` |
-| `GET` | `/me` | S1 | Perfil + integraciones + bootstrap CSRF no-cacheable | `200` (shape abajo) |
-| `PATCH` | `/me` | S1 | Actualiza `timezone` (IANA), `display_name` | `200` |
-| `GET` | `/integrations/status` | S1 | Estado de login/Calendar/Gmail, scopes, frescura | `200` |
-| `POST` | `/integrations/google/connect` | S3 | OAuth incremental con scopes de Calendar (verificación real D7) | `302` a Google |
-| `POST` | `/integrations/google/reconnect` | S3 | Re-autorización tras `invalid_grant` (Testing caduca a 7 días) | `302` a Google |
-| `PATCH` | `/me/notifications` | S4 | Preferencias M8 (opt-in Gmail, digests, umbrales) | `200` |
-| `POST` | `/notifications/test` | S4 | Envío de prueba al email verificado | `202` |
-| `DELETE` | `/me` | S4 | Borrado de cuenta; admite `delete_maulwurf_events` explícito, crea operación y pide borrados remotos antes de revocar tokens | `202 {deletion_operation_id}` |
-| `GET` | `/me/deletion/{id}` | S4 | Estado no sensible del borrado; acepta la sesión restringida iniciadora | `pending\|completed\|completed_with_remote_failures` |
+| `GET` | `/auth/google/start` | S1 | OAuth Authorization Code with `state`, PKCE, and `nonce`; scopes `openid email profile` | `302` to Google |
+| `GET` | `/auth/google/callback` | S1 | Validates `nonce`/issuer/audience; creates the user by `sub`; issues an opaque session | `302` to `/` with cookie |
+| `POST` | `/auth/logout` | S1 | Revokes the session | `204` |
+| `GET` | `/me` | S1 | Profile + integrations + non-cacheable CSRF bootstrap | `200` (shape below) |
+| `PATCH` | `/me` | S1 | Updates `timezone` (IANA), `display_name` | `200` |
+| `GET` | `/integrations/status` | S1 | Login/Calendar/Gmail status, scopes, freshness | `200` |
+| `POST` | `/integrations/google/connect` | S3 | Incremental OAuth with Calendar scopes (real verification D7) | `302` to Google |
+| `POST` | `/integrations/google/reconnect` | S3 | Re-authorization after `invalid_grant` (Testing expires after 7 days) | `302` to Google |
+| `PATCH` | `/me/notifications` | S4 | M8 preferences (Gmail opt-in, digests, thresholds) | `200` |
+| `POST` | `/notifications/test` | S4 | Test send to the verified email | `202` |
+| `DELETE` | `/me` | S4 | Account deletion; accepts explicit `delete_maulwurf_events`, creates the operation, and requests remote deletions before revoking tokens | `202 {deletion_operation_id}` |
+| `GET` | `/me/deletion/{id}` | S4 | Non-sensitive deletion status; accepts the restricted initiator session | `pending\|completed\|completed_with_remote_failures` |
 
-Tras `DELETE /me`, la sesión que inició la operación queda en **modo restringido**: solo
-`GET /me/deletion/{id}` y `POST /auth/logout`; cualquier otra sesión se revoca. Así el
-cliente puede mostrar el estado del borrado sin conservar acceso al resto de la cuenta.
+After `DELETE /me`, the session that started the operation enters **restricted mode**: only
+`GET /me/deletion/{id}` and `POST /auth/logout`; every other session is revoked. This way
+the client can show the deletion status without keeping access to the rest of the account.
 
-Ejemplo `GET /me`:
+`GET /me` example:
 
 ```json
 {
   "id": "b2a1…",
   "email": "estudiante@uni.edu",
   "timezone": "America/Bogota",
-  "csrf_token": "token-plano-solo-en-respuesta-no-cacheable",
+  "csrf_token": "plain-token-only-in-non-cacheable-response",
   "integrations": {
     "google_login": "connected",
     "calendar": {
@@ -1079,21 +1124,24 @@ Ejemplo `GET /me`:
 }
 ```
 
-Rechazar permisos de Calendar/Gmail **no** impide transcribir ni chatear.
+Declining Calendar/Gmail permissions does **not** prevent transcribing or chatting.
 
-### 3.4 M2a — Materias (S1)
+### 3.4 M2a — Subjects (S1)
 
-| Método | Ruta | Descripción | Respuestas |
+| Method | Route | Description | Responses |
 |---|---|---|---|
-| `GET` | `/subjects` | Lista del tenant | `200` `{items:[{id,name,color,teacher,class_count}]}` |
-| `POST` | `/subjects` | Crea (`name`, `color`, `teacher` opcional) | `201` · `422` · `409` duplicado |
-| `PATCH` | `/subjects/{id}` | Edita | `200` · `404` · `403` |
-| `DELETE` | `/subjects/{id}` | Elimina; `409 subject_has_active_audios` si hay clases activas; `{"force": true}` exige confirmación explícita y tombstone de sus clases | `204` · `409` |
+| `GET` | `/subjects` | Tenant list | `200` `{items:[{id,name,color,teacher,class_count}]}` |
+| `POST` | `/subjects` | Creates (`name`, `color`, optional `teacher`) | `201` · `422` · `409 subject_name_taken` |
+| `PATCH` | `/subjects/{id}` | Edits only the fields sent; a foreign, missing or deleted subject answers `404` (ADR-0006, not `403`) | `200` · `404` · `422` · `409 subject_name_taken` |
+| `DELETE` | `/subjects/{id}` | Deletes (tombstone `deleted_at`); `409 subject_has_active_audios` if there are active classes. `{"force": true}` is accepted by contract but **has no effect in S1**: deleting the classes with the subject is deferred to S2, with the `DELETE /audios/{id}` tombstone | `204` · `404` · `409 subject_has_active_audios` |
 
-### 3.5 M2b — Ingesta y audios (esqueleto S1; completo S2)
+A subject name is unique per user among non-deleted subjects, ignoring case and surrounding
+spaces; deleting a subject frees its name.
 
-`GET /ingestion/capabilities` publica solo valores observados por el spike. Antes de F0 el
-shape no pretende probar límites ni idiomas:
+### 3.5 M2b — Ingestion and audios (S1 skeleton; S2 full)
+
+`GET /ingestion/capabilities` publishes only values observed by the spike. Before F0 the
+shape does not claim to prove limits or languages:
 
 ```json
 {
@@ -1111,9 +1159,9 @@ shape no pretende probar límites ni idiomas:
 }
 ```
 
-Después de F0, los campos no nulos deben enlazar al informe versionado que los midió.
+After F0, non-null fields must link to the versioned report that measured them.
 
-`POST /audios` reserva una sesión; no puede deduplicar antes de conocer el hash.
+`POST /audios` reserves a session; it cannot deduplicate before knowing the hash.
 
 ```json
 {
@@ -1121,7 +1169,7 @@ Después de F0, los campos no nulos deben enlazar al informe versionado que los 
   "class_date": "2026-09-21",
   "class_timezone": "America/Bogota",
   "language_code": "es",
-  "title": "Clase 03 — integrales",
+  "title": "Class 03 — integrals",
   "teacher": "…",
   "privacy_notice_version": "2026-09-19",
   "cloud_processing_accepted": true,
@@ -1130,44 +1178,53 @@ Después de F0, los campos no nulos deben enlazar al informe versionado que los 
 }
 ```
 
-`privacy_notice_version` y los dos acknowledgements se validan antes de reservar. El token
-opcional solo puede venir de un `409 duplicate_variant` previo, pertenece al mismo tenant,
-vence pronto y se consume una vez.
+`privacy_notice_version` and the two acknowledgements are validated before reserving. The
+optional token can only come from a previous `409 duplicate_variant`, belongs to the same
+tenant, expires soon, and is consumed once.
 
 - `201 Created`: `{"audio_id","attempt_id","upload_url","upload_expires_at","outcome":"new"}`.
-- `422 consent_required|language_not_allowed|validation_failed`; `429` cuota; `503` sin slot.
-- No existe respuesta `duplicate_exact` ni `duplicate_variant` en este POST.
+- `422 consent_required|language_not_allowed|validation_failed`; `429` quota; `503` no slot.
+- There is no `duplicate_exact` or `duplicate_variant` response on this POST.
 
 `PUT /audios/{id}/content?attempt_id=…`:
 
-- Binario autenticado: sesión + CSRF + `attempt_id`; la URL es relativa al mismo origen, no
-  es token bearer público ni permite elegir hosts internos.
-- Recepción streaming a `tmpfs` privado por intento, SHA-256 incremental, corte al superar
-  límite; el hash y la duración reales los valida ffprobe, no `Content-Length`.
-- Tras recepción completa calcula SHA-256 y limpia primero el temporal que no seguirá a ASR.
-  `202 Accepted` solo para contenido nuevo admitido:
+- Authenticated binary: session + CSRF + `attempt_id`; the URL is same-origin relative, it
+  is not a public bearer token and does not allow choosing internal hosts.
+- Streaming reception into private per-attempt `tmpfs`, incremental SHA-256, cut-off when
+  the limit is exceeded; the real hash and duration are validated by ffprobe, not
+  `Content-Length`.
+- After full reception it computes SHA-256 and cleans up first the temporary data that will
+  not follow ASR. `202 Accepted` only for new admitted content:
 ```json
 { "attempt_id": "c41b…", "status": "transcribing", "received_bytes": 184467440 }
 ```
-- `200 duplicate_exact`: `{"audio_id":"canónico","outcome":"duplicate_exact"}` tras liberar
-  la reserva. `409 duplicate_variant` incluye `existing_audio_id`,
-  `variant_confirmation_token` opaco y su expiración; el cliente debe hacer segundo POST y
-  volver a subir. El segundo PUT compara su hash con el token antes de ASR.
-- Errores: `410 upload_expired` · `413 payload_too_large` · `415 unsupported_format` ·
+- `200 duplicate_exact`: `{"audio_id":"canonical","outcome":"duplicate_exact"}` after
+  releasing the reservation. `409 duplicate_variant` includes `existing_audio_id`, an
+  opaque `variant_confirmation_token`, and its expiry; the client must make a second POST
+  and upload again. The second PUT compares its hash against the token before ASR.
+- Errors: `410 upload_expired` · `413 payload_too_large` · `415 unsupported_format` ·
   `409 attempt_not_active` · `422 variant_hash_mismatch` · `429`/`503`.
-- Desconectar la subida antes de completarla cancela y limpia el intento; tras el `202`
-  cerrar la pestaña/SSE **no** cancela el ASR (continúa bajo su lease).
+- Disconnecting the upload before it completes cancels and cleans up the attempt; after
+  the `202`, closing the tab/SSE does **not** cancel ASR (it continues under its lease).
 
-`GET /audios/{id}` — ficha con estados independientes por etapa (spec M2):
+`GET /audios?subject_id={uuid}&limit={1..100}` — tenant listing (spec M9): `{ "items": [ … ] }`
+with the same per-item fields as the detail below except `audio_retained`, `transcript` and
+`exports`. Ordered by `class_date DESC, created_at DESC`; tombstoned classes are excluded and a
+foreign or unknown `subject_id` yields an empty list (never a `404`, so it discloses nothing
+across tenants).
+
+`GET /audios/{id}` — detail view with independent per-stage statuses (spec M2):
 
 ```json
 {
   "id": "8f0c…",
-  "subject": { "id": "5d6e…", "name": "Cálculo II", "color": "#6366f1" },
-  "title": "Clase 03",
+  "subject": { "id": "5d6e…", "name": "Calculus II", "color": "#6366f1" },
+  "title": "Class 03",
   "class_date": "2026-09-21",
   "class_timezone": "America/Bogota",
   "language_code": "es",
+  "duration_seconds": 3725.5,
+  "created_at": "2026-09-21T18:02:11Z",
   "attempt": {
     "attempt_id": "c41b…",
     "status": "transcribing",
@@ -1178,15 +1235,21 @@ vence pronto y se consume una vez.
   },
   "stages": { "index": "pending", "analyze": "not_requested" },
   "aggregate_status": "processing",
-  "audio_retained": false
+  "audio_retained": false,
+  "transcript": { "version": 2, "timestamp_precision": "segment", "char_count": 18422 },
+  "exports": { "txt": true, "srt": true }
 }
 ```
 
-`aggregate_status`: `processing` mientras haya etapas requeridas pendientes/en ejecución;
-`ready` si todas con éxito; `partial` si hay transcript utilizable pero alguna etapa
-requerida falló/canceló; `failed` si no hay transcript utilizable.
+`transcript` is `null` without a usable transcript; `exports.srt` is `true` only when a
+truthful SRT exists (real precision and ordered times inside `duration_seconds`), so the
+client can enable the download without probing the `409`.
 
-`GET /audios/{id}/progress` (SSE, consumido con `EventSource` por ser `GET`):
+`aggregate_status`: `processing` while required stages are pending/running; `ready` if all
+succeeded; `partial` if there is a usable transcript but some required stage failed/was
+cancelled; `failed` if there is no usable transcript.
+
+`GET /audios/{id}/progress` (SSE, consumed with `EventSource` because it is a `GET`):
 
 ```text
 event: snapshot
@@ -1209,68 +1272,68 @@ id: 21
 data: {"code":"asr_deadline_exceeded","detail":"requires_reupload"}
 ```
 
-Progreso real: bytes recibidos y fragmentos terminados/total si se conoce; **nunca
-porcentajes inventados**. Latidos `: ping` cada ~15 s mantienen la conexión a través de
-proxies. Al reconectar con `Last-Event-ID`, el servidor reenvía `snapshot` (los eventos son
-estado, no incrementales); polling como fallback.
+Real progress: bytes received and fragments done/total when known; **never invented
+percentages**. `: ping` heartbeats every ~15 s keep the connection alive through proxies.
+On reconnect with `Last-Event-ID`, the server resends `snapshot` (events are state, not
+incremental); polling as fallback.
 
-Otros endpoints M2:
+Other M2 endpoints:
 
-| Método | Ruta | Sprint | Reglas | Respuestas |
+| Method | Route | Sprint | Rules | Responses |
 |---|---|---|---|---|
-| `POST` | `/audios/{id}/retry` | S2 · S3 | Cuerpo obligatorio `{stages:["index"\|"analyze"], transcript_version}`; solo texto, deduplicado por run/config | `202` · `409 transcript_unavailable\|invalid_transition` |
-| `POST` | `/audios/{id}/reupload` | S2 | Solo sin transcript utilizable; nueva sesión efímera con la **misma identidad** de ingesta | `201` nueva URL · `409` si ya hay transcript |
-| `POST` | `/audios/{id}/attempts/{attempt_id}/cancel` | S2 | Cancela intento autenticado; tras el commit devuelve conflicto con estado actual y **no** destruye el transcript | `202` · `409 invalid_transition` |
-| `DELETE` | `/audios/{id}` | S2 | Tombstone: cancela intentos/jobs, borra transcript/chunks/embeddings/tareas derivadas/resumen/citas; eventos Google existentes se conservan por defecto (aviso); eliminarlos exige opción explícita vía `google_remote_operations` | `202` |
-| `GET` | `/audios/{id}/transcript.txt` | S2 | Export TXT si hay transcript | `200` · `404` |
-| `GET` | `/audios/{id}/transcript.srt` | S2 | Export SRT **solo** con tiempos válidos, ordenados y dentro de la duración | `200` · `409 srt_unavailable` |
+| `POST` | `/audios/{id}/retry` | S2 · S3 | Required body `{stages:["index"\|"analyze"], transcript_version}`; text only, deduplicated by run/config | `202` · `409 transcript_unavailable\|invalid_transition` |
+| `POST` | `/audios/{id}/reupload` | S2 | Only without a usable transcript; new ephemeral session with the **same** ingestion identity | `201` new URL · `409` if a transcript already exists |
+| `POST` | `/audios/{id}/attempts/{attempt_id}/cancel` | S2 | Cancels an authenticated attempt; after the commit it returns a conflict with the current status and does **not** destroy the transcript | `202` · `409 invalid_transition` |
+| `DELETE` | `/audios/{id}` | S2 | Tombstone: cancels attempts/jobs, deletes derived transcripts/chunks/embeddings/tasks/summary/citations; existing Google events are kept by default (notice); removing them requires an explicit option via `google_remote_operations` | `202` |
+| `GET` | `/audios/{id}/transcript.txt` | S2 | TXT export of the active transcript, or of one `?segment={segment_id}` (owner-scoped) | `200` · `404` |
+| `GET` | `/audios/{id}/transcript.srt` | S2 | SRT export **only** with valid, ordered timestamps within the duration | `200` · `404` sin transcript · `409 srt_unavailable` |
 
-### 3.6 M3 — Contrato interno de transcripción (no es API pública)
+### 3.6 M3 — Internal transcription contract (not a public API)
 
-La ingesta es un servicio FastAPI aparte (`ingest`); su interfaz con la API/BD está congelada
-desde S1:
+Ingestion is a separate FastAPI service (`ingest`); its interface with the API/DB has been
+frozen since S1:
 
-| Interfaz | Contrato |
+| Interface | Contract |
 |---|---|
-| Reserva | La API crea el intento con lease y fencing token; el servicio `ingest` es el único propietario durante recepción/ASR |
-| Commit atómico | Transacción única: `transcripts` + `segments` + eventos `index/analyze` con `enabled=false, blocked_reason=cleanup_pending`; idioma/modelo/configuración/versión/precisión persistidos; vacío o silencio = `rejected/no_usable_text` |
-| Cleanup | Tras commit el intento pasa a `transcript_committed_cleanup_pending`. `finally` cierra y elimina temporales; `succeeded` exige `cleanup_status=verified`. |
-| Habilitación de outbox | Solo eventos de índice/análisis se habilitan tras cleanup verificado. El reconciliador post-commit puede verificar y habilitar sin retranscribir. Calendar, notificaciones y borrados no usan este gate. |
-| Fencing | Token por intento; un propietario vencido no puede publicar; commits tardíos tras cancelación/tombstone se rechazan |
-| Reintentos | gRPC transitorios acotados dentro del intento con deadline total; auth/idioma/formato inválido no se reintenta; agotar plazo → `requires_reupload` |
-| Timestamps | `word\|segment\|none` según lo medido; nunca inventar ni repartir proporcionalmente; SRT solo con tiempos válidos |
+| Reservation | The API creates the attempt with lease and fencing token; the `ingest` service is the sole owner during reception/ASR |
+| Atomic commit | Single transaction: `transcripts` + `segments` + `index/analyze` events with `enabled=false, blocked_reason=cleanup_pending`; language/model/configuration/version/precision persisted; empty or silence = `rejected/no_usable_text` |
+| Cleanup | After the commit the attempt moves to `transcript_committed_cleanup_pending`. `finally` closes and removes temporaries; `succeeded` requires `cleanup_status=verified`. |
+| Outbox enabling | Only index/analyze events are enabled after verified cleanup. The post-commit reconciler can verify and enable without retranscribing. Calendar, notifications, and deletions do not use this gate. |
+| Fencing | Token per attempt; an expired owner cannot publish; late commits after cancellation/tombstone are rejected |
+| Retries | Transient gRPC retries bounded within the attempt with an overall deadline; invalid auth/language/format is not retried; deadline exhausted → `requires_reupload` |
+| Timestamps | `word\|segment\|none` as measured; never invent or distribute proportionally; SRT only with valid times |
 
-### 3.7 M4 — Tareas (S3)
+### 3.7 M4 — Tasks (S3)
 
-| Método | Ruta | Descripción | Respuestas |
+| Method | Route | Description | Responses |
 |---|---|---|---|
-| `GET` | `/tasks?status=&subject_id=&due_from=&due_to=` | Bandeja filtrada por estado (`pending\|needs_review\|confirmed\|dismissed\|completed`) | `200` |
-| `GET` | `/tasks/{id}` | Detalle con evidencia, `calendar_sync_status` **aparte**, revisión pendiente si existe | `200` · `404` |
-| `POST` | `/tasks` | Manual o propuesta chat. `manual` usa cero fuentes; una propuesta fundada en corpus requiere `task_sources` validadas | `201` · `422 evidence_invalid` |
-| `PATCH` | `/tasks/{id}` | Cuerpo incluye `version`. Si está `confirmed`, crea revisión `pending_confirmation` y no cambia campos activos; desajuste → `409` con estado vigente | `200` · `409 version_conflict` |
-| `POST` | `/tasks/{id}/confirm` | Cuerpo `{expected_version, revision_id?}`. Confirma tarea activa o promueve exactamente la revisión pendiente, y crea/reutiliza outbox Calendar atómica | `202` pending/blocked · `409 version_conflict` · `422 date_unresolved\|evidence_invalid` |
-| `POST` | `/tasks/{id}/dismiss` | Descarta; cancela recordatorios futuros; conserva evento con aviso | `200` |
-| `POST` | `/tasks/{id}/complete` | Completa; cancela recordatorios futuros; conserva evento con aviso | `200` |
+| `GET` | `/tasks?status=&subject_id=&due_from=&due_to=` | Inbox filtered by status (`pending\|needs_review\|confirmed\|dismissed\|completed`) | `200` |
+| `GET` | `/tasks/{id}` | Detail with evidence, `calendar_sync_status` **separate**, pending revision if any | `200` · `404` |
+| `POST` | `/tasks` | Manual or chat proposal. `manual` uses zero sources; a corpus-grounded proposal requires validated `task_sources` | `201` · `422 evidence_invalid` |
+| `PATCH` | `/tasks/{id}` | Body includes `version`. If `confirmed`, creates a `pending_confirmation` revision and does not change active fields; mismatch → `409` with the current status | `200` · `409 version_conflict` |
+| `POST` | `/tasks/{id}/confirm` | Body `{expected_version, revision_id?}`. Confirms the active task or promotes exactly the pending revision, and creates/reuses the Calendar outbox atomically | `202` pending/blocked · `409 version_conflict` · `422 date_unresolved\|evidence_invalid` |
+| `POST` | `/tasks/{id}/dismiss` | Dismisses; cancels future reminders; keeps the event with a notice | `200` |
+| `POST` | `/tasks/{id}/complete` | Completes; cancels future reminders; keeps the event with a notice | `200` |
 
-Shape de tarea:
+Task shape:
 
 ```json
 {
-  "id": "3f2a…", 
+  "id": "3f2a…",
   "audio_id": "8f0c…",
   "sources": [{"audio_id":"8f0c…","transcript_version":1,"segment_id":"a1…",
                "char_start":0,"char_end":48}],
-  "subject": {"id": "5d6e…", "name": "Cálculo II"},
+  "subject": {"id": "5d6e…", "name": "Calculus II"},
   "source": "extraction",
   "tipo": "examen",
-  "titulo": "Examen parcial — temas 1 a 4",
-  "detalle": "Incluye sustitución trigonométrica",
+  "titulo": "Midterm exam — topics 1 to 4",
+  "detalle": "Includes trigonometric substitution",
   "due_date": "2026-09-21",
   "due_at": null,
   "timezone": "America/Bogota",
   "all_day": true,
   "date_status": "resolved",
-  "date_text": "el lunes 21 de septiembre",
+  "date_text": "Monday, September 21",
   "date_reason": null,
   "confidence_score": 0.92,
   "status": "needs_review",
@@ -1284,25 +1347,25 @@ Shape de tarea:
   },
   "evidence": [
     {"segment_id": "a1…", "char_start": 0, "char_end": 48,
-     "quote": "el examen parcial será el lunes 21 de septiembre",
+     "quote": "the midterm exam will be on Monday, September 21",
      "t_start": 1875.2, "t_end": 1888.9}
   ],
   "pending_revision": {"id":"r1…","base_task_version":1,"status":"pending_confirmation"}
 }
 ```
 
-Contrato del bloque de agenda (M5): vencimiento y bloque Calendar no son lo mismo; los pares
-`event_start_at/event_end_at` (con hora) y `event_start_date/event_end_date_exclusive`
-(all-day) son mutuamente excluyentes con fin posterior al inicio; la duración por defecto es
-visible/editable antes de confirmar y el LLM nunca inventa una duración.
+Calendar block contract (M5): the due date and the Calendar block are not the same thing;
+the `event_start_at/event_end_at` (with time) and `event_start_date/event_end_date_exclusive`
+(all-day) pairs are mutually exclusive with the end after the start; the default duration is
+visible/editable before confirming and the LLM never invents a duration.
 
 ### 3.8 M5 — Google Calendar (S3)
 
-| Método | Ruta | Descripción | Respuestas |
+| Method | Route | Description | Responses |
 |---|---|---|---|
-| `GET` | `/calendar/events?from=&to=` | Lee el espejo local (`calendar_events`), ventana propuesta -7/+60 días; informa frescura/cobertura | `200` con `last_synced_at` y aviso de cobertura |
-| `POST` | `/calendar/sync` | Fuerza refresco completo de la ventana con publicación atómica (sin mezclar `syncToken` con filtros) | `202` · `409` |
-| `GET` | `/calendar/conflicts` | Conflictos: solapamiento horario (eventos con hora) vs concentración de entregas/exámenes el mismo día | `200` shape abajo |
+| `GET` | `/calendar/events?from=&to=` | Reads the local mirror (`calendar_events`), proposed window -7/+60 days; reports freshness/coverage | `200` with `last_synced_at` and a coverage notice |
+| `POST` | `/calendar/sync` | Forces a full refresh of the window with atomic publication (without mixing `syncToken` with filters) | `202` · `409` |
+| `GET` | `/calendar/conflicts` | Conflicts: time overlap (events with time) vs concentration of deadlines/exams on the same day | `200` shape below |
 
 ```json
 {
@@ -1318,12 +1381,12 @@ visible/editable antes de confirmar y el LLM nunca inventa una duración.
 }
 ```
 
-El mismo contrato alimenta dashboard y `get_calendar_events(rango)`. Al completar
-`/integrations/google/reconnect`, el backend busca solo tareas `blocked` de la versión vigente,
-las mueve atómicamente a `pending` y crea/reutiliza su outbox. No reactiva revisiones, tareas
-tombstoned ni versiones obsoletas.
+The same contract feeds the dashboard and `get_calendar_events(range)`. When
+`/integrations/google/reconnect` completes, the backend looks only for `blocked` tasks of
+the current version, atomically moves them to `pending`, and creates/reuses their outbox.
+It does not reactivate revisions, tombstoned tasks, or obsolete versions.
 
-### 3.9 M6 — Búsqueda híbrida (S2; Ctrl+K en S4)
+### 3.9 M6 — Hybrid search (S2; Ctrl+K in S4)
 
 `GET /search?q=&subject_id=&from=&to=&limit=&cursor=`
 
@@ -1333,45 +1396,52 @@ tombstoned ni versiones obsoletas.
     {
       "chunk_id": "c9…",
       "audio_id": "8f0c…",
-      "subject": {"id": "5d6e…", "name": "Cálculo II", "color": "#6366f1"},
+      "subject": {"id": "5d6e…", "name": "Calculus II", "color": "#6366f1"},
       "class_date": "2026-09-03",
-      "snippet": "…sustitución trigonométrica…",
+      "snippet": "…trigonometric substitution…",
       "segment_id": "a1…",
       "t_start": 1875.0,
       "t_end": 1890.0,
       "score_rrf": 0.031
     }
   ],
-  "took_ms": 120
+  "took_ms": 120,
+  "next_cursor": null
 }
 ```
 
-- Ambas ramas (pgvector + FTS con configuración por idioma) filtran **primero** `user_id`,
-  recursos activos, versión activa y filtros; nunca top-k global y filtro después. La rama
-  vectorial exige `hnsw.iterative_scan = strict_order` y over-fetch (§2.5) para sostener
-  ese contrato; alternativa medida: escaneo exacto en corpus pequeños.
-- La fusión RRF produce orden total determinista: `ORDER BY score_rrf DESC, chunk_id`; el
-  `cursor` de paginación incluye el desempate para no omitir ni duplicar resultados.
-- Sin offsets fiables, `t_start/t_end` van `null` y la UI muestra «segmento N».
-- Objetivo p95 ≤ 500 ms medido, no garantizado (spec §8).
+- Both branches (pgvector + FTS with per-language configuration) filter `user_id`, active
+  resources, active version, and filters **first**; never global top-k and then filter. The
+  vector branch requires `hnsw.iterative_scan = strict_order` and over-fetch (§2.5) to
+  sustain that contract; measured alternative: exact scan on small corpora.
+- RRF fusion produces a deterministic total order: `ORDER BY score_rrf DESC, chunk_id`; the
+  pagination `cursor` includes the generation and the tiebreaker so no results are omitted or
+  duplicated. `next_cursor` is additive to the frozen §1.3 example and is `null` when the
+  bounded 60-hit window is exhausted.
+- `limit` is 1..50 with default 8; there is no deep pagination beyond the 60 fused hits.
+- A per-user Redis quota is checked before the embeddings call; exceeding it returns
+  `429 rate_limited` with `Retry-After`. The provisional 30/min limit
+  (`MAULWURF_SEARCH_RATE_LIMIT_PER_MINUTE`) waits for the D5/F0 provider quota.
+- Without reliable offsets, `t_start/t_end` are `null` and the UI shows "segment N".
+- Target p95 ≤ 500 ms measured, not guaranteed (spec §8).
 
-### 3.10 M7 — Chat RAG (S2; tools de lectura S3)
+### 3.10 M7 — RAG chat (S2; read tools S3)
 
-| Método | Ruta | Sprint | Descripción | Respuestas |
+| Method | Route | Sprint | Description | Responses |
 |---|---|---|---|---|
-| `POST` | `/chat/conversations` | S2 | Crea conversación (`mode: all\|subject\|class` + `subject_id`/`audio_id` según modo) | `201` · `422 chat_mode_invalid` |
-| `GET` | `/chat/conversations` | S2 | Lista del tenant | `200` |
-| `GET` | `/chat/conversations/{id}/messages` | S2 | Historial paginado | `200` |
-| `POST` | `/chat/conversations/{id}/messages` | S2 | Envía pregunta; **SSE consumido con `fetch`**; `client_message_id` idempotente devuelve el mensaje existente sin reejecutar | `200 text/event-stream` |
-| `DELETE` | `/chat/conversations/{id}` | S2 | Tombstone y purga de contenido/fuentes | `204` |
-| `POST` | `/chat/conversations/{id}/messages/{message_id}/cancel` | S2 | Cancela el streaming en curso; el parcial queda `cancelled` | `202` |
+| `POST` | `/chat/conversations` | S2 | Creates a conversation (`mode: all\|subject\|class` + `subject_id`/`audio_id` per mode) | `201` · `422 chat_mode_invalid` |
+| `GET` | `/chat/conversations` | S2 | Tenant list | `200` |
+| `GET` | `/chat/conversations/{id}/messages` | S2 | Paginated history | `200` |
+| `POST` | `/chat/conversations/{id}/messages` | S2 | Sends a question; **SSE consumed with `fetch`**; an idempotent `client_message_id` returns the existing message without re-executing; at most two concurrent streams per user | `200 text/event-stream` · `429 rate_limited` |
+| `DELETE` | `/chat/conversations/{id}` | S2 | Tombstone and purge of content/sources | `204` |
+| `POST` | `/chat/conversations/{id}/messages/{message_id}/cancel` | S2 | Cancels the in-flight stream; the partial is left `cancelled` | `202` |
 
-Eventos SSE del chat (congelados S2; todos con `id`): comienza con `snapshot`, sigue con
-cero o más `delta`/`citation` y termina exactamente una vez en `done` o `error`. Latidos
-`: ping` entre deltas mantienen la conexión a través de proxies; al reconectar, el
-`Last-Event-ID` permite omitir lo ya enviado (el estado completo vive en el mensaje
-persistido) y el cliente no reenvía el mismo `client_message_id` para pedir una nueva
-generación.
+Chat SSE events (frozen in S2; all with `id`): it starts with `snapshot`, continues with
+zero or more `delta`/`citation`, and ends exactly once in `done` or `error`. `: ping`
+heartbeats between deltas keep the connection alive through proxies; on reconnect, the
+`Last-Event-ID` makes it possible to skip what was already sent (the full state lives in
+the persisted message) and the client does not resend the same `client_message_id` to ask
+for a new generation.
 
 ```text
 event: snapshot
@@ -1380,14 +1450,14 @@ data: {"message_id":"m7…","status":"streaming"}
 
 event: delta
 id: 41
-data: {"text": "Según tu clase de cálculo, "}
+data: {"text": "According to your calculus class, "}
 
 event: citation
 id: 42
 data: {"index": 1, "audio_id": "8f0c…", "transcript_version": 1,
        "chunk_id": "c9…", "segment_id": "a1…",
        "t_start": 1875.0, "t_end": 1888.9,
-       "label": "[Cálculo II · Clase 03 · 31:15]",
+       "label": "[Calculus II · Class 03 · 31:15]",
        "url": "/biblioteca/8f0c…?segment=a1…"}
 
 event: done
@@ -1398,67 +1468,71 @@ data: {"message_id": "m7…", "conversation_id": "k2…",
 
 event: error
 id: 44
-data: {"code": "insufficient_evidence", "message": "No hay evidencia suficiente; pide más contexto."}
+data: {"code": "insufficient_evidence", "message": "Not enough evidence; ask for more context."}
 ```
 
-Reglas del contrato:
+Contract rules:
 
-- Las citas solo referencian IDs validados en BD; los marcadores van en buffer hasta validar
-  su ID; ningún enlace arbitrario del modelo se renderiza como fuente.
-- Sin offsets fiables la etiqueta es «segmento N», nunca un minuto inventado.
-- Sin evidencia suficiente: abstención explícita, no fabricación.
-- Tools F2 (allowlist): `get_calendar_events(rango)`, `get_pending_tasks()`,
-  `propose_task()`; ninguna escribe Calendar ni envía correo; máximo de iteraciones/tiempo
-  acotado; rangos y esquemas validados por el backend.
-- Modos validados por CHECK de `conversations`; todo dentro del tenant.
+- Citations only reference IDs validated in the DB; markers are buffered until their ID is
+  validated; no arbitrary link from the model is rendered as a source.
+- Without reliable offsets the label is "segment N", never an invented minute.
+- Without sufficient evidence: explicit abstention, not fabrication.
+- F2 tools (allowlist): `get_calendar_events(range)`, `get_pending_tasks()`,
+  `propose_task()`; none writes Calendar or sends email; iterations/time are bounded;
+  ranges and schemas validated by the backend.
+- Modes validated by the `conversations` CHECK; everything within the tenant.
+- L2.5 implements `POST .../messages` and `.../cancel` with the minimal turn persistence;
+  conversation create/list/history/delete remain A2.12. `Last-Event-ID` is the last received
+  character offset: every connect/reconnect re-sends `snapshot` and skips that prefix from the
+  persisted message.
 
-### 3.11 M8/M9 — Notificaciones y dashboard (S4)
+### 3.11 M8/M9 — Notifications and dashboard (S4)
 
-| Método | Ruta | Sprint | Descripción |
+| Method | Route | Sprint | Description |
 |---|---|---|---|
-| `PATCH` | `/me/notifications` | S4 | Preferencias M8: opt-in Gmail, hora/activación de digests, umbrales visibles |
-| `POST` | `/notifications/test` | S4 | Envío de prueba al email verificado (Gmail `gmail.send`); `202` con advertencia de entrega incierta |
-| `GET` | `/notifications?status=&from=&to=&limit=&cursor=` | S4 | Panel paginado de entregas; no mezcla payload sensible |
-| `POST` | `/notifications/{id}/resend` | S4 | Cuerpo obligatorio `{acknowledge_duplicate_risk:true}`; crea una nueva ocurrencia auditada y no muta `delivery_unknown` |
+| `PATCH` | `/me/notifications` | S4 | M8 preferences: Gmail opt-in, daily digest time/weekday, visible thresholds |
+| `POST` | `/notifications/test` | S4 | Test send to the verified email (Gmail `gmail.send`); `202` with an uncertain-delivery warning |
+| `GET` | `/notifications?status=&from=&to=&limit=&cursor=` | S4 | Paginated delivery panel; does not mix sensitive payloads |
+| `POST` | `/notifications/{id}/resend` | S4 | Required body `{acknowledge_duplicate_risk:true}`; creates a new audited occurrence and does not mutate `delivery_unknown` |
 
-El dashboard (M9) es composición de los contratos anteriores: `GET /calendar/events`,
-`GET /tasks?status=`, `GET /search` y las fichas `GET /audios/{id}`; no introduce endpoints
-nuevos en MVP.
+The dashboard (M9) is a composition of the previous contracts: `GET /calendar/events`,
+`GET /tasks?status=`, `GET /search`, and the `GET /audios/{id}` detail views; it introduces
+no new endpoints in the MVP.
 
-### 3.12 Salud y operación (S1)
+### 3.12 Health and operations (S1)
 
-| Método | Ruta | Descripción |
+| Method | Route | Description |
 |---|---|---|
-| `GET` | `/healthz` | Por proceso (web/api/ingest/worker/scheduler); liveness |
-| `GET` | `/readyz` | API: Postgres/Redis. Ingesta: BD, temporales seguros, cleanup y capacidad operativa. **Nunca** invoca proveedores pagados |
+| `GET` | `/healthz` | Per process (web/api/ingest/worker/scheduler); liveness |
+| `GET` | `/readyz` | API: Postgres/Redis. Ingestion: DB, safe temporaries, cleanup, and operational capacity. **Never** invokes paid providers |
 
-### 3.13 Contratos internos congelados (resumen por sprint)
+### 3.13 Frozen internal contracts (summary per sprint)
 
-| Semana | Contrato congelado | Área proveedora | Áreas consumidoras |
+| Week | Frozen contract | Providing area | Consuming areas |
 |---|---|---|---|
-| S1 | Sesión/cookie/CSRF (`mw_session`, hash, rotación y bootstrap `GET /me`) | API/BD | Todas |
-| S1 | `POST /audios` + `PUT` (reserva, consentimiento, dedupe en PUT, URL relativa) | API/BD + Ingesta | Web |
-| S1 | Shape de `outbox_events` y gate por tipo | API/BD | Infra/Workers |
-| S1 | Estados de ingesta y SSE | Ingesta + API/BD | Web |
-| S2 | Chunks/embeddings y eventos `index(audio_id)` | RAG + API/BD | Infra/Workers |
-| S2 | SSE de chat (`snapshot\|delta\|citation\|done\|error`) y formato de citas | RAG | Web |
-| S2 | `/search` con cursor y filtros | RAG + API/BD | Web |
-| S3 | `tasks`, `task_sources`, revisiones, `calendar_events` y settings Calendar | API/BD | Web, Infra/Workers |
-| S3 | Tools de lectura y límites de iteración | RAG | Infra/Workers, Web |
-| S4 | Extensión de settings/notificaciones y dedupe | API/BD | Infra/Workers, Web |
+| S1 | Session/cookie/CSRF contract (`mw_session`, hash, rotation, and `GET /me` bootstrap) | API/DB | All |
+| S1 | `POST /audios` + `PUT` (reservation, consent, dedupe in PUT, relative URL) | API/DB + Ingestion | Web |
+| S1 | `outbox_events` shape and per-type gate | API/DB | Infra/Workers |
+| S1 | Ingestion statuses and SSE | Ingestion + API/DB | Web |
+| S2 | Chunks/embeddings and `index(audio_id)` events | RAG + API/DB | Infra/Workers |
+| S2 | Chat SSE (`snapshot\|delta\|citation\|done\|error`) and citation format | RAG | Web |
+| S2 | `/search` with cursor and filters | RAG + API/DB | Web |
+| S3 | `tasks`, `task_sources`, revisions, `calendar_events`, and Calendar settings | API/DB | Web, Infra/Workers |
+| S3 | Read tools and iteration limits | RAG | Infra/Workers, Web |
+| S4 | Settings/notifications extension and dedupe | API/DB | Infra/Workers, Web |
 
-### 3.14 Matriz endpoint → sprint
+### 3.14 Endpoint → sprint matrix
 
 | Endpoint | S1 | S2 | S3 | S4 |
 |---|---|---|---|---|
-| `/auth/google/start`, `/callback`, `/auth/logout`, `/me`, `PATCH /me` | esqueleto→completo | — | — | — |
+| `/auth/google/start`, `/callback`, `/auth/logout`, `/me`, `PATCH /me` | skeleton→full | — | — | — |
 | `/integrations/status` | ✓ | — | — | — |
 | `/subjects` CRUD | ✓ | — | — | — |
 | `/ingestion/capabilities` | — | ✓ | — | — |
-| `POST /audios` + `PUT` binario | esqueleto | ✓ | — | — |
-| `GET /audios*`, SSE progreso, `retry`, `reupload`, `cancel`, `DELETE`, TXT/SRT | — | ✓ | — | — |
+| `POST /audios` + binary `PUT` | skeleton | ✓ | — | — |
+| `GET /audios*`, progress SSE, `retry`, `reupload`, `cancel`, `DELETE`, TXT/SRT | — | ✓ | — | — |
 | `/search` | — | ✓ | — | Ctrl+K (UI) |
-| `/chat/*` (conversaciones + SSE) | — | ✓ | tools de lectura | — |
+| `/chat/*` (conversations + SSE) | — | ✓ | read tools | — |
 | `/tasks*` (M4) | — | — | ✓ | — |
 | `/calendar/*` (M5) | — | — | ✓ | — |
 | `/integrations/google/connect\|reconnect` | — | — | ✓ | — |
@@ -1467,419 +1541,441 @@ nuevos en MVP.
 
 ---
 
-## 4. Secuencia sugerida por área y ticket (ownership por claiming)
+## 4. Suggested sequence by area and ticket (ownership via claiming)
 
-La secuencia diaria siguiente es una **propuesta de orden**, no una asignación: cada persona
-reclama tickets del backlog abierto y el owner se registra en `sprints/CLAIMS.md`. Los
-identificadores y sus dependencias provienen del plan maestro; las pruebas en
-`PLAN_TESTS.md` evidencian el ticket.
+The following daily sequence is an **ordering proposal**, not an assignment: each person
+claims tickets from the open backlog and the owner is recorded in `sprints/CLAIMS.md`. The
+identifiers and their dependencies come from the master plan; the tests in `PLAN_TESTS.md`
+evidence the ticket.
 
-Secuencia sugerida, no asignación: el owner se obtiene solo del claiming canónico. Lunes =
-verificar puerta/capacidad, abrir sprint, congelar contratos y claims; día 3 = primera
-integración consumible; días 4–5 = E2E/cierre; viernes = demo y retro. Nada se mergea sin
-review de un claim activo en la frontera afectada o del líder. Definición de hecho: alcance
-cerrado, código/documento, prueba o evidencia prevista, demostración y registro verificable.
+Suggested sequence, not assignment: the owner comes only from canonical claiming.
+Monday = verify gate/capacity, open the sprint, freeze contracts and claims; day 3 = first
+consumable integration; days 4–5 = E2E/close; Friday = demo and retro. Nothing merges
+without review from an active claim at the affected boundary or from the lead. Definition
+of done: closed scope, code/document, planned test or evidence, demonstration, and a
+verifiable record.
 
-### 4.1 S1 — Fundación + spike de viabilidad (F0)
+### 4.1 S1 — Foundation + feasibility spike (F0)
 
-**Objetivo:** monorepo corriendo, auth básica, esquema inicial y contrato real de Riva
-probado. **Criterios de salida:** monorepo §3.3 creado; `docker compose up` con los 8
-servicios sin almacenamiento de audio; login Google funcional en local; migraciones desde
-vacío; CI verde; informe del spike con evidencia (versiones, llamadas, idiomas, formatos,
-límites, timestamps).
+**Objective:** monorepo running, basic auth, initial schema, and a proven real Riva
+contract. **Exit criteria:** monorepo §3.3 created; `docker compose up` with the 8 services
+without audio storage; working Google login locally; migrations from empty; green CI; spike
+report with evidence (versions, calls, languages, formats, limits, timestamps).
 
-**Interfaces congeladas el lunes:** contrato de sesión/cookie y CSRF; esquema de `POST
-/audios` + `PUT` binario (URL de upload relativa); shape de outbox; estados de ingesta;
-shape de respuesta SSE de progreso (§2.9 y §3.5 de este documento).
+**Interfaces frozen on Monday:** session/cookie and CSRF contract; schema of `POST
+/audios` + binary `PUT` (relative upload URL); outbox shape; ingestion statuses; progress
+SSE response shape (§2.9 and §3.5 of this document).
 
-#### Área RAG · calidad · coordinación (secuencia sugerida)
+#### RAG area · quality · coordination (suggested sequence)
 
-| Día | Ticket | Tarea | Entregable verificable |
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| Lunes | L1.6 | Congelar interfaces S1 en el plan maestro | Tabla §6 del plan sin cambios toda la semana |
-| 1 | L1.1 | Verificar/ajustar la estructura monorepo §3.3 existente; fijar versiones (Python, Node, Postgres 16, pgvector) y lockfiles | `apps/` + `infra/` + lockfiles verificados |
-| 1–2 | L1.2 | ADRs cortos: estructura, versiones, política de lockfiles, formato de commit/PR | ADRs en `docs/` revisados el viernes |
-| 2 | L1.3 | Protocolo del spike: qué medir, formato del informe, criterios D2/D4/D6 | Protocolo publicado antes del día 2 y usado como único formato |
-| 3 | L1.4 | Esquema Pydantic preliminar de análisis (§M4) y de chunk (§M6) como borrador de congelación | Esquemas en `apps/api/prompts/` (borrador) |
-| 3–4 | L1.5 | Esbozar dataset G4: ≥50 preguntas/idioma, 15 no respondibles, evidencia esperada | Dataset anotado en formato acordado |
-| Continuo | L1.7 | Revisar todos los PRs; mantener tablero | PRs con review registrada |
+| Monday | L1.6 | Freeze S1 interfaces in the master plan | Plan §6 table unchanged all week |
+| 1 | L1.1 | Verify/adjust the existing monorepo §3.3 structure; pin versions (Python, Node, Postgres 16, pgvector) and lockfiles | `apps/` + `infra/` + lockfiles verified |
+| 1–2 | L1.2 | Short ADRs: structure, versions, lockfile policy, commit/PR format | ADRs in `docs/` reviewed on Friday |
+| 2 | L1.3 | Spike protocol: what to measure, report format, D2/D4/D6 criteria | Protocol published before day 2 and used as the single format |
+| 3 | L1.4 | Preliminary Pydantic schema for analysis (§M4) and chunk (§M6) as a freeze draft | Schemas in `apps/api/prompts/` (draft) |
+| 3–4 | L1.5 | Sketch the G4 dataset: ≥50 questions/language, 15 unanswerable, expected evidence | Annotated dataset in the agreed format |
+| Continuous | L1.7 | Review all PRs; maintain the board | PRs with recorded review |
 
-Plan B: si el spike falla (p. ej. sin timestamps), reunión extraordinaria el **martes** para
-decidir D6 antes de que S2 dependa de ello.
+Plan B: if the spike fails (e.g., no timestamps), an extraordinary meeting on **Tuesday**
+to decide D6 before S2 depends on it.
 
-#### Área API · base de datos (secuencia sugerida)
+#### API area · database (suggested sequence)
 
-| Día | Ticket | Tarea | Entregable verificable |
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1 | A1.1 | Verificar scaffold `apps/api`: FastAPI + Pydantic v2 + SQLAlchemy 2 async (routers/services/models/core) y `/healthz` | API arranca en compose |
-| 1 | A1.2 | Verificar/completar config Pydantic Settings; `NVIDIA_API_KEY` y secretos solo por entorno | Secretos fuera de código y logs |
-| 2–3 | A1.3 | OAuth Google backend: Authorization Code + `state` + PKCE; valida `nonce`/issuer/audience; identidad por `sub` | Login real en compose |
-| 2–3 | A1.4 | Sesión opaca: cookie `Secure/HttpOnly/SameSite=Lax`, solo hash en `sessions`, expiración/revocación; CSRF y Origin en mutaciones | Tests de revocación/CSRF en verde |
-| 3–4 | A1.5 | Tablas núcleo `users/sessions/google_credentials/subjects` con FKs compuestas y RLS base, más shape S1 de `audios`, `ingestion_attempts` y `outbox_events` | Migraciones desde vacío |
-| 4 | A1.6 | CRUD materias con propiedad tenant; bloqueo de borrado con clases activas | CRUD demostrable |
-| 4 | A1.7 | Alembic: desde vacío y actualización; probar con pool y workers | Comandos documentados en README |
-| 5 | A1.8 | Esqueleto `POST /audios` + `PUT` binario (contrato congelado); `GET/PATCH /me`, logout, `/integrations/status` | Endpoints respondiendo |
-| 5 | A1.9 | Tests de aislamiento básicos (B no ve recursos de A ni adivinando IDs) | Suite G3 parcial en verde |
+| 1 | A1.1 | Verify the `apps/api` scaffold: FastAPI + Pydantic v2 + SQLAlchemy 2 async (routers/services/models/core) and `/healthz` | API boots in compose |
+| 1 | A1.2 | Verify/complete Pydantic Settings config; `NVIDIA_API_KEY` and secrets via environment only | Secrets out of code and logs |
+| 2–3 | A1.3 | Google OAuth backend: Authorization Code + `state` + PKCE; validates `nonce`/issuer/audience; identity by `sub` | Real login in compose |
+| 2–3 | A1.4 | Opaque session: `Secure/HttpOnly/SameSite=Lax` cookie, hash only in `sessions`, expiration/revocation; CSRF and Origin on mutations | Revocation/CSRF tests green |
+| 3–4 | A1.5 | Core tables `users/sessions/google_credentials/subjects` with composite FKs and base RLS, plus the S1 shape of `audios`, `ingestion_attempts`, and `outbox_events` | Migrations from empty |
+| 4 | A1.6 | Subject CRUD with tenant ownership; deletion blocked with active classes | Demonstrable CRUD |
+| 4 | A1.7 | Alembic: from empty and upgrade; test with pool and workers | Commands documented in the README |
+| 5 | A1.8 | `POST /audios` + binary `PUT` skeleton (frozen contract); `GET/PATCH /me`, logout, `/integrations/status` | Endpoints responding |
+| 5 | A1.9 | Basic isolation tests (B does not see A's resources, not even by guessing IDs) | Partial G3 suite green |
 
-Alcance: el `PUT` binario S1 es **solo esqueleto**; la recepción real llega en S2 sobre el
-contrato congelado. Plan B si las credenciales OAuth no llegan el día 2: sesión
-opaca + CSRF con login de desarrollo tras feature flag temporal, nunca mergeado a demo.
+Scope: the S1 binary `PUT` is a **skeleton only**; real reception arrives in S2 on the
+frozen contract. Plan B if the OAuth credentials do not arrive by day 2: opaque session +
+CSRF with a development login behind a temporary feature flag, never merged to demo.
 
-#### Área Ingesta · audio · ASR — semana crítica, spike bloqueante
+#### Ingestion area · audio · ASR — critical week, blocking spike
 
-**Parte A: spike de contrato (F0.1)**
+**Part A: contract spike (F0.1)**
 
-| Día | Ticket | Tarea | Entregable verificable |
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1 | S1.A1 | Generador de audio sintético en RAM con texto esperado conocido (voz inteligible, no solo tonos); nunca versionado ni artefacto CI | Script reproducible sin artefactos |
-| 1 | S1.A2 | Primera llamada real `nvidia-riva-client==2.27.0`: TLS `grpc.nvcf.nvidia.com:443`, function-id, Bearer solo backend | Llamada observada y versiones registradas |
-| 1–2 | S1.A3 | Idiomas candidatos uno por uno (español incluido); código inválido/ausente/incorrecto; sin `task:translate` ni fallback a `multi` | Allowlist propuesta |
-| 2 | S1.A4 | Formato de entrada: WAV PCM signed 16-bit mono; sample rate efectivo (16 kHz candidato, no garantía); ffprobe/ffmpeg sobre mp3/m4a/wav/ogg/opus/flac/webm | Formatos probados documentados |
-| 2–3 | S1.A5 | Límites: payload máximo, duración, cuotas, concurrencia, deadlines, cancelación, errores gRPC; sin saturar el proveedor | Números medidos con presupuesto |
-| 2–3 | S1.A6 | Pedir offsets palabras/segmentos; unidades, orden, rango, precisión sobre frases conocidas/silencios/fronteras; decisión `word\|segment\|none` | Decisión D6 propuesta |
-| 3–4 | S1.A7 | Latencia por duración/idioma, memoria del SDK, expansión PCM, costo | Tabla de medición |
-| 4 | S1.A8 | Informe de contrato: versiones, llamadas redactadas, idiomas, formatos, límites, timestamps; sin claves ni audio privado | Informe publicado día 4 |
-| Viernes | S1.A9 | Presentar informe; el equipo y el rol de decisión cierran D2/D3-Audio/D4/D6 | Decisiones cerradas o bloqueadas con propuesta |
+| 1 | S1.A1 | In-RAM synthetic audio generator with known expected text (intelligible voice, not just tones); never versioned or a CI artifact | Reproducible script without artifacts |
+| 1 | S1.A2 | First real call with `nvidia-riva-client==2.27.0`: TLS `grpc.nvcf.nvidia.com:443`, function-id, Bearer backend-only | Observed call and recorded versions |
+| 1–2 | S1.A3 | Candidate languages one by one (Spanish included); invalid/missing/wrong code; no `task:translate` and no fallback to `multi` | Proposed allowlist |
+| 2 | S1.A4 | Input format: signed 16-bit mono WAV PCM; effective sample rate (16 kHz candidate, not a guarantee); ffprobe/ffmpeg over mp3/m4a/wav/ogg/opus/flac/webm | Tested formats documented |
+| 2–3 | S1.A5 | Limits: max payload, duration, quotas, concurrency, deadlines, cancellation, gRPC errors; without saturating the provider | Measured numbers with budget |
+| 2–3 | S1.A6 | Request word/segment offsets; units, order, range, precision over known phrases/silences/boundaries; `word\|segment\|none` decision | Proposed D6 decision |
+| 3–4 | S1.A7 | Latency by duration/language, SDK memory, PCM expansion, cost | Measurement table |
+| 4 | S1.A8 | Contract report: versions, redacted calls, languages, formats, limits, timestamps; no keys or private audio | Report published on day 4 |
+| Friday | S1.A9 | Present the report; the team and the decision role close D2/D3-Audio/D4/D6 | Decisions closed or blocked with a proposal |
 
-**Parte B: prototipo de ingesta efímera (F0.2)**
+**Part B: ephemeral ingestion prototype (F0.2)**
 
-| Día | Ticket | Tarea | Entregable verificable |
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 2–3 | S1.B1 | Proceso con root fs read-only, `tmpfs` acotado, usuario no root, sin swap/core dumps/snapshots; verificar el **host**, no solo compose | Configuración verificada |
-| 3–4 | S1.B2 | Reserva de RAM por slot (original + fragmentos activos + buffers SDK/ffmpeg + margen); objetivo 200 MiB/3 h no aprobado hasta superar la prueba | Reserva dimensionada |
-| 3–4 | S1.B3 | Supervisor + lease + fencing + limpieza independiente del proceso ASR; comprobar descriptores/procesos/mount, no solo nombres | Prototipo demostrado |
-| 4–5 | S1.B4 | Matriz de fallos: éxito, upload incompleto, rechazo, timeout, cancelación, error ffmpeg/Riva/BD, SIGKILL, reinicio de contenedor y de host; fallo durante y tras el commit | Los 9 escenarios demostrados |
-| 5 | S1.B5 | Verificar ausencia de original/convertidos/fragmentos en disco/Redis/logs/trazas/cachés; evidencia sin audio | Inspecciones guardadas sin audio |
-| 5 | S1.B6 | Lease vencido no marca cleanup verificado; sin evidencia → outbox bloqueada; fallo de limpieza → detener admisión + alerta | Contrato probado |
+| 2–3 | S1.B1 | Process with read-only root fs, bounded `tmpfs`, non-root user, no swap/core dumps/snapshots; verify the **host**, not just compose | Verified configuration |
+| 3–4 | S1.B2 | RAM reservation per slot (original + active fragments + SDK/ffmpeg buffers + margin); the 200 MiB/3 h target is not approved until the test is passed | Sized reservation |
+| 3–4 | S1.B3 | Supervisor + lease + fencing + cleanup independent of the ASR process; check descriptors/processes/mounts, not just names | Demonstrated prototype |
+| 4–5 | S1.B4 | Failure matrix: success, incomplete upload, rejection, timeout, cancellation, ffmpeg/Riva/DB error, SIGKILL, container and host restart; failure during and after the commit | All 9 scenarios demonstrated |
+| 5 | S1.B5 | Verify absence of originals/converted files/fragments on disk/Redis/logs/traces/caches; evidence without audio | Inspections saved without audio |
+| 5 | S1.B6 | An expired lease does not mark cleanup verified; without evidence → outbox blocked; cleanup failure → stop admission + alert | Contract proven |
 
-#### Área Infra · integraciones · calidad (secuencia sugerida)
+#### Infra area · integrations · quality (suggested sequence)
 
-| Día | Ticket | Tarea | Entregable verificable |
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1 | J1.1 | `infra/docker-compose.yml` con los 8 servicios (`web`, `api`, `ingest`, `worker`, `scheduler`, `postgres` pgvector, `redis`, `caddy`); sin MinIO/S3 ni volumen de audio | `compose up` levanta todo |
-| 2 | J1.8 | Imagen base de `ingest` con ffmpeg/ffprobe fijados para compose (sin endurecer aún) | Target `base` verificado y comparado con ffmpeg 8.0.1 del spike |
-| 1–2 | J1.2 | `ingest` endurecido: root fs read-only, tmpfs por instancia, no root, límites de recursos, sin swap/core dumps | Imagen endurecida |
-| 2–3 | J1.3 | Caddy TLS local: sin buffering a disco, sin caché, sin captura de bodies en uploads | Prueba de no-buffering documentada |
-| 2–4 | J1.4 | CI: ruff+ESLint, mypy+tsc, pytest+Vitest, integración con PG/pgvector/Redis reales, builds api/ingest/web; sin secretos de proveedores en MRs | Pipeline verde en MR |
-| 3–4 | J1.5 | Esqueleto ARQ: `worker`+`scheduler` conectados a Redis, dispatcher básico de outbox, `/healthz` y `/readyz` (api: PG/Redis; ingest: BD, temporales seguros, cleanup y capacidad) | Healthchecks verdes |
-| 4 | J1.6 | Redis solo con IDs/estado; persistencia solo para Postgres (y Redis si se decide) | Política aplicada |
-| 5 | J1.7 | README con comandos reproducibles (levantar, testear, lint) | README revisado |
+| 1 | J1.1 | `infra/docker-compose.yml` with the 8 services (`web`, `api`, `ingest`, `worker`, `scheduler`, pgvector `postgres`, `redis`, `caddy`); no MinIO/S3 and no audio volume | `compose up` brings everything up |
+| 2 | J1.8 | `ingest` base image with pinned ffmpeg/ffprobe for compose (not hardened yet) | `base` target verified and compared against the spike's ffmpeg 8.0.1 |
+| 1–2 | J1.2 | Hardened `ingest`: read-only root fs, per-instance tmpfs, non-root, resource limits, no swap/core dumps | Hardened image |
+| 2–3 | J1.3 | Local Caddy TLS: no disk buffering, no cache, no body capture on uploads | No-buffering test documented |
+| 2–4 | J1.4 | CI: ruff+ESLint, mypy+tsc, pytest+Vitest, integration with real PG/pgvector/Redis, api/ingest/web builds; no provider secrets in MRs | Green pipeline on MR |
+| 3–4 | J1.5 | ARQ skeleton: `worker`+`scheduler` connected to Redis, basic outbox dispatcher, `/healthz` and `/readyz` (api: PG/Redis; ingest: DB, safe temporaries, cleanup, and capacity) | Green healthchecks |
+| 4 | J1.6 | Redis with IDs/status only; persistence only for Postgres (and Redis if decided) | Policy applied |
+| 5 | J1.7 | README with reproducible commands (up, test, lint) | README reviewed |
 
-#### Área Web · UX (secuencia sugerida)
+#### Web area · UX (suggested sequence)
 
-| Día | Ticket | Tarea | Entregable verificable |
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1 | D1.1 | Scaffold `apps/web`: Next.js App Router + TS + Tailwind + shadcn/ui con lockfile | App corre contra API local |
-| 1–2 | D1.2 | Rutas base `/`, `/biblioteca`, `/chat`, `/materias`, `/settings` con layout | Navegación visible |
-| 2–3 | D1.3 | Login Google: redirección a `/auth/google/start`, callback, estados de carga/error; logout | Login demostrable |
-| 3 | D1.4 | Cliente HTTP: cookies same-origin, CSRF en mutaciones, interceptores 401/403/429 | Cliente probado |
-| 3–4 | D1.5 | Componentes base: fecha/zona/idioma, badges de estado, empty states, toasts | Design system mínimo |
-| 4 | D1.6 | CRUD materias contra la API real de materias (A1.6) | Materias creables/editables |
-| 5 | D1.7 | Borradores estáticos de upload y biblioteca (sin wiring) para validar UX temprano | Revisión del equipo el viernes |
-| 5 | D1.8 | Landing pública de producto en `/` para visitantes (hero, flujo SUBE→ENCUENTRA→DECIDE, panel de privacidad, FAQ); con sesión activa `/` sigue siendo dashboard. Diseño mínimo pendiente de decisión del equipo | Landing visible sin datos privados |
+| 1 | D1.1 | `apps/web` scaffold: Next.js App Router + TS + Tailwind + shadcn/ui with lockfile | App runs against the local API |
+| 1–2 | D1.2 | Base routes `/`, `/biblioteca`, `/chat`, `/materias`, `/settings` with layout | Visible navigation |
+| 2–3 | D1.3 | Google login: redirect to `/auth/google/start`, callback, loading/error states; logout | Demonstrable login |
+| 3 | D1.4 | HTTP client: same-origin cookies, CSRF on mutations, 401/403/429 interceptors | Tested client |
+| 3–4 | D1.5 | Base components: date/timezone/language, status badges, empty states, toasts | Minimal design system |
+| 4 | D1.6 | Subject CRUD against the real subjects API (A1.6) | Subjects creatable/editable |
+| 5 | D1.7 | Static upload and library drafts (no wiring) to validate UX early | Team review on Friday |
+| 5 | D1.8 | Public product landing at `/` for visitors (hero, UPLOAD→FIND→DECIDE flow, privacy panel, FAQ); with an active session `/` remains the dashboard. Minimal design pending team decision | Landing visible without private data |
 
-Plan B: si los endpoints de A1.6/A1.8 se retrasan, mock server contra el contrato congelado y
-conmutación el jueves; el contrato no se negocia en solitario.
+Plan B: if the A1.6/A1.8 endpoints are delayed, a mock server against the frozen contract
+and switch-over on Thursday; the contract is not negotiated unilaterally.
 
-**Criterios de salida S1 (puerta F0 + base):** builds/tests verdes; `compose up` con los 8
-servicios; login/logout/`GET /me` vía Caddy; migraciones desde vacío; informe del spike con
-idiomas/límites/timestamps; matriz de fallos S1.B4 completa; decisión `word|segment|none`
-documentada; aislamiento básico probado. Sin esto, la ingesta real queda bloqueada.
+**S1 exit criteria (F0 gate + foundation):** green builds/tests; `compose up` with the 8
+services; login/logout/`GET /me` via Caddy; migrations from empty; spike report with
+languages/limits/timestamps; complete S1.B4 failure matrix; documented `word|segment|none`
+decision; basic isolation proven. Without this, real ingestion stays blocked.
 
-### 4.2 S2 — Conocimiento: corte vertical F1
+### 4.2 S2 — Knowledge: F1 vertical slice
 
-**Objetivo:** subir audio → transcript → índice híbrido → chat con citas en un corte vertical
-completo. **Criterios de salida:** E2E real navegador → proxy → servicios con clase
-sintética de 1 h y el límite efectivo publicado; audio ausente antes de indexar; chat con
-citas válidas; G1, G2-T o G2-X, G3 y G4 pasan; G5-F1 con evidencia.
+**Objective:** upload audio → transcript → hybrid index → chat with citations in one
+complete vertical slice. **Exit criteria:** real browser → proxy → services E2E with a 1 h
+synthetic class and the published effective limit; audio absent before indexing; chat with
+valid citations; G1, G2-T or G2-X, G3, and G4 pass; G5-F1 with evidence.
 
-**Interfaces congeladas S2:** shape final de chunks/embeddings; eventos SSE del chat
-(`delta|citation|done|error`); formato de citas `[Materia · Clase · mm:ss]`; contrato de
-`/search`.
+**S2 frozen interfaces:** final chunks/embeddings shape; chat SSE events
+(`delta|citation|done|error`); citation format `[Subject · Class · mm:ss]`; `/search`
+contract.
 
-#### Área RAG (secuencia sugerida)
+#### RAG area (suggested sequence)
 
-| Día | Ticket | Tarea | Entregable verificable |
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1–2 | L2.1 | Chunking: ~800 tokens con overlap ~100, cortes en límites de frase/segmento, offsets Unicode preservados, `chunk_segments` para evidencia | Tests de offsets en verde |
-| 2–3 | L2.2 | Embeddings batch versionados (`index_version`, modelo/dimensión/versión) con generación nueva y activación atómica; HNSW coseno | Índice activado sin versiones parciales |
-| 3–4 | L2.3 | Búsqueda híbrida: `tsvector` por idioma (spanish/english/simple) + pgvector coseno, fusión RRF; filtros `user_id`/versión/tombstone **en ambas ramas antes de top-k** | Recall HNSW con filtros evaluado |
-| 4 | L2.4 | `SearchService` reutilizable + `GET /search` (contrato RAG + API/BD) | Endpoint con snippet+audio+timestamp |
-| 3–5 | L2.5 | Pipeline de chat SSE: embedding de pregunta → 30 candidatos/rama → RRF → dedupe/diversidad → ~8 chunks bajo presupuesto de tokens; `delta/citation/done/error` | Streaming demostrable |
-| 5 | L2.6 | Citas solo hacia IDs validados en BD; «segmento N» sin offsets; `message_sources` con todas las fuentes entregadas | Cero IDs no autorizados |
-| Viernes | L2.7 | Evaluación G4 sobre el dataset S1: Recall@8 ≥ 0.85 respondibles, precisión citas ≥ 0.95, abstención ≥ 0.90 | Números por idioma con numerador/denominador |
-| Viernes | L2.8 | p95 de recuperación ≤ 500 ms en corpus de referencia | Medición publicada |
+| 1–2 | L2.1 | Chunking: ~800 tokens with ~100 overlap, cuts at sentence/segment boundaries, preserved Unicode offsets, `chunk_segments` for evidence | Offset tests green |
+| 2–3 | L2.2 | Versioned batch embeddings (`index_version`, model/dimension/version) with a new generation and atomic activation; HNSW cosine | Index activated without partial versions |
+| 3–4 | L2.3 | Hybrid search: per-language `tsvector` (spanish/english/simple) + pgvector cosine, RRF fusion; `user_id`/version/tombstone filters **in both branches before top-k** | HNSW recall with filters evaluated |
+| 4 | L2.4 | Reusable `SearchService` + `GET /search` (RAG + API/DB contract) | Endpoint with snippet+audio+timestamp |
+| 3–5 | L2.5 | SSE chat pipeline: question embedding → 30 candidates/branch → RRF → dedupe/diversity → ~8 chunks under the token budget; `delta/citation/done/error` | Demonstrable streaming |
+| 5 | L2.6 | Citations only to DB-validated IDs; "segment N" without offsets; `message_sources` with every delivered source | Zero unauthorized IDs |
+| Friday | L2.7 | G4 evaluation on the S1 dataset: answerable Recall@8 ≥ 0.85, citation precision ≥ 0.95, abstention ≥ 0.90 | Per-language numbers with numerator/denominator |
+| Friday | L2.8 | Retrieval p95 ≤ 500 ms on the reference corpus | Published measurement |
 
-Plan B: si a jueves hay <3 clases reales, transcripciones sintéticas de clase (solo texto)
-anotadas para el dataset; nunca maquillar métricas.
+Plan B: if by Thursday there are <3 real classes, annotated synthetic class transcripts
+(text only) for the dataset; never sugarcoat metrics.
 
-#### Área API · backend (secuencia sugerida)
+#### API area · backend (suggested sequence)
 
-| Día | Ticket | Tarea | Entregable verificable |
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1–2 | A2.1 | Tablas `transcripts`, `segments`, `processing_runs` y ajustes sobre `audios` (sin storage_key), `ingestion_attempts` (lease/heartbeat/fencing/cleanup_status) y `outbox_events` creadas en A1.5 | Esquema completo sin migración de emergencia |
-| 1 | A2.2 | `GET /ingestion/capabilities` con datos del spike | Límites efectivos publicados |
-| 2 | A2.3 | `POST /audios`: valida metadatos (materia, fecha, zona, idioma allowlist), crea intento `awaiting_upload`, devuelve URL relativa + expiración | Suite de contratos |
-| 2–3 | A2.4 | `PUT` binario con sesión/CSRF/attempt_id; 202 solo tras recepción/admisión; compensar reserva si falla BD; cortar streaming al superar límite | Pruebas de corte |
-| 3 | A2.5 | Dedupe por identidad exacta: unicidad transaccional; variante exige confirmación; nunca retener audio esperando decisión | Concurrencia verificada |
-| 3 | A2.6 | Estados por etapa independientes + agregado derivado; `not_requested` ≠ éxito | Máquina de estados probada |
-| 3–4 | A2.7 | Cancelación, tombstone y fencing: invalidar token de ejecución; commits tardíos rechazados; `DELETE` con purga de derivados | Test de commit tardío |
-| 4 | A2.8 | `retry` (solo análisis/índice) y `reupload` (solo sin transcript utilizable); conflicto correcto en cada caso | Tests de transición |
-| 4–5 | A2.9 | `GET /audios?subject_id=`, `GET /audios/{id}`, SSE progreso con snapshot desde BD, TXT y SRT condicionado | Endpoints probados |
-| 5 | A2.10 | Recibir commit atómico de transcript/segmentos del servicio de ingesta; outbox deshabilitada hasta `cleanup_status='verified'` | Gate de cleanup probado |
-| 5 | A2.11 | `GET /search` (contrato RAG + API/BD): filtros tenant/materia/fechas; snippet + audio + timestamp válido | Contrato Ctrl+K |
-| 5 | A2.12 | Tablas `conversations`/`messages`/`message_sources` + endpoints M7: CRUD de conversaciones (modos all/subject/class), historial, `client_message_id` idempotente, cancelación de streaming | Chat persistido y aislado |
+| 1–2 | A2.1 | `transcripts`, `segments`, `processing_runs` tables and adjustments to `audios` (no storage_key), `ingestion_attempts` (lease/heartbeat/fencing/cleanup_status), and `outbox_events` created in A1.5 | Complete schema without an emergency migration |
+| 1 | A2.2 | `GET /ingestion/capabilities` with spike data | Effective limits published |
+| 2 | A2.3 | `POST /audios`: validates metadata (subject, date, timezone, allowlist language), creates an `awaiting_upload` attempt, returns relative URL + expiry | Contract suite |
+| 2–3 | A2.4 | Binary `PUT` with session/CSRF/attempt_id; 202 only after reception/admission; compensate the reservation if the DB fails; cut the stream when the limit is exceeded | Cut-off tests |
+| 3 | A2.5 | Dedupe by exact identity: transactional uniqueness; a variant requires confirmation; never hold audio waiting for a decision | Verified concurrency |
+| 3 | A2.6 | Independent per-stage statuses + derived aggregate; `not_requested` ≠ success | State machine tested |
+| 3–4 | A2.7 | Cancellation, tombstone, and fencing: invalidate the execution token; late commits rejected; `DELETE` with derived-data purge | Late-commit test |
+| 4 | A2.8 | `retry` (analyze/index only) and `reupload` (only without a usable transcript); correct conflict in each case | Transition tests |
+| 4–5 | A2.9 | `GET /audios?subject_id=`, `GET /audios/{id}`, progress SSE with snapshot from the DB, TXT and conditional SRT | Tested endpoints |
+| 5 | A2.10 | Receive the atomic transcript/segments commit from the ingestion service; outbox disabled until `cleanup_status='verified'` | Cleanup gate tested |
+| 5 | A2.11 | `GET /search` (RAG + API/DB contract): tenant/subject/date filters; snippet + audio + valid timestamp | Ctrl+K contract |
+| 5 | A2.12 | `conversations`/`messages`/`message_sources` tables + M7 endpoints: conversation CRUD (all/subject/class modes), history, idempotent `client_message_id`, stream cancellation | Persisted and isolated chat |
 
-#### Área Ingesta · pipeline real (secuencia sugerida)
+#### Ingestion area · real pipeline (suggested sequence)
 
-| Día | Ticket | Tarea | Entregable verificable |
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1–2 | S2.1 | Servicio real: capabilities con límites del spike; recepción streaming a tmpfs privado por intento; SHA-256 incremental; ffprobe valida contenedor/codecs/duración/canales; rechazo de playlists/URLs/malformados | Recepción robusta |
-| 2–3 | S2.2 | ffmpeg sin red, sin interpolación shell, límites CPU/memoria/salida/tiempo; normalización WAV PCM 16-bit mono al sample rate validado; fragmentación según límites reales (no asumir 10 min), cortes en silencios con solapamiento probado | Fragmentación medida |
-| 3–4 | S2.3 | Procesamiento secuencial con backpressure (sin decodificar 3 h a RAM); reconciliación de fronteras: texto/palabras duplicadas, timestamps globales = offset + local, sin duplicar el overlap | Reconciliación probada |
-| 3–4 | S2.4 | Cliente Riva bloqueante aislado del event loop, cancelación/deadlines probados; reintentos acotados transitorios; auth/idioma/formato inválido no se reintenta | Fallos gRPC deterministas |
-| 4 | S2.5 | Commit atómico transcript+segmentos (contrato Ingesta + API/BD): idioma, modelo/config, versión, `timestamp_precision`; vacío/silencio = sin texto utilizable; calidad baja → advertencias | Transacción coherente |
-| 4–5 | S2.6 | Cleanup en `finally` al terminar ASR (éxito o error); `cleanup_status` separado; intento `succeeded` solo tras commit **y** cleanup comprobado; habilitar outbox entonces | Test rojo si `succeeded` sin cleanup |
-| 5 | S2.7 | Reconciliador post-commit: proceso caído tras commit → verificar cleanup y habilitar outbox sin retranscribir; fencing token | Recovery demostrado |
-| 5 | S2.8 | Cancelación: desconexión en recepción cancela y limpia; tras 202 continúa bajo lease; cerrar pestaña no cancela; cancelar post-commit → conflicto | Casos probados |
-| Viernes | S2.9 | E2E clase sintética de 1 h y límite efectivo publicado | Demo punta a punta |
+| 1–2 | S2.1 | Real service: capabilities with spike limits; streaming reception into private per-attempt tmpfs; incremental SHA-256; ffprobe validates container/codecs/duration/channels; reject playlists/URLs/malformed input | Robust reception |
+| 2–3 | S2.2 | ffmpeg without network, without shell interpolation, CPU/memory/output/time limits; WAV PCM 16-bit mono normalization at the validated sample rate; fragmentation per real limits (do not assume 10 min), cuts at silences with proven overlap | Measured fragmentation |
+| 3–4 | S2.3 | Sequential processing with backpressure (no decoding 3 h into RAM); boundary reconciliation: duplicated text/words, global timestamps = offset + local, without duplicating the overlap | Reconciliation proven |
+| 3–4 | S2.4 | Blocking Riva client isolated from the event loop, tested cancellation/deadlines; bounded transient retries; invalid auth/language/format is not retried | Deterministic gRPC failures |
+| 4 | S2.5 | Atomic transcript+segments commit (Ingestion + API/DB contract): language, model/config, version, `timestamp_precision`; empty/silence = no usable text; low quality → warnings | Coherent transaction |
+| 4–5 | S2.6 | Cleanup in `finally` when ASR ends (success or error); separate `cleanup_status`; attempt `succeeded` only after commit **and** verified cleanup; enable the outbox then | Red test if `succeeded` without cleanup |
+| 5 | S2.7 | Post-commit reconciler: process dead after the commit → verify cleanup and enable the outbox without retranscribing; fencing token | Demonstrated recovery |
+| 5 | S2.8 | Cancellation: disconnect during reception cancels and cleans up; after 202 it continues under lease; closing the tab does not cancel; cancelling post-commit → conflict | Tested cases |
+| Friday | S2.9 | E2E with a 1 h synthetic class and the published effective limit | End-to-end demo |
 
-#### Área Infra · workers · observabilidad (secuencia sugerida)
+#### Infra area · workers · observability (suggested sequence)
 
-| Día | Ticket | Tarea | Entregable verificable |
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1–2 | J2.1 | Dispatcher de outbox real: publica a Redis solo IDs/config no sensible cuando `cleanup_status='verified'`, nunca antes | Gate probado |
-| 2–3 | J2.2 | Job `index(audio_id)` idempotente: consume el contrato de RAG; verifica propiedad/tombstone/versión antes de publicar; reintentos backoff+jitter (máx 3 transitorios) | Reintentos sin duplicados |
-| 3 | J2.3 | Reconstrucción tras perder Redis: BD/outbox regeneran trabajos durables; probar el camino completo | `FLUSHALL` + regeneración |
-| 3–4 | J2.4 | Reconciliador: intentos muertos marcados, outbox atascada re-publicada, ejecuciones duplicadas resueltas por unicidad/lease | Fault injection |
-| 4–5 | J2.5 | Observabilidad mínima: logs JSON con `request_id/audio_id/attempt_id/run_id` sin payloads sensibles; métricas RAM/tmpfs/slots, lag outbox, retries, edad de temporales; alerta inmediata por cleanup fallido | Panel mínimo |
-| 5 | J2.6 | Smoke E2E automatizado: upload → transcript → cleanup → índice → pregunta con cita, contra compose | Smoke en cada MR |
-| 5 | J2.7 | Fault injection con áreas API/BD e Ingesta: crash antes/después del commit; lease vencido no marca cleanup verificado | Evidencia documentada |
+| 1–2 | J2.1 | Real outbox dispatcher: publishes only non-sensitive IDs/config to Redis when `cleanup_status='verified'`, never before | Gate tested |
+| 2–3 | J2.2 | Idempotent `index(audio_id)` job: consumes the RAG contract; verifies ownership/tombstone/version before publishing; backoff+jitter retries (max 3 transient) | Retries without duplicates |
+| 3 | J2.3 | Reconstruction after losing Redis: DB/outbox regenerate durable jobs; test the full path | `FLUSHALL` + regeneration |
+| 3–4 | J2.4 | Reconciler: dead attempts marked, stuck outbox re-published, duplicate executions resolved by uniqueness/lease | Fault injection |
+| 4–5 | J2.5 | Minimal observability: JSON logs with `request_id/audio_id/attempt_id/run_id` without sensitive payloads; RAM/tmpfs/slots metrics, outbox lag, retries, temporary-file age; immediate alert on cleanup failure | Minimal panel |
+| 5 | J2.6 | Automated E2E smoke: upload → transcript → cleanup → index → question with citation, against compose | Smoke on every MR |
+| 5 | J2.7 | Fault injection with the API/DB and Ingestion areas: crash before/after the commit; an expired lease does not mark cleanup verified | Documented evidence |
 
-#### Área Web · UI (secuencia sugerida)
+#### Web area · UI (suggested sequence)
 
-| Día | Ticket | Tarea | Entregable verificable |
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1–2 | D2.1 | Formulario upload según M2: materia, fecha de clase, zona horaria, **idioma sin preselección** (allowlist de capabilities), título/profesor opcionales; consentimiento visible (borrado, tratamiento cloud, sin reproducción/retranscripción) | Formulario completo |
-| 2–3 | D2.2 | Upload binario: `PUT` a la URL relativa con `fetch` stream; progreso real de bytes; cancelar subida cancela el intento; sin Server Actions | Upload demostrable |
-| 3–4 | D2.3 | Progreso: SSE con `EventSource` + polling como fallback; bytes recibidos y fragmentos completados/total; cero porcentajes inventados; snapshot al reconectar | Estados honestos |
-| 3–4 | D2.4 | Biblioteca `/biblioteca`: por materia, estado agregado + estados por etapa; aviso permanente «audio no conservado»; «volver a subir» ≠ «reintentar análisis/índice» | Estados `not_requested/processing/ready/partial/failed` visibles |
-| 4–5 | D2.5 | `TranscriptReader` en `/biblioteca/[audio_id]`: segmentos enlazables/resaltables (`?segment=`), timestamps solo si válidos; export TXT/SRT condicionado; resumen vacío si `not_requested` | Lector enlazable |
-| 4–5 | D2.6 | UI chat `/chat`: composer con modo (todas/materia/clase), SSE con `fetch` (no `EventSource`), eventos `delta/citation/done/error`, cancelación, estados `streaming/completed/failed/cancelled` | Chat demostrable |
-| 5 | D2.7 | Citas clicables `[Materia · Clase · mm:ss]` → `/biblioteca/{audio_id}?segment=…` resaltando texto; «segmento N» sin tiempos; Markdown sanitizado | Cero enlaces arbitrarios |
-| Continuo | D2.8 | Privacidad navegador: `no-store` en privado, liberar `File`/object URLs al terminar/cancelar, sin IndexedDB/Cache Storage para datos privados | Verificación G1 en cliente |
+| 1–2 | D2.1 | Upload form per M2: subject, class date, timezone, **language without preselection** (capabilities allowlist), optional title/teacher; visible consent (deletion, cloud processing, no playback/retranscription) | Complete form |
+| 2–3 | D2.2 | Binary upload: `PUT` to the relative URL with `fetch` stream; real byte progress; cancelling the upload cancels the attempt; no Server Actions | Demonstrable upload |
+| 3–4 | D2.3 | Progress: SSE with `EventSource` + polling as fallback; bytes received and fragments completed/total; zero invented percentages; snapshot on reconnect | Honest statuses |
+| 3–4 | D2.4 | Library `/biblioteca`: by subject, aggregate status + per-stage statuses; permanent "audio not retained" notice; "upload again" ≠ "retry analyze/index" | Visible `not_requested/processing/ready/partial/failed` statuses |
+| 4–5 | D2.5 | `TranscriptReader` at `/biblioteca/[audio_id]`: linkable/highlightable segments (`?segment=`), timestamps only when valid; conditional TXT/SRT export; empty summary if `not_requested` | Linkable reader |
+| 4–5 | D2.6 | Chat UI `/chat`: composer with mode (all/subject/class), SSE with `fetch` (not `EventSource`), `delta/citation/done/error` events, cancellation, `streaming/completed/failed/cancelled` statuses | Demonstrable chat |
+| 5 | D2.7 | Clickable citations `[Subject · Class · mm:ss]` → `/biblioteca/{audio_id}?segment=…` highlighting text; "segment N" without times; sanitized Markdown | Zero arbitrary links |
+| Continuous | D2.8 | Browser privacy: `no-store` on private content, release `File`/object URLs on finish/cancel, no IndexedDB/Cache Storage for private data | Client-side G1 verification |
 
-**Criterios de salida S2:** E2E con 1 h y límite efectivo; audio ausente antes de indexar;
-G1 y G5-F1 con evidencia (crash antes/después de commit resuelto; sin versiones parciales ni
-duplicados tras retries); G4 con números por idioma; p95 recuperación medido.
+**S2 exit criteria:** E2E with 1 h and the effective limit; audio absent before indexing;
+G1 and G5-F1 with evidence (crash before/after commit resolved; no partial versions or
+duplicates after retries); G4 with per-language numbers; measured retrieval p95.
 
-### 4.3 S3 — Acción: extracción y Calendar (F2)
+#### Implementation-gap tickets (added after the QA review of 2026-10-11)
 
-**Objetivo:** propuesta → revisión → confirmación → **un único evento**; lectura de agenda y
-edición confirmada; ninguna escritura sin confirmación humana. **Criterios de salida:** E2E
-con cuenta Google de prueba; G5-F2, G6 y G7-CAL aprobadas.
+These tickets close gaps between the code and the contracts above that no ticket owned. They
+have no day in the suggested sequence: they are claimed like any other ticket and prioritized
+by the lead. The full text, evidence and priorities are in [plan/S2.md](plan/S2.md) §10.
 
-**Interfaces congeladas S3:** contrato de `tasks` + revisiones; shape de `calendar_events`;
-tools de chat de lectura (`get_calendar_events`, `get_pending_tasks`, `propose_task`) y sus
-límites de iteración; prompts v1.
-
-#### Área RAG · prompts · validación · fechas (secuencia sugerida)
-
-| Día | Ticket | Tarea | Entregable verificable |
+| Ticket | Area | Task | Priority |
 |---|---|---|---|
-| 1 | L3.2 | Esquema Pydantic final §M4: tipo/título/detalle, `due_date`/`due_at` excluyentes, `date_status`, `confidence_score`, spans Unicode `[inicio, fin)`, cita textual | Schema congelado día 1 |
-| 1–2 | L3.1 | `apps/api/prompts/v1/` con system/user prompts de extracción y tests de regresión por versión; `prompt_version` registrado en resultados | Cambio de prompt sin tests no sube |
-| 2–3 | L3.3 | Reglas deterministas post-LLM: enums, rangos, pertenencia de segmentos a clase/tenant/versión, reconstrucción de evidencia desde BD, comprobación literal de la cita | Cero propuestas con span inventado |
-| 3–4 | L3.4 | Resolución de fechas contra fecha/zona **de la clase** (no upload, no «hoy»): DST, «el viernes que viene», horas inexistentes/duplicadas; ambiguo → `needs_review`; nunca medianoche inventada | Casos DST → `needs_review` |
-| 4 | L3.5 | Análisis por ventanas con overlap y agregación/dedupe por evidencia; idempotencia con `processing_runs` | Reanálisis no duplica |
-| 4–5 | L3.6 | Job `analyze(audio_id)` con adaptador de worker; reanálisis crea revisión nueva sin sobrescribir tareas editadas/confirmadas | Backfill explícito |
-| Viernes | L3.7 | Evaluación G6: ≥50 actividades anotadas por idioma (ambigüedades/DST incluidos) | Precisión ≥ 0.95, recall ≥ 0.85, fecha exacta ≥ 0.95 en resolubles, evidencia 100% validada |
-| 5 | L3.8 | Resumen (3–5 frases) y temas versionados | Shape versionado |
+| A2.13 · S2.11 | API · Ingestion | API↔ingest reception contract and the streaming endpoint in `ingest` | P0 |
+| S2.10 | Ingestion | Wire the pipeline to the Riva client; empty text is `rejected` | P0 |
+| J2.8 | Infra | Compose/env wiring for `ingest` | P0 |
+| L2.10 | RAG · lead | ADR: web stack | P0 |
+| A2.14 | API | Reservation lifecycle and `PUT` concurrency (§2.4 states, §3.5 `409`) | P1 |
+| A2.16 | API | Fail-closed settings | P1 |
+| A2.17 | API | RLS with `SET LOCAL app.user_id` (§2.1) | P1 |
+| A2.18 | API | Supporting FK indexes (§2.1.8), version invariants, drift test | P1 |
+| A2.19 | API | Contract conformance (§3.2, §3.3, §3.5) | P1 |
+| S2.12 · S2.13 | Ingestion | Admission latch, heartbeat, ffprobe limits; error-code catalog (§3.2) | P1 |
+| L2.9 | RAG | Align the §M6 `Chunk` contract with §2.5 | P1 |
+| J2.10 | Infra | Ingress upload limit and Caddy limits (Cloudflare Tunnel is no longer planned) | P1 |
+| A2.15 · J2.9 · L2.11 | API · Infra · lead | Error envelope; CI hygiene; documentation reconciliation | P2 |
 
-Plan B: sin acceso a LLM el día 1 → validadores y agregación en modo replay con outputs
-grabados (sin claves ni PII); G6 real cuando haya clave autorizada.
+### 4.3 S3 — Action: extraction and Calendar (F2)
 
-#### Área API · tareas · evidencia · revisiones (secuencia sugerida)
+**Objective:** proposal → review → confirmation → **a single event**; agenda reading and
+confirmed editing; no writes without human confirmation. **Exit criteria:** E2E with a
+Google test account; G5-F2, G6, and G7-CAL pass.
 
-| Día | Ticket | Tarea | Entregable verificable |
+**S3 frozen interfaces:** `tasks` + revisions contract; `calendar_events` shape; read chat
+tools (`get_calendar_events`, `get_pending_tasks`, `propose_task`) and their iteration
+limits; prompts v1.
+
+#### RAG area · prompts · validation · dates (suggested sequence)
+
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1–2 | A3.1 | Tabla `tasks` completa: tipo/título/detalle, `due_date`/`due_at` excluyentes con CHECKs, `date_status`, `confidence_score` [0,1] nullable, `status`, `calendar_sync_status` separado, `version`, pares de inicio/fin Calendar, revisión pendiente | Esquema sin migración de emergencia |
-| 2 | A3.2 | Evidencia persistida: transcript/segmentos/spans + texto original de fecha + motivo de revisión + `due_version` + snapshot de zona | Evidencia 100% reconstruible |
-| 2–3 | A3.3 | Endpoints M4: `GET /tasks?status=`, `PATCH` con versión (locking optimista), `confirm`, `dismiss`, `complete`, `POST /tasks` manual/chat | Suite de contratos |
-| 3 | A3.4 | Confirmación atómica: guarda tarea + outbox de evento en una transacción; 202 con `calendar_sync_status=pending`; sin integración → confirmada + `blocked` | Transacción atómica probada |
-| 3–4 | A3.5 | Reanálisis crea revisión nueva: no borrar/sobrescribir tareas editadas/confirmadas/programadas; activar revisión solo al completarse | Doble análisis no duplica |
-| 3–4 | A3.6 | Reconstrucción de evidencia desde BD para validar spans del contrato RAG: offsets Unicode por segmento; rechazar pertenencia inválida | Ninguna propuesta con span inventado |
-| 4 | A3.7 | Reglas de estado: resolver fecha/calidad antes de confirmar; confirmar exige fecha válida + evidencia; `scheduled` no es estado de tarea | Transiciones probadas |
-| 4–5 | A3.8 | Tabla `calendar_events` espejo (clave `(user_id, calendar_id, event_id)`, all-day separado de instantes, ETag, `last_synced_at`) | Lista para el worker de Calendar (J3.7) |
-| 5 | A3.9 | Tests: doble análisis no duplica; edición concurrente no pierde datos; doble confirmación no crea doble outbox | Suite en verde |
+| 1 | L3.2 | Final §M4 Pydantic schema: type/title/detail, exclusive `due_date`/`due_at`, `date_status`, `confidence_score`, Unicode spans `[start, end)`, verbatim quote | Schema frozen on day 1 |
+| 1–2 | L3.1 | `apps/api/prompts/v1/` with extraction system/user prompts and per-version regression tests; `prompt_version` recorded in results | A prompt change without tests does not ship |
+| 2–3 | L3.3 | Deterministic post-LLM rules: enums, ranges, segment membership in class/tenant/version, evidence reconstruction from the DB, literal quote checking | Zero proposals with an invented span |
+| 3–4 | L3.4 | Date resolution against the **class's** date/timezone (not upload, not "today"): DST, "next Friday", nonexistent/duplicated hours; ambiguous → `needs_review`; never an invented midnight | DST cases → `needs_review` |
+| 4 | L3.5 | Windowed analysis with overlap and evidence-based aggregation/dedupe; idempotency with `processing_runs` | Reanalysis does not duplicate |
+| 4–5 | L3.6 | `analyze(audio_id)` job with a worker adapter; reanalysis creates a new revision without overwriting edited/confirmed tasks | Explicit backfill |
+| Friday | L3.7 | G6 evaluation: ≥50 annotated activities per language (ambiguities/DST included) | Precision ≥ 0.95, recall ≥ 0.85, exact date ≥ 0.95 on resolvables, evidence 100% validated |
+| 5 | L3.8 | Summary (3–5 sentences) and versioned topics | Versioned shape |
 
-#### Área Ingesta · soporte de análisis (secuencia sugerida)
+Plan B: without LLM access on day 1 → validators and aggregation in replay mode with
+recorded outputs (no keys or PII); real G6 when an authorized key exists.
 
-| Día | Ticket | Tarea | Entregable verificable |
+#### API area · tasks · evidence · revisions (suggested sequence)
+
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1–2 | S3.1 | Backfill explícito de análisis para clases F1: solo desde texto persistido, nunca reupload | Backfill demostrado |
-| 2–3 | S3.2 | Ventanas de análisis con overlap eficiente y dedupe por evidencia; coste de tokens/latencia con transcripciones reales | Números para el presupuesto G8 |
-| 3 | S3.3 | Robustez cuando ASR no entregó offsets: análisis funciona igual (evidencia textual); sin minutos inventados | Clases sin offsets analizadas |
-| 3–4 | S3.4 | `processing_runs` por versión de transcript/config: reanálisis solo reprocesa lo necesario | Versionado probado |
-| 4 | S3.5 | Medición de costos ASR (minutos efectivos × tarifa) y RAM/tmpfs bajo carga | Tabla publicada |
-| 5 | S3.6 | Hardening: reintentos backoff+jitter (máx 3 transitorios); advertencias de calidad ASR visibles para la bandeja | Señales en UI |
+| 1–2 | A3.1 | Complete `tasks` table: type/title/detail, exclusive `due_date`/`due_at` with CHECKs, `date_status`, nullable `confidence_score` [0,1], `status`, separate `calendar_sync_status`, `version`, Calendar start/end pairs, pending revision | Schema without an emergency migration |
+| 2 | A3.2 | Persisted evidence: transcript/segments/spans + original date text + review reason + `due_version` + timezone snapshot | Evidence 100% reconstructible |
+| 2–3 | A3.3 | M4 endpoints: `GET /tasks?status=`, `PATCH` with version (optimistic locking), `confirm`, `dismiss`, `complete`, manual/chat `POST /tasks` | Contract suite |
+| 3 | A3.4 | Atomic confirmation: saves the task + event outbox in one transaction; 202 with `calendar_sync_status=pending`; without integration → confirmed + `blocked` | Atomic transaction proven |
+| 3–4 | A3.5 | Reanalysis creates a new revision: do not delete/overwrite edited/confirmed/scheduled tasks; activate the revision only when complete | Double analysis does not duplicate |
+| 3–4 | A3.6 | Evidence reconstruction from the DB to validate RAG-contract spans: Unicode offsets per segment; reject invalid membership | No proposal with an invented span |
+| 4 | A3.7 | Status rules: resolve date/quality before confirming; confirming requires a valid date + evidence; `scheduled` is not a task status | Tested transitions |
+| 4–5 | A3.8 | `calendar_events` mirror table (key `(user_id, calendar_id, event_id)`, all-day separate from instants, ETag, `last_synced_at`) | Ready for the Calendar worker (J3.7) |
+| 5 | A3.9 | Tests: double analysis does not duplicate; concurrent editing loses no data; double confirmation does not create a double outbox | Suite green |
 
-#### Área Infra · Google Calendar (secuencia sugerida)
+#### Ingestion area · analysis support (suggested sequence)
 
-| Día | Ticket | Tarea | Entregable verificable |
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1 | J3.1 | Verificar scopes reales (D7): `calendar.app.created` + `calendar.events.readonly` + `calendar.calendarlist.readonly` con llamadas reales; registrar qué permite cada uno; no asumir | Hallazgos registrados |
-| 1–2 | J3.2 | `GoogleCalendarService`: cliente bloqueante aislado del event loop; reintentos acotados 429/5xx respetando `Retry-After`; `invalid_grant` desconecta (no todo 403 es reintentable) | Comportamiento probado |
-| 2 | J3.3 | Calendario secundario único «Maulwurf» al conectar; guardar ID; reconciliar creación ambigua antes de repetir | Un solo calendario |
-| 2–4 | J3.4 | Job `sync_task_event(task_id, task_version)`: ID de evento determinista desde el UUID (hex/base32hex); timeout de insert → consultar ese ID; 409 → comprobar identidad y reconciliar; descartar jobs de versiones obsoletas | Doble clic no duplica |
-| 3–4 | J3.5 | Evento con prefijo `[Maulwurf]`, detalle y **link autenticado al segmento textual** (sin audio ni tokens en URL); all-day con `start.date`/`end.date` fin exclusivo; con hora: inicio/fin válidos + zona IANA; duración por defecto visible/editable antes de confirmar | Evento correcto en ambos modos |
-| 4 | J3.6 | Patch del evento al confirmar revisión con control de ETag; no sobrescribir cambios externos; completar/descartar cancela recordatorios pero conserva el evento | Cambio externo respetado |
-| 4–5 | J3.7 | Lectura: ventana -7/+60 días con paginación completa, recurrencias expandidas, eliminaciones; publicación atómica en `calendar_events`; registrar cobertura y `last_synced_at` | Espejo poblado atómicamente |
-| 5 | J3.8 | Conflicto horario (solape con hora) ≠ concentración de entregas por día; `GET /calendar/conflicts` y `POST /calendar/sync` | Endpoint de conflictos |
-| Continuo | J3.9 | Cuenta Google de prueba protegida; pruebas remotas crean solo recursos de prueba y los limpian | Presupuesto de llamadas documentado |
+| 1–2 | S3.1 | Explicit analysis backfill for F1 classes: only from persisted text, never re-upload | Demonstrated backfill |
+| 2–3 | S3.2 | Analysis windows with efficient overlap and evidence-based dedupe; token/latency cost with real transcripts | Numbers for the G8 budget |
+| 3 | S3.3 | Robustness when ASR delivered no offsets: analysis still works (textual evidence); no invented minutes | Classes without offsets analyzed |
+| 3–4 | S3.4 | `processing_runs` per transcript/config version: reanalysis reprocesses only what is needed | Versioning tested |
+| 4 | S3.5 | ASR cost measurement (effective minutes × rate) and RAM/tmpfs under load | Published table |
+| 5 | S3.6 | Hardening: backoff+jitter retries (max 3 transient); ASR quality warnings visible to the inbox | Signals in the UI |
 
-#### Área Web · bandeja · dashboard (secuencia sugerida)
+#### Infra area · Google Calendar (suggested sequence)
 
-| Día | Ticket | Tarea | Entregable verificable |
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1–2 | D3.1 | Bandeja «para confirmar»: tareas por estado, evidencia textual con cita, badge `date_status` (resuelta/ambigua/faltante), advertencia si la calidad ASR es baja | Bandeja completa |
-| 2–3 | D3.2 | Edición de propuesta: título/detalle, fecha/hora/zona, all-day vs instante, y **bloque de agenda separado del vencimiento** (inicio/fin con duración por defecto visible y editable) | Edición fiel al contrato |
-| 3 | D3.3 | Confirmar/descartar/completar con control de versión: detectar 409 de edición concurrente y refrescar; confirmación muestra qué se escribirá en Calendar | Humano en el loop visible |
-| 3 | D3.4 | «Ver segmento de transcripción» desde la tarea → `TranscriptReader` con el segmento resaltado; timestamp solo si existe | Enlace honesto |
-| 4 | D3.5 | Ficha de clase completa: resumen, temas, items detectados, estados de análisis/índice; backfill/reanálisis visibles cuando apliquen | Ficha completa |
-| 4–5 | D3.6 | Dashboard con agenda: `CalendarView` (FullCalendar) con eventos Google + tareas Maulwurf coloreadas por materia, **sin dibujar dos veces la tarea y su evento vinculado**; frescura de sincronización visible | Dashboard sin duplicados |
-| 5 | D3.7 | Estados de sync por tarea (`pending/synced/failed/blocked`) + UI de reconexión Google; sin auto-escritura en ningún flujo | Reconexión usable |
-| 5 | D3.8 | Tools de chat solo lectura: respuestas que usan agenda/tasks distinguen la fuente; `propose_task` crea propuesta en bandeja, nunca agenda directo | Ningún atajo de escritura |
+| 1 | J3.1 | Verify real scopes (D7): `calendar.app.created` + `calendar.events.readonly` + `calendar.calendarlist.readonly` with real calls; record what each allows; do not assume | Findings recorded |
+| 1–2 | J3.2 | `GoogleCalendarService`: blocking client isolated from the event loop; bounded 429/5xx retries honoring `Retry-After`; `invalid_grant` disconnects (not every 403 is retryable) | Proven behavior |
+| 2 | J3.3 | Single "Maulwurf" secondary calendar on connect; store the ID; reconcile ambiguous creation before retrying | A single calendar |
+| 2–4 | J3.4 | `sync_task_event(task_id, task_version)` job: deterministic event ID from the UUID (hex/base32hex); insert timeout → look up that ID; 409 → check identity and reconcile; discard jobs for obsolete versions | Double click does not duplicate |
+| 3–4 | J3.5 | Event with the `[Maulwurf]` prefix, details, and an **authenticated link to the text segment** (no audio or tokens in the URL); all-day with exclusive-end `start.date`/`end.date`; with time: valid start/end + IANA timezone; default duration visible/editable before confirming | Correct event in both modes |
+| 4 | J3.6 | Patch the event when confirming a revision with ETag control; do not overwrite external changes; complete/dismiss cancels reminders but keeps the event | External change respected |
+| 4–5 | J3.7 | Reading: -7/+60 day window with full pagination, expanded recurrences, deletions; atomic publication into `calendar_events`; record coverage and `last_synced_at` | Mirror populated atomically |
+| 5 | J3.8 | Time conflict (overlap with time) ≠ concentration of deadlines per day; `GET /calendar/conflicts` and `POST /calendar/sync` | Conflicts endpoint |
+| Continuous | J3.9 | Protected Google test account; remote tests create only test resources and clean them up | Documented call budget |
 
-**Criterios de salida S3:** E2E con cuenta de prueba: propuesta → revisión → confirmación →
-un único evento; lectura de agenda y edición confirmada; doble clic/respuesta perdida/retries
-concurrentes no duplican; all-day vs instante correctos; rechazo de scopes no rompe
-biblioteca/chat; G5-F2, G6 y G7-CAL con evidencia.
+#### Web area · inbox · dashboard (suggested sequence)
 
-### 4.4 S4 — Recordatorios, cierre y demo (F3)
-
-**Objetivo:** Gmail opt-in, recordatorios/digests, dashboard completo, Ctrl+K, hardening.
-**Criterios de salida:** envío real de prueba observado con cuenta autorizada;
-dedupe/DST/entrega incierta probados; runbooks y revisión de seguridad/costos; demo final.
-
-**Interfaces congeladas S4:** preferencias/notificaciones; dedupe de recordatorios; rutas
-finales de UI.
-
-#### Área RAG · cierre de calidad (secuencia sugerida)
-
-| Día | Ticket | Tarea | Entregable verificable |
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1–2 | L4.1 | Cerrar G4/G6 con números finales y slices difíciles documentados | Informe por idioma |
-| 2–3 | L4.2 | Revisión cruzada de seguridad: aislamiento tenant en SSE/tools/jobs, evidencia validada, ninguna escritura sin confirmación, secretos fuera de logs/trazas | Checklist firmada |
-| 3 | L4.3 | Checklist de consistencia §9 del plan de implementación marcada con evidencia | Ítems con evidencia |
-| 3–5 | L4.4 | Si cambió algún contrato: spec + plan + diseño actualizados en la misma revisión | Consistencia con evidencia/deuda |
-| 4 | L4.5 | Go/no-go de demo y guion (upload → transcript → chat con cita → tarea → confirmación → evento → recordatorio) | Guion ensayado con el área Web el jueves |
-| Viernes | L4.6 | Retro final y backlog F4 priorizado | Propuesta priorizada |
+| 1–2 | D3.1 | "To confirm" inbox: tasks by status, textual evidence with citation, `date_status` badge (resolved/ambiguous/missing), warning when ASR quality is low | Complete inbox |
+| 2–3 | D3.2 | Proposal editing: title/detail, date/time/zone, all-day vs instant, and the **Calendar block kept separate from the due date** (start/end with a visible, editable default duration) | Editing faithful to the contract |
+| 3 | D3.3 | Confirm/dismiss/complete with version control: detect the 409 from concurrent editing and refresh; confirmation shows what will be written to Calendar | Human in the loop made visible |
+| 3 | D3.4 | "View transcript segment" from the task → `TranscriptReader` with the segment highlighted; timestamp only when it exists | Honest link |
+| 4 | D3.5 | Complete class detail view: summary, topics, detected items, analysis/index statuses; backfill/reanalysis visible when applicable | Complete detail view |
+| 4–5 | D3.6 | Dashboard with agenda: `CalendarView` (FullCalendar) with Google events + color-coded Maulwurf tasks, **never drawing the task and its linked event twice**; visible sync freshness | Dashboard without duplicates |
+| 5 | D3.7 | Per-task sync statuses (`pending/synced/failed/blocked`) + Google reconnection UI; no auto-writing in any flow | Usable reconnection |
+| 5 | D3.8 | Read-only chat tools: answers using agenda/tasks distinguish the source; `propose_task` creates an inbox proposal, never a direct agenda write | No write shortcut |
 
-#### Área API · preferencias · borrado · cierre (secuencia sugerida)
+**S3 exit criteria:** E2E with a test account: proposal → review → confirmation → a single
+event; agenda reading and confirmed editing; double click/lost response/concurrent retries
+do not duplicate; all-day vs instant correct; scope rejection does not break library/chat;
+G5-F2, G6, and G7-CAL with evidence.
 
-| Día | Ticket | Tarea | Entregable verificable |
+### 4.4 S4 — Reminders, close, and demo (F3)
+
+**Objective:** Gmail opt-in, reminders/digests, complete dashboard, Ctrl+K, hardening.
+**Exit criteria:** real test send observed with an authorized account; dedupe/DST/uncertain
+delivery tested; runbooks and security/cost review; final demo.
+
+**S4 frozen interfaces:** preferences/notifications; reminder dedupe; final UI routes.
+
+#### RAG area · quality close-out (suggested sequence)
+
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1 | A4.1 | Tabla `notifications` según M8: `scheduled_at`, `due_version`, `dedupe_key`, estados (`pending\|sending\|sent\|failed\|delivery_unknown\|cancelled`), `provider_message_id`, errores redactados | Esquema probado |
-| 1–2 | A4.2 | `PATCH /me/notifications` y `POST /notifications/test` | Endpoints |
-| 2 | A4.3 | Cambiar vencimiento/preferencias cancela ocurrencias futuras obsoletas; nunca ráfaga retrospectiva al confirmar tarde | Tests de cancelación |
-| 2–3 | A4.4 | Borrado de cuenta observable: `DELETE /me` → 202 + `deletion_operation_id`; tombstone, bloqueo de sesiones/jobs, borrado remoto **antes** de revocar, purga idempotente y `GET /me/deletion/{id}` | E2E de borrado |
-| 3 | A4.5 | D8 ya aprobada: validación de backups texto/metadatos cifrados, retención acordada y tombstones reaplicados al restaurar | Restore comprobado |
-| 3–4 | A4.6 | Hardening final: ownership en API/SSE/tools/jobs; `no-store` en privado; rate limits básicos con `429/503` y cabeceras correctas | Límites activos |
-| 4 | A4.7 | Tests de aislamiento finales (G3 completo) y soporte de restore | G3 cerrada |
-| Viernes | A4.8 | Soporte en ensayo de demo | Demo sin puntos muertos |
+| 1–2 | L4.1 | Close G4/G6 with final numbers and documented hard slices | Per-language report |
+| 2–3 | L4.2 | Cross security review: tenant isolation in SSE/tools/jobs, validated evidence, no writes without confirmation, secrets out of logs/traces | Signed checklist |
+| 3 | L4.3 | §9 consistency checklist of the implementation plan checked with evidence | Items with evidence |
+| 3–5 | L4.4 | If any contract changed: spec + plan + design updated in the same revision | Consistency with evidence/debt |
+| 4 | L4.5 | Demo go/no-go and script (upload → transcript → chat with citation → task → confirmation → event → reminder) | Script rehearsed with the Web area on Thursday |
+| Friday | L4.6 | Final retro and prioritized F4 backlog | Prioritized proposal |
 
-#### Área Ingesta · hardening (secuencia sugerida)
+#### API area · preferences · deletion · close (suggested sequence)
 
-| Día | Ticket | Tarea | Entregable verificable |
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1–2 | S4.1 | Runbook de cleanup/recuperación: cleanup fallido bloquea admisión, sweeper cada 60 s, pérdida de host, restauración | Runbook ejecutado y revisado |
-| 2–3 | S4.2 | Hardening del supervisor: leases/heartbeat, fencing, `audio_deleted_at` solo tras comprobar ausencia de temporales | Contrato probado |
-| 3 | S4.3 | Re-verificar G1 bajo carga: cero persistencia con uploads concurrentes y fallos inyectados | Evidencia sin audio |
-| 4 | S4.4 | TTLs efectivos (10/30/60 min de propuesta; ajustar con benchmark) publicados en capabilities | Límites con benchmark detrás |
-| 4 | S4.5 | Tabla de costos reales por hora de clase (ASR, RAM, CPU ffmpeg) | Números para G8 |
-| Viernes | S4.6 | Soporte en ensayo de demo | Ensayo |
+| 1 | A4.1 | `notifications` table per M8: `scheduled_at`, `due_version`, `dedupe_key`, statuses (`pending\|sending\|sent\|failed\|delivery_unknown\|cancelled`), `provider_message_id`, redacted errors | Tested schema |
+| 1–2 | A4.2 | `PATCH /me/notifications` and `POST /notifications/test` | Endpoints |
+| 2 | A4.3 | Changing the due date/preferences cancels obsolete future occurrences; never a retrospective burst when confirming late | Cancellation tests |
+| 2–3 | A4.4 | Observable account deletion: `DELETE /me` → 202 + `deletion_operation_id`; tombstone, session/job blocking, remote deletion **before** revoking, idempotent purge, and `GET /me/deletion/{id}` | Deletion E2E |
+| 3 | A4.5 | D8 already approved: validate encrypted text/metadata backups, agreed retention, and tombstones reapplied on restore | Restore verified |
+| 3–4 | A4.6 | Final hardening: ownership in API/SSE/tools/jobs; `no-store` on private content; basic rate limits with `429/503` and correct headers | Active limits |
+| 4 | A4.7 | Final isolation tests (full G3) and restore support | G3 closed |
+| Friday | A4.8 | Support in the demo rehearsal | Demo without dead ends |
 
-#### Área Infra · Gmail · scheduler · despliegue (secuencia sugerida)
+#### Ingestion area · hardening (suggested sequence)
 
-| Día | Ticket | Tarea | Entregable verificable |
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1–2 | J4.1 | Gmail opt-in con `gmail.send` incremental; destinatario fijo al email verificado; templates HTML + texto plano escapados; ningún GET de correo muta estado; «Posponer» abre UI autenticada | Envío básico probado |
-| 1–2 | J4.2 | Scheduler ARQ con rol único activo: cada minuto calcula vencimientos/horas locales y reclama filas atómicamente; workers múltiples protegidos por unicidad y leases; SLA objetivo 15 min | Reclamo atómico |
-| 2 | J4.3 | Recordatorios escalados: T-48/T-24/T-2 h para instantes; T-3d/T-1d a hora local para all-day; sin fecha = sin recordatorios; sin ráfaga retrospectiva | Programación probada |
-| 2–3 | J4.4 | Dedupe persistente `(user_id, tipo, task_id, due_version, occurrence)`; cambiar vencimiento/preferencias cancela ocurrencias obsoletas; DST: hora inexistente → siguiente válido; hora repetida → una sola vez | Casos DST probados |
-| 3–4 | J4.5 | `delivery_unknown` cuando se pierde la respuesta tras enviar o el lease `sending` vence: **sin reintento automático**; visible en panel; reexpedición manual advierte | Entrega incierta gestionada |
-| 4 | J4.6 | Digests diario (07:00 configurable) y semanal (domingo) por fecha local, con conflictos de la semana | Digests enviados |
-| 3–5 | J4.7 | Despliegue de referencia (ARM + dominio + túnel según propuesta §5), imágenes versionadas, Alembic como job único, rollback probado | Deploy con rollback |
-| 4–5 | J4.8 | Presupuesto/alertas activos (tokens, ASR, cuotas) y runbooks: cleanup, caída de proveedor, tokens revocados, restore, borrado de cuenta | Alertas activas |
-| Viernes | J4.9 | G8: builds/tests de las 3 apps, restore comprobado, recordatorios dentro del objetivo con dependencias saludables | G8 cerrada |
-| Viernes | J4.10 | Envío real de prueba observado con cuenta autorizada y limpieza posterior | Evidencia del envío |
+| 1–2 | S4.1 | Cleanup/recovery runbook: failed cleanup blocks admission, sweeper every 60 s, host loss, restoration | Runbook executed and reviewed |
+| 2–3 | S4.2 | Supervisor hardening: leases/heartbeat, fencing, `audio_deleted_at` only after verifying absence of temporaries | Contract proven |
+| 3 | S4.3 | Re-verify G1 under load: zero persistence with concurrent uploads and injected failures | Evidence without audio |
+| 4 | S4.4 | Effective TTLs (10/30/60 min proposed; adjust with the benchmark) published in capabilities | Limits backed by the benchmark |
+| 4 | S4.5 | Table of real costs per class hour (ASR, RAM, ffmpeg CPU) | Numbers for G8 |
+| Friday | S4.6 | Support in the demo rehearsal | Rehearsal |
 
-#### Área Web · dashboard final · Ctrl+K · demo (secuencia sugerida)
+#### Infra area · Gmail · scheduler · deployment (suggested sequence)
 
-| Día | Ticket | Tarea | Entregable verificable |
+| Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1 | D4.1 | Preferencias de notificaciones en `/settings`: opt-in Gmail, hora del digest diario/día semanal, umbrales visibles | Pantalla completa |
-| 2 | D4.2 | Panel de entregas/sincronizaciones fallidas: `delivery_unknown` explicado, reexpedición manual con advertencia de duplicado | Panel honesto |
-| 2–3 | D4.3 | Ctrl+K global con `GET /search`: snippet + materia + clase + timestamp válido; accesible en cualquier pantalla | Búsqueda global |
-| 3 | D4.4 | Estadísticas por materia: clases transcritas, duración original, temas cubiertos — sin exponer audio | Stats por materia |
-| 4 (opcional) | D4.5 | PWA instalable solo si sobra margen: manifest + service worker que **excluye** upload/API/transcripts/chat/SSE de cualquier caché | SW verificado |
-| 3–4 | D4.6 | Pulido: empty states, errores accionables, loading, accesibilidad básica (labels, focus, contraste) | Pulido |
-| 4 | D4.7 | Ensayo de demo contra el guion aprobado: flujo completo | Dos ejecuciones (jueves y viernes) |
-| 5 | D4.8 | Revisión final de privacidad del navegador con checklist G1 en cliente | Checklist verificada |
+| 1–2 | J4.1 | Gmail opt-in with incremental `gmail.send`; fixed recipient to the verified email; escaped HTML + plain-text templates; no mail GET mutates state; "Snooze" opens authenticated UI | Basic send tested |
+| 1–2 | J4.2 | ARQ scheduler with a single active role: every minute it computes dues/local times and claims rows atomically; multiple workers protected by uniqueness and leases; target SLA 15 min | Atomic claim |
+| 2 | J4.3 | Scaled reminders: T-48/T-24/T-2 h for instants; T-3d/T-1d at local time for all-day; no date = no reminders; no retrospective burst | Scheduling tested |
+| 2–3 | J4.4 | Persistent dedupe `(user_id, type, task_id, due_version, occurrence)`; changing the due date/preferences cancels obsolete occurrences; DST: nonexistent hour → next valid; repeated hour → once | DST cases tested |
+| 3–4 | J4.5 | `delivery_unknown` when the response is lost after sending or the `sending` lease expires: **no automatic retry**; visible in the panel; manual resending warns | Uncertain delivery handled |
+| 4 | J4.6 | Daily (07:00 configurable) and weekly (Sunday) digests by local date, with the week's conflicts | Digests sent |
+| 3–5 | J4.7 | Reference deployment (ARM + domain + tunnel per the §5 proposal), versioned images, Alembic as a single job, tested rollback | Deploy with rollback |
+| 4–5 | J4.8 | Active budget/alerts (tokens, ASR, quotas) and runbooks: cleanup, provider outage, revoked tokens, restore, account deletion | Active alerts |
+| Friday | J4.9 | G8: builds/tests for the 3 apps, verified restore, reminders within target with healthy dependencies | G8 closed |
+| Friday | J4.10 | Real test send observed with an authorized account and subsequent cleanup | Send evidence |
 
-**Criterios de salida S4:** envío real observado; `delivery_unknown` sin reintento
-automático; restore no reintroduce borrados; dedupe/DST probados; demo completa en el
-despliegue de referencia con alertas; checklist G1 en cliente verificada.
+#### Web area · final dashboard · Ctrl+K · demo (suggested sequence)
 
-### 4.5 Cobertura de puertas G1–G8 por sprint
+| Day | Ticket | Task | Verifiable deliverable |
+|---|---|---|---|
+| 1 | D4.1 | Notification preferences at `/settings`: Gmail opt-in, daily digest time/weekday, visible thresholds | Complete screen |
+| 2 | D4.2 | Delivery/failed-sync panel: `delivery_unknown` explained, manual resending with a duplicate warning | Honest panel |
+| 2–3 | D4.3 | Global Ctrl+K with `GET /search`: snippet + subject + class + valid timestamp; accessible from any screen | Global search |
+| 3 | D4.4 | Per-subject statistics: transcribed classes, original duration, covered topics — without exposing audio | Per-subject stats |
+| 4 (optional) | D4.5 | Installable PWA only if margin remains: manifest + service worker that **excludes** upload/API/transcripts/chat/SSE from any cache | SW verified |
+| 3–4 | D4.6 | Polish: empty states, actionable errors, loading, basic accessibility (labels, focus, contrast) | Polished |
+| 4 | D4.7 | Demo rehearsal against the approved script: full flow | Two runs (Thursday and Friday) |
+| 5 | D4.8 | Final browser privacy review with the client-side G1 checklist | Checklist verified |
 
-| Puerta | Qué exige (PLAN_TESTS §5) | S1 | S2 | S3 | S4 |
+**S4 exit criteria:** real send observed; `delivery_unknown` without automatic retry;
+restore does not reintroduce deletions; dedupe/DST tested; complete demo on the reference
+deployment with alerts; client-side G1 checklist verified.
+
+### 4.5 G1–G8 gate coverage per sprint
+
+| Gate | What it requires (PLAN_TESTS §5) | S1 | S2 | S3 | S4 |
 |---|---|---|---|---|---|
-| G1 Privacidad | Cero persistencia de audio en todos los caminos F0.2; cleanup confirmado antes de jobs de texto | evidencia inicial | re-verificación con carga | — | re-verificación final |
-| G2-T ASR temporal | Offsets ordenados/en rango con precisión aceptada; cero tiempos inventados | spike P-S1-SG-07 | E2E con `word\|segment` | — | — |
-| G2-X ASR textual | D6 aprobado; `none`, tiempos null, SRT/enlaces temporales deshabilitados | spike + decisión D6 | UI/SRT sin tiempos | — | — |
-| G3 Aislamiento | Cero accesos cruzados (IDs adivinados, búsqueda, SSE, tools, jobs, borrado) | tests básicos | completa en búsqueda/SSE/borrado | extends tools/jobs | cierre completo |
-| G4 RAG | ≥50 preguntas/idioma (15 no respondibles); Recall@8 ≥ 0.85; citas ≥ 0.95; abstención ≥ 0.90 | formato dataset | primera medición | — | números finales |
-| G5-F1 Recuperación de conocimiento | Sin versiones parciales ni duplicados; crash resuelto; borrar fuente bloquea respuestas/jobs tardíos | — | fault injection + reconciliador | — | — |
-| G5-F2 Recuperación de acción | Análisis/revisiones/outbox Calendar sin parciales; versiones obsoletas no publican ni se reactivan | — | — | confirmación/ETag/reconnect | — |
-| G6 Extracción | ≥50 actividades/idioma; precisión ≥ 0.95; recall ≥ 0.85; fecha exacta ≥ 0.95; evidencia 100% | — | — | medición | cierre |
-| G7-CAL Calendar | Nada sin confirmación; evento único; all-day/instantes, scopes, ETag y reconnect | — | — | Calendar | — |
-| G7-MAIL Gmail | Opt-in; entrega incierta sin reintento; reenvío manual advertido | — | — | — | Gmail |
-| G8 Operación | Builds/tests 3 apps; restore; recordatorios ≤ 15 min; presupuesto/alertas | CI base | smoke E2E | — | cierre |
+| G1 Privacy | Zero audio persistence on all F0.2 paths; cleanup confirmed before text jobs | initial evidence | re-verification under load | — | final re-verification |
+| G2-T Temporal ASR | Ordered/in-range offsets with accepted precision; zero invented times | spike P-S1-SG-07 | E2E with `word\|segment` | — | — |
+| G2-X Textual ASR | D6 approved; `none`, null times, SRT/time links disabled | spike + D6 decision | UI/SRT without times | — | — |
+| G3 Isolation | Zero cross-tenant access (guessed IDs, search, SSE, tools, jobs, deletion) | basic tests | complete in search/SSE/deletion | extends tools/jobs | full close |
+| G4 RAG | ≥50 questions/language (15 unanswerable); Recall@8 ≥ 0.85; citations ≥ 0.95; abstention ≥ 0.90 | dataset format | first measurement | — | final numbers |
+| G5-F1 Knowledge retrieval | No partial versions or duplicates; crash resolved; deleting a source blocks late answers/jobs | — | fault injection + reconciler | — | — |
+| G5-F2 Action retrieval | Analysis/revisions/Calendar outbox without partials; obsolete versions neither publish nor reactivate | — | — | confirmation/ETag/reconnect | — |
+| G6 Extraction | ≥50 activities/language; precision ≥ 0.95; recall ≥ 0.85; exact date ≥ 0.95; evidence 100% | — | — | measurement | close |
+| G7-CAL Calendar | Nothing without confirmation; single event; all-day/instants, scopes, ETag, and reconnect | — | — | Calendar | — |
+| G7-MAIL Gmail | Opt-in; uncertain delivery without retry; manual resending warned | — | — | — | Gmail |
+| G8 Operations | Builds/tests for the 3 apps; restore; reminders ≤ 15 min; budget/alerts | base CI | E2E smoke | — | close |
 
-### 4.6 Resumen anti-ciclo (regla §6a del plan maestro)
+### 4.6 Anti-cycle summary (master plan §6a rule)
 
-Quien provee una interfaz la congela el lunes y entrega una primera integración consumible a
-más tardar el día 3, pero el cierre y los E2E ocurren los días 4–5; quien consume construye
-contra el contrato congelado (con doble/mock si hace falta) y conmuta cuando el código real
-exista. Nadie espera bloqueado más de un día sin decisión visible.
+Whoever provides an interface freezes it on Monday and delivers a first consumable
+integration no later than day 3, but close-out and the E2Es happen on days 4–5; whoever
+consumes builds against the frozen contract (with a double/mock if needed) and switches
+when the real code exists. Nobody stays blocked for more than a day without a visible
+decision.
 
-| Área | No espera a | Consume desde el lunes | Primera integración real llega |
+| Area | Does not wait for | Consumes from Monday | First real integration arrives |
 |---|---|---|---|
-| API/BD | Infra (compose) ni RAG (versiones) — S1; Ingesta (Riva) — S2 | Decisiones de versiones (día 1); shape de commit congelado | Compose día 1–2; commit simulado con fixtures en S2 |
-| Ingesta | Infra (imagen endurecida) ni API/BD (endpoints) | Contrato `POST /audios`+`PUT` congelado | Imagen base día 2; endpoints día 2–3 |
-| RAG | Ingesta (spike/transcripts) ni API/BD (tablas) | Sus propios contratos (los publica) | Tablas día 2; transcripts reales solo para medir el viernes |
-| Web | API/BD (endpoints) ni Infra (compose) | Contratos de sesión/materias/estados congelados | API real día 3–4; conmuta el jueves |
-| Infra | API/BD (esqueleto) ni RAG (índice real) | ADR de versiones (día 1); contrato del job índice congelado | Índice stub → real día 4–5 |
+| API/DB | Infra (compose) or RAG (versions) in S1; Ingestion (Riva) in S2 | Version decisions (day 1); frozen commit shape | Compose day 1–2; simulated commit with fixtures in S2 |
+| Ingestion | Infra (hardened image) or API/DB (endpoints) | Frozen `POST /audios`+`PUT` contract | Base image day 2; endpoints day 2–3 |
+| RAG | Ingestion (spike/transcripts) or API/DB (tables) | Its own contracts (it publishes them) | Tables day 2; real transcripts only to measure on Friday |
+| Web | API/DB (endpoints) or Infra (compose) | Frozen session/subjects/status contracts | Real API day 3–4; switches on Thursday |
+| Infra | API/DB (skeleton) or RAG (real index) | Versions ADR (day 1); frozen index job contract | Stub index → real day 4–5 |
 
 ---
 
-## 5. Enlaces
+## 5. Links
 
-- [ESPECIFICACION.md](ESPECIFICACION.md) — contratos M1–M9, modelo de datos, NFRs.
-- [PLAN_IMPLEMENTACION.md](PLAN_IMPLEMENTACION.md) — fases F0–F3, puertas con variantes
-  (G1, G2-T/G2-X, G3, G4, G5-F1/F2, G6, G7-CAL/MAIL, G8) y matriz D1–D8.
-- [PLAN_SPRINTS.md](PLAN_SPRINTS.md) — secuencia S1–S4, backlog abierto y reglas de coordinación.
-- [PLAN_TESTS.md](PLAN_TESTS.md) — catálogo por sprint y área (sufijos legados estables).
-- [plan/](plan/S1.md) — especificaciones detalladas: [S1](plan/S1.md) · [S2](plan/S2.md) ·
+- [ESPECIFICACION.md](ESPECIFICACION.md) — M1–M9 contracts, data model, NFRs.
+- [PLAN_IMPLEMENTACION.md](PLAN_IMPLEMENTACION.md) — phases F0–F3, gates with variants
+  (G1, G2-T/G2-X, G3, G4, G5-F1/F2, G6, G7-CAL/MAIL, G8) and the D1–D8 matrix.
+- [PLAN_SPRINTS.md](PLAN_SPRINTS.md) — S1–S4 sequence, open backlog, and coordination rules.
+- [PLAN_TESTS.md](PLAN_TESTS.md) — catalog per sprint and area (stable legacy suffixes).
+- [plan/](plan/S1.md) — detailed specifications: [S1](plan/S1.md) · [S2](plan/S2.md) ·
   [S3](plan/S3.md) · [S4](plan/S4.md).
-- [NVIDIA_RIVA.md](NVIDIA_RIVA.md) — parámetros auditados para el spike S1.
-- Claiming: [sprints/CLAIMS.md](sprints/CLAIMS.md) — registro canónico; bitácoras en
-  [sprints/](sprints/README.md) — evidencia y notas por persona.
+- [NVIDIA_RIVA.md](NVIDIA_RIVA.md) — audited parameters for the S1 spike.
+- Claiming: [sprints/CLAIMS.md](sprints/CLAIMS.md) — canonical registry; logbooks at
+  [sprints/](sprints/README.md) — per-person evidence and notes.
 
 ---
 
-*Documento vivo: actualizar por PR junto con `ESPECIFICACION.md` y
-`PLAN_IMPLEMENTACION.md` cuando cambie un contrato. Nada de lo aquí descrito debe leerse
-como implementado.*
+*Living document: update via PR alongside `ESPECIFICACION.md` and
+`PLAN_IMPLEMENTACION.md` whenever a contract changes. Nothing described here should be read
+as implemented.*

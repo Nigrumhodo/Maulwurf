@@ -1,81 +1,80 @@
-# Maulwurf — Catálogo de pruebas por sprint
+# Maulwurf — Sprint Test Catalog
 
-> Estado: plan operativo pendiente de ejecución, revisión 2026-09-19. Subordinado a
-> [ESPECIFICACION.md](ESPECIFICACION.md) (contratos M1–M9, §6 modelo de datos) y
-> [PLAN_IMPLEMENTACION.md](PLAN_IMPLEMENTACION.md) (§7 capas de prueba y variantes de puertas
-> G1–G8).
-> Cada ticket del backlog de [PLAN_SPRINTS.md](PLAN_SPRINTS.md) referencia aquí los tests que lo
-> evidencian; quien reclama un ticket registra su ejecución en su bitácora de
-> [sprints/](sprints/README.md). **Ningún test existe aún:** este documento define qué debe
-> existir y cuándo.
+> Status: operational plan pending execution, revision 2026-09-19. Subordinate to
+> [ESPECIFICACION.md](ESPECIFICACION.md) (contracts M1–M9, §6 data model) and
+> [PLAN_IMPLEMENTACION.md](PLAN_IMPLEMENTACION.md) (§7 test layers and G1–G8 gate variants).
+> Each ticket in the [PLAN_SPRINTS.md](PLAN_SPRINTS.md) backlog references here the tests that
+> evidence it; whoever claims a ticket records its execution in their logbook at
+> [sprints/](sprints/README.md). **No test exists yet:** this document defines what must exist
+> and when.
 
 ---
 
-## 0. Convenciones
+## 0. Conventions
 
-### 0.1 Capas (de PLAN_IMPLEMENTACION §7)
+### 0.1 Layers (from PLAN_IMPLEMENTACION §7)
 
-| Capa | Código | Qué valida | Dónde corre | Herramienta |
+| Layer | Code | What it validates | Where it runs | Tool |
 |---|---|---|---|---|
-| Unitaria | `U-` | Lógica pura: fechas/DST, offsets Unicode, chunking, RRF, estados, dedupe | CI (cada MR) | pytest / Vitest |
-| Integración local | `I-` | Servicios reales de compose: Postgres/pgvector, Redis, ffmpeg, outbox, leases, cleanup, reinicios | CI (MR) + local | pytest contra compose |
-| Provider-contract | `P-` | Contratos reales de NVIDIA Riva, LLM/embeddings, Google | **Protegida**: manual o programada, nunca en MR | scripts dedicados |
-| E2E | `E-` | Navegador → proxy → servicios → BD/proveedor | CI (smoke) + demo manual | Vitest/Playwright + manual |
-| Carga | `L-` | Memoria, tmpfs, latencia, concurrencia, ausencia de persistencia de audio | Local/protegida, antes de cierres | scripts dedicados |
-| Componente/manual | `C-` | Componentes aislados (Vitest) o checklist manual anotada (demo, seguridad, privacidad de cliente) | CI (componentes) + manual | Vitest + checklist |
-| Regresión de prompts | `R-` | Validadores/agregación contra outputs de LLM grabados (sin claves ni PII); no gasta cuota | CI (cada MR) | pytest |
+| Unit | `U-` | Pure logic: dates/DST, Unicode offsets, chunking, RRF, states, dedupe | CI (every MR) | pytest / Vitest |
+| Local integration | `I-` | Real compose services: Postgres/pgvector, Redis, ffmpeg, outbox, leases, cleanup, restarts | CI (MR) + local | pytest against compose |
+| Provider-contract | `P-` | Real contracts of NVIDIA Riva, LLM/embeddings, Google | **Protected**: manual or scheduled, never in MR | dedicated scripts |
+| E2E | `E-` | Browser → proxy → services → DB/provider | CI (smoke) + manual demo | Vitest/Playwright + manual |
+| Load | `L-` | Memory, tmpfs, latency, concurrency, absence of audio persistence | Local/protected, before closures | dedicated scripts |
+| Component/manual | `C-` | Isolated components (Vitest) or annotated manual checklist (demo, security, client privacy) | CI (components) + manual | Vitest + checklist |
+| Prompt regression | `R-` | Validators/aggregation against recorded LLM outputs (no keys or PII); spends no quota | CI (every MR) | pytest |
 
-### 0.2 Identificadores
+### 0.2 Identifiers
 
-`<capa>-<sprint>-<sufijo legado>-<n>`, p. ej. `I-S2-AN-05` = integración, sprint 2,
-sufijo estable `AN`, caso 03. Los sufijos **JL/AN/SG/JF/DA** forman parte de IDs legados ya
-referenciados: **no expresan ownership, asignación ni responsabilidad actual y no se renombran**.
-La responsabilidad procede únicamente del claiming del ticket, registrado en
-[sprints/CLAIMS.md](sprints/CLAIMS.md); la bitácora solo documenta la evidencia posterior.
+`<layer>-<sprint>-<legacy suffix>-<n>`, e.g. `I-S2-AN-05` = integration, sprint 2,
+stable suffix `AN`, case 03. The **JL/AN/SG/JF/DA** suffixes are part of legacy IDs already
+referenced: **they do not express ownership, assignment or current responsibility and are not
+renamed**. Responsibility comes only from the ticket claim, recorded in
+[sprints/CLAIMS.md](sprints/CLAIMS.md); the logbook only documents the subsequent evidence.
 
-### 0.3 Ubicación (según §3.3 de la especificación)
+### 0.3 Location (per §3.3 of the specification)
 
 - Python: `apps/api/tests/unit/`, `apps/api/tests/integration/`, `apps/ingest/tests/…`,
-  `workers/tests/…` — pytest, marcadores `@pytest.mark.integration` / `provider` / `load`.
-- Web: `apps/web/tests/unit/`, `apps/web/tests/e2e/` — Vitest (+ Playwright cuando exista E2E).
-- Scripts de carga y provider: `scripts/load/`, `scripts/provider/` (sin secretos incrustados).
+  `workers/tests/…` — pytest, markers `@pytest.mark.integration` / `provider` / `load`.
+- Web: `apps/web/tests/unit/`, `apps/web/tests/e2e/` — Vitest (+ Playwright once E2E exists).
+- Load and provider scripts: `scripts/load/`, `scripts/provider/` (no embedded secrets).
 
-### 0.4 Reglas de fixtures (no negociables, de AGENTS.md y spec)
+### 0.4 Fixture rules (non-negotiable, from AGENTS.md and the spec)
 
-1. **Audio sintético solo en RAM**, generado en el momento de la ejecución; nunca versionado
-   ni retenido como artefacto de CI. Solo se persisten métricas no sensibles y texto esperado.
-2. Fixtures de texto: **transcripciones sintéticas o redactadas** (sin voz real de nadie, sin PII).
-3. Prohibido: API keys, tokens, payloads crudos de proveedores, dumps de BD, audio, en fixtures,
-   snapshots, logs de test o grabaciones de CI.
-4. Provider-contract usa **cuentas protegidas autorizadas + presupuesto documentado**; crea solo
-   recursos de prueba y los limpia. Un mock **no es evidencia** de un contrato de proveedor.
-5. Tests de fechas/DST usan **relojes inyectables**, nunca la hora del sistema.
-6. Regla de decisión de suite: si un test necesita red, es `I-` o `P-`; si necesita un proveedor
-   pagado, es `P-`; si necesita navegador, es `E-`; lo demás es `U-`.
+1. **Synthetic audio in RAM only**, generated at execution time; never versioned nor retained
+   as a CI artifact. Only non-sensitive metrics and expected text are persisted.
+2. Text fixtures: **synthetic or authored transcripts** (nobody's real voice, no PII).
+3. Forbidden: API keys, tokens, raw provider payloads, DB dumps, audio, in fixtures, snapshots,
+   test logs or CI recordings.
+4. Provider-contract uses **authorized protected accounts + documented budget**; it creates only
+   test resources and cleans them up. A mock **is not evidence** of a provider contract.
+5. Date/DST tests use **injectable clocks**, never system time.
+6. Suite decision rule: if a test needs the network, it is `I-` or `P-`; if it needs a paid
+   provider, it is `P-`; if it needs a browser, it is `E-`; everything else is `U-`.
 
-### 0.5 Nomenclatura
+### 0.5 Naming
 
-`test_<módulo>_<comportamiento>.py` / `<módulo>.<comportamiento>.test.ts`. Un test, una aserción
-compuesta máxima. Todo test de `I-`/`P-`/`E-` tiene una línea de docstring que dice **qué puerta
-o contrato evidencia** (G1, G2-T/G2-X, G3, G4, G5-F1/G5-F2, G6, G7-CAL/G7-MAIL, G8,
-M1–M9 o interfaz congelada §6 de [PLAN_SPRINTS.md](PLAN_SPRINTS.md)).
+`test_<module>_<behavior>.py` / `<module>.<behavior>.test.ts`. One test, one composed assertion
+at most. Every `I-`/`P-`/`E-` test has a docstring line stating **which gate or contract it
+evidences** (G1, G2-T/G2-X, G3, G4, G5-F1/G5-F2, G6, G7-CAL/G7-MAIL, G8, M1–M9 or the frozen
+interface §6 of [PLAN_SPRINTS.md](PLAN_SPRINTS.md)).
 
-### 0.6 Claiming y criterio mínimo por ticket
+### 0.6 Claiming and minimum criterion per ticket
 
-Este catálogo se organiza por área/capacidad, no por persona. Cuando una tabla requiera indicar
-responsabilidad, `Área/Responsable reclamado` remite al claiming vigente y a su evidencia en
-[sprints/](sprints/README.md); el sufijo legado del ID nunca decide esa responsabilidad.
+This catalog is organized by area/capability, not by person. When a table needs to indicate
+responsibility, `Area/Claimed owner` refers to the current claiming and its evidence in
+[sprints/](sprints/README.md); the legacy ID suffix never decides that responsibility.
 
-Los tickets documentales pueden cerrarse con evidencia `C-` o una checklist definida, ejecutada y
-registrada con fecha, entorno y resultado. **Ningún ticket funcional puede quedar sin al menos una
-prueba trazable de este catálogo**; un documento o una checklist no sustituye la validación de una
-funcionalidad, infraestructura o contrato de proveedor.
+Documentation tickets can be closed with `C-` evidence or a checklist that is defined, executed
+and recorded with date, environment and result. **No functional ticket may be left without at
+least one traceable test from this catalog**; a document or a checklist does not replace the
+validation of a feature, infrastructure or provider contract.
 
-### 0.7 Trazabilidad añadida para pruebas antes huérfanas
+### 0.7 Traceability added for previously orphaned tests
 
-Estas asociaciones completan las referencias del backlog sin cambiar los IDs estables:
+These associations complete the backlog references without changing the stable IDs:
 
-| Prueba | Tickets naturales |
+| Test | Natural tickets |
 |---|---|
 | U-S1-SG-03 | S1.A6, S2.3 |
 | P-S2-SG-12 | S2.4 |
@@ -87,300 +86,318 @@ Estas asociaciones completan las referencias del backlog sin cambiar los IDs est
 
 ---
 
-## 1. Sprint 1 (S1) — Fundación + spike F0
+## 1. Sprint 1 (S1) — Foundation + F0 spike
 
-### 1.1 Ingesta/ASR — spike y prototipo de ingesta
+### 1.1 Ingestion/ASR — spike and ingestion prototype
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| U-S1-SG-01 | U | Generador de audio sintético en RAM produce texto esperado conocido (voz inteligible, no tonos); determinista con semilla | F0.1, fixture rule |
-| U-S1-SG-02 | U | Validador de formatos: acepta WAV PCM s16 mono; tabla de decisión de rechazo (playlist, URL, contenedor inesperado, multi-canal) | M2 |
-| U-S1-SG-03 | U | Matemática de fronteras: timestamp global = offset de fragmento + tiempo local, sin duplicar solapamiento | M2/§6 |
-| I-S1-SG-04 | I | Matriz de fallos completa: éxito, upload incompleto, rechazo, timeout, cancelación, error ffmpeg/Riva/BD, SIGKILL, reinicio de contenedor y de host; fallo inyectado durante y después del commit | F0.2, G1 |
-| I-S1-SG-05 | I | Expiración de lease **no** marca cleanup verificado; sin evidencia de limpieza la outbox queda bloqueada | F0.2, G1 |
-| I-S1-SG-06 | I | Ausencia de original/convertidos/fragmentos en disco, Redis, logs, trazas y cachés; inspección de descriptores/procesos/mounts, no solo nombres de archivo | G1 |
-| P-S1-SG-07 | P | Spike de contrato NVIDIA: idiomas habilitados, formatos, sample rate, límites payload/duración, cuotas, deadlines, precisión de offsets (`word/segment/none`) | F0.1, D2/D4/D6 |
-| P-S1-SG-08 | P | Latencia por duración/idioma y memoria del SDK dentro del presupuesto autorizado | F0.1, G8 |
+| U-S1-SG-01 | U | In-RAM synthetic audio generator produces known expected text (intelligible voice, not tones); deterministic with a seed | F0.1, fixture rule |
+| U-S1-SG-02 | U | Format validator: accepts WAV PCM s16 mono; rejection decision table (playlist, URL, unexpected container, multi-channel) | M2 |
+| U-S1-SG-03 | U | Boundary math: global timestamp = fragment offset + local time, without duplicating overlap | M2/§6 |
+| I-S1-SG-04 | I | Complete failure matrix: success, incomplete upload, rejection, timeout, cancellation, ffmpeg/Riva/DB error, SIGKILL, container and host restart; injected failure during and after the commit | F0.2, G1 |
+| I-S1-SG-05 | I | Lease expiration does **not** mark verified cleanup; without cleanup evidence the outbox stays blocked | F0.2, G1 |
+| I-S1-SG-06 | I | Absence of original/converted/fragments on disk, Redis, logs, traces and caches; inspection of descriptors/processes/mounts, not only file names | G1 |
+| P-S1-SG-07 | P | NVIDIA contract spike: enabled languages, formats, sample rate, payload/duration limits, quotas, deadlines, offset precision (`word/segment/none`) | F0.1, D2/D4/D6 |
+| P-S1-SG-08 | P | Latency per duration/language and SDK memory within the authorized budget | F0.1, G8 |
 
-**Criterio de suite cerrada:** P-S1-SG-07 produce el informe del contrato; sin él, S2 no arranca.
+**Closed-suite criterion:** P-S1-SG-07 produces the contract report; without it, S2 does not start.
 
-### 1.2 API/datos — autenticación y esquema núcleo
+### 1.2 API/data — authentication and core schema
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| U-S1-AN-01 | U | Hash del identificador de sesión y revocación/expiración; cookie con flags `Secure/HttpOnly/SameSite=Lax` emitida correctamente | M1 |
-| U-S1-AN-02 | U | Bootstrap y rotación CSRF: `GET /me` con `no-store` entrega el token plano cuyo hash guarda la sesión; toda mutación, incluido el `PUT`, exige token y Origin same-origin; crear/rotar sesión invalida el token anterior y logout/revocación lo inutiliza | M1 |
-| U-S1-AN-03 | U | Cifrado AES-GCM de tokens de Google: nonce único por cifrado, versión de clave registrada, nada plano en BD | M1/§7 |
-| I-S1-AN-04 | I | Migraciones Alembic: desde vacío y desde versión anterior, con pool de conexiones | G3 |
-| I-S1-AN-05 | I | Aislamiento: usuario B no ve recursos de A ni adivinando IDs (materias, sesiones, credenciales) | G3 |
-| I-S1-AN-06 | I | OAuth Google con Google de prueba o doble local: `state`, PKCE, `nonce`/issuer/audience; identidad por `sub`, no email | M1, D1 |
-| I-S1-AN-07 | I | CRUD materias: borrar materia con clases activas exige moverlas o confirmar | M1 |
+| U-S1-AN-01 | U | Session identifier hash and revocation/expiration; cookie with `Secure/HttpOnly/SameSite=Lax` flags issued correctly | M1 |
+| U-S1-AN-02 | U | CSRF bootstrap and rotation: `GET /me` with `no-store` delivers the plain token whose hash the session stores; every mutation, including the `PUT`, requires token and same-origin Origin; creating/rotating a session invalidates the previous token and logout/revocation voids it | M1 |
+| U-S1-AN-03 | U | AES-GCM encryption of Google tokens: unique nonce per encryption, key version recorded, nothing in plaintext in the DB | M1/§7 |
+| I-S1-AN-04 | I | Alembic migrations: from empty and from the previous version, with a connection pool | G3 |
+| I-S1-AN-05 | I | Isolation: user B does not see A's resources, not even by guessing IDs (subjects, sessions, credentials) | G3 |
+| I-S1-AN-06 | I | Google OAuth with a test Google or local double: `state`, PKCE, `nonce`/issuer/audience; identity from `sub`, not email | M1, D1 |
+| I-S1-AN-07 | I | Subject CRUD: deleting a subject with active classes requires moving them or confirming | M1 |
 
-### 1.3 Contratos de conocimiento — preparación para S2
+### 1.3 Knowledge contracts — preparation for S2
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| U-S1-JL-01 | U | Borrador Pydantic §M4: `due_date`/`due_at` mutuamente excluyentes, `confidence_score` en [0,1] nullable, `date_status` enum | M4 |
-| U-S1-JL-02 | U | Borrador Pydantic §M6: chunk con offsets Unicode `[inicio, fin)` válidos y enlaces a `chunk_segments` | M6 |
-| U-S1-JL-03 | U | Dataset G4: validador de formato (pregunta, respondible sí/no, evidencia esperada); 15 no respondibles por idioma obligatorias | G4 |
+| U-S1-JL-01 | U | Pydantic draft §M4: `due_date`/`due_at` mutually exclusive, nullable `confidence_score` in [0,1], `date_status` enum | M4 |
+| U-S1-JL-02 | U | Pydantic draft §M6: chunk with valid Unicode offsets `[start, end)` and links to `chunk_segments` | M6 |
+| U-S1-JL-03 | U | G4 dataset: format validator (question, answerable yes/no, expected evidence); 15 mandatory non-answerables per language | G4 |
 
-### 1.4 Infraestructura/CI — base operativa
+### 1.4 Infrastructure/CI — operating base
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| I-S1-JF-01 | I | Smoke de compose: 8 servicios arriba; `/healthz` por proceso; `/readyz` de API (Postgres/Redis) y de ingest (BD, temporales seguros, capacidad) **sin** invocar proveedores pagados | G8 |
-| I-S1-JF-02 | I | No-buffering del proxy: carga de archivo grande vía Caddy mientras se verifica que no aparece ningún archivo en ningún filesystem | G1 |
-| I-S1-JF-03 | I | Redis contiene solo IDs/estado; ninguna clave con payload > umbral documentado | G1 |
-| U-S1-JF-04 | U | Política de outbox por tipo: `index_requested`/`analyze_requested` quedan bloqueados por `cleanup_pending` hasta cleanup verificado; Calendar, notificaciones y borrados nacen habilitados en su propia transacción tras validar autorización, tombstone y versión | M3/§6/G5-F1/G5-F2 |
+| I-S1-JF-01 | I | Compose smoke: 8 services up; `/healthz` per process; API `/readyz` (Postgres/Redis) and ingest `/readyz` (DB, safe temporaries, capacity) **without** invoking paid providers | G8 |
+| I-S1-JF-02 | I | Proxy no-buffering: large file upload via Caddy while verifying that no file appears on any filesystem | G1 |
+| I-S1-JF-03 | I | Redis contains only IDs/status; no key with a payload above the documented threshold | G1 |
+| U-S1-JF-04 | U | Outbox policy by type: `index_requested`/`analyze_requested` are blocked by `cleanup_pending` until verified cleanup; Calendar, notifications and deletions are born enabled in their own transaction after validating authorization, tombstone and version | M3/§6/G5-F1/G5-F2 |
 
-### 1.5 Web/UX — cliente y componentes base
+### 1.5 Web/UX — client and base components
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| U-S1-DA-01 | U | Cliente HTTP: obtiene el CSRF mediante `GET /me` no cacheable, lo inyecta en toda mutación y reemplaza el valor al rotar la sesión; interceptores 401→login, 403→mensaje, 429→reintento diferido | M1/M9 |
-| U-S1-DA-02 | U | Formulario de materias: validación de campos requeridos y errores de API renderizados | M1 |
-| C-S1-DA-03 | C | Componentes base: badges de estado y empty states muestran los valores del contrato de estados | M9 |
+| U-S1-DA-01 | U | HTTP client: obtains the CSRF via the non-cacheable `GET /me`, injects it into every mutation and replaces the value when the session rotates; interceptors 401→login, 403→message, 429→deferred retry | M1/M9 |
+| U-S1-DA-02 | U | Subject form: required-field validation and rendered API errors | M1 |
+| C-S1-DA-03 | C | Base components: status badges and empty states show the values of the status contract | M9 |
 
 ---
 
-## 2. Sprint 2 (S2) — Conocimiento: corte vertical F1
+## 2. Sprint 2 (S2) — Knowledge: F1 vertical slice
 
-### 2.1 Ingesta/ASR — pipeline real
+### 2.1 Ingestion/ASR — real pipeline
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| U-S2-SG-01 | U | `/ingestion/capabilities` refleja los límites medidos en el spike (no constantes duras) | D2/D4 |
-| U-S2-SG-02 | U | Validación ffprobe: tabla de decisión completa (contenedor, codecs, duración, canales; playlists/URLs/malformados rechazados) | M2 |
-| U-S2-SG-03 | U | Invocación ffmpeg: argv construido sin interpolación de shell; límites de CPU/memoria/salida/tiempo presentes | M2/seguridad |
-| U-S2-SG-04 | U | Reconciliación de fronteras: palabras/texto duplicados del overlap eliminados; orden estable; offsets globales correctos | M2 |
-| U-S2-SG-05 | U | Clasificación de reintentos: gRPC transitorio reintenta (máx 3, backoff+jitter); auth/idioma/formato inválido **no** reintenta | M2 |
-| I-S2-SG-06 | I | Commit atómico transcript+segmentos en una transacción; `not_requested` ≠ éxito; respuesta vacía = resultado sin texto utilizable, no relleno | M2/§6 |
-| I-S2-SG-07 | I | Cleanup en `finally` ante éxito y cada error de S1; `cleanup_status=pending\|verified\|failed` separado del ASR; el camino normal no llega a `succeeded` sin verificación y un fallo detiene admisión y bloquea outbox de texto | G1/G5-F1 |
-| I-S2-SG-08 | I | Reconciliador post-commit: proceso muerto tras el commit deja `transcript_committed_cleanup_pending`; solo la verificación en el mismo host/namespace habilita outbox **sin retranscribir** | F0.2/G1/G5-F1 |
-| I-S2-SG-09 | I | Fencing: propietario vencido no publica transcript (token obsoleto rechazado) | M2 |
-| I-S2-SG-10 | I | Cancelación: desconexión durante recepción cancela+limpia; tras 202 continúa bajo lease; cerrar pestaña no cancela; cancelar tras commit → 409 | M2 |
-| E-S2-SG-11 | E | Clase sintética de 1 h (generada en RAM) transcrita de punta a punta vía proxy; demuestra `word\|segment` para G2-T o `none` con UI/SRT temporal deshabilitada para G2-X | G1/G2-T o G2-X/F1 |
-| P-S2-SG-12 | P | Regresión mínima contra Riva real tras cambios del cliente bloqueante: contrato, cancelación, deadlines y clasificación de errores con presupuesto fijo y suite protegida | F0.1/G2-T o G2-X |
+| U-S2-SG-01 | U | `/ingestion/capabilities` reflects the limits measured in the spike (no hardcoded constants) | D2/D4 |
+| U-S2-SG-02 | U | ffprobe validation: complete decision table (container, codecs, duration, channels; playlists/URLs/malformed rejected) | M2 |
+| U-S2-SG-03 | U | ffmpeg invocation: argv built without shell interpolation; CPU/memory/output/time limits present | M2/security |
+| U-S2-SG-04 | U | Boundary reconciliation: words/text duplicated by the overlap removed; stable order; correct global offsets | M2 |
+| U-S2-SG-05 | U | Retry classification: transient gRPC retries (max 3, backoff+jitter); auth/language/invalid format does **not** retry | M2 |
+| I-S2-SG-06 | I | Atomic transcript+segments commit in one transaction; `not_requested` ≠ success; empty response = result without usable text, not filler | M2/§6 |
+| I-S2-SG-07 | I | Cleanup in `finally` on success and on every S1 error; `cleanup_status=pending\|verified\|failed` kept separate from the ASR; the normal path does not reach `succeeded` without verification and a failure stops admission and blocks the text outbox | G1/G5-F1 |
+| I-S2-SG-08 | I | Post-commit reconciler: a process dead after the commit leaves `transcript_committed_cleanup_pending`; only verification on the same host/namespace enables the outbox **without retranscribing** | F0.2/G1/G5-F1 |
+| I-S2-SG-09 | I | Fencing: an expired owner does not publish the transcript (stale token rejected) | M2 |
+| I-S2-SG-10 | I | Cancellation: disconnection during reception cancels+cleans; after 202 it continues under lease; closing the tab does not cancel; cancelling after commit → 409 | M2 |
+| E-S2-SG-11 | E | 1 h synthetic class (generated in RAM) transcribed end to end via the proxy; demonstrates `word\|segment` for G2-T or `none` with the temporal UI/SRT disabled for G2-X | G1/G2-T or G2-X/F1 |
+| P-S2-SG-12 | P | Minimal regression against real Riva after blocking client changes: contract, cancellation, deadlines and error classification with a fixed budget and protected suite | F0.1/G2-T or G2-X |
+| I-S2-SG-13 | I | Pipeline calls the Riva client through a test double: text reaches the commit hook; silence or empty text ends `rejected` with `no_usable_text`, never `succeeded`; losing the lease mid-call cancels the RPC | M2/G2-T or G2-X |
+| I-S2-SG-14 | I | Streaming reception endpoint in `ingest`: peak RSS does not grow with upload size (two sizes recorded), the limit cuts the stream and runs cleanup, a client disconnect cancels the attempt | M2/G1 |
+| I-S2-SG-15 | I | Persisted admission latch stays closed after a restart with `cleanup_status=failed`; any heartbeat error marks the lease lost and cancels the job; ffprobe runs under CPU/memory limits and is killed with its children | G1/S1.B6 |
+| U-S2-SG-16 | U | Every `error_code` the ingest service can write is in the catalog and has an API mapping; an infrastructure fault ends `requires_reupload`, not `rejected` | M2/§3.2 |
 
-### 2.2 API/datos — esquema y endpoints M2
+### 2.2 API/data — M2 schema and endpoints
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| U-S2-AN-01 | U | Validación previa a bytes: idioma obligatorio en allowlist, sin `multi`; consentimiento con `privacy_notice_version` vigente, aceptación cloud y reconocimiento de voces de terceros; ausencia/versión obsoleta rechaza antes de reservar capacidad | M2/reglas 2 y 7 |
-| U-S2-AN-02 | U | Dedupe se decide en el `PUT` por hash+idioma+materia+fecha+zona; exacto devuelve canónica tras cleanup; variante devuelve token opaco de un uso, corto y ligado a tenant/hash/metadatos/clase, y exige segundo `POST` + reupload | M2 |
-| U-S2-AN-03 | U | Estados ASR `awaiting_upload→receiving→transcribing→transcript_committed_cleanup_pending→succeeded` o finales tipados; cleanup independiente; análisis/índice `not_requested\|pending\|running\|succeeded\|failed\|cancelled` y agregado honesto; transiciones inválidas rechazadas | M2/M3 |
-| U-S2-AN-04 | U | Tombstone/fencing: token invalidado; commit tardío rechazado | M2 |
-| I-S2-AN-05 | I | Dedupe concurrente en `PUT`: exactos simultáneos convergen en la canónica; variante limpia antes del 409, rechaza token expirado/reusado/ajeno o hash distinto en el segundo `PUT`, y **nunca retiene audio** esperando decisión | M2/G3 |
-| I-S2-AN-06 | I | `DELETE /audios/{id}` purga derivados; borrar mientras corre ASR produce cancelación limpia sin huérfanos | G3 |
-| I-S2-AN-07 | I | SSE `GET /audios/{id}/progress`: snapshot desde BD reconectable; solo owner; muestra bytes y fragmentos reales | M2/G3 |
-| I-S2-AN-08 | I | Matriz `retry` vs `reupload`: retry solo para análisis/índice; reupload solo sin transcript utilizable; mensajes de error correctos en cada caso | M2 |
-| I-S2-AN-09 | I | Export `transcript.txt` siempre; `transcript.srt` **solo** con tiempos válidos; `?segment=` filtra por owner | M2/M9 |
-| I-S2-AN-10 | I | Outbox `index_requested`/`analyze_requested` queda deshabilitada hasta `cleanup_status=verified`; el gate no bloquea por error outbox de Calendar, notificaciones o borrados creadas por sus transacciones | M3/G5-F1/G5-F2 |
-| I-S2-AN-11 | I | Chat M7: CRUD de conversaciones con modos all/subject/class aislados por tenant; `client_message_id` idempotente; cancelación de streaming deja parcial `cancelled`; borrar conversación purga fuentes | M7/G3 |
+| U-S2-AN-01 | U | Validation before bytes: mandatory language in the allowlist, no `multi`; consent with the current `privacy_notice_version`, cloud acceptance and third-party voice acknowledgment; missing/stale version rejects before reserving capacity | M2/rules 2 and 7 |
+| U-S2-AN-02 | U | Dedupe is decided at the `PUT` by hash+language+subject+date+zone; exact returns the canonical after cleanup; variant returns a short opaque single-use token bound to tenant/hash/metadata/class and requires a second `POST` + reupload | M2 |
+| U-S2-AN-03 | U | ASR states `awaiting_upload→receiving→transcribing→transcript_committed_cleanup_pending→succeeded` or typed finals; independent cleanup; analysis/index `not_requested\|pending\|running\|succeeded\|failed\|cancelled` and honest aggregation; invalid transitions rejected | M2/M3 |
+| U-S2-AN-04 | U | Tombstone/fencing: token invalidated; late commit rejected | M2 |
+| I-S2-AN-05 | I | Concurrent dedupe on `PUT`: simultaneous exacts converge on the canonical; variant cleans up before the 409, rejects an expired/reused/foreign token or a different hash on the second `PUT`, and **never retains audio** while awaiting a decision | M2/G3 |
+| I-S2-AN-06 | I | `DELETE /audios/{id}` purges derivatives; deleting while ASR runs produces a clean cancellation without orphans | G3 |
+| I-S2-AN-07 | I | SSE `GET /audios/{id}/progress`: reconnectable snapshot from the DB; owner only; shows real bytes and fragments | M2/G3 |
+| I-S2-AN-08 | I | `retry` vs `reupload` matrix: retry only for analysis/index; reupload only without usable transcript; correct error messages in each case | M2 |
+| I-S2-AN-09 | I | Export `transcript.txt` always; `transcript.srt` **only** with valid times; `?segment=` filters by owner | M2/M9 |
+| I-S2-AN-10 | I | `index_requested`/`analyze_requested` outbox stays disabled until `cleanup_status=verified`; the gate is not blocked by an error in the Calendar, notification or deletion outbox created by their transactions | M3/G5-F1/G5-F2 |
+| I-S2-AN-11 | I | M7 chat: conversation CRUD with all/subject/class modes isolated by tenant; idempotent `client_message_id`; stream cancellation leaves a `cancelled` partial; deleting a conversation purges sources | M7/G3 |
+| I-S2-AN-12 | I | API→ingest reception contract: 200 MiB stream with no spool, equal SHA-256 on both sides, sink errors mapped through the catalog, client disconnect cancels and leaves no temporaries | M2/G1 |
+| I-S2-AN-13 | I | 20 concurrent `POST /audios` never exceed `active_slots`/`per_user_active_limit`; two `PUT`s on one attempt reach the sink exactly once (`409 attempt_not_active`); abandoned and failed reservations free their slot | M2/G5-F1 |
+| U-S2-AN-14 | U | 404, 405 and an injected unhandled exception use `{"error": {code, message, details}}` and the 500 body carries no exception text | §3.2 |
+| U-S2-AN-15 | U | Startup without `MAULWURF_ENV` fails; weak or mutually equal secrets are rejected outside `local` | M1/security |
+| I-S2-AN-16 | I | RLS enabled: the A1.9 suite passes, a query without `app.user_id` fails (fail-closed), the table owner is also subject to the policies (`FORCE`), pooled connections do not leak the setting, one test shows the barrier works without the application filter | G3/ADR-0006 |
+| I-S2-AN-17 | I | Every composite FK has a non-partial covering index; `index_version` and dimension invariants rejected by the database; blank transcript text rejected (if confirmed by the lead); `alembic check` drift test; `0003` upgrades and downgrades | G3/§2.1.8 |
+| U-S2-AN-18 | U | One contract test per conformance item: capabilities TTL, language normalization, variant-token codes, `GET`/`PATCH /me`, single upload-limit source, consistent `503` headers | M1/M2 |
 
-### 2.3 Recuperación/RAG — chunking, índice y chat
+### 2.3 Retrieval/RAG — chunking, index and chat
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| U-S2-JL-01 | U | Chunking: objetivo ~800 tokens, overlap ~100, cortes en límites de frase/segmento; offsets Unicode preservados (emoji, acentos, CJK); `chunk_segments` correcto | M6 |
-| U-S2-JL-02 | U | Versionado de embeddings: generación de índice nueva con activación atómica; nunca mezcla modelo/dimensión/versión | M6/D5 |
-| U-S2-JL-03 | U | RRF: fusión determinista dada la misma entrada; `k` documentado; desempate por `chunk_id` (cursor estable); dedupe y diversidad aplicados antes del top-k | M6 |
-| U-S2-JL-04 | U | Filtros `user_id`/versión/tombstone aplicados **en ambas ramas** (lexical y vectorial) antes del top-k | G3 |
-| U-S2-JL-05 | U | Citas: solo hacia IDs validados en BD; sin offsets fiables → «segmento N»; el modelo nunca inventa fuentes | M7/regla 5 |
-| I-S2-JL-06 | I | Búsqueda híbrida contra Postgres+pgvector reales con corpus de prueba (texto redactado) | M6 |
-| I-S2-JL-07 | I | Pipeline de chat SSE: eventos `delta/citation/done/error` en orden; cancelación a mitad de stream limpia estado | M7 |
-| I-S2-JL-08 | I | `message_sources` contiene **todas** las fuentes entregadas al modelo, no solo las citadas | M7 |
-| E-S2-JL-09 | E | Pregunta desde navegador → respuesta con cita clicable que abre el lector en el segmento | G4/F1 |
-| P-S2-JL-10 | P | Proveedor de embeddings/LLM: contrato real, dimensiones y cuotas (protegida) — alimenta D5 | D5 |
+| U-S2-JL-01 | U | Chunking: ~800 token target, ~100 overlap, cuts at sentence/segment boundaries; Unicode offsets preserved (emoji, accents, CJK); correct `chunk_segments` | M6 |
+| U-S2-JL-02 | U | Embedding versioning: new index generation with atomic activation; never mixes model/dimension/version | M6/D5 |
+| U-S2-JL-03 | U | RRF: deterministic fusion given the same input; documented `k`; tie-break by `chunk_id` (stable cursor); dedupe and diversity applied before the top-k | M6 |
+| U-S2-JL-04 | U | `user_id`/version/tombstone filters applied **in both branches** (lexical and vector) before the top-k | G3 |
+| U-S2-JL-05 | U | Citations: only towards IDs validated in the DB; without reliable offsets → "segment N"; the model never invents sources | M7/rule 5 |
+| I-S2-JL-06 | I | Hybrid search against real Postgres+pgvector and Redis with a test corpus (authored text), including the per-user quota | M6 |
+| I-S2-JL-07 | I | SSE chat pipeline: `delta/citation/done/error` events in order; mid-stream cancellation cleans state | M7 |
+| I-S2-JL-08 | I | `message_sources` contains **all** sources given to the model, not only the cited ones | M7 |
+| E-S2-JL-09 | E | Question from the browser → answer with a clickable citation that opens the reader at the segment | G4/F1 |
+| P-S2-JL-10 | P | Embedding/LLM provider: real contract, dimensions and quotas (protected) — feeds D5 | D5 |
+| U-S2-JL-11 | U | A `Chunk` (§M6) persists into `chunks`/`chunk_segments` with no extra mapping; every `NOT NULL` column is derivable; `overlap_span` shape validated | M6 |
+| C-S2-JL-12 | C | Checklist: web stack ADR published, `ARCH.md` §7 row closed, PR #42 merged, rebased or closed | ARCH |
+| C-S2-JL-13 | C | Checklist: `scripts/docs/check_refs.py` passes in CI; `AGENTS.md`/`README.md` status matches `CLAIMS.md`; corrected `CLAIMS.md` rows | docs |
 
-**Criterio G4 (semanal, script reproducible):** Recall@8 ≥ 0.85 (respondibles, con filtros de
-tenant/versión activos), precisión de citas
-≥ 0.95, abstención ≥ 0.90; p95 de recuperación ≤ 500 ms. Números por idioma con
-numerador/denominador, dataset versionado con partición `test` congelada, fórmula y adjudicación
-publicadas conforme al protocolo de PLAN_IMPLEMENTACION §7.1.
+**G4 criterion (weekly, reproducible script):** Recall@8 ≥ 0.85 (answerables, with tenant/version
+filters active), citation precision
+≥ 0.95, abstention ≥ 0.90; retrieval p95 ≤ 500 ms. Numbers per language with
+numerator/denominator, versioned dataset with a frozen `test` partition, formula and adjudication
+published per the PLAN_IMPLEMENTACION §7.1 protocol.
 
-### 2.4 Trabajo durable — outbox, workers y observabilidad
+### 2.4 Durable work — outbox, workers and observability
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| U-S2-JF-01 | U | Backoff con jitter acotado (máx 3 transitorios); casos no transitorios no reintentan | M3 |
-| I-S2-JF-02 | I | Job `index(audio_id)` idempotente: doble entrega → un solo índice; sin versiones parciales activas | G5-F1 |
-| I-S2-JF-03 | I | `FLUSHALL` de Redis en entorno de prueba → jobs regenerados desde BD/outbox camino completo | G5-F1 |
-| I-S2-JF-04 | I | Reconciliador: intentos muertos marcados, outbox atascada re-publicada, duplicados resueltos por unicidad/lease | G5-F1 |
-| I-S2-JF-05 | I | Crash inyectado antes y después del commit entre ingesta y API: resultado según contrato | G5-F1 |
-| E-S2-JF-06 | E | Smoke E2E en pipeline: upload → transcript → cleanup → índice → pregunta con cita | G4/G5-F1 |
-| C-S2-JF-10 | C | Observabilidad mínima: alerta redactada por cleanup fallido, panel de fallos por etapa y ausencia de payload sensible en métricas | G1/G8 |
+| U-S2-JF-01 | U | Backoff with bounded jitter (max 3 transients); non-transient cases do not retry | M3 |
+| I-S2-JF-02 | I | Idempotent `index(audio_id)` job: double delivery → a single index; no partially active versions | G5-F1 |
+| I-S2-JF-03 | I | Redis `FLUSHALL` in the test environment → jobs regenerated from DB/outbox end to end | G5-F1 |
+| I-S2-JF-04 | I | Reconciler: dead attempts marked, stuck outbox re-published, duplicates resolved by uniqueness/lease | G5-F1 |
+| I-S2-JF-05 | I | Injected crash before and after the commit between ingestion and API: outcome per contract | G5-F1 |
+| E-S2-JF-06 | E | Pipeline E2E smoke: upload → transcript → cleanup → index → question with citation | G4/G5-F1 |
+| C-S2-JF-10 | C | Minimal observability: drafted alert for failed cleanup, failure panel per stage, and no sensitive payload in metrics | G1/G8 |
+| I-S2-JF-11 | I | `docker compose config`: `ingest` has the Riva and `INGEST_*` variable names and none of the API secrets; no default for `NVIDIA_API_KEY`; `ingest` still runs as UID 10001; `.env` can override `MAULWURF_PUBLIC_ORIGIN` | M2/G1 |
+| C-S2-JF-12 | C | Checklist: CI fails on a seeded fake secret and on an emptied suite; CI Redis has `maxmemory` and `noeviction`; license report published | G8/ADR-0005 |
+| C-S2-JF-13 | C | Checklist: ingress decided; its effective upload limit, timeouts and buffering measured or documented (date, environment, status codes); Caddy body and timeout limits set | D4/M2 |
 
-### 2.5 Web/UX — upload, biblioteca y chat
+### 2.5 Web/UX — upload, library and chat
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| U-S2-DA-01 | U | Formulario: idioma sin preselección y versión vigente del aviso, aceptación cloud y reconocimiento de voces obligatorios antes de crear reserva o iniciar el `PUT`; error de versión obsoleta obliga a revisar y aceptar de nuevo | M2/M9 |
-| U-S2-DA-02 | U | Cancelar la subida cancela el intento (llamada a API + liberación de `File`/object URLs) | M9/G1 |
-| U-S2-DA-03 | U | Progreso: bytes reales y fragmentos completados/total; **cero** porcentajes inventados; fallback de polling activable | M9 |
-| C-S2-DA-04 | C | Lector: anclaje `?segment=` resalta; timestamps solo si válidos; export condicionado; resumen vacío si `not_requested` | M9 |
-| C-S2-DA-05 | C | Citas `[Materia · Clase · mm:ss]` → ruta correcta; sin tiempos → «segmento N»; Markdown sanitizado | M7/M9 |
-| E-S2-DA-06 | E | Recorrido E2E del navegador de la semana, incluido estado `partial` distinguiendo la etapa fallida | F1 |
-| C-S2-DA-07 | C | Barrido global: ningún reproductor ni botón de descarga de audio; sin IndexedDB/Cache Storage con datos privados (`no-store` verificado) | G1 en cliente |
+| U-S2-DA-01 | U | Form: language without preselection and current notice version, cloud acceptance and voice acknowledgment mandatory before creating a reservation or starting the `PUT`; a stale version error forces reviewing and accepting again | M2/M9 |
+| U-S2-DA-02 | U | Cancelling the upload cancels the attempt (API call + releasing `File`/object URLs) | M9/G1 |
+| U-S2-DA-03 | U | Progress: real bytes and completed/total fragments; **zero** invented percentages; optional polling fallback | M9 |
+| C-S2-DA-04 | C | Reader: `?segment=` anchor highlights; timestamps only when valid; conditional export; empty summary if `not_requested` | M9 |
+| C-S2-DA-05 | C | Citations `[Subject · Class · mm:ss]` → correct route; without times → "segment N"; sanitized Markdown | M7/M9 |
+| E-S2-DA-06 | E | Browser E2E path of the week, including the `partial` state distinguishing the failed stage | F1 |
+| C-S2-DA-07 | C | Global sweep: no audio player nor download button; no IndexedDB/Cache Storage with private data (`no-store` verified) | G1 on the client |
 
 ---
 
-## 3. Sprint 3 (S3) — Acción: extracción y Calendar (F2)
+## 3. Sprint 3 (S3) — Action: extraction and Calendar (F2)
 
-### 3.1 Análisis LLM — prompts, validación y fechas
+### 3.1 LLM analysis — prompts, validation and dates
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| U-S3-JL-01 | U | Validación post-LLM: enums, rangos, pertenencia de segmentos a clase/tenant/versión; span Unicode fuera de rango → rechazo | M4/G6 |
-| U-S3-JL-02 | U | Evidencia: comprobación **literal** de la cita textual contra el segmento reconstruido desde BD | M4/regla 5 |
-| U-S3-JL-03 | U | Resolución de fechas contra fecha/zona **de la clase**: DST (hora inexistente → siguiente válida; hora repetida → una sola), «el viernes que viene», relativas, ambiguo → `needs_review`, nunca medianoche inventada | M4/DST |
-| U-S3-JL-04 | U | Ventanas con overlap: dedupe de tareas por evidencia igual; `processing_runs` hace el análisis idempotente | M4 |
-| U-S3-JL-05 | U | Reanálisis: publica una revisión completa nueva y crea `task_revisions` sin sobrescribir tareas editadas/confirmadas ni activar resultados parciales | M4/G5-F2 |
-| R-S3-JL-06 | R | **Regresión de prompts v1**: outputs de LLM grabados (sin claves ni PII) → validadores y agregación verificados sin gastar cuota; corre en CI | G6 |
-| P-S3-JL-07 | P | Ejecución real de G6 con el proveedor autorizado (protegida, presupuesto) | G6 |
+| U-S3-JL-01 | U | Post-LLM validation: enums, ranges, segment membership in class/tenant/version; out-of-range Unicode span → rejection | M4/G6 |
+| U-S3-JL-02 | U | Evidence: **literal** check of the quoted text against the segment reconstructed from the DB | M4/rule 5 |
+| U-S3-JL-03 | U | Date resolution against the **class's** date/zone: DST (nonexistent time → next valid; repeated time → a single one), "next Friday", relative dates, ambiguous → `needs_review`, never an invented midnight | M4/DST |
+| U-S3-JL-04 | U | Overlapping windows: task dedupe by identical evidence; `processing_runs` makes the analysis idempotent | M4 |
+| U-S3-JL-05 | U | Reanalysis: publishes a new complete revision and creates `task_revisions` without overwriting edited/confirmed tasks nor activating partial results | M4/G5-F2 |
+| R-S3-JL-06 | R | **Prompt regression v1**: recorded LLM outputs (no keys or PII) → validators and aggregation verified without spending quota; runs in CI | G6 |
+| P-S3-JL-07 | P | Real G6 execution with the authorized provider (protected, budget) | G6 |
 
-**Criterio G6:** ≥50 actividades anotadas por idioma (ambigüedades/DST incluidos): precisión ≥ 0.95,
-recall ≥ 0.85, fecha exacta ≥ 0.95 en resolubles, evidencia validada al 100 %. Aplica el
-protocolo §7.1: unidad de emparejamiento (tipo + fecha normalizada + evidencia), partición
-`test` congelada y aprobación por idioma, no por promedio global.
+**G6 criterion:** ≥50 annotated activities per language (ambiguities/DST included): precision ≥ 0.95,
+recall ≥ 0.85, exact date ≥ 0.95 on answerables, evidence validated 100 %. Applies the
+§7.1 protocol: matching unit (type + normalized date + evidence), frozen `test` partition and
+approval per language, not by global average.
 
-### 3.2 API/datos — tareas, evidencia y revisiones
+### 3.2 API/data — tasks, evidence and revisions
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| U-S3-AN-01 | U | CHECKs de `tasks`: vencimiento excluyente; bloque Calendar usa exactamente un par instante o all-day, con fin posterior al inicio; `scheduled` **no** es estado y `calendar_sync_status` va separado | M4/M5/§6 |
-| U-S3-AN-02 | U | Locking optimista: PATCH con versión incorrecta → 409 | M4 |
-| I-S3-AN-03 | I | Confirmación atómica promueve `revision_id` con `expected_version`, incrementa versión y crea una outbox; doble confirmación no duplica; sin integración queda confirmada + `blocked` | M4/G5-F2/G7-CAL |
-| I-S3-AN-04 | I | Editar una tarea confirmada crea `task_revision(pending_confirmation)` sin mutar campos/evento activos; versión base obsoleta → 409; reanálisis no toca revisiones activadas ni tareas editadas/confirmadas | M4/G5-F2 |
-| I-S3-AN-05 | I | `task_sources` tenant-aware admite cero fuentes solo para tarea manual y una o varias fuentes validadas para extracción/chat; pertenencia o span inválido se rechaza y la evidencia es reconstruible | M4/G6 |
-| I-S3-AN-06 | I | Doble análisis no duplica tareas/revisiones por evidencia; doble confirmación devuelve 202 con una sola outbox y `calendar_sync_status=pending` | M4/G5-F2 |
+| U-S3-AN-01 | U | `tasks` CHECKs: exclusive due constraint; the Calendar block uses exactly one instant or all-day pair, with end after start; `scheduled` is **not** a status and `calendar_sync_status` is kept separate | M4/M5/§6 |
+| U-S3-AN-02 | U | Optimistic locking: PATCH with the wrong version → 409 | M4 |
+| I-S3-AN-03 | I | Atomic confirmation promotes `revision_id` with `expected_version`, increments the version and creates one outbox; double confirmation does not duplicate; without the integration it stays confirmed + `blocked` | M4/G5-F2/G7-CAL |
+| I-S3-AN-04 | I | Editing a confirmed task creates `task_revision(pending_confirmation)` without mutating active fields/event; stale base version → 409; reanalysis does not touch activated revisions nor edited/confirmed tasks | M4/G5-F2 |
+| I-S3-AN-05 | I | Tenant-aware `task_sources` allows zero sources only for a manual task and one or several validated sources for extraction/chat; invalid membership or span is rejected and the evidence is reconstructible | M4/G6 |
+| I-S3-AN-06 | I | Double analysis does not duplicate tasks/revisions by evidence; double confirmation returns 202 with a single outbox and `calendar_sync_status=pending` | M4/G5-F2 |
 
-### 3.3 Procesamiento textual — soporte de análisis
+### 3.3 Text processing — analysis support
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| I-S3-SG-01 | I | Backfill sobre clases F1: solo desde texto persistido, sin reupload ni retranscripción | M4 |
-| U-S3-SG-02 | U | Ventanas con overlap: coste de tokens acotado y dedupe por evidencia con transcripciones reales del spike (textuales, redactadas) | M4 |
-| U-S3-SG-03 | U | Sin offsets del ASR: el análisis funciona con evidencia textual; cero minutos inventados | M4/D6 |
-| I-S3-SG-04 | I | `processing_runs` por versión de transcript/config: reanálisis reprocesa solo lo necesario | M4 |
-| U-S3-SG-05 | U | Hardening de análisis: backoff+jitter acotado (máx 3 transitorios), errores no transitorios sin reintento; advertencias de calidad ASR (baja confianza, segmentos vacíos) marcadas para la bandeja | M4/G6 |
+| I-S3-SG-01 | I | Backfill over F1 classes: only from persisted text, without reupload or retranscription | M4 |
+| U-S3-SG-02 | U | Overlapping windows: bounded token cost and dedupe by evidence with real spike transcripts (textual, authored) | M4 |
+| U-S3-SG-03 | U | Without ASR offsets: the analysis works with textual evidence; zero invented minutes | M4/D6 |
+| I-S3-SG-04 | I | `processing_runs` per transcript/config version: reanalysis reprocesses only what is needed | M4 |
+| U-S3-SG-05 | U | Analysis hardening: bounded backoff+jitter (max 3 transients), non-transient errors without retry; ASR quality warnings (low confidence, empty segments) flagged for the inbox | M4/G6 |
 
-### 3.4 Integración — Google Calendar
+### 3.4 Integration — Google Calendar
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| P-S3-JF-01 | P | Scopes reales (D7-CAL) con cuenta protegida: qué permite `calendar.app.created` + `calendar.events.readonly` + `calendar.calendarlist.readonly`; registro de hallazgos; **no asumir** | D7-CAL/G7-CAL |
-| P-S3-JF-02 | P | Insert con timeout → consultar ID determinista; 409 → comprobar identidad y reconciliar; `Retry-After` respetado; `invalid_grant` desconecta (no reintentar) | G7-CAL |
-| I-S3-JF-03 | I | Idempotencia del sync: doble clic / respuesta perdida / reintento concurrente → **exactamente un evento** | G5-F2/G7-CAL |
-| I-S3-JF-04 | I | Patch con ETag: conflicto externo no se sobrescribe; completar/descartar cancela recordatorios pero conserva el evento | G7-CAL |
-| I-S3-JF-05 | I | Lectura -7/+60 días: paginación completa, recurrencias expandidas, eliminaciones; publicación **atómica** en `calendar_events`; sin mezclar `syncToken` con filtros | G7-CAL |
-| I-S3-JF-06 | I | Scopes ausentes o `invalid_grant` dejan sync `blocked` sin romper biblioteca/chat; al reconectar, solo versiones vigentes bloqueadas pasan atómicamente a `pending` y crean/reutilizan outbox, nunca revisiones/jobs obsoletos | G5-F2/G7-CAL |
-| I-S3-JF-07 | I | Conflictos: solape horario ≠ concentración de entregas; `GET /calendar/conflicts` correcto | M5 |
+| P-S3-JF-01 | P | Real scopes (D7-CAL) with a protected account: what `calendar.app.created` + `calendar.events.readonly` + `calendar.calendarlist.readonly` allow; findings log; **do not assume** | D7-CAL/G7-CAL |
+| P-S3-JF-02 | P | Insert with timeout → look up the deterministic ID; 409 → verify identity and reconcile; `Retry-After` respected; `invalid_grant` disconnects (do not retry) | G7-CAL |
+| I-S3-JF-03 | I | Sync idempotency: double click / lost response / concurrent retry → **exactly one event** | G5-F2/G7-CAL |
+| I-S3-JF-04 | I | Patch with ETag: an external conflict is not overwritten; completing/discarding cancels reminders but keeps the event | G7-CAL |
+| I-S3-JF-05 | I | -7/+60 day read: full pagination, expanded recurrences, deletions; **atomic** publication into `calendar_events`; never mixing `syncToken` with filters | G7-CAL |
+| I-S3-JF-06 | I | Missing scopes or `invalid_grant` leave sync `blocked` without breaking library/chat; on reconnect, only current blocked versions move atomically to `pending` and create/reuse outbox, never stale revisions/jobs | G5-F2/G7-CAL |
+| I-S3-JF-07 | I | Conflicts: time overlap ≠ delivery pile-up; correct `GET /calendar/conflicts` | M5 |
 
-### 3.5 Web/UX — bandeja de revisión y dashboard
+### 3.5 Web/UX — review inbox and dashboard
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| C-S3-DA-01 | C | Bandeja: estados de tarea, badge `date_status` (resuelta/ambigua/faltante), advertencia de calidad ASR baja | M4/M9 |
-| C-S3-DA-02 | C | Edición: vencimiento separado del bloque Calendar; pares all-day/instante excluyentes, fin posterior, duración por defecto visible/editable y revisión pendiente sin mutar lo activo | M4/M5/M9 |
-| C-S3-DA-03 | C | Confirmación muestra **qué se escribirá** en Calendar antes de escribirlo; 409 refresca sin perder la edición | M4/M9 |
-| C-S3-DA-04 | C | `propose_task` del chat crea propuesta en bandeja, **nunca** escribe agenda directo | regla 3 |
-| E-S3-DA-05 | E | E2E con cuenta Google de prueba: propuesta → revisión/versionado → preview → confirmación → un evento visible mediante job idempotente | G5-F2/G6/G7-CAL |
-| C-S3-DA-06 | C | Ficha de clase completa: resumen, temas, items, estados por etapa de análisis/índice, backfill/reanálisis visibles y advertencias de calidad sin exponer audio | M4/M9 |
-| C-S3-DA-07 | C | Dashboard: no dibuja dos veces la tarea y su evento vinculado; `last_synced_at` y cobertura visibles | M5/M9 |
-| C-S3-DA-08 | C | Estados de sync por tarea (`pending/synced/failed/blocked`) y UI de reconexión: al reconectar solo versiones vigentes pasan a `pending` y la UI comunica la reanudación sin auto-confirmar | M5/M9 |
-| C-S3-JF-08 | C | Cuenta protegida: elegibilidad, presupuesto y limpieza de recursos de prueba firmadas | D7-CAL/G7-CAL |
+| C-S3-DA-01 | C | Inbox: task statuses, `date_status` badge (resolved/ambiguous/missing), low ASR quality warning | M4/M9 |
+| C-S3-DA-02 | C | Editing: due separate from the Calendar block; exclusive all-day/instant pairs, end after start, default duration visible/editable, and pending revision without mutating what is active | M4/M5/M9 |
+| C-S3-DA-03 | C | Confirmation shows **what will be written** to Calendar before writing it; 409 refreshes without losing the edit | M4/M9 |
+| C-S3-DA-04 | C | Chat `propose_task` creates a proposal in the inbox, **never** writes the calendar directly | rule 3 |
+| E-S3-DA-05 | E | E2E with a test Google account: proposal → review/versioning → preview → confirmation → one visible event via an idempotent job | G5-F2/G6/G7-CAL |
+| C-S3-DA-06 | C | Full class page: summary, topics, items, per-stage analysis/index statuses, visible backfill/reanalysis and quality warnings without exposing audio | M4/M9 |
+| C-S3-DA-07 | C | Dashboard: does not draw the task and its linked event twice; `last_synced_at` and coverage visible | M5/M9 |
+| C-S3-DA-08 | C | Per-task sync statuses (`pending/synced/failed/blocked`) and reconnection UI: on reconnect only current versions move to `pending` and the UI communicates the resumption without auto-confirming | M5/M9 |
+| C-S3-JF-08 | C | Protected account: eligibility, budget and signed test-resource cleanup | D7-CAL/G7-CAL |
 
 ---
 
-## 4. Sprint 4 (S4) — Recordatorios, cierre y demo (F3)
+## 4. Sprint 4 (S4) — Reminders, closure and demo (F3)
 
-### 4.1 API/datos — notificaciones, borrado y cierre G3
+### 4.1 API/data — notifications, deletion and G3 closure
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| U-S4-AN-01 | U | Estados de `notifications` (`pending\|sending\|sent\|failed\|delivery_unknown\|cancelled`) y transiciones válidas | M8 |
-| U-S4-AN-02 | U | `dedupe_key` (user, tipo, task, due_version, occurrence) previene duplicados por construcción | M8 |
-| U-S4-AN-03 | U | Cambiar vencimiento/preferencias cancela **solo** ocurrencias futuras obsoletas; nunca ráfaga retrospectiva | M8 |
-| I-S4-AN-04 | I | `DELETE /me` devuelve 202 + `deletion_operation_id`; tombstone, sesiones/jobs bloqueados y purga idempotente; la sesión iniciadora queda restringida a `GET /me/deletion/{id}` y logout, las demás se revocan; borrado remoto antes de revocar tokens; `GET /me/deletion/{id}` expone `pending\|completed\|completed_with_remote_failures` y solo residuo mínimo expirado | seguridad/G3 |
-| I-S4-AN-05 | I | Restore de backup (D8): solo texto/metadatos cifrados; tombstones reaplicados; nada borrado reaparece | D8/G8 |
-| I-S4-AN-06 | I | Rate limits básicos: `429/503` con cabeceras correctas en endpoints sensibles; ownership en API/SSE/tools/jobs | G3/NFR |
-| I-S4-AN-07 | I | Sweep de huérfanos: cero chunks/embeddings/filas derivadas sin clase tras borrados | G3 |
+| U-S4-AN-01 | U | `notifications` statuses (`pending\|sending\|sent\|failed\|delivery_unknown\|cancelled`) and valid transitions | M8 |
+| U-S4-AN-02 | U | `dedupe_key` (user, type, task, due_version, occurrence) prevents duplicates by construction | M8 |
+| U-S4-AN-03 | U | Changing due date/preferences cancels **only** stale future occurrences; never a retrospective burst | M8 |
+| I-S4-AN-04 | I | `DELETE /me` returns 202 + `deletion_operation_id`; tombstone, blocked sessions/jobs and idempotent purge; the initiating session is restricted to `GET /me/deletion/{id}` and logout, the rest are revoked; remote deletion before revoking tokens; `GET /me/deletion/{id}` exposes `pending\|completed\|completed_with_remote_failures` and only the expired minimal residue | security/G3 |
+| I-S4-AN-05 | I | Backup restore (D8): only encrypted text/metadata; tombstones reapplied; nothing deleted reappears | D8/G8 |
+| I-S4-AN-06 | I | Basic rate limits: `429/503` with correct headers on sensitive endpoints; ownership in API/SSE/tools/jobs | G3/NFR |
+| I-S4-AN-07 | I | Orphan sweep: zero chunks/embeddings/derived rows without a class after deletions | G3 |
 
-### 4.2 Notificaciones/operación — Gmail, scheduler y despliegue
+### 4.2 Notifications/operations — Gmail, scheduler and deployment
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| U-S4-JF-01 | U | Escalado T-48/T-24/T-2 h (instantes) y T-3d/T-1d a hora local (all-day); tareas sin fecha sin recordatorios | M8 |
-| U-S4-JF-02 | U | DST: hora inexistente → siguiente instante válido; hora repetida → una sola notificación | M8 |
-| U-S4-JF-03 | U | Plantillas HTML + texto plano escapado; destinatario fijo al email verificado; ningún GET de correo muta estado | M8/seguridad |
-| I-S4-JF-04 | I | Scheduler: rol único activo; reclamación atómica de filas con múltiples workers; SLA objetivo 15 min | M8 |
-| I-S4-JF-05 | I | `delivery_unknown`: respuesta perdida o lease vencido → **sin reintento automático**; `POST /notifications/{id}/resend` exige `acknowledge_duplicate_risk=true`, crea una ocurrencia auditada nueva y no cambia la original a `pending` | M8/G7-MAIL |
-| I-S4-JF-06 | I | Digests diario 07:00 configurable y semanal (domingo) por fecha local, con conflictos de la semana | M8 |
-| P-S4-JF-07 | P | Envío real de Gmail observado de punta a punta con cuenta autorizada + limpieza posterior (una vez, controlada) | G7-MAIL/G8 |
-| L-S4-JF-08 | L | Restore comprobado en entorno limpio; rollback de imágenes probado; migración Alembic como job único | G8 |
-| E-S4-JF-09 | E | G8 completo: builds/tests de las 3 apps; recordatorios dentro del objetivo con dependencias saludables | G8 |
-| C-S4-JF-10 | C | Runbooks ejecutados tal cual en entorno de referencia con evidencia redactada | G1/G8 |
+| U-S4-JF-01 | U | T-48/T-24/T-2 h escalation (instants) and T-3d/T-1d at local time (all-day); undated tasks without reminders | M8 |
+| U-S4-JF-02 | U | DST: nonexistent time → next valid instant; repeated time → a single notification | M8 |
+| U-S4-JF-03 | U | HTML + escaped plain-text templates; fixed recipient to the verified email; no mail GET mutates state | M8/security |
+| I-S4-JF-04 | I | Scheduler: single active role; atomic row claiming with multiple workers; target SLA 15 min | M8 |
+| I-S4-JF-05 | I | `delivery_unknown`: lost response or expired lease → **no automatic retry**; `POST /notifications/{id}/resend` requires `acknowledge_duplicate_risk=true`, creates a new audited occurrence and does not set the original back to `pending` | M8/G7-MAIL |
+| I-S4-JF-06 | I | Daily 07:00 configurable digest and weekly (Sunday) by local date, with the week's conflicts | M8 |
+| P-S4-JF-07 | P | Real Gmail delivery observed end to end with an authorized account + subsequent cleanup (once, controlled) | G7-MAIL/G8 |
+| L-S4-JF-08 | L | Restore verified in a clean environment; image rollback tested; Alembic migration as a single job | G8 |
+| E-S4-JF-09 | E | Full G8: builds/tests of the 3 apps; reminders within the target with healthy dependencies | G8 |
+| C-S4-JF-10 | C | Runbooks executed as written in the reference environment with authored evidence | G1/G8 |
 
-### 4.3 Web/UX — dashboard final, Ctrl+K y privacidad de cliente
+### 4.3 Web/UX — final dashboard, Ctrl+K and client privacy
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| C-S4-DA-01 | C | Preferencias de notificaciones: opt-in Gmail, hora de digest, umbrales visibles | M8/M9 |
-| C-S4-DA-02 | C | Panel de entregas: `delivery_unknown` explicado; reexpedición exige reconocimiento explícito del riesgo y conserva visible la entrega original | M8/M9/G7-MAIL |
-| C-S4-DA-03 | C | Ctrl+K: snippet + materia + clase + timestamp válido; accesible en cualquier pantalla | M6/M9 |
-| E-S4-DA-04 | E | Ensayo de demo completo ×2 (jueves y viernes) con guion versionado del sprint | demo |
-| C-S4-DA-05 | C | Checklist G1 en cliente final: sin caché de datos privados en ninguna ruta; service worker (si existe) excluye upload/API/transcripts/chat/SSE | G1 |
-| C-S4-DA-06 | C | Estadísticas por materia: clases transcritas, duración original y temas cubiertos desde metadatos de texto, sin exponer audio | M9 |
+| C-S4-DA-01 | C | Notification preferences: Gmail opt-in, digest time, visible thresholds | M8/M9 |
+| C-S4-DA-02 | C | Delivery panel: `delivery_unknown` explained; resending requires explicit acknowledgment of the risk and keeps the original delivery visible | M8/M9/G7-MAIL |
+| C-S4-DA-03 | C | Ctrl+K: snippet + subject + class + valid timestamp; reachable from any screen | M6/M9 |
+| E-S4-DA-04 | E | Full demo rehearsal ×2 (Thursday and Friday) with the versioned sprint script | demo |
+| C-S4-DA-05 | C | G1 checklist on the final client: no private-data cache on any route; the service worker (if any) excludes upload/API/transcripts/chat/SSE | G1 |
+| C-S4-DA-06 | C | Per-subject statistics: transcribed classes, original duration and covered topics from text metadata, without exposing audio | M9 |
 
-### 4.4 Ingesta/ASR — carga y hardening final
+### 4.4 Ingestion/ASR — load and final hardening
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| L-S4-SG-01 | L | Re-verificación G1 bajo carga: uploads concurrentes + fallos inyectados → cero persistencia, cero temporales huérfanos, RAM dentro de reserva por slot | G1 |
-| L-S4-SG-02 | L | Benchmark de TTLs (propuesta 10/30/60 min) publicado en capabilities con datos detrás | M2 |
-| I-S4-SG-03 | I | Runbook ejecutado tal cual: cleanup fallido → admisión detenida + alerta; pérdida de host → restauración según documento | G1/G8 |
-| C-S4-SG-04 | C | Tabla de costos reales por hora de clase (ASR, RAM, CPU ffmpeg) con mediciones reproducibles | G8 |
+| L-S4-SG-01 | L | G1 re-verification under load: concurrent uploads + injected failures → zero persistence, zero orphaned temporaries, RAM within the per-slot reservation | G1 |
+| L-S4-SG-02 | L | TTL benchmark (proposed 10/30/60 min) published in capabilities with backing data | M2 |
+| I-S4-SG-03 | I | Runbook executed as written: failed cleanup → admission stopped + alert; host loss → restoration per the document | G1/G8 |
+| C-S4-SG-04 | C | Table of real costs per class hour (ASR, RAM, ffmpeg CPU) with reproducible measurements | G8 |
 
-### 4.5 Calidad/seguridad — cierre
+### 4.5 Quality/security — closure
 
-| ID | Nivel | Qué prueba | Contrato/puerta |
+| ID | Level | What it tests | Contract/gate |
 |---|---|---|---|
-| R-S4-JL-01 | R | G4 y G6 finales publicadas por idioma con slices difíciles documentados | G4/G6 |
-| C-S4-JL-02 | C | Revisión de seguridad ejecutada: aislamiento tenant en SSE/tools/jobs, evidencia validada, ninguna escritura sin confirmación, secretos fuera de logs/trazas | seguridad |
-| C-S4-JL-03 | C | Checklist §9 de PLAN_IMPLEMENTACION marcada ítem por ítem con evidencia | cierre |
-| C-S4-JL-04 | C | Retro final ejecutada y backlog F4 priorizado y registrado (acta o documento enlazado) | cierre |
+| R-S4-JL-01 | R | Final G4 and G6 published per language with difficult slices documented | G4/G6 |
+| C-S4-JL-02 | C | Security review executed: tenant isolation in SSE/tools/jobs, validated evidence, no writes without confirmation, secrets out of logs/traces | security |
+| C-S4-JL-03 | C | PLAN_IMPLEMENTACION §9 checklist checked item by item with evidence | closure |
+| C-S4-JL-04 | C | Final retro executed and F4 backlog prioritized and recorded (minutes or linked document) | closure |
 
 ---
 
-## 5. Cobertura de puertas y variantes G1–G8
+## 5. Gate coverage and variants G1–G8
 
-| Puerta | Definición breve | Evidencia principal planificada | Área/Responsable reclamado |
+| Gate | Brief definition | Planned main evidence | Area/Claimed owner |
 |---|---|---|---|
-| G1 | No persistencia de audio + recovery F0/F1 | I-S1-SG-04/05/06, I-S1-JF-02/03, I-S2-SG-06/07/08/09/10, E-S2-SG-11, C-S2-DA-07, L-S4-SG-01 | Ingesta y privacidad / según claiming |
-| G2-T | ASR con offsets temporales fiables y en rango | U-S1-SG-03, P-S1-SG-07, U-S2-SG-04, I-S2-SG-06, E-S2-SG-11, I-S2-AN-09 | Contrato ASR temporal / según claiming |
-| G2-X | Producto textual aprobado, sin tiempos inventados ni SRT/enlaces temporales | P-S1-SG-07, I-S2-SG-06, I-S2-AN-09, U-S2-JL-05, C-S2-DA-04/05, E-S2-SG-11 | Contrato ASR textual / según claiming |
-| G3 | Aislamiento tenant completo | I-S1-AN-05, U-S2-JL-04, I-S2-AN-05/06/07, I-S4-AN-04/06/07 | API, datos y seguridad / según claiming |
-| G4 | Calidad RAG (métricas publicadas) | U-S2-JL-01/03/04/05, I-S2-JL-06/07/08, E-S2-JL-09, R-S4-JL-01 | Recuperación/RAG / según claiming |
-| G5-F1 | Recuperación durable de transcript, índice y chat | U-S1-JF-04, I-S2-AN-10, I-S2-JF-02/03/04/05, E-S2-JF-06 | Trabajo durable F1 / según claiming |
-| G5-F2 | Recuperación durable de análisis, revisiones y outbox Calendar | U-S3-JL-05, I-S3-AN-03/04/06, I-S3-JF-03/06, E-S3-DA-05 | Trabajo durable F2 / según claiming |
-| G6 | Extracción con evidencia validada | U-S3-JL-01/02/03/05, U-S3-SG-05, R-S3-JL-06, P-S3-JL-07, I-S3-AN-05 | Análisis/evidencia / según claiming |
-| G7-CAL | Calendar idempotente, reconciliación, scopes y reconnect | I-S3-AN-03, P-S3-JF-01/02, I-S3-JF-03/04/05/06, E-S3-DA-05, C-S3-DA-08 | Integración Calendar / según claiming |
-| G7-MAIL | Gmail opt-in, entrega incierta y reenvío manual advertido | U-S4-JF-03, I-S4-JF-04/05, P-S4-JF-07, C-S4-DA-01/02 | Gmail/notificaciones / según claiming |
-| G8 | Entrega: builds, restore, despliegue, costos | I-S1-JF-01, P-S1-SG-08, L-S4-JF-08, E-S4-JF-09, C-S4-SG-04, I-S4-AN-05 | Operación/entrega / según claiming |
+| G1 | No audio persistence + F0/F1 recovery | I-S1-SG-04/05/06, I-S1-JF-02/03, I-S2-SG-06/07/08/09/10, I-S2-SG-14/15, I-S2-AN-12, E-S2-SG-11, C-S2-DA-07, L-S4-SG-01 | Ingestion and privacy / per claiming |
+| G2-T | ASR with reliable, in-range time offsets | U-S1-SG-03, P-S1-SG-07, U-S2-SG-04, I-S2-SG-06, E-S2-SG-11, I-S2-AN-09 | Temporal ASR contract / per claiming |
+| G2-X | Approved textual product, no invented times nor temporal SRT/links | P-S1-SG-07, I-S2-SG-06, I-S2-AN-09, U-S2-JL-05, C-S2-DA-04/05, E-S2-SG-11 | Textual ASR contract / per claiming |
+| G3 | Complete tenant isolation | I-S1-AN-05, U-S2-JL-04, I-S2-AN-05/06/07, I-S2-AN-16/17, I-S4-AN-04/06/07 | API, data and security / per claiming |
+| G4 | RAG quality (published metrics) | U-S2-JL-01/03/04/05, I-S2-JL-06/07/08, E-S2-JL-09, R-S4-JL-01 | Retrieval/RAG / per claiming |
+| G5-F1 | Durable recovery of transcript, index and chat | U-S1-JF-04, I-S2-AN-10, I-S2-AN-13, I-S2-JF-02/03/04/05, E-S2-JF-06 | Durable work F1 / per claiming |
+| G5-F2 | Durable recovery of analysis, revisions and Calendar outbox | U-S3-JL-05, I-S3-AN-03/04/06, I-S3-JF-03/06, E-S3-DA-05 | Durable work F2 / per claiming |
+| G6 | Extraction with validated evidence | U-S3-JL-01/02/03/05, U-S3-SG-05, R-S3-JL-06, P-S3-JL-07, I-S3-AN-05 | Analysis/evidence / per claiming |
+| G7-CAL | Idempotent Calendar, reconciliation, scopes and reconnect | I-S3-AN-03, P-S3-JF-01/02, I-S3-JF-03/04/05/06, E-S3-DA-05, C-S3-DA-08 | Calendar integration / per claiming |
+| G7-MAIL | Gmail opt-in, uncertain delivery and warned manual resend | U-S4-JF-03, I-S4-JF-04/05, P-S4-JF-07, C-S4-DA-01/02 | Gmail/notifications / per claiming |
+| G8 | Delivery: builds, restore, deployment, costs | I-S1-JF-01, P-S1-SG-08, L-S4-JF-08, E-S4-JF-09, C-S4-SG-04, I-S4-AN-05 | Operations/delivery / per claiming |
 
 ---
 
-## 6. Ejecución por semana (qué corre dónde)
+## 6. Weekly execution (what runs where)
 
-| Momento | Qué se ejecuta | Área/Responsable reclamado |
+| Moment | What runs | Area/Claimed owner |
 |---|---|---|
-| Cada commit/MR | `U-` + `I-` + smoke `E-` + regresión de prompts `R-` (con fixtures grabados) | CI/infraestructura / según claiming |
-| Antes de cada demo del viernes | Suite completa local en compose + checklist manual de la semana | Áreas de los tickets / responsables reclamados |
-| Manual protegida, con presupuesto | `P-` (Riva, LLM/embeddings, Google) — registro de hallazgos en `docs/` | Integración afectada / responsable reclamado |
-| Antes de cierres de semana/del proyecto | `L-` (carga, RAM/tmpfs, G1 bajo carga) | Ingesta e infraestructura / según claiming |
-| Semanal | Métricas G4/G6 reproducibles publicadas con numerador/denominador | Recuperación y análisis / según claiming |
+| Every commit/MR | `U-` + `I-` + `E-` smoke + prompt regression `R-` (with recorded fixtures) | CI/infrastructure / per claiming |
+| Before each Friday demo | Full local suite in compose + manual checklist of the week | Ticket areas / claimed owners |
+| Protected manual, with budget | `P-` (Riva, LLM/embeddings, Google) — findings recorded in `docs/` | Affected integration / claimed owner |
+| Before week/project closures | `L-` (load, RAM/tmpfs, G1 under load) | Ingestion and infrastructure / per claiming |
+| Weekly | Reproducible G4/G6 metrics published with numerator/denominator | Retrieval and analysis / per claiming |
 
-> Regla honesta: un mock valida lógica, no contratos. Ninguna puerta G se cierra con mocks como
-> única evidencia; las `P-` requieren cuenta protegida autorizada y presupuesto, y sus hallazgos
-> se documentan (capacidades y límites observados, no supuestos).
+> Honest rule: a mock validates logic, not contracts. No G gate is closed with mocks as the only
+> evidence; `P-` tests require an authorized protected account and budget, and their findings
+> are documented (observed capabilities and limits, not assumptions).
+

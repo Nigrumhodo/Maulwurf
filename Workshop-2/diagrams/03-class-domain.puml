@@ -1,0 +1,244 @@
+@startuml
+!theme plain
+!pragma layout smetana
+skinparam defaultFontName "Noto Sans"
+skinparam defaultFontSize 12
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam ArrowColor #444444
+hide circle
+hide empty members
+title Figure 3.1 · Domain model (persistent entities)
+
+package "Identity" {
+  class User {
+    - id: UUID
+    - googleSub: String
+    - email: String
+    - timezone: IanaZone
+    - displayName: String [0..1]
+    - status: UserStatus
+    + updateProfile(timezone, displayName): void
+    + requestDeletion(): DeletionOperation
+  }
+  class Session {
+    - tokenHash: String
+    - csrfHash: String
+    - expiresAt: Instant
+    - revokedAt: Instant [0..1]
+    + isValid(now: Instant): bool
+    + rotate(): IssuedSession
+    + revoke(): void
+  }
+  class GoogleCredential {
+    - accessTokenEnc: Bytes
+    - refreshTokenEnc: Bytes [0..1]
+    - keyVersion: int
+    - scopes: String [*]
+    - status: IntegrationStatus
+    + refresh(): void
+    + markDisconnected(): void
+  }
+  class Subject {
+    - name: String
+    - color: String
+    - teacher: String [0..1]
+    + rename(name: String): void
+    + delete(force: bool): void
+  }
+}
+
+package "Ingestion" {
+  class Audio {
+    - classDate: Date
+    - classTimezone: IanaZone
+    - languageCode: String
+    - title: String [0..1]
+    - sha256: String [0..1]
+    - durationSeconds: float [0..1]
+    - requiredStages: Stage [*]
+    + aggregateStatus(): AggregateStatus
+    + tombstone(): void
+  }
+  class IngestionAttempt {
+    - status: AttemptStatus
+    - privacyNoticeVersion: String
+    - fencingToken: long
+    - leaseExpiresAt: Instant [0..1]
+    - uploadExpiresAt: Instant
+    - receivedBytes: long
+    - fragmentsDone: int [0..1]
+    - cleanupStatus: CleanupStatus
+    - errorCode: String [0..1]
+    + acquireLease(instance: String): Lease
+    + heartbeat(lease: Lease): bool
+    + transition(lease: Lease, to: AttemptStatus): bool
+    + recordCleanup(lease: Lease, evidence): bool
+    + cancel(): void
+  }
+  class VariantConfirmationToken {
+    - tokenHash: String
+    - expiresAt: Instant
+    - consumedAt: Instant [0..1]
+    + consume(sha256: String): Audio
+  }
+}
+
+package "Knowledge" {
+  class Transcript {
+    - version: int
+    - languageRequested: String
+    - model: String
+    - timestampPrecision: TimestampPrecision
+    - text: String
+    + segments(): Segment [*]
+    + exportTxt(): String
+    + exportSrt(): String
+  }
+  class Segment {
+    - ordinal: int
+    - text: String
+    - charStart: int
+    - charEnd: int
+    - tStart: float [0..1]
+    - tEnd: float [0..1]
+  }
+  class Chunk {
+    - ordinal: int
+    - content: String
+    - charStart: int
+    - charEnd: int
+    - tokenCount: int
+    - indexVersion: String
+  }
+  class Embedding {
+    - model: String
+    - dimension: int
+    - vector: float [1536]
+  }
+  class IndexGeneration {
+    - version: String
+    - status: GenerationStatus
+    + activate(): void
+  }
+  class Conversation {
+    - mode: ConversationMode
+    - title: String [0..1]
+    + ask(question: String, clientMessageId: String): Message
+  }
+  class Message {
+    - role: Role
+    - content: String
+    - status: MessageStatus
+    - clientMessageId: String [0..1]
+    + cancel(): void
+  }
+  class MessageSource {
+    - kind: SourceKind
+    - transcriptVersion: int [0..1]
+  }
+}
+
+package "Action (F2–F3)" {
+  class ProcessingRun {
+    - stage: Stage
+    - transcriptVersion: int
+    - promptVersion: String [0..1]
+    - status: StageStatus
+    - attemptCount: int
+  }
+  class Task {
+    - tipo: TaskType
+    - titulo: String
+    - dueDate: Date [0..1]
+    - dueAt: Instant [0..1]
+    - dateStatus: DateStatus
+    - confidenceScore: float [0..1]
+    - status: TaskStatus
+    - calendarSyncStatus: CalendarSyncStatus
+    - version: int
+    + confirm(expectedVersion: int, revision: TaskRevision [0..1]): void
+    + proposeEdit(fields): TaskRevision
+    + dismiss(): void
+    + complete(): void
+  }
+  class TaskEvidence {
+    - charStart: int
+    - charEnd: int
+    - quote: String
+    + verify(segment: Segment): bool
+  }
+  class TaskRevision {
+    - baseTaskVersion: int
+    - proposedFields: Map
+    - status: RevisionStatus
+  }
+  class CalendarEvent {
+    - calendarId: String
+    - eventId: String
+    - startAt: Instant [0..1]
+    - etag: String
+  }
+  class Notification {
+    - type: NotificationType
+    - scheduledAt: Instant
+    - dedupeKey: String
+    - status: NotificationStatus
+  }
+}
+
+class OutboxEvent {
+  - type: EventType
+  - resourceId: UUID
+  - enabled: bool
+  - blockedReason: String [0..1]
+  - status: OutboxStatus
+  - attempts: int
+  + enableAfterCleanup(): void
+  + markDispatched(): void
+}
+
+enum AttemptStatus {
+  awaiting_upload
+  receiving
+  transcribing
+  transcript_committed_cleanup_pending
+  succeeded
+  rejected
+  requires_reupload
+  cancelled
+}
+
+enum TimestampPrecision {
+  word
+  segment
+  none
+}
+
+User "1" *-- "0..*" Session
+User "1" *-- "0..1" GoogleCredential
+User "1" o-- "0..*" Subject : owns
+Subject "1" o-- "0..*" Audio : groups
+Audio "1" *-- "1..*" IngestionAttempt : attempts
+Audio "1" -- "0..*" VariantConfirmationToken : canonical
+Audio "1" *-- "0..*" Transcript : versions
+Transcript "1" *-- "1..*" Segment
+Transcript "1" *-- "0..*" Chunk
+Chunk "0..*" -- "1..*" Segment : covers
+Chunk "1" *-- "0..*" Embedding
+IndexGeneration "1" -- "0..*" Embedding : publishes
+User "1" o-- "0..*" Conversation
+Conversation "1" *-- "0..*" Message
+Message "1" *-- "0..*" MessageSource
+MessageSource "0..*" --> "0..1" Segment : cites
+Audio "1" *-- "0..*" ProcessingRun
+Audio "0..1" -- "0..*" Task : extracted from
+Task "1" *-- "0..*" TaskEvidence
+TaskEvidence "0..*" --> "1" Segment : quotes
+Task "1" *-- "0..*" TaskRevision
+Task "0..1" -- "0..1" CalendarEvent : synced as
+Task "0..1" -- "0..*" Notification : reminds
+User "1" -- "0..*" OutboxEvent : publishes
+IngestionAttempt ..> AttemptStatus
+Transcript ..> TimestampPrecision
+@enduml

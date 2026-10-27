@@ -1,0 +1,30 @@
+@startsalt
+<style>
+saltDiagram { FontName "Noto Sans"; FontSize 13 }
+</style>
+{+
+  {* <b>Maulwurf</b> | Dashboard | Library | Subjects | Chat | Inbox | Settings | maria@unal.edu.co }
+  ==
+  { <b><size:16>Class 02 · Physics I | . | [Export TXT] | [Export SRT] | [Delete class] }
+  <i>2026-10-06 · Spanish · whisper-large-v3 · timestamps: segment · audio not retained</i>
+  ==
+  {
+    {T
+      + Summary
+      + Topics
+      ++ Newton's laws
+      ++ Friction
+      + Proposed tasks (2)
+    } | {S
+      <b>[00:00] Segment 1
+      Today we continue with Newton's second law and its applications…
+      .
+      <b>[03:12] Segment 2
+      <back:#FFF2A8>Remember that the lab report is due next Wednesday before midnight.</back>
+      .
+      <b>[05:40] Segment 3
+      Let us now look at friction on an inclined plane…
+    }
+  }
+}
+@endsalt

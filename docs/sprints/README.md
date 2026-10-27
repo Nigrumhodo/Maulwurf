@@ -1,125 +1,126 @@
-# Bitácoras de sprint — Maulwurf
+# Sprint logbooks — Maulwurf
 
-Este directorio contiene las **bitácoras personales** del equipo. El plan maestro con el
-backlog por semana es [../PLAN_SPRINTS.md](../PLAN_SPRINTS.md); el catálogo de pruebas que
-evidencia cada tarea es [../PLAN_TESTS.md](../PLAN_TESTS.md); la fuente de contratos es
-[../ESPECIFICACION.md](../ESPECIFICACION.md) y las puertas/evidencias en
+This directory contains the team's **personal logbooks**. The master plan with the weekly
+backlog is [../PLAN_SPRINTS.md](../PLAN_SPRINTS.md); the test catalog that evidences each
+ticket is [../PLAN_TESTS.md](../PLAN_TESTS.md); the contracts source is
+[../ESPECIFICACION.md](../ESPECIFICACION.md) and the gates/evidence in
 [../PLAN_IMPLEMENTACION.md](../PLAN_IMPLEMENTACION.md).
 
-## Cómo funciona el claiming
+## How claiming works
 
-1. **Las tareas no están preasignadas.** Cada semana publica su backlog en el plan maestro
-   (§2–§5), agrupado por área (`L-` RAG/liderazgo, `A-` API/BD, `S-` Ingesta/ASR,
-   `J-` Infra/Integraciones, `D-` Web/UX) con dependencias y tests.
-2. **El lunes** se abre únicamente el sprint activo tras revisar la puerta anterior,
-   capacidad y disponibilidad. Cada persona elige tickets y los reclama mediante un PR en
-   el [registro canónico](CLAIMS.md). **Un ticket = un responsable.** La bitácora personal
-   conserva evidencia y bloqueos, pero no asigna un ticket por sí sola.
-3. Las filas prellenadas en bitácoras antes de la revisión 2026-09-19 son candidatos
-   históricos, no claims vigentes. S2–S4 no se reclaman hasta que se abran formalmente.
-4. Lo que nadie reclama lo resuelve el líder: reasignar, dividir o bajar el alcance del
-   DoD de forma explícita. Una división crea IDs hijos en el backlog antes del claim; una
-   transferencia conserva owner anterior, fecha, motivo y evidencia.
-5. Restricciones: un ticket que incluya prueba `P-*` o una llamada real a Riva,
-   LLM/embeddings, Google o Gmail requiere elegibilidad verificada para la cuenta protegida
-   (sin registrar secretos); un ticket que toca carpetas de otra área necesita review de
-   quien tenga un claim activo allí o del líder.
-6. **Evidencia sobre afirmaciones:** un ticket se cierra con comando real, fecha, entorno y
-   resultado anotados en la bitácora. Un mock no valida proveedor; un test unitario no
-   valida infraestructura; nada está «hecho» por estar escrito.
+1. **Tickets are not pre-assigned.** Each week publishes its backlog in the master plan
+   (§2–§5), grouped by area (`L-` RAG/leadership, `A-` API/DB, `S-` Ingestion/ASR,
+   `J-` Infra/Integrations, `D-` Web/UX) with dependencies and tests.
+2. **On Monday** only the active sprint opens, after reviewing the previous gate,
+   capacity, and availability. Each person picks tickets and claims them through a PR in
+   the [canonical registry](CLAIMS.md). **One ticket = one owner.** The personal logbook
+   keeps evidence and blockers, but does not assign a ticket by itself.
+3. Rows pre-filled in logbooks before the 2026-09-19 review are historical candidates,
+   not valid claims. S2–S4 are not claimed until they formally open.
+4. Whatever nobody claims is resolved by the lead: reassign, split, or explicitly lower
+   the DoD scope. A split creates child IDs in the backlog before the claim; a transfer
+   keeps the previous owner, date, motive, and evidence.
+5. Restrictions: a ticket that includes a `P-*` test or a real call to Riva,
+   LLM/embeddings, Google, or Gmail requires verified eligibility for the protected
+   account (without recording secrets); a ticket touching another area's folders needs
+   review from whoever holds an active claim there or from the lead.
+6. **Evidence over claims:** a ticket closes with a real command, date, environment, and
+   result recorded in the logbook. A mock does not validate a provider; a unit test does
+   not validate infrastructure; nothing is `done` just for being written down.
 
-## Bitácoras del equipo
+## Team logbooks
 
-| Persona | Perfil sugerido (no ownership) | Bitácora | Handle en CLAIMS |
+| Person | Suggested profile (not ownership) | Logbook | Handle in CLAIMS |
 |---|---|---|---|
-| José Leonardo Pinilla Zamora | Liderazgo técnico · RAG | [jose-leonardo.md](jose-leonardo.md) | `jpinillaz` |
-| Andres Felipe | API · Base de datos | [andres.md](andres.md) | sin claims aún |
-| Santiago Montealegre | Ingesta · Audio · ASR | [santiago.md](santiago.md) | `satnovaOG` |
-| Jefferson Figueroa | Infra · Workers · Integraciones | [jefferson.md](jefferson.md) | sin claims aún |
-| Daniel Samaca | Web · UX | [daniel.md](daniel.md) | sin claims aún |
+| José Leonardo Pinilla Zamora | Technical leadership · RAG | [jose-leonardo.md](jose-leonardo.md) | `jpinillaz` |
+| Andres Felipe | API · Database | [andres.md](andres.md) | `angalindog` |
+| Santiago Montealegre | Ingestion · Audio · ASR | [santiago.md](santiago.md) | `satnovaOG` |
+| Jefferson Figueroa | Infra · Workers · Integrations | [jefferson.md](jefferson.md) | no claims yet |
+| Daniel Samaca | Web · UX | [daniel.md](daniel.md) | no claims yet |
 
-Correspondencia persona↔handle observada en el historial del repositorio (autoría de
-`santiago.md` por `satnovaOG`; ramas `s1/*-jpinillaz` que editan `jose-leonardo.md`).
-Corregirla en un PR si cambia.
+Person↔handle correspondence observed in the repository history (authorship of
+`santiago.md` by `satnovaOG`; `s1/*-jpinillaz` branches editing `jose-leonardo.md`).
+Correct it in a PR if it changes.
 
-El ownership vigente se consulta exclusivamente en [CLAIMS.md](CLAIMS.md).
+Current ownership is consulted exclusively in [CLAIMS.md](CLAIMS.md).
 
-El perfil es una sugerencia de especialización, no una restricción: cualquiera puede
-reclamar de cualquier área respetando las reglas de arriba.
+The profile is a specialization suggestion, not a restriction: anyone may claim from any
+area following the rules above.
 
-## Reglas de coordinación
+## Coordination rules
 
-1. **Interfaces congeladas:** el lunes se congela el contrato de las interfaces compartidas
-   (§6 del plan maestro). Cambiarlas dentro de la semana requiere aprobación del líder y
-   actualizar consumidores el mismo día.
-2. **Anti-ciclo (§6a del plan maestro):** quien provee una interfaz congela el contrato y
-   un doble/mock ejecutable el lunes; entrega la primera integración consumible a más tardar
-   el día 3 y cierra el comportamiento/E2E durante días 4–5. Quien consume construye contra
-   el contrato congelado y conmuta al código real al estar disponible. Nadie queda bloqueado
-   más de un día sin una decisión visible.
-3. **PRs y reviews:** nada se mergea sin 1 review; el código que cruza fronteras de área lo
-   revisa una persona con claim activo en esa carpeta o el líder si no hay claim.
-   Los PR de claim tocan únicamente su fila de `CLAIMS.md` y se fusionan en cuanto pasan
-   review; si dos PR reclaman el mismo ticket, gana el primero mergeado y el otro se cierra.
-4. **Prioridad de documentos:** si este plan choca con `ESPECIFICACION.md` o
-   `PLAN_IMPLEMENTACION.md`, ganan ellos; actualizar spec/plan en la misma revisión si un
-   cambio de contrato es inevitable.
-5. **Backlog:** ideas fuera del alcance de la semana van al backlog F4; el líder prioriza
-   en la retro del viernes.
-6. **Pruebas con proveedores cloud:** audio sintético generado en RAM, credenciales de
-   prueba protegidas y presupuesto acordado; nunca clases reales hasta que D3 esté
-   resuelto y G1 pase.
+1. **Frozen interfaces:** on Monday the contract of the shared interfaces is frozen (§6 of
+   the master plan). Changing them during the week requires the leader's approval and
+   updating consumers the same day.
+2. **Anti-cycle (§6a of the master plan):** whoever provides an interface freezes the
+   contract and an executable double/mock on Monday; delivers the first consumable
+   integration no later than day 3 and closes behavior/E2E during days 4–5. Whoever
+   consumes builds against the frozen contract and switches to the real code once
+   available. Nobody stays blocked more than one day without a visible decision.
+3. **PRs and reviews:** nothing merges without 1 review; code crossing area boundaries is
+   reviewed by someone with an active claim in that folder or by the lead if there is no
+   claim. Claim PRs touch only their `CLAIMS.md` row and merge as soon as they pass
+   review; if two PRs claim the same ticket, the first one merged wins and the other is
+   closed.
+4. **Document priority:** if this plan conflicts with `ESPECIFICACION.md` or
+   `PLAN_IMPLEMENTACION.md`, they win; update spec/plan in the same revision if a contract
+   change is unavoidable.
+5. **Backlog:** ideas outside the week's scope go to the F4 backlog; the lead prioritizes
+   at the Friday retro.
+6. **Cloud provider tests:** synthetic audio generated in RAM, protected test
+   credentials, and an agreed budget; never real classes until D3 is resolved and G1
+   passes.
 
-## Flujo de trabajo semanal
+## Weekly workflow
 
 ```
-Lunes: verificar puerta/capacidad + abrir sprint + congelar interfaces + claims en CLAIMS.md
-Diario: 15 min (estado, bloqueos, transferencias visibles)
-Día 3: primera integración consumible; consumidores cambian mocks cuando proceda
-Días 4–5: E2E, cierre técnico y evidencia
-Viernes: demo + verificación del DoD + retro + cierre de bitácoras
+Monday: verify gate/capacity + open sprint + freeze interfaces + claims in CLAIMS.md
+Daily: 15 min (status, blockers, visible transfers)
+Day 3: first consumable integration; consumers switch mocks when appropriate
+Days 4–5: E2E, technical closure, and evidence
+Friday: demo + DoD verification + retro + logbook closure
 ```
 
-## Plantilla de bitácora
+## Logbook template
 
-Cada bitácora personal mantiene esta estructura mínima:
+Each personal logbook keeps this minimum structure:
 
 ```markdown
-# <Nombre> — bitácora de sprint
+# <Name> — sprint logbook
 
-> Perfil sugerido: <área> · Plan maestro: [../PLAN_SPRINTS.md](../PLAN_SPRINTS.md) ·
-> Pruebas: [../PLAN_TESTS.md](../PLAN_TESTS.md)
+> Suggested profile: <area> · Master plan: [../PLAN_SPRINTS.md](../PLAN_SPRINTS.md) ·
+> Tests: [../PLAN_TESTS.md](../PLAN_TESTS.md)
 
-## Tickets reclamados
+## Claimed tickets
 
-### Semana 1 (S1) — Fundación + spike
+### Week 1 (S1) — Foundation + spike
 
-> Sección histórica: las filas anteriores a la revisión 2026-09-19 son candidatos, no
-> claims. Los tickets vigentes se registran primero en `CLAIMS.md`.
+> Historical section: rows written before the 2026-09-19 review are candidates, not
+> claims. Current tickets are recorded first in `CLAIMS.md`.
 
-| Ticket | Área | Estado (`pendiente/en curso/bloqueado/hecho/transferido`) | Evidencia (comando, fecha, entorno, resultado) |
+| Ticket | Area | Status (`pending/in progress/blocked/done/transferred`) | Evidence (command, date, environment, result) |
 |---|---|---|---|
-| <id> | <área> | pendiente | Claim aceptado en `CLAIMS.md`: <PR/enlace> |
+| <id> | <area> | pending | Claim accepted in `CLAIMS.md`: <PR/link> |
 
-## Bloqueos y dependencias
+## Blockers and dependencies
 
-- Espero de <quién>: <qué> (contrato congelado §6 / código real día <n>)
+- I expect from <who>: <what> (frozen contract §6 / real code on day <n>)
 
-## Notas de semana
+## Week notes
 
-- <decisiones, hallazgos, desvíos de alcance>
+- <decisions, findings, scope deviations>
 ```
 
-Reglas de la plantilla: un ticket por fila y solo después de aparecer en `CLAIMS.md`; el
-estado cambia en la daily, no el viernes; un ticket «hecho» sin evidencia vuelve a «en curso».
-Cada semana S2–S4 añade su propia sección solo cuando el sprint sea abierto.
+Template rules: one ticket per row and only after it appears in `CLAIMS.md`; the status
+changes at the daily, not on Friday; a ticket marked `done` without evidence goes back
+to `in progress`. Each week S2–S4 adds its own section only when the sprint is open.
 
-## Enlaces
+## Links
 
-- [CLAIMS.md](CLAIMS.md) — registro canónico de claims, transferencias y elegibilidad cloud.
-- [../PLAN_SPRINTS.md](../PLAN_SPRINTS.md) — plan maestro: backlog por semana, dependencias, DoD.
-- [../PLAN_TESTS.md](../PLAN_TESTS.md) — catálogo de pruebas por sprint: unitarias, integración, provider-contract, E2E y carga.
-- [../DISENO_BD_API_SPRINTS.md](../DISENO_BD_API_SPRINTS.md) — diseño de BD/API y secuencia sugerida por área.
-- [../ESPECIFICACION.md](../ESPECIFICACION.md) — contratos M1–M9 y modelo de datos.
-- [../PLAN_IMPLEMENTACION.md](../PLAN_IMPLEMENTACION.md) — fases F0–F3, puertas G1–G8, decisiones D1–D8.
-- [../NVIDIA_RIVA.md](../NVIDIA_RIVA.md) — parámetros auditados para el spike S1.
+- [CLAIMS.md](CLAIMS.md) — canonical registry of claims, transfers, and cloud eligibility.
+- [../PLAN_SPRINTS.md](../PLAN_SPRINTS.md) — master plan: weekly backlog, dependencies, DoD.
+- [../PLAN_TESTS.md](../PLAN_TESTS.md) — test catalog per sprint: unit, integration, provider-contract, E2E, and load.
+- [../DISENO_BD_API_SPRINTS.md](../DISENO_BD_API_SPRINTS.md) — DB/API design and suggested sequence per area.
+- [../ESPECIFICACION.md](../ESPECIFICACION.md) — M1–M9 contracts and data model.
+- [../PLAN_IMPLEMENTACION.md](../PLAN_IMPLEMENTACION.md) — phases F0–F3, gates G1–G8, decisions D1–D8.
+- [../NVIDIA_RIVA.md](../NVIDIA_RIVA.md) — audited parameters for the S1 spike.

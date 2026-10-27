@@ -1,0 +1,55 @@
+@startuml
+!theme plain
+skinparam defaultFontName "Noto Sans"
+skinparam defaultFontSize 13
+skinparam ArrowColor #444444
+left to right direction
+title Figure 1.2 · Actors and main use cases
+
+actor "Visitor" as visitor
+actor "Student" as student
+actor "Scheduler\n(time)" as clock
+
+visitor <|-- student
+
+rectangle Maulwurf {
+  usecase "UC1 Sign in with Google" as UC1
+  usecase "UC2 Manage subjects" as UC2
+  usecase "UC3 Upload a class recording" as UC3
+  usecase "UC4 Read and export a transcript" as UC4
+  usecase "UC5 Search classes" as UC5
+  usecase "UC6 Ask questions with citations" as UC6
+  usecase "UC7 Review and confirm proposed tasks" as UC7
+  usecase "UC8 Schedule a confirmed task in Calendar" as UC8
+  usecase "UC9 Receive reminders and digests" as UC9
+  usecase "UC10 Manage profile, integrations\nand account deletion" as UC10
+  usecase "Transcribe and index\nthe class (automatic)" as AUTO
+  usecase "Extract task proposals\n(automatic, from F2)" as EXTRACT
+}
+
+actor "Google\nIdentity" as oauth
+actor "NVIDIA Riva" as riva
+actor "LLM / embeddings\nprovider" as llm
+actor "Google Calendar" as calendar
+actor "Gmail" as gmail
+
+visitor --> UC1
+student --> UC2
+student --> UC3
+student --> UC4
+student --> UC5
+student --> UC6
+student --> UC7
+student --> UC10
+UC1 --> oauth
+UC3 ..> AUTO : <<include>>
+AUTO --> riva
+AUTO --> llm
+AUTO ..> EXTRACT : <<extend>>
+EXTRACT --> llm
+UC6 --> llm
+UC7 ..> UC8 : <<include>>
+UC8 --> calendar
+clock --> UC9
+UC9 --> gmail
+@enduml

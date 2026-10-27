@@ -11,6 +11,8 @@ fallo impide servir, así un contenedor mal configurado no llega a aceptar audio
 import asyncio
 import logging
 import os
+import secrets
+import socket
 import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -19,8 +21,12 @@ import asyncpg
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-from maulwurf_ingest import hardening
+from maulwurf_ingest import admission, hardening
 from maulwurf_ingest.config import settings
+from maulwurf_ingest.credential import decode_secret
+from maulwurf_ingest.receptions import open_service_pool
+from maulwurf_ingest.receptions import router as receptions_router
+from maulwurf_ingest.reconciler import reconcile_committed
 
 logger = logging.getLogger(__name__)
 
@@ -45,13 +51,75 @@ def enforce_hardening() -> None:
         raise HardeningError(f"endurecimiento incompleto: {', '.join(failures)}")
 
 
+async def reconcile_on_startup() -> None:
+    """One recovery pass. A database miss leaves the outbox blocked and the process up.
+
+    There is no sweeper loop here: repeating this pass on a timer is S4.2.
+    A persisted failed cleanup closes admission before the process serves.
+    """
+    if not settings.database_url:
+        return
+    dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    created: asyncpg.Pool | None = None
+    try:
+        created = await asyncpg.create_pool(
+            dsn, min_size=1, max_size=1, timeout=CHECK_TIMEOUT_S, command_timeout=CHECK_TIMEOUT_S,
+        )
+        if created is None:
+            admission.close()
+            return
+        await reconcile_committed(
+            created, instance=f"ingest:{socket.gethostname()}", tmp_dir=tempfile.gettempdir(),
+        )
+        await admission.restore_from_database(created)
+    except Exception as exc:
+        # The DSN is in the exception text. Log only the type.
+        logger.warning("reconciler.startup_failed error=%s", type(exc).__name__)
+        admission.close()
+    finally:
+        if created is not None:
+            await created.close()
+
+
+def refuse_bad_credential() -> None:
+    """A present secret must be 32 bytes of hex and must not be a placeholder.
+
+    An absent secret does not stop the process: the internal routes answer 503
+    and ``/readyz`` reports ``credential``.
+    """
+    raw = settings.credential_secret
+    previous = settings.credential_previous_secret
+    previous_kid = settings.credential_previous_kid
+    if (previous is None) != (previous_kid is None):
+        raise HardeningError("INGEST_CREDENTIAL_SECRET")
+    if raw is None or not raw.strip():
+        if previous is not None:
+            raise HardeningError("INGEST_CREDENTIAL_SECRET")
+        return
+    try:
+        decode_secret(raw)
+        if previous is not None:
+            decode_secret(previous)
+    except ValueError:
+        raise HardeningError("INGEST_CREDENTIAL_SECRET") from None
+
+
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     enforce_hardening()
+    refuse_bad_credential()
+    app.state.instance_id = secrets.token_hex(16)
+    app.state.pool = None
+    await reconcile_on_startup()
+    await open_service_pool(app)
     yield
+    pool = getattr(app.state, "pool", None)
+    if isinstance(pool, asyncpg.Pool):
+        await pool.close()
 
 
 app = FastAPI(title="Maulwurf Ingest", version="0.1.0", lifespan=lifespan)
+app.include_router(receptions_router)
 
 
 async def check_hardening() -> None:
@@ -86,10 +154,18 @@ async def check_postgres() -> None:
             await conn.close()
 
 
+async def check_credential() -> None:
+    raw = settings.credential_secret
+    if raw is None or not raw.strip():
+        raise RuntimeError("credential")
+    decode_secret(raw)
+
+
 CHECKS: dict[str, Callable[[], Awaitable[None]]] = {
     "hardening": check_hardening,
     "tmpfs": check_tmpfs,
     "postgres": check_postgres,
+    "credential": check_credential,
 }
 
 

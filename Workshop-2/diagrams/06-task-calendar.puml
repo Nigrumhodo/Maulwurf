@@ -1,0 +1,44 @@
+@startuml
+!theme plain
+skinparam defaultFontName "Noto Sans"
+skinparam defaultFontSize 12
+skinparam ArrowColor #444444
+title Figure 6.2 · Evidence-backed task to Calendar
+
+start
+:Transcript is indexed and available;
+:Analysis job reads transcript windows
+with class timezone and context;
+:LLM returns structured proposals
+with IDs, spans and literal quotes;
+:Validate schema, tenant, version,
+date semantics and quote;
+if (Evidence and date valid?) then (yes)
+  :Store task as needs_review;
+  :Show quote, segment link,
+editable date and confidence signal;
+  if (Student confirms?) then (yes)
+    :Transaction locks expected task version;
+    :Create confirmed task and
+Calendar outbox event atomically;
+    :Calendar worker writes one deterministic event;
+    if (Remote response received?) then (yes)
+      :Store event ID and mark synced;
+    else (no)
+      :Mark delivery_unknown or failed;
+      :Require explicit retry or acknowledgement;
+    endif
+  else (dismiss or edit)
+    if (Edit?) then (yes)
+      :Create pending revision;
+      :Wait for confirmation;
+    else (dismiss)
+      :Mark dismissed;
+    endif
+  endif
+else (no)
+  :Store needs_review or missing/ambiguous date;
+  :Do not schedule automatically;
+endif
+stop
+@enduml

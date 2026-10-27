@@ -19,6 +19,7 @@ from pathlib import Path
 import asyncpg
 import pytest
 from test_supervisor import (  # noqa: E402
+    SYNTHETIC_TEXT,
     _config,
     _row,
     _seed,
@@ -28,7 +29,8 @@ from test_supervisor import (  # noqa: E402
 )
 
 from maulwurf_ingest import lease
-from maulwurf_ingest.asr_job import CONVERTED
+from maulwurf_ingest.asr_job import ACTIVE_FRAGMENT
+from maulwurf_ingest.receiver import iter_bytes
 from maulwurf_ingest.supervisor import Outcome, SupervisorConfig, run_attempt
 
 pytestmark = [
@@ -51,8 +53,8 @@ async def test_scenario_1_success_commits_then_cleans(
     """After the commit, cleanup is verified and the attempt directory is gone."""
     attempt = await _seed(pool)
     result = await run_attempt(
-        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
-        config=_config(tmpfs_dir),
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
+        config=_config(tmpfs_dir, stub_transcript=SYNTHETIC_TEXT),
     )
     row = await _row(pool, attempt)
     assert result.outcome is Outcome.SUCCEEDED
@@ -69,11 +71,11 @@ async def test_scenario_2_truncated_upload_is_rejected(
     attempt = await _seed(pool)
     result = await run_attempt(
         pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id,
-        audio=audio[:32], config=_config(tmpfs_dir),
+        audio=iter_bytes(audio[:32]), config=_config(tmpfs_dir),
     )
     row = await _row(pool, attempt)
-    assert result.outcome is Outcome.ASR_FAILED
-    assert (row["status"], row["error_code"]) == ("requires_reupload", "asr_failed")
+    assert result.outcome is Outcome.REJECTED
+    assert (row["status"], row["error_code"]) == ("rejected", "malformed")
     assert row["cleanup_status"] == "verified"
     _gone(tmpfs_dir, None)
 
@@ -84,11 +86,11 @@ async def test_scenario_3_rejected_container(
     attempt = await _seed(pool)
     result = await run_attempt(
         pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id,
-        audio=b"this-is-not-a-media-container", config=_config(tmpfs_dir),
+        audio=iter_bytes(b"this-is-not-a-media-container"), config=_config(tmpfs_dir),
     )
     row = await _row(pool, attempt)
-    assert result.outcome is Outcome.ASR_FAILED
-    assert row["status"] == "requires_reupload"
+    assert result.outcome is Outcome.REJECTED
+    assert (row["status"], row["error_code"]) == ("rejected", "malformed")
     assert row["cleanup_status"] == "verified"
     _gone(tmpfs_dir, None)
 
@@ -98,7 +100,7 @@ async def test_scenario_4_timeout(
 ) -> None:
     attempt = await _seed(pool)
     result = await run_attempt(
-        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
         config=_config(tmpfs_dir, realtime=True, asr_timeout_s=0.4),
     )
     row = await _row(pool, attempt)
@@ -114,7 +116,7 @@ async def test_scenario_5_explicit_cancel(
     attempt = await _seed(pool)
     started: asyncio.Queue[tuple[int, Path]] = asyncio.Queue()
     run = asyncio.create_task(run_attempt(
-        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
         config=_config(tmpfs_dir, realtime=True),
         on_child=lambda pid, workdir: started.put_nowait((pid, workdir)),
     ))
@@ -131,26 +133,27 @@ async def test_scenario_5_explicit_cancel(
 async def test_scenario_6_ffmpeg_and_invalid_lease(
     pool: asyncpg.Pool, audio: bytes, tmpfs_dir: Path
 ) -> None:
-    """ffmpeg failure cleans up. An expired lease cannot publish the commit."""
+    """Un contenedor inválido queda rejected y limpio. Un lease vencido no publica el commit."""
     broken = await _seed(pool)
     failed = await run_attempt(
         pool, user_id=broken.user_id, attempt_id=broken.attempt_id,
-        audio=b"not-ffmpeg-input", config=_config(tmpfs_dir),
+        audio=iter_bytes(b"not-ffmpeg-input"), config=_config(tmpfs_dir),
     )
     failed_row = await _row(pool, broken)
-    assert failed.outcome is Outcome.ASR_FAILED
+    assert failed.outcome is Outcome.REJECTED
+    assert (failed_row["status"], failed_row["error_code"]) == ("rejected", "malformed")
     assert failed_row["cleanup_status"] == "verified"
     _gone(tmpfs_dir, None)
 
     attempt = await _seed(pool)
     started: asyncio.Queue[Path] = asyncio.Queue()
     run = asyncio.create_task(run_attempt(
-        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
         config=_config(tmpfs_dir, realtime=True, heartbeat_interval_s=0.2),
         on_child=lambda _pid, workdir: started.put_nowait(workdir),
     ))
     workdir = await started.get()
-    await _wait_for(workdir / CONVERTED)
+    await _wait_for(workdir / ACTIVE_FRAGMENT)
     await pool.execute(
         "UPDATE ingestion_attempts SET lease_expires_at = now() - interval '1 second'"
         " WHERE id = $1",
@@ -175,12 +178,12 @@ async def test_scenario_7_sigkill_during_transcription(
     attempt = await _seed(pool)
     started: asyncio.Queue[tuple[int, Path]] = asyncio.Queue()
     run = asyncio.create_task(run_attempt(
-        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
         config=_config(tmpfs_dir, realtime=True),
         on_child=lambda pid, workdir: started.put_nowait((pid, workdir)),
     ))
     pid, workdir = await started.get()
-    await _wait_for(workdir / CONVERTED)
+    await _wait_for(workdir / ACTIVE_FRAGMENT)
     os.kill(pid, signal.SIGKILL)
     result = await run
     row = await _row(pool, attempt)
@@ -198,8 +201,8 @@ async def test_scenario_7_after_commit_open_descriptor_is_not_verified(
     held: list[int] = []
     try:
         result = await run_attempt(
-            pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=audio,
-            config=_config(tmpfs_dir),
+            pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
+            config=_config(tmpfs_dir, stub_transcript=SYNTHETIC_TEXT),
             on_child=lambda _pid, workdir: held.append(os.open(workdir / "original", os.O_RDONLY)),
         )
     finally:
@@ -224,7 +227,7 @@ def _killed_supervisor(
                 created,
                 user_id=uuid.UUID(user_id),
                 attempt_id=uuid.UUID(attempt_id),
-                audio=audio,
+                audio=iter_bytes(audio),
                 config=SupervisorConfig(
                     instance="ingest:killed",
                     lease_ttl=timedelta(seconds=30),

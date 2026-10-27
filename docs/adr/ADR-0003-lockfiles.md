@@ -1,28 +1,28 @@
-# ADR-0003 — Política de lockfiles
+# ADR-0003 — Lockfile policy
 
-- Fecha UTC: 2026-09-23
-- Estado: Aceptado
+- Date (UTC): 2026-09-23
+- Status: Accepted
 - Ticket: L1.2
-- Relacionado: [ADR-0002](ADR-0002-versiones.md), `.gitignore`
+- Related: [ADR-0002](ADR-0002-versiones.md), `.gitignore`
 
-## Contexto
+## Context
 
-Sin lockfiles commiteados las instalaciones no son reproducibles (criterio
-L1.1). Hay que decir qué entra al git y cómo se actualiza.
+Without committed lockfiles, installations are not reproducible (L1.1
+criterion). What enters git and how it is updated must be stated.
 
-## Decisión
+## Decision
 
-Se versionan:
+Versioned:
 
 - `apps/api/uv.lock`
 - `apps/ingest/uv.lock`
 - `apps/web/package-lock.json`
-- `requirements-riva.txt` (alineado con `nvidia-riva-client==2.27.0`)
+- `requirements-riva.txt` (aligned with `nvidia-riva-client==2.27.0`)
 
-No se versionan: `.venv/`, `node_modules/`, `.env`, caches, audio
-(`*.wav` y el resto de extensiones de `.gitignore`), dumps, secretos.
+Not versioned: `.venv/`, `node_modules/`, `.env`, caches, audio
+(`*.wav` and the rest of the `.gitignore` extensions), dumps, secrets.
 
-Instalación:
+Installation:
 
 ```text
 cd apps/api && uv sync --extra dev
@@ -30,13 +30,13 @@ cd apps/ingest && uv sync --extra dev
 cd apps/web && npm ci
 ```
 
-`npm install` sin lock solo si hay que regenerarlo; el PR incluye el lock
-nuevo. Un cambio de dependencia actualiza manifiesto y lock en el **mismo**
-PR. No se resuelve a ciegas en CI: J1.4 usará `uv sync --frozen` / `npm ci`
-cuando exista el pipeline.
+`npm install` without a lock only to regenerate it; the PR includes the new
+lock. A dependency change updates the manifest and the lock in the **same**
+PR. CI does not resolve blindly: J1.4 will use `uv sync --frozen` / `npm ci`
+once the pipeline exists.
 
-## Consecuencias
+## Consequences
 
-Revisiones rechazan PRs que añaden paquetes sin lock, o que commitean
-`.venv` / `node_modules` / `.env`. Escanear vulnerabilidades de
-dependencias sigue pendiente (TODO de AGENTS.md) y no lo sustituye este ADR.
+Reviews reject PRs that add packages without a lock, or that commit
+`.venv` / `node_modules` / `.env`. Scanning dependency vulnerabilities
+remains pending (TODO in AGENTS.md); this ADR does not replace it.

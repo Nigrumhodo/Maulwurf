@@ -12,7 +12,9 @@ Fuera de `local`, los valores de desarrollo (DSN de localhost, Origin de localho
 aceptan: una variable olvidada en staging/prod debe fallar al arrancar, no en la primera
 consulta.
 
-Los límites de ingesta se añaden cuando el spike F0 publique los valores medidos (A2.2).
+Las capabilities de ingesta se reciben como una configuración JSON publicada a partir del
+spike F0 (A2.2). Los valores provisionales del contrato S1 no se exponen como límites
+efectivos.
 """
 import os
 from contextvars import ContextVar
@@ -31,9 +33,22 @@ from pydantic import (
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.schemas.ingestion import IngestionCapabilities
+
 ENV_PREFIX = "MAULWURF_"
 ENV_FILES = ("../../.env", ".env")
-_SECRET_FIELDS = ("secret_key", "encryption_key", "oauth_state_secret", "google_client_secret")
+_SECRET_FIELDS = (
+    "secret_key",
+    "encryption_key",
+    "oauth_state_secret",
+    "google_client_secret",
+    "embedding_api_key",
+    "llm_api_key",
+)
+# Pinned by `embeddings.vector vector(1536)` in migration 0002 (M6). Changing it requires a
+# migration and a whole new index generation, so startup validates it instead of silently
+# accepting a model with another dimension.
+EMBEDDING_DIMENSION = 1536
 _DEV_DEFAULT_FIELDS = ("database_url", "redis_url", "public_origin")
 # `.env` que usa la construcción en curso (respeta `_env_file`, p. ej. None en tests).
 _active_env_files: ContextVar[tuple[str, ...]] = ContextVar("_active_env_files", default=ENV_FILES)
@@ -75,12 +90,57 @@ class Settings(BaseSettings):
     google_client_secret: SecretStr | None = None
     # Vida máxima de la sesión opaca (A1.4); el logout la revoca antes.
     session_ttl_hours: int = Field(default=168, ge=1, le=720)
+    # A2.11: provisional per-user search quota (one embeddings call per search). D5/F0
+    # must replace it with the provider quota measured by the contract spike.
+    search_rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
     # Contrato de ingesta S1 (A1.8). Valores provisionales hasta D2/D4 (S1.A8/A2.2):
     # allowlist propuesta por S1.A3 y límite de bytes de `.env.example` (200 MiB, no aprobado).
     privacy_notice_version: str = "2026-09-v1"
     ingest_languages: tuple[str, ...] = Field(default=("es", "en", "fr"), min_length=1)
     upload_max_bytes: int = Field(default=209_715_200, ge=1)
     upload_ttl_minutes: int = Field(default=15, ge=1, le=120)
+    # Token de confirmación de variante del `409 duplicate_variant` (A2.4, punto C4): M2
+    # pide «expiración corta» sin publicar un número, así que es provisional como el resto
+    # del contrato S1. Corto a propósito: es de un solo uso y solo se persiste su hash.
+    variant_token_ttl_minutes: int = Field(default=5, ge=1, le=60)
+    # Configuración no sensible, publicada y versionada por el spike. Pydantic Settings
+    # la lee de MAULWURF_INGESTION_CAPABILITIES como un objeto JSON; sin ella el endpoint
+    # devuelve el shape seguro sin límites aprobados.
+    ingestion_capabilities: IngestionCapabilities = Field(default_factory=IngestionCapabilities)
+    # Versioned embeddings (L2.2, M6/D5): provider compatible with the embeddings API.
+    # `base_url` is the base to which `/embeddings` is appended. Without base_url and api_key
+    # indexing fails with `embedding_not_configured`; there is never a default provider nor
+    # a silent degradation to fake vectors.
+    embedding_base_url: AnyHttpUrl | None = None
+    embedding_api_key: SecretStr | None = None
+    embedding_model: str = Field(default="text-embedding-3-small", min_length=1)
+    embedding_dimension: int = Field(default=EMBEDDING_DIMENSION, ge=1)
+    # Bounded per-batch budget (guardrail 10: no loop or burst without a limit).
+    embedding_batch_size: int = Field(default=100, ge=1, le=512)
+    embedding_max_retries: int = Field(default=3, ge=0, le=10)
+    embedding_timeout_seconds: float = Field(default=30.0, gt=0, le=600)
+    # Lotes en paralelo (PR #71). Por defecto 1 = secuencial: la cuota del proveedor sigue
+    # pendiente (D5, guardia 10), así que el paralelismo no se activa por defecto; el techo
+    # (4) acota cualquier ráfaga cuando D5 fije el límite real.
+    embedding_max_concurrency: int = Field(default=1, ge=1, le=4)
+    # Versioned chat/LLM provider (L2.5, M7/D5). Same fail-closed rule as embeddings: without
+    # base_url + api_key there is no provider and the SSE pipeline publishes
+    # `provider_unavailable` instead of inventing a completion. The window is required with a
+    # provider because the token budget cannot be enforced without it.
+    llm_base_url: AnyHttpUrl | None = None
+    llm_api_key: SecretStr | None = None
+    llm_model: str = Field(default="gpt-4o-mini", min_length=1)
+    llm_model_window: int | None = Field(default=None, ge=1)
+    # Provisional until D5/F0 publishes the provider's real limits. They are configuration,
+    # not a hidden default: the composition of window - reserve - margin is the contract.
+    llm_output_reserve_tokens: int = Field(default=1024, ge=1)
+    llm_context_margin_tokens: int = Field(default=512, ge=0)
+    llm_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
+    llm_max_retries: int = Field(default=2, ge=0, le=5)
+    # D3-Texto: models/providers whose decision is closed (ESPECIFICACION §12). Empty by
+    # default — fail closed: with the decision open only synthetic or redacted text is
+    # indexed (S2.md §0.6, rule 6). Only the lead's recorded closure fills it in.
+    d3_text_closed_models: tuple[str, ...] = ()
     # Único Origin aceptado en mutaciones (A1.4): el que sirve Caddy, same-origin.
     public_origin: AnyHttpUrl = cast(AnyHttpUrl, "https://localhost")
     # cast: pydantic valida los DSN en runtime; mypy no relaja el tipo del default.
@@ -121,6 +181,46 @@ class Settings(BaseSettings):
     def _reject_incomplete_oauth(self) -> "Settings":
         if (self.google_client_id is None) != (self.google_client_secret is None):
             raise ValueError("google_client_id y google_client_secret van juntos")
+        return self
+
+    @model_validator(mode="after")
+    def _reject_incomplete_embedding_config(self) -> "Settings":
+        if (self.embedding_base_url is None) != (self.embedding_api_key is None):
+            raise ValueError("embedding_base_url y embedding_api_key van juntos")
+        return self
+
+    @model_validator(mode="after")
+    def _reject_embedding_dimension_change(self) -> "Settings":
+        # The vector dimension lives in the schema (`embeddings.vector vector(1536)`, M6);
+        # another value here could only come from an incompatible model and would fail on
+        # INSERT, so it is rejected at startup with the field name.
+        if self.embedding_dimension != EMBEDDING_DIMENSION:
+            raise ValueError(
+                f"embedding_dimension debe ser {EMBEDDING_DIMENSION} "
+                "(dimensión fijada en la migración 0002)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_incomplete_llm_config(self) -> "Settings":
+        if (self.llm_base_url is None) != (self.llm_api_key is None):
+            raise ValueError("llm_base_url y llm_api_key van juntos")
+        if self.llm_base_url is not None and self.llm_model_window is None:
+            raise ValueError(
+                "llm_model_window es obligatorio cuando el proveedor LLM está configurado"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_llm_budget(self) -> "Settings":
+        if self.llm_model_window is None:
+            return self
+        minimum = self.llm_output_reserve_tokens + self.llm_context_margin_tokens + 1
+        if self.llm_model_window < minimum:
+            raise ValueError(
+                "llm_model_window debe superar llm_output_reserve_tokens + "
+                "llm_context_margin_tokens"
+            )
         return self
 
     @model_validator(mode="after")
