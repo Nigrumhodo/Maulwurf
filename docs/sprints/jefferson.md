@@ -21,6 +21,7 @@
 | D1.3 | D | done | 2026-10-02/03 UTC, Windows, Node 22. Google login: button → `/auth/google/start`, callback with loading/error, logout with revocation. `b164313`, `6a6c4da` (backend OAuth A1.3 included). Merged in #42. |
 | D1.4 | D | in progress | 2026-10-17 UTC, Windows, Node 22. Same-origin HTTP client: `lib/csrf.ts` (in-memory token) + `apiFetch` injecting `X-CSRF-Token` on mutations and interceptors 401→login / 403→message / 429→retry with `Retry-After`. `npm run typecheck && npm run lint && npm test && npm run build` → U-S1-DA-01: **15 tests green** (`ad75e7c`). No new dependencies (native fetch). Pending PR to `develop`. |
 | D1.5 | D | done | 2026-10-18 UTC, Windows, Node 22. Base components in `components/ui/`: `DateInput`, `TimezoneSelect`, `LanguageSelect` (language **without preselection**, allowlist es/en/fr), `StatusBadge` (exact contract values §1.4/§2.10, incl. `transcript_committed_cleanup_pending` and aggregates), `EmptyState`, `Toast`+`ToastProvider`. Logic in `lib/{status,languages,timezones,validation}.ts`. `npm run typecheck && npm run lint && npm test && npm run build` → U-S1-DA-02 (9) and C-S1-DA-03 (5) green; **29 tests total**. Pending PR to `develop`. |
+| D1.6 | D | in progress | 2026-10-18 UTC, Windows, Node 22. Subject CRUD against the real A1.6 API (`/subjects`): `SubjectForm` (required-name validation + `#rrggbb` color + API error mapping `subject_name_taken`/`validation_failed`) and `MateriasPage` (list/create/edit/delete + `ConfirmDialog` on `409 subject_has_active_audios`). `lib/subjects.ts` + `tests/unit/subjects.test.ts`. `npm run typecheck && npm run lint && npm test && npm run build` → U-S1-DA-02 extended (6 tests); **35 tests total**. Pending live CRUD verification against the running stack and PR to `develop`. |
 
 ## Blockers and dependencies
 
@@ -33,3 +34,4 @@
 - 2026-10-17: Cyber Y2K restyle (palette, glitch, CRT, floating chat) and theme-aware login images.
 - 2026-10-17: D1.4 implemented with native `fetch` (no axios).
 - 2026-10-18: D1.5 complete (base components + tests). Navigation: the "académico" dropdown became the "Gestión" button → `/gestion` hub with a collapsible side menu (subir clase, biblioteca, chat, materias, tareas, agenda).
+- 2026-10-18: Merged `origin/develop` into `frontJJ` (develop was far ahead: S2, A1.6 done). D1.6 implemented (subject CRUD) against the real `/subjects` API.

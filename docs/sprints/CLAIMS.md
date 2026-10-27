@@ -96,6 +96,7 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | claim | D1.3 | ARES313 | done | 2026-10-11 | not applicable | — / lead | Google login, logout and loading/error states; merged in #42 |
 | claim | D1.4 | ARES313 | in progress | 2026-10-17 | not applicable | — / area D | Same-origin HTTP client with CSRF on mutations and 401/403/429 interceptors (`ad75e7c`); U-S1-DA-01: 15 tests green. Pending PR to `develop`. |
 | claim | D1.5 | ARES313 | done | 2026-10-18 | not applicable | — / area D | Base components: `DateInput`/`TimezoneSelect`/`LanguageSelect` (no language preselection), `StatusBadge` (exact contract values), `EmptyState`, `Toast`+`ToastProvider`; `lib/{status,languages,timezones,validation}.ts`. U-S1-DA-02 (9) and C-S1-DA-03 (5) green. Pending PR to `develop`. |
+| claim | D1.6 | ARES313 | in progress | 2026-10-18 | not applicable | — / area D | Subject CRUD against the real A1.6 API: `SubjectForm` (required-field validation + API error mapping) and `MateriasPage` list/create/edit/delete with the active-classes dialog (`409 subject_has_active_audios`). U-S1-DA-02 extended (6 tests); 35 web tests green. Pending live verification and PR to `develop`. |
 
 ### S2 — Knowledge
 
@@ -161,3 +162,4 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | 2026-10-22 | S2.7, S2.8 and S2.9 are claimed by satnovaOG (`in progress`) on `feature/S2.7-S2.9-reconciler-cancel-e2e`. S2.9 is the in-RAM harness; the 1 h Caddy demo stays blocked. No Riva call. | This change |
 | 2026-10-23 | S2.5–S2.8 move to `done` (merged in #75 and #76). S2.9 moves to `done` for the short in-RAM harness only: the 1 h synthetic class was not used, and that does not close G2-T or G2-X. S2.10–S2.13 are claimed by satnovaOG (`done`) on `feature/S2.10-S2.13-riva-reception`. No NVIDIA channel. | This change |
 | 2026-10-18 | D1.5 (Web area) of ARES313 is claimed and closed: base components (date/timezone/language without preselection, contract-value badges, empty states, toasts) with U-S1-DA-02 (9) and C-S1-DA-03 (5) green. | This change |
+| 2026-10-18 | D1.6 (Web area) of ARES313 is claimed (`in progress`): subject CRUD against the real A1.6 API with `SubjectForm` and `MateriasPage`. U-S1-DA-02 extended (6 tests); 35 web tests green. | This change |
