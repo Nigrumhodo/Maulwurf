@@ -19,6 +19,7 @@ const selectClass =
 export function UploadForm() {
   const [cloudAccepted, setCloudAccepted] = useState(false);
   const [voiceAcknowledged, setVoiceAcknowledged] = useState(false);
+  const [showError, setShowError] = useState(false);
   const consentReady = cloudAccepted && voiceAcknowledged;
 
   function handleSubmit(event: FormEvent) {
@@ -74,6 +75,24 @@ export function UploadForm() {
       <p className="lowercase text-lavender/60">
         &gt; audio no conservado · el audio se borra; solo se guarda el texto de la transcripción.
       </p>
+
+      <div className="lowercase flex flex-col items-start gap-2">
+        <button
+          type="button"
+          onClick={() => setShowError((value) => !value)}
+          className="text-lavender/60 underline hover:text-mint"
+        >
+          {showError ? "ocultar estado de error (maqueta)" : "ver estado de error (maqueta)"}
+        </button>
+        {showError && (
+          <div role="alert" className="flex flex-col gap-1 border-2 border-mint px-3 py-2 text-mint">
+            <span>&gt; archivo rechazado · formato no admitido</span>
+            <span className="text-lavender/60">
+              sube un wav, mp3, ogg, opus, flac o webm; la app no guarda el archivo
+            </span>
+          </div>
+        )}
+      </div>
 
       <div className="flex items-center gap-2">
         <Button type="submit" disabled={!consentReady}>

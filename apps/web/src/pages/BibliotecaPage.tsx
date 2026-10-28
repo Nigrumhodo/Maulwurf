@@ -11,6 +11,7 @@ interface MockAudio {
   subject: string;
   title: string;
   aggregate: string;
+  attempt: string;
   index: string;
   analyze: string;
   hasTranscript: boolean;
@@ -22,6 +23,7 @@ const MOCK: MockAudio[] = [
     subject: "cálculo i",
     title: "clase 03 — integrales",
     aggregate: "ready",
+    attempt: "succeeded",
     index: "succeeded",
     analyze: "not_requested",
     hasTranscript: true,
@@ -31,6 +33,7 @@ const MOCK: MockAudio[] = [
     subject: "física ii",
     title: "clase 07 — termodinámica",
     aggregate: "processing",
+    attempt: "transcribing",
     index: "running",
     analyze: "not_requested",
     hasTranscript: true,
@@ -40,6 +43,7 @@ const MOCK: MockAudio[] = [
     subject: "química",
     title: "clase 02 — enlaces",
     aggregate: "partial",
+    attempt: "succeeded",
     index: "succeeded",
     analyze: "failed",
     hasTranscript: true,
@@ -49,9 +53,20 @@ const MOCK: MockAudio[] = [
     subject: "historia",
     title: "clase 01 — revolución industrial",
     aggregate: "failed",
+    attempt: "requires_reupload",
     index: "failed",
     analyze: "not_requested",
     hasTranscript: false,
+  },
+  {
+    id: "a5",
+    subject: "álgebra",
+    title: "clase 05 — espacios vectoriales",
+    aggregate: "processing",
+    attempt: "transcript_committed_cleanup_pending",
+    index: "not_requested",
+    analyze: "not_requested",
+    hasTranscript: true,
   },
 ];
 
@@ -79,13 +94,24 @@ export function BibliotecaPage() {
                 <StatusBadge status={audio.aggregate} />
               </div>
               <div className="flex items-center gap-2 text-lavender/60">
+                <span>audio:</span>
+                <StatusBadge status={audio.attempt} />
                 <span>index:</span>
                 <StatusBadge status={audio.index} />
                 <span>análisis:</span>
                 <StatusBadge status={audio.analyze} />
               </div>
               <div className="flex items-center gap-2">
-                {audio.hasTranscript ? (
+                {audio.attempt === "transcript_committed_cleanup_pending" ? (
+                  <>
+                    <Button size="sm" variant="secondary" disabled>
+                      abrir transcripción
+                    </Button>
+                    <span className="text-lavender/60">
+                      limpieza pendiente · indexación bloqueada hasta verificar el borrado
+                    </span>
+                  </>
+                ) : audio.hasTranscript ? (
                   <>
                     <Button size="sm" variant="secondary" disabled>
                       abrir transcripción
