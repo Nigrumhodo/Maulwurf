@@ -210,6 +210,93 @@ async def make_class_with_transcript(
     return audio, attempt, transcript
 
 
+async def make_committed_cleanup_pending(
+    db: AsyncSession,
+    actor: Actor,
+    *,
+    audio: Audio | None = None,
+    required_stages: list[str] | None = None,
+) -> tuple[Audio, IngestionAttempt, Transcript, list[Segment], dict[str, OutboxEvent]]:
+    """State left by the S2.5 atomic commit, before cleanup is verified (A2.10).
+
+    It mirrors ``maulwurf_ingest.persistence.commit_transcript`` in one transaction:
+    transcript + segments + disabled ``index_requested``/``analyze_requested`` events and
+    the attempt in ``transcript_committed_cleanup_pending``. This is a test fixture, not a
+    second writer; the real transaction is covered by I-S2-SG-06 in ``apps/ingest``.
+    """
+    audio = audio or await make_audio(db, actor)
+    stages = ["index"] if required_stages is None else required_stages
+    audio.required_stages = stages
+    now = datetime.now(UTC)
+    attempt = await make_attempt(db, actor, audio=audio)
+    attempt.status = "transcript_committed_cleanup_pending"
+    attempt.cleanup_status = "pending"
+    attempt.fragments_done = 2
+    attempt.fragments_total = 2
+    attempt.lease_expires_at = now + timedelta(minutes=5)
+
+    text = "texto de prueba"
+    transcript = Transcript(
+        user_id=actor.user_id,
+        audio_id=audio.id,
+        version=1,
+        language_requested=audio.language_code,
+        model="test-model",
+        model_config={"fragment_seconds": 30, "overlap_s": 0.25},
+        timestamp_precision="word",
+        text=text,
+        char_count=len(text),
+        fts_config="spanish",
+    )
+    db.add(transcript)
+    await db.flush()
+    audio.active_transcript_version = transcript.version
+    segments = [
+        Segment(
+            user_id=actor.user_id,
+            transcript_id=transcript.id,
+            ordinal=0,
+            text="texto",
+            char_start=0,
+            char_end=5,
+            t_start=0.0,
+            t_end=1.0,
+        ),
+        Segment(
+            user_id=actor.user_id,
+            transcript_id=transcript.id,
+            ordinal=1,
+            text="de prueba",
+            char_start=6,
+            char_end=15,
+            t_start=1.0,
+            t_end=2.0,
+        ),
+    ]
+    db.add_all(segments)
+
+    stage_event = {"index": "index_requested", "analyze": "analyze_requested"}
+    events: dict[str, OutboxEvent] = {}
+    for stage in stages:
+        if stage not in stage_event:
+            continue
+        event = OutboxEvent(
+            user_id=actor.user_id,
+            type=stage_event[stage],
+            resource_type="audio",
+            resource_id=audio.id,
+            resource_version=transcript.version,
+            payload={"transcript_id": str(transcript.id), "version": transcript.version},
+            enabled=False,
+            blocked_reason="cleanup_pending",
+            dedupe_key=stage,
+        )
+        db.add(event)
+        events[stage] = event
+    await db.flush()
+    return audio, attempt, transcript, segments, events
+
+
 async def make_segment(db: AsyncSession, actor: Actor) -> Segment:
     transcript = await make_transcript(db, actor)
     segment = Segment(
