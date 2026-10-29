@@ -13,11 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import IngestionAttempt
 from app.services.outbox import Outcome
 from app.workers.dispatcher import dispatch_pending
-from tests.integration.test_dispatcher import _audio, _event, redis
+from tests.integration.test_dispatcher import _audio, _event
 
 pytestmark = pytest.mark.integration
-
-_ = redis
 
 
 async def test_expired_lease_cleanup_pending_blocks_outbox(

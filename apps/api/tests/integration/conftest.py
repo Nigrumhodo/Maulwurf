@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 from alembic.config import Config
+from arq import create_pool
+from arq.connections import ArqRedis, RedisSettings
 from sqlalchemy import make_url, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
@@ -69,3 +71,19 @@ async def db_session(migrated_database_url: str) -> AsyncIterator[AsyncSession]:
             await session.close()
             await trans.rollback()
     await engine.dispose()
+
+
+@pytest.fixture
+async def redis() -> AsyncIterator[tuple[ArqRedis, str]]:
+    """Cola ARQ aislada por test: el worker de compose no consume estos jobs."""
+    pool = await create_pool(RedisSettings.from_dsn(str(settings.redis_url)))
+    queue = f"arq:test:{uuid.uuid4().hex}"
+    try:
+        yield pool, queue
+    finally:
+        # `arq:job:<id>` no lleva namespace de cola y los jobs reales también se llaman
+        # `outbox:<id>`: solo se borran los ids que están en la cola de ESTE test.
+        job_ids = await pool.zrange(queue, 0, -1)
+        job_keys = [f"arq:job:{job_id.decode()}" for job_id in job_ids]
+        await pool.delete(queue, *job_keys)
+        await pool.aclose()

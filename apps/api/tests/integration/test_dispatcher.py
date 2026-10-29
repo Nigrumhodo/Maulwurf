@@ -4,15 +4,12 @@ Usa una cola propia por test para que el worker de compose, si está corriendo, 
 los jobs; al final borra esa cola y los jobs que creó.
 """
 import uuid
-from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
-from arq import create_pool
-from arq.connections import ArqRedis, RedisSettings
+from arq.connections import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.models import Audio, IngestionAttempt, OutboxEvent, Subject, User
 from app.services.outbox import Outcome
 from app.workers.dispatcher import dispatch_pending
@@ -20,21 +17,6 @@ from app.workers.dispatcher import dispatch_pending
 pytestmark = pytest.mark.integration
 
 NOW = datetime.now(UTC)
-
-
-@pytest.fixture
-async def redis() -> AsyncIterator[tuple[ArqRedis, str]]:
-    pool = await create_pool(RedisSettings.from_dsn(str(settings.redis_url)))
-    queue = f"arq:test:{uuid.uuid4().hex}"
-    try:
-        yield pool, queue
-    finally:
-        # `arq:job:<id>` no lleva namespace de cola y los jobs reales también se llaman
-        # `outbox:<id>`: solo se borran los ids que están en la cola de ESTE test.
-        job_ids = await pool.zrange(queue, 0, -1)
-        job_keys = [f"arq:job:{job_id.decode()}" for job_id in job_ids]
-        await pool.delete(queue, *job_keys)
-        await pool.aclose()
 
 
 async def _audio(db: AsyncSession, cleanup_status: str | None) -> tuple[User, Audio]:
