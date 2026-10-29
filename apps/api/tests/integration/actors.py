@@ -219,10 +219,13 @@ async def make_committed_cleanup_pending(
 ) -> tuple[Audio, IngestionAttempt, Transcript, list[Segment], dict[str, OutboxEvent]]:
     """State left by the S2.5 atomic commit, before cleanup is verified (A2.10).
 
-    It mirrors ``maulwurf_ingest.persistence.commit_transcript`` in one transaction:
-    transcript + segments + disabled ``index_requested``/``analyze_requested`` events and
-    the attempt in ``transcript_committed_cleanup_pending``. This is a test fixture, not a
-    second writer; the real transaction is covered by I-S2-SG-06 in ``apps/ingest``.
+    Mirrors ``maulwurf_ingest.persistence.commit_transcript`` in one transaction:
+    transcript v1 (language, model, model_config, version, timestamp precision and
+    char count) + segments + ``active_transcript_version`` + disabled
+    ``index_requested``/``analyze_requested`` rows with
+    ``blocked_reason='cleanup_pending'``, and the attempt in
+    ``transcript_committed_cleanup_pending``. It is a test fixture, not a second
+    writer; I-S2-SG-06 covers the real transaction in ``apps/ingest``.
     """
     audio = audio or await make_audio(db, actor)
     stages = ["index"] if required_stages is None else required_stages
@@ -294,6 +297,16 @@ async def make_committed_cleanup_pending(
         db.add(event)
         events[stage] = event
     await db.flush()
+
+    assert transcript.char_count == len(text)
+    assert audio.active_transcript_version == transcript.version
+    for stage, event in events.items():
+        assert event.type == stage_event[stage]
+        assert event.resource_type == "audio"
+        assert event.resource_id == audio.id
+        assert event.resource_version == transcript.version
+        assert event.enabled is False
+        assert event.blocked_reason == "cleanup_pending"
     return audio, attempt, transcript, segments, events
 
 
