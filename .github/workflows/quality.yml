@@ -58,13 +58,9 @@ jobs:
       - if: matrix.app == 'ingest'
         run: sudo apt-get update && sudo apt-get install -y espeak-ng
       - run: uv sync --frozen --extra dev
-      # TODO(J1.4): quitar la tolerancia al código 5 cuando existan suites por app.
+      # No tolerance for exit code 5: an empty suite must fail the job.
       - name: Unit tests
-        run: |
-          set +e
-          uv run pytest -m "not integration and not provider and not load" -q
-          code=$?
-          if [ "$code" -ne 0 ] && [ "$code" -ne 5 ]; then exit "$code"; fi
+        run: uv run pytest -m "not integration and not provider and not load" -q
 
   web:
     runs-on: ubuntu-latest
@@ -125,13 +121,26 @@ jobs:
         run: |
           docker run -d --name ci-redis -p 6379:6379 \
             redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499 \
-            redis-server --save "" --appendonly no --maxmemory-policy noeviction
+            redis-server --save "" --appendonly no --maxmemory 256mb --maxmemory-policy noeviction
           for _ in $(seq 1 20); do
             if docker exec ci-redis redis-cli ping | grep -q PONG; then exit 0; fi
             sleep 1
           done
           echo "redis no respondio" >&2
           exit 1
+      # Same as compose (ADR-0005): no persistence, with maxmemory + noeviction.
+      - name: Assert Redis policy matches ADR-0005
+        run: |
+          check() {
+            actual=$(docker exec ci-redis redis-cli CONFIG GET "$1" | sed -n 2p)
+            if [ "$actual" != "$2" ]; then
+              echo "redis $1=$actual, se esperaba $2" >&2
+              exit 1
+            fi
+          }
+          check maxmemory 268435456
+          check maxmemory-policy noeviction
+          check appendonly no
       - uses: astral-sh/setup-uv@v5
         with:
           version: "0.12.18"
@@ -142,7 +151,6 @@ jobs:
       - if: matrix.app == 'ingest'
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: uv sync --frozen --extra dev
-      # TODO(J1.4): quitar la tolerancia al código 5 en api cuando su suite exista.
       - name: Integration tests
         run: |
           if [ "${{ matrix.app }}" = "ingest" ]; then
@@ -165,11 +173,46 @@ jobs:
               exit 1
             fi
           else
-            set +e
             uv run pytest -m integration -q
-            code=$?
-            if [ "$code" -ne 0 ] && [ "$code" -ne 5 ]; then exit "$code"; fi
           fi
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/ci/check_no_secrets.sh
+
+  license-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [api, ingest, web]
+    steps:
+      - uses: actions/checkout@v4
+      - if: matrix.app != 'web'
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.18"
+          enable-cache: true
+          cache-dependency-glob: apps/${{ matrix.app }}/uv.lock
+      - if: matrix.app == 'web'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      # Blocks licenses incompatible with AGPL-3.0; UNKNOWN only warns.
+      - name: License report
+        run: bash scripts/ci/license_report.sh ${{ matrix.app }} reports/licenses
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: licenses-${{ matrix.app }}
+          path: reports/licenses/
+          if-no-files-found: ignore
 
   build-images:
     runs-on: ubuntu-latest
