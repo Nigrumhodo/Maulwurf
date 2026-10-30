@@ -793,3 +793,30 @@ async def test_search_service_returns_content_for_chat_consumers(
     response = await client.get("/search", params={"q": "alpha"}, cookies=actor.cookies)
     assert response.status_code == 200
     assert "content" not in response.json()["results"][0]
+
+
+async def test_rehydrate_chunk_ids_filters_by_audio_id(
+    db_session: AsyncSession,
+    provider: FakeEmbeddingProvider,
+) -> None:
+    actor = await actors.make_actor(db_session)
+    generation = await _make_generation(db_session, actor)
+    audio, _, chunk, _ = await _indexed_class(
+        db_session, actor, generation=generation, content="alpha chunk"
+    )
+    other_audio = await actors.make_audio(db_session, actor)
+    service = SearchService(db_session, provider=provider)
+
+    found = await service.rehydrate_chunk_ids(
+        user_id=actor.user_id, chunk_id=chunk.id, audio_id=audio.id
+    )
+    assert found is not None
+    assert found.chunk_id == chunk.id
+
+    # The chunk exists and is active, but it does not belong to this audio.
+    assert (
+        await service.rehydrate_chunk_ids(
+            user_id=actor.user_id, chunk_id=chunk.id, audio_id=other_audio.id
+        )
+        is None
+    )
