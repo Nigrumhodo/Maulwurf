@@ -29,7 +29,14 @@ from app.core.errors import ApiError
 from app.models import Audio, IngestionAttempt
 from app.services import dedupe
 from app.services.audios import RETRY_AFTER_SECONDS
-from app.services.uploads import Admission, SinkError, effective_upload_limit, receive_content
+from app.services.uploads import (
+    Admission,
+    DiscardReason,
+    Received,
+    SinkError,
+    effective_upload_limit,
+    receive_content,
+)
 
 CONTENT = b"RIFF" + b"\x00" * 60
 # Identificadores que jamás deben aparecer en el código de recepción (spec M2, «sin spool»).
@@ -83,12 +90,16 @@ def test_router_delegates_streaming_and_nobody_spools_to_disk() -> None:
 
 
 class _Sink:
-    """`ReceptionSink` de mentira: bytes solo en RAM y eventos ordenados."""
+    """`ReceptionSink` de mentira: bytes solo en RAM y eventos ordenados.
+
+    `finish` devuelve el hash y el conteo de lo escrito, como lo haría `ingest`.
+    """
 
     def __init__(self, *, begin_error: str | None = None, admit_error: str | None = None) -> None:
         self.events: list[str] = []
         self.written = 0
         self.retained = bytearray()
+        self.hasher = hashlib.sha256()
         self._begin_error = begin_error
         self._admit_error = admit_error
 
@@ -98,7 +109,8 @@ class _Sink:
         user_id: uuid.UUID,
         audio_id: uuid.UUID,
         attempt_id: uuid.UUID,
-        expected_bytes: int | None,
+        fencing_token: int,
+        declared_bytes: int | None,
     ) -> None:
         self.events.append("begin")
         if self._begin_error is not None:
@@ -108,12 +120,18 @@ class _Sink:
         self.events.append("write")
         self.written += len(chunk)
         self.retained += chunk
+        self.hasher.update(chunk)
 
-    async def finish(self) -> None:
+    async def finish(self) -> Received:
         self.events.append("finish")
+        return Received(sha256=self.hasher.hexdigest(), received_bytes=self.written)
 
-    async def discard(self) -> None:
-        self.events.append("discard")
+    async def abort(self) -> None:
+        self.events.append("abort")
+        self.retained.clear()
+
+    async def discard(self, reason: DiscardReason) -> None:
+        self.events.append(f"discard:{reason}")
         self.retained.clear()
 
     async def admit(self) -> Admission:
@@ -188,6 +206,7 @@ def _attempt(**fields: Any) -> IngestionAttempt:
         "status": "awaiting_upload",
         "received_bytes": 0,
         "expected_bytes": None,
+        "fencing_token": 1,
     }
     values.update(fields)
     return IngestionAttempt(**values)
@@ -262,7 +281,7 @@ async def test_stream_is_cut_at_the_limit_and_never_admits(
     assert (error.status_code, error.code) == (413, "payload_too_large")
     assert error.details == {"max_bytes": 64}
     # Acotado: se corta ANTES de escribir el chunk que rebasa y se descarta lo recibido.
-    assert sink.events == ["begin", "write", "discard"]
+    assert sink.events == ["begin", "write", "abort"]
     assert sink.written == 48 and sink.retained == b""
     assert attempt.status == "awaiting_upload"  # la reserva queda intacta para reintentar (C6)
 
@@ -274,7 +293,7 @@ async def test_empty_body_is_415_and_never_202() -> None:
         await _receive(_FakeRequest([]), sink)
 
     assert (excinfo.value.status_code, excinfo.value.code) == (415, "unsupported_format")
-    assert sink.events == ["begin", "discard"] and "admit" not in sink.events
+    assert sink.events == ["begin", "abort"] and "admit" not in sink.events
 
 
 async def test_sink_down_is_503_before_reading_a_byte() -> None:
@@ -347,7 +366,7 @@ async def test_duplicate_exact_discards_before_responding(
     assert result.status_code == 200
     assert result.payload == {"audio_id": str(canonical.id), "outcome": "duplicate_exact"}
     # El orden ES la prueba: discard() termina ANTES de la respuesta y jamás hay admit().
-    assert sink.events == ["begin", "write", "finish", "discard"]
+    assert sink.events == ["begin", "write", "finish", "discard:duplicate_exact"]
 
 
 async def test_admit_failure_compensates_identity_and_is_503(
@@ -370,7 +389,7 @@ async def test_admit_failure_compensates_identity_and_is_503(
     # Transacción compensadora: la identidad ya escrita vuelve a estar limpia (§8.1).
     assert audio.sha256 is None and audio.original_bytes is None
     assert (attempt.received_bytes, attempt.expected_bytes) == (0, None)
-    assert sink.events == ["begin", "write", "finish", "admit", "discard"]
+    assert sink.events == ["begin", "write", "finish", "admit", "discard:api_error"]
     assert sink.retained == b""
 
 
@@ -382,9 +401,10 @@ async def test_client_disconnect_cancels_attempt_and_cleans_up() -> None:
     with pytest.raises(RuntimeError, match="conexión perdida"):
         await _receive(request, sink, attempt=attempt)
 
-    # «Desconectar cancela y limpia el intento» (C6), sin admit y sin respuesta posible.
-    assert attempt.status == "cancelled"
-    assert sink.events == ["begin", "write", "discard"] and "admit" not in sink.events
+    # Desconectar cancela el hop interno (ADR-0008 §7); `ingest` registra `cancelled` y la API
+    # no escribe estado. Sin admit y sin respuesta posible.
+    assert attempt.status == "awaiting_upload"
+    assert sink.events == ["begin", "write", "abort"] and "admit" not in sink.events
     assert sink.retained == b""
 
 
@@ -402,7 +422,7 @@ async def test_disconnect_after_the_commit_never_leaks_a_409() -> None:
 
     assert attempt.status == "transcript_committed_cleanup_pending"  # unchanged
     assert cast(_StubDb, db).commits == 0
-    assert sink.events == ["begin", "write", "discard"]
+    assert sink.events == ["begin", "write", "abort"]
 
 
 def test_effective_limit_follows_published_capabilities(monkeypatch: pytest.MonkeyPatch) -> None:

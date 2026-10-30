@@ -71,6 +71,7 @@ from app.services.audios import (
     tombstone_audio,
 )
 from app.services.exports import render_srt, render_txt, srt_exportable
+from app.services.ingest_sink import get_reception_sink
 from app.services.runs import (
     ensure_reupload_allowed,
     open_reupload,
@@ -80,7 +81,6 @@ from app.services.tenant import get_owned
 from app.services.uploads import (
     ReceptionSink,
     effective_upload_limit,
-    get_reception_sink,
     receive_content,
 )
 

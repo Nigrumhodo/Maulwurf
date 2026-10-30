@@ -47,7 +47,14 @@ from app.main import app
 from app.models import Audio, IngestionAttempt, VariantConfirmationToken
 from app.services import dedupe
 from app.services.audios import token_hash
-from app.services.uploads import Admission, SinkError, get_reception_sink, receive_content
+from app.services.ingest_sink import get_reception_sink
+from app.services.uploads import (
+    Admission,
+    DiscardReason,
+    Received,
+    SinkError,
+    receive_content,
+)
 from tests.integration.actors import (
     Actor,
     make_actor,
@@ -69,6 +76,7 @@ class FakeSink:
         self.events: list[str] = []
         self.written = 0
         self.retained = bytearray()
+        self.hasher = hashlib.sha256()
         self.begin_error: str | None = None
         self.admit_error: str | None = None
         self.discard_error: str | None = None
@@ -79,22 +87,32 @@ class FakeSink:
         user_id: uuid.UUID,
         audio_id: uuid.UUID,
         attempt_id: uuid.UUID,
-        expected_bytes: int | None,
+        fencing_token: int,
+        declared_bytes: int | None,
     ) -> None:
+        # One sink serves a test's several PUTs: each reception starts its own hash and count.
+        self.hasher = hashlib.sha256()
+        self.written = 0
         self.events.append("begin")
         if self.begin_error is not None:
             raise SinkError(self.begin_error)
 
     async def write(self, chunk: bytes) -> None:
         self.events.append("write")
+        self.hasher.update(chunk)
         self.written += len(chunk)
         self.retained += chunk
 
-    async def finish(self) -> None:
+    async def finish(self) -> Received:
         self.events.append("finish")
+        return Received(sha256=self.hasher.hexdigest(), received_bytes=self.written)
 
-    async def discard(self) -> None:
-        self.events.append("discard")
+    async def abort(self) -> None:
+        self.events.append("abort")
+        self.retained.clear()
+
+    async def discard(self, reason: DiscardReason) -> None:
+        self.events.append(f"discard:{reason}")
         if self.discard_error is not None:
             raise SinkError(self.discard_error)
         self.retained.clear()
@@ -257,7 +275,7 @@ async def test_duplicate_exact_cleans_before_reserving(
     assert response.status_code == 200
     assert response.json() == {"audio_id": first["audio_id"], "outcome": "duplicate_exact"}
     # M2: el cleanup TERMINA antes de la respuesta y nunca hay admisión sin ASR.
-    assert sink.events == ["begin", "write", "finish", "discard"]
+    assert sink.events == ["begin", "write", "finish", "discard:duplicate_exact"]
     # La reserva perdedora se libera por completo…
     assert await db_session.get(IngestionAttempt, uuid.UUID(second["attempt_id"])) is None
     assert await db_session.get(Audio, uuid.UUID(second["audio_id"])) is None
@@ -296,7 +314,8 @@ async def test_concurrent_exact_upload_converges_to_canonical(
     assert response.status_code == 200
     assert response.json() == {"audio_id": winner["audio_id"], "outcome": "duplicate_exact"}
     assert len(calls) == 2  # consulta en la ventana + reconsulta tras violar el índice único
-    assert sink.events == ["begin", "write", "finish", "discard"]  # rollback + cleanup + 200
+    # rollback + cleanup + 200
+    assert sink.events == ["begin", "write", "finish", "discard:duplicate_exact"]
     assert await db_session.get(IngestionAttempt, uuid.UUID(loser["attempt_id"])) is None
     assert await db_session.get(Audio, uuid.UUID(loser["audio_id"])) is None
     winner_audio = await db_session.get(Audio, uuid.UUID(winner["audio_id"]))
@@ -329,7 +348,7 @@ async def test_duplicate_variant_cleans_before_409_and_issues_single_use_token(
     ttl = expires - datetime.now(UTC)
     assert timedelta(minutes=1) <= ttl <= timedelta(minutes=settings.variant_token_ttl_minutes)
     # Cleanup verificado ANTES del 409 y reserva provisional absorbida.
-    assert sink.events == ["begin", "write", "finish", "discard"]
+    assert sink.events == ["begin", "write", "finish", "discard:duplicate_variant"]
     assert await db_session.get(Audio, uuid.UUID(other["audio_id"])) is None
     assert await db_session.get(IngestionAttempt, uuid.UUID(other["attempt_id"])) is None
     # En BD solo vive el SHA-256 del token: el plano jamás se persiste.
@@ -417,10 +436,11 @@ async def test_second_put_with_different_hash_is_422(
     assert response.json()["error"]["code"] == "variant_hash_mismatch"
     attempt = await db_session.get(IngestionAttempt, uuid.UUID(confirmed["attempt_id"]))
     assert attempt is not None
-    assert attempt.status == "rejected" and attempt.error_code == "variant_hash_mismatch"
+    # ADR-0008 §5: `ingest` writes the `rejected` status from the discard reason, not `api`.
+    assert attempt.status == "awaiting_upload"
     audio = await db_session.get(Audio, uuid.UUID(confirmed["audio_id"]))
     assert audio is not None and audio.sha256 is None  # sin identidad, sin ASR
-    assert sink.events == ["begin", "write", "finish", "discard"]
+    assert sink.events == ["begin", "write", "finish", "discard:variant_hash_mismatch"]
     assert "admit" not in sink.events
     _assert_clean(response, sink)
 
@@ -550,7 +570,7 @@ async def test_simultaneous_variant_contexts_resolve_to_one_canonical(
     assert error["details"]["existing_audio_id"] == winner["audio_id"]
     assert len(calls) == 2  # pre-commit miss + post-admission re-check
     # Verified cleanup before the 409 and the provisional class absorbed.
-    assert sink.events == ["begin", "write", "finish", "discard"]
+    assert sink.events == ["begin", "write", "finish", "discard:duplicate_variant"]
     assert await db_session.get(IngestionAttempt, uuid.UUID(loser["attempt_id"])) is None
     assert await db_session.get(Audio, uuid.UUID(loser["audio_id"])) is None
     fresh_winner = await db_session.get(Audio, uuid.UUID(winner["audio_id"]))
@@ -642,7 +662,7 @@ async def test_stream_over_limit_is_cut_hot(
 
     assert response.status_code == 413
     assert response.json()["error"]["details"] == {"max_bytes": 64}
-    assert sink.events == ["begin", "write", "discard"]  # corte ANTES del chunk que rebasa
+    assert sink.events == ["begin", "write", "abort"]  # corte ANTES del chunk que rebasa
     assert sink.written == 48 and sink.retained == b""
     attempt = await db_session.get(IngestionAttempt, uuid.UUID(reserved["attempt_id"]))
     assert attempt is not None
@@ -712,7 +732,7 @@ async def test_commit_failure_after_receive_compensates(
     assert attempt.status == "awaiting_upload" and attempt.received_bytes == 0
     audio = await db_session.get(Audio, uuid.UUID(reserved["audio_id"]))
     assert audio is not None and audio.sha256 is None
-    assert sink.events == ["begin", "write", "finish", "discard"]
+    assert sink.events == ["begin", "write", "finish", "discard:api_error"]
     _assert_clean(response, sink)
 
 
@@ -738,7 +758,7 @@ async def test_admit_failure_restores_identity_and_is_503(
     )
     audio = await db_session.get(Audio, uuid.UUID(reserved["audio_id"]))
     assert audio is not None and audio.sha256 is None and audio.original_bytes is None
-    assert sink.events == ["begin", "write", "finish", "admit", "discard"]
+    assert sink.events == ["begin", "write", "finish", "admit", "discard:api_error"]
     _assert_clean(response, sink)
 
 
@@ -783,7 +803,7 @@ async def test_failed_discard_never_answers_duplicate(
     assert "admit" not in sink.events
 
 
-async def test_client_disconnect_cancels_attempt(
+async def test_client_disconnect_aborts_the_hop_without_writing_status(
     db_session: AsyncSession, sink: FakeSink
 ) -> None:
     actor = await make_actor(db_session)
@@ -810,12 +830,12 @@ async def test_client_disconnect_cancels_attempt(
             content_length=None,
         )
 
-    # «Desconectar cancela y limpia el intento» (C6), sin respuesta posible.
+    # Desconectar cancela el hop interno (ADR-0008 §7); el estado `cancelled` lo escribe `ingest`.
     fresh = await db_session.get(IngestionAttempt, attempt_id)
-    assert fresh is not None and fresh.status == "cancelled"
+    assert fresh is not None and fresh.status == "awaiting_upload"
     audio_after = await db_session.get(Audio, audio_id)
     assert audio_after is not None and audio_after.sha256 is None
-    assert sink.events == ["begin", "write", "discard"] and "admit" not in sink.events
+    assert sink.events == ["begin", "write", "abort"] and "admit" not in sink.events
     assert sink.retained == b""
 
 
@@ -832,7 +852,7 @@ async def test_empty_body_is_415_never_202(
     assert 202 != response.status_code
     attempt = await db_session.get(IngestionAttempt, uuid.UUID(reserved["attempt_id"]))
     assert attempt is not None and attempt.status == "awaiting_upload"
-    assert sink.events == ["begin", "discard"]
+    assert sink.events == ["begin", "abort"]
 
 
 # --- F. Invariante global ----------------------------------------------------------------
