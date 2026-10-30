@@ -662,7 +662,7 @@ async def test_stream_over_limit_is_cut_hot(
 
     assert response.status_code == 413
     assert response.json()["error"]["details"] == {"max_bytes": 64}
-    assert sink.events == ["begin", "write", "abort"]  # corte ANTES del chunk que rebasa
+    assert sink.events == ["begin", "write", "abort"]  # cut BEFORE the chunk that exceeds the limit
     assert sink.written == 48 and sink.retained == b""
     attempt = await db_session.get(IngestionAttempt, uuid.UUID(reserved["attempt_id"]))
     assert attempt is not None
@@ -830,7 +830,7 @@ async def test_client_disconnect_aborts_the_hop_without_writing_status(
             content_length=None,
         )
 
-    # Desconectar cancela el hop interno (ADR-0008 §7); el estado `cancelled` lo escribe `ingest`.
+    # Disconnecting cancels the internal hop (ADR-0008 §7); `ingest` writes the `cancelled` state.
     fresh = await db_session.get(IngestionAttempt, attempt_id)
     assert fresh is not None and fresh.status == "awaiting_upload"
     audio_after = await db_session.get(Audio, audio_id)

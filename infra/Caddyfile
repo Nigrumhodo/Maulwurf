@@ -8,7 +8,7 @@
 https://localhost {
 	tls internal
 
-	# 1) PUT binario: termina en api; api hace streaming a ingest por la red interna (ADR-0008).
+	# 1) Binary PUT: ends at api; api streams to ingest over the internal network (ADR-0008).
 	@upload {
 		method PUT
 		path /audios/*/content
@@ -17,8 +17,8 @@ https://localhost {
 		reverse_proxy api:8000
 	}
 
-	# ADR-0008: la API interna de ingest nunca es pública. Caddy responde 404 antes de cualquier
-	# otro emparejamiento; cualquier variante que no coincida cae en el fallback web.
+	# ADR-0008: ingest's internal API is never public. Caddy answers 404 before any other
+	# route match; any variant that does not match falls through to the web fallback.
 	@internal path /internal/*
 	handle @internal {
 		respond 404

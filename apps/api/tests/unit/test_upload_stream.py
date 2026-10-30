@@ -90,9 +90,9 @@ def test_router_delegates_streaming_and_nobody_spools_to_disk() -> None:
 
 
 class _Sink:
-    """`ReceptionSink` de mentira: bytes solo en RAM y eventos ordenados.
+    """`ReceptionSink` fake: bytes only in RAM and ordered events.
 
-    `finish` devuelve el hash y el conteo de lo escrito, como lo haría `ingest`.
+    `finish` returns the hash and count of what was written, as `ingest` would.
     """
 
     def __init__(self, *, begin_error: str | None = None, admit_error: str | None = None) -> None:
@@ -401,8 +401,8 @@ async def test_client_disconnect_cancels_attempt_and_cleans_up() -> None:
     with pytest.raises(RuntimeError, match="conexión perdida"):
         await _receive(request, sink, attempt=attempt)
 
-    # Desconectar cancela el hop interno (ADR-0008 §7); `ingest` registra `cancelled` y la API
-    # no escribe estado. Sin admit y sin respuesta posible.
+    # Disconnecting cancels the internal hop (ADR-0008 §7); `ingest` records `cancelled` and the API
+    # writes no state. No admit and no possible response.
     assert attempt.status == "awaiting_upload"
     assert sink.events == ["begin", "write", "abort"] and "admit" not in sink.events
     assert sink.retained == b""

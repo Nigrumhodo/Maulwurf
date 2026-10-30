@@ -83,8 +83,8 @@ class ReceptionSink(Protocol):
     """Destino efímero del pipe-through: la API escribe, nunca retiene.
 
     `finish()` returns the remote hash and count, which `receive_content` compares with its
-    own. `discard()` must VERIFY the cleanup before any `200/409` answer (M2: «limpiar
-    primero»); `abort()` only cancels the in-flight stream and expects no answer.
+    own. `discard()` must VERIFY the cleanup before any `200/409` answer (M2: «clean up
+    first»); `abort()` only cancels the in-flight stream and expects no answer.
     """
 
     async def begin(
@@ -233,11 +233,11 @@ async def _discard_verified(sink: ReceptionSink, reason: DiscardReason) -> None:
 
 
 async def _abort_disconnected(sink: ReceptionSink, *, finished: bool) -> None:
-    """Desconexión del cliente (ADR-0008 §7): cancela el hop interno, sin respuesta.
+    """Client disconnect (ADR-0008 §7): cancels the internal hop, with no response.
 
-    Antes de `finish()` basta con cancelar: `ingest` ve el cuerpo cortado y registra
-    `cancelled` por sí mismo. Si el `receive` ya respondió, `ingest` tiene un temporal
-    retenido y hay que pedirle el `discard` verificado.
+    Before `finish()`, cancelling is enough: `ingest` sees the body cut off and records
+    `cancelled` on its own. If `receive` has already answered, `ingest` holds a retained
+    temp file and must be asked for a verified `discard`.
     """
     await sink.abort()
     if finished:
@@ -411,8 +411,8 @@ async def receive_content(
                 continue
             received += len(chunk)
             if received > limit:
-                # Corte en caliente (ADR-0008 §7): se cancela el hop interno; `ingest` ve el
-                # cuerpo cortado y registra `cancelled` por sí mismo, así que aquí no hay discard.
+                # Mid-stream cut (ADR-0008 §7): the internal hop is cancelled; `ingest` sees the
+                # body cut off and records `cancelled` itself, so there is no discard here.
                 await sink.abort()
                 raise ApiError(
                     413,
@@ -428,7 +428,7 @@ async def receive_content(
         await sink.abort()
         raise _sink_api_error(exc) from exc
     except Exception:
-        # Desconexión o lectura rota a mitad de subida (ADR-0008 §7): sin respuesta que enviar.
+        # Disconnect or broken read mid-upload (ADR-0008 §7): no response to send.
         await _abort_disconnected(sink, finished=False)
         raise
 
