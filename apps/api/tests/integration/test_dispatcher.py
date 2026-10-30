@@ -3,15 +3,22 @@
 Usa una cola propia por test para que el worker de compose, si está corriendo, no consuma
 los jobs; al final borra esa cola y los jobs que creó.
 """
+import random
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
+from typing import Any, cast
 
 import pytest
 from arq.connections import ArqRedis
+from arq.jobs import Job
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import ResponseError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Audio, IngestionAttempt, OutboxEvent, Subject, User
 from app.services.outbox import Outcome
+from app.services.outbox_retry import RetryPolicy
 from app.workers.dispatcher import dispatch_pending
 
 pytestmark = pytest.mark.integration
@@ -289,3 +296,219 @@ async def test_requeue_after_failed_commit_is_counted_as_deduplicated(
     assert report[Outcome.DEDUPLICATED] == 1
     assert event.status == "dispatched"
     assert len(await pool.queued_jobs(queue_name=queue)) == 1
+
+
+class _FakeClock:
+    """Reloj inyectado: el backoff se prueba sin esperar ni leer la hora real."""
+
+    def __init__(self, now: datetime) -> None:
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+class _ScriptedPool:
+    """Doble de `ArqRedis`: cada llamada consume una entrada; `None` delega en el pool real.
+
+    Una entrada que sea excepción se lanza en lugar de encolar.
+    """
+
+    def __init__(self, real: ArqRedis, script: Sequence[BaseException | None]) -> None:
+        self._real = real
+        self._script = list(script)
+
+    async def enqueue_job(self, function: str, *args: Any, **kwargs: Any) -> Job | None:
+        step = self._script.pop(0) if self._script else None
+        if step is not None:
+            raise step
+        return await self._real.enqueue_job(function, *args, **kwargs)
+
+
+def _transient() -> ResponseError:
+    return ResponseError("TRYAGAIN multi-key operation in progress")
+
+
+async def test_transient_error_schedules_jittered_backoff_then_publishes(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    pool, queue = redis
+    start = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
+    clock = _FakeClock(start)
+    user, audio = await _audio(db_session, "verified")
+    event = _event(user, audio, "index_requested")
+    db_session.add(event)
+    await db_session.flush()
+    flaky = cast(ArqRedis, _ScriptedPool(pool, [_transient()]))
+
+    first = await dispatch_pending(
+        db_session, flaky, queue_name=queue, retry=RetryPolicy(rng=random.Random(7)),  # noqa: S311 - jitter, not a security value
+        clock=clock,
+    )
+
+    expected_wait = RetryPolicy(rng=random.Random(7)).delay(1)  # noqa: S311 - jitter, not a security value
+    assert first[Outcome.RETRY_SCHEDULED] == 1
+    assert (event.status, event.attempts) == ("pending", 1)
+    assert event.next_attempt_at == start + expected_wait
+    assert await pool.queued_jobs(queue_name=queue) == []
+
+    clock.now = start + timedelta(seconds=1)
+    too_early = await dispatch_pending(db_session, pool, queue_name=queue, clock=clock)
+    assert sum(too_early.values()) == 0
+
+    clock.now = event.next_attempt_at
+    retried = await dispatch_pending(db_session, pool, queue_name=queue, clock=clock)
+    assert retried[Outcome.PUBLISH] == 1
+    assert (event.status, event.attempts) == ("dispatched", 2)
+    assert len(await pool.queued_jobs(queue_name=queue)) == 1
+
+
+async def test_third_transient_failure_marks_event_failed(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    pool, queue = redis
+    start = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
+    clock = _FakeClock(start)
+    user, audio = await _audio(db_session, "verified")
+    event = _event(user, audio, "index_requested")
+    db_session.add(event)
+    await db_session.flush()
+    flaky = cast(ArqRedis, _ScriptedPool(pool, [_transient(), _transient(), _transient()]))
+    policy = RetryPolicy(rng=random.Random(3))  # noqa: S311 - jitter, not a security value
+
+    outcomes = []
+    for _ in range(3):
+        report = await dispatch_pending(
+            db_session, flaky, queue_name=queue, retry=policy, clock=clock
+        )
+        outcomes.append(report)
+        if event.next_attempt_at is not None:
+            clock.now = event.next_attempt_at
+
+    assert [r[Outcome.RETRY_SCHEDULED] for r in outcomes[:2]] == [1, 1]
+    assert outcomes[2][Outcome.FAILED] == 1
+    assert (event.status, event.attempts) == ("failed", 3)
+    # Terminal: ni el reloj ni un Redis sano lo vuelven a tomar.
+    clock.now = start + timedelta(days=30)
+    later = await dispatch_pending(db_session, pool, queue_name=queue, clock=clock)
+    assert sum(later.values()) == 0
+    assert await pool.queued_jobs(queue_name=queue) == []
+
+
+async def test_permanent_error_fails_without_retry(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    pool, queue = redis
+    start = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
+    clock = _FakeClock(start)
+    user, audio = await _audio(db_session, "verified")
+    event = _event(user, audio, "index_requested")
+    db_session.add(event)
+    await db_session.flush()
+    broken = cast(ArqRedis, _ScriptedPool(pool, [TypeError("not serializable")]))
+
+    report = await dispatch_pending(db_session, broken, queue_name=queue, clock=clock)
+
+    assert report[Outcome.FAILED] == 1
+    assert (event.status, event.attempts) == ("failed", 1)
+    assert event.next_attempt_at is None
+    clock.now = start + timedelta(days=1)
+    later = await dispatch_pending(db_session, pool, queue_name=queue, clock=clock)
+    assert sum(later.values()) == 0
+
+
+async def test_infra_error_stops_cycle_without_charging_events(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    # Redis caído no es culpa del evento: no gasta intentos ni pasa a failed.
+    pool, queue = redis
+    start = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
+    clock = _FakeClock(start)
+    user, audio = await _audio(db_session, "verified")
+    first = _event(user, audio, "index_requested")
+    first.created_at = start - timedelta(seconds=2)
+    second = _event(user, audio, "analyze_requested")
+    second.created_at = start - timedelta(seconds=1)
+    db_session.add_all([first, second])
+    await db_session.flush()
+    outage = cast(ArqRedis, _ScriptedPool(pool, [None, RedisConnectionError("refused")]))
+
+    report = await dispatch_pending(db_session, outage, queue_name=queue, clock=clock)
+
+    assert report[Outcome.PUBLISH] == 1
+    assert report[Outcome.DEFERRED_INFRA] == 1
+    assert first.status == "dispatched"
+    assert (second.status, second.attempts, second.next_attempt_at) == ("pending", 0, None)
+
+    recovered = await dispatch_pending(db_session, pool, queue_name=queue, clock=clock)
+    assert recovered[Outcome.PUBLISH] == 1
+    assert (second.status, second.attempts) == ("dispatched", 1)
+
+
+async def test_tombstoned_audio_is_not_published(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    pool, queue = redis
+    user, audio = await _audio(db_session, "verified")
+    event = _event(user, audio, "index_requested")
+    db_session.add(event)
+    await db_session.flush()
+    audio.deleted_at = NOW
+    await db_session.flush()
+
+    report = await dispatch_pending(db_session, pool, queue_name=queue)
+
+    assert report[Outcome.TOMBSTONED] == 1
+    assert event.status == "skipped" and event.published_at is None
+    assert await pool.queued_jobs(queue_name=queue) == []
+
+
+async def test_revoked_owner_is_not_published(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    pool, queue = redis
+    user, audio = await _audio(db_session, "verified")
+    event = _event(user, audio, "analyze_requested")
+    db_session.add(event)
+    await db_session.flush()
+    user.status = "deleting"
+    await db_session.flush()
+
+    report = await dispatch_pending(db_session, pool, queue_name=queue)
+
+    assert report[Outcome.OWNER_REVOKED] == 1
+    assert event.status == "skipped" and event.published_at is None
+    assert await pool.queued_jobs(queue_name=queue) == []
+
+
+async def test_stale_transcript_version_is_not_published(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    pool, queue = redis
+    user, audio = await _audio(db_session, "verified")
+    audio.active_transcript_version = 2
+    event = _event(user, audio, "index_requested")  # resource_version=1: superada por la 2
+    db_session.add(event)
+    await db_session.flush()
+
+    report = await dispatch_pending(db_session, pool, queue_name=queue)
+
+    assert report[Outcome.STALE_VERSION] == 1
+    assert event.status == "skipped" and event.published_at is None
+    assert await pool.queued_jobs(queue_name=queue) == []
+
+
+async def test_current_transcript_version_still_publishes(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    pool, queue = redis
+    user, audio = await _audio(db_session, "verified")
+    audio.active_transcript_version = 1
+    event = _event(user, audio, "index_requested")  # resource_version=1 == activa
+    db_session.add(event)
+    await db_session.flush()
+
+    report = await dispatch_pending(db_session, pool, queue_name=queue)
+
+    assert report[Outcome.PUBLISH] == 1
+    assert event.status == "dispatched"

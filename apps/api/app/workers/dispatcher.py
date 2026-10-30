@@ -1,15 +1,21 @@
-"""Dispatcher de la outbox (J1.5): de `outbox_events` en PostgreSQL a jobs ARQ en Redis.
+"""Dispatcher de la outbox (J1.5, J2.1): de `outbox_events` en PostgreSQL a jobs ARQ en Redis.
 
 Cada ciclo toma un lote con `FOR UPDATE SKIP LOCKED` (dos schedulers no publican el mismo
-evento), aplica `services.outbox.decide` y encola solo IDs.
+evento), aplica `services.outbox.decide`, revalida el evento y encola solo IDs.
 
-- El lote solo contiene eventos que pueden avanzar: los publicables y los que hay que
-  descartar. Quedan fuera, sin ocupar huecos y `pending`, los tipos sin consumidor en S1 y
-  los index/analyze cuyo último intento aún no tiene cleanup verificado. Así ningún
-  backlog atascado deja sin despachar a los eventos listos más nuevos. `decide()` sigue
-  aplicando el gate sobre lo seleccionado (defensa en profundidad, fail closed).
-- Un tipo desconocido, un gate sobre un recurso que no es audio o un index sin versión
-  pasan a `skipped` (terminal, nada se publica) en vez de reaparecer en cada ciclo.
+- El lote solo contiene eventos que pueden avanzar: los publicables, los que hay que
+  descartar y los que ya cumplen su espera de reintento. Quedan fuera, sin ocupar huecos,
+  los tipos sin consumidor en S1, los index/analyze sin cleanup verificado y los reintentos
+  pendientes (`next_attempt_at` en el futuro).
+- Cada fila cuenta una sola vez con su resultado final (`Outcome`).
+- Errores de encolado (`workers/outbox_errors.py`):
+  - infra (Redis caído, OOM): se corta el ciclo sin tocar los eventos restantes ni gastar
+    intentos. Se reintenta en el siguiente ciclo del scheduler.
+  - transitorio: `attempts + 1` y `next_attempt_at` con backoff y jitter; al llegar a
+    `max_attempts` pasa a `failed`.
+  - permanente: `failed` sin reintento.
+- Revalidación justo antes de publicar (`workers/outbox_revalidation.py`): audio borrado,
+  dueño sin cuenta activa o versión desplazada dejan el evento `skipped` sin publicar.
 - Entrega al menos una vez, no exactamente una: si el commit falla después de encolar, el
   evento sigue pendiente y el siguiente ciclo lo reencola. `_job_id = outbox:<id>` solo
   deduplica mientras el job o su resultado siguen en Redis (`keep_result = 60 s`); pasado
@@ -17,11 +23,11 @@ evento), aplica `services.outbox.decide` y encola solo IDs.
 - El encolado ocurre con los row locks tomados: si Redis se degrada, la transacción se
   alarga y otros schedulers saltan esas filas (SKIP LOCKED). Aceptable con lote 100 y cron
   minutal; revisar si aparece presión real.
-- En S1 el ciclo de vida termina en `dispatched`: sin ack del consumidor, reintentos,
-  `attempts` ni `next_attempt_at` (J2.1).
 """
+
 import logging
 from collections import Counter
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from arq.connections import ArqRedis
@@ -36,6 +42,9 @@ from app.services.outbox import (
     Outcome,
     decide,
 )
+from app.services.outbox_retry import DEFAULT_RETRY, RetryPolicy
+from app.workers.outbox_delivery import enqueue
+from app.workers.outbox_revalidation import revalidate
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +71,8 @@ LATEST_CLEANUP = (
 )
 
 
-def _job_args(event: OutboxEvent, job: str) -> tuple[object, ...]:
-    # Solo IDs y versión: nunca payload, audio, tokens ni texto.
-    if job == "index":
-        return (str(event.resource_id), event.resource_version)
-    return (str(event.resource_id),)
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 def _malformed(event: OutboxEvent) -> str | None:
@@ -80,8 +86,30 @@ def _malformed(event: OutboxEvent) -> str | None:
     return None
 
 
+def _decide(event: OutboxEvent, cleanup_status: str | None) -> Decision:
+    reason = _malformed(event)
+    if reason is not None:
+        logger.warning("outbox.%s event_id=%s type=%s", reason, event.id, event.type)
+        return Decision(Outcome.UNKNOWN_TYPE)
+    decision = decide(
+        event.type,
+        enabled=event.enabled,
+        blocked_reason=event.blocked_reason,
+        cleanup_status=cleanup_status,
+    )
+    if decision.outcome is Outcome.UNKNOWN_TYPE:
+        logger.warning("outbox.unknown_type event_id=%s type=%s", event.id, event.type)
+    return decision
+
+
 async def dispatch_pending(
-    db: AsyncSession, redis: ArqRedis, *, queue_name: str, batch_size: int = BATCH_SIZE
+    db: AsyncSession,
+    redis: ArqRedis,
+    *,
+    queue_name: str,
+    batch_size: int = BATCH_SIZE,
+    retry: RetryPolicy = DEFAULT_RETRY,
+    clock: Callable[[], datetime] = _utc_now,
 ) -> Counter[Outcome]:
     """Publica los eventos listos del lote; devuelve cuántos cayeron en cada resultado."""
     gated = OutboxEvent.type.in_(GATED_TYPES)
@@ -91,6 +119,7 @@ async def dispatch_pending(
         and_(OutboxEvent.type == "index_requested", OutboxEvent.resource_version.is_(None)),
         LATEST_CLEANUP == "verified",
     )
+    now = clock()
     rows = (
         await db.execute(
             select(OutboxEvent, LATEST_CLEANUP)
@@ -99,6 +128,7 @@ async def dispatch_pending(
                 OutboxEvent.published_at.is_(None),
                 OutboxEvent.enabled.is_(True),
                 OutboxEvent.type.not_in(WITHOUT_CONSUMER),
+                or_(OutboxEvent.next_attempt_at.is_(None), OutboxEvent.next_attempt_at <= now),
                 can_advance,
             )
             .order_by(OutboxEvent.created_at, OutboxEvent.id)
@@ -108,38 +138,42 @@ async def dispatch_pending(
     ).all()
 
     report: Counter[Outcome] = Counter()
-    now = datetime.now(UTC)
     for event, cleanup_status in rows:
-        reason = _malformed(event)
-        if reason is not None:
-            decision = Decision(Outcome.UNKNOWN_TYPE)
-            logger.warning("outbox.%s event_id=%s type=%s", reason, event.id, event.type)
-        else:
-            decision = decide(
-                event.type,
-                enabled=event.enabled,
-                blocked_reason=event.blocked_reason,
-                cleanup_status=cleanup_status,
-            )
-            if decision.outcome is Outcome.UNKNOWN_TYPE:
-                logger.warning("outbox.unknown_type event_id=%s type=%s", event.id, event.type)
-        report[decision.outcome] += 1
-
-        if decision.outcome is Outcome.UNKNOWN_TYPE:
-            event.status = "skipped"
-            continue
-        if not decision.publish or decision.job is None:
-            continue
-        job = await redis.enqueue_job(
-            decision.job,
-            *_job_args(event, decision.job),
-            _job_id=f"outbox:{event.id}",
-            _queue_name=queue_name,
+        outcome = await _dispatch_one(
+            db, redis, event, cleanup_status, queue_name=queue_name, retry=retry,
+            clock=clock, report=report,
         )
-        if job is None:
-            # `arq:job/result:<id>` ya existía: un ciclo anterior encoló y su commit falló.
-            # El job ya está en cola, así que marcar dispatched es correcto.
-            report[Outcome.DEDUPLICATED] += 1
-        event.status = "dispatched"
-        event.published_at = now
+        report[outcome] += 1
+        if outcome is Outcome.DEFERRED_INFRA:
+            # Redis no responde: el resto del lote fallaría igual, y cada fallo bloquea tiempo.
+            break
     return report
+
+
+async def _dispatch_one(
+    db: AsyncSession,
+    redis: ArqRedis,
+    event: OutboxEvent,
+    cleanup_status: str | None,
+    *,
+    queue_name: str,
+    retry: RetryPolicy,
+    clock: Callable[[], datetime],
+    report: Counter[Outcome],
+) -> Outcome:
+    decision = _decide(event, cleanup_status)
+    if decision.outcome is Outcome.UNKNOWN_TYPE:
+        event.status = "skipped"
+        return Outcome.UNKNOWN_TYPE
+    if not decision.publish or decision.job is None:
+        return decision.outcome
+
+    rejection = await revalidate(db, event)
+    if rejection is not None:
+        logger.info("outbox.revalidation_rejected event_id=%s reason=%s", event.id, rejection)
+        event.status = "skipped"
+        return rejection
+    return await enqueue(
+        redis, event, decision.job, queue_name=queue_name, retry=retry, clock=clock,
+        report=report,
+    )
