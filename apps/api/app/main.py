@@ -7,6 +7,8 @@ from fastapi import FastAPI
 
 from app.core.db import engine
 from app.core.errors import install_error_handlers
+from app.core.logging import configure_logging
+from app.core.request_context import RequestIdMiddleware
 from app.routers import (
     audios,
     auth,
@@ -14,6 +16,7 @@ from app.routers import (
     health,
     ingestion,
     integrations,
+    internal_metrics,
     me,
     search,
     subjects,
@@ -30,6 +33,7 @@ except PackageNotFoundError:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    configure_logging()
     yield
     # Cierra el pool al parar (compose stop / SIGTERM) en vez de abandonar conexiones.
     await close_llm_http_client()
@@ -39,6 +43,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Maulwurf API", version=__version__, lifespan=lifespan)
 install_error_handlers(app)
+app.add_middleware(RequestIdMiddleware)
 app.include_router(health.router)
 app.include_router(ingestion.router)
 app.include_router(me.router)
@@ -48,3 +53,4 @@ app.include_router(integrations.router)
 app.include_router(subjects.router)
 app.include_router(search.router)
 app.include_router(chat.router)
+app.include_router(internal_metrics.router)

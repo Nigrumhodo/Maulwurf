@@ -16,6 +16,7 @@ from arq.worker import Function
 
 from app.core.config import settings
 from app.core.db import session_scope
+from app.core.logging import configure_logging
 from app.workers.dispatcher import dispatch_pending
 
 logger = logging.getLogger(__name__)
@@ -49,10 +50,16 @@ async def dispatch_outbox(ctx: dict[str, Any]) -> None:
         logger.info("dispatch_outbox %s", dict(report))
 
 
+async def startup(ctx: dict[str, Any]) -> None:
+    """Worker and scheduler startup: JSON logs with redaction (J2.5)."""
+    configure_logging()
+
+
 class WorkerSettings:
     functions: ClassVar[list[Function | Callable[..., Awaitable[None]]]] = [index, analyze]
     queue_name = WORKER_QUEUE
     redis_settings = _REDIS
+    on_startup = startup
     health_check_interval = HEALTH_CHECK_INTERVAL_S
     keep_result = 60
     max_tries = 1  # S1 sin reintentos: backoff/jitter y presupuesto llegan en J2.x
@@ -63,6 +70,7 @@ class SchedulerSettings:
     cron_jobs: ClassVar[list[CronJob]] = [cron(dispatch_outbox, second=0, run_at_startup=True)]
     queue_name = SCHEDULER_QUEUE
     redis_settings = _REDIS
+    on_startup = startup
     health_check_interval = HEALTH_CHECK_INTERVAL_S
     keep_result = 60
     max_tries = 1
