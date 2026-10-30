@@ -38,10 +38,12 @@ from app.models import (
     Subject,
     Transcript,
 )
+from app.services.citations import validate_citation_source
 from app.services.indexing import chunk_tsvector
 from app.services.llm import ChatMessage, LLMProviderError
 from app.services.rag import RAGService, cancel_message
 from app.services.rate_limiter import acquire_stream
+from app.services.search import RetrievedChunk
 from tests.integration import actors
 
 pytestmark = pytest.mark.integration
@@ -105,6 +107,25 @@ class BlockingLLM(FakeLLM):
         yield "parcial"
         self.started.set()
         await self.release.wait()
+
+
+class GatedCitationLLM(FakeLLM):
+    """Hold the stream before `[S1]` so the test can invalidate the source meanwhile."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.before_marker = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def stream(
+        self, messages: Sequence[ChatMessage], *, max_tokens: int
+    ) -> AsyncIterator[str]:
+        self.calls += 1
+        self.last_messages = list(messages)
+        yield "Según tu clase, "
+        self.before_marker.set()
+        await self.release.wait()
+        yield "[S1] la integral acumula área."
 
 
 @dataclass
@@ -304,6 +325,31 @@ async def _indexed_class(
     return audio, transcript, chunk, segment
 
 
+def _retrieved_source(
+    audio: Audio,
+    transcript: Transcript,
+    chunk: Chunk,
+    segment: Segment | None,
+) -> RetrievedChunk:
+    return RetrievedChunk(
+        chunk_id=chunk.id,
+        audio_id=audio.id,
+        subject_id=audio.subject_id,
+        subject_name="Materia",
+        subject_color="#123456",
+        class_date=audio.class_date,
+        content=chunk.content,
+        snippet=chunk.content,
+        segment_id=segment.id if segment is not None else None,
+        t_start=65.0,
+        t_end=70.0,
+        score_rrf=1.0,
+        transcript_id=transcript.id,
+        transcript_version=transcript.version,
+        segment_ordinal=segment.ordinal if segment is not None else None,
+    )
+
+
 async def _conversation(db: AsyncSession, actor: actors.Actor, **kwargs: Any) -> Conversation:
     conversation = Conversation(user_id=actor.user_id, mode=kwargs.pop("mode", "all"), **kwargs)
     db.add(conversation)
@@ -498,6 +544,200 @@ async def test_chat_persists_assistant_message_sources_and_validated_citations(
         assert sources[0].chunk_id is not None
         assert sources[0].transcript_id is not None
         assert sources[0].segment_id is not None
+
+
+async def test_validate_citation_source_rejects_another_tenant(chat_sse: Harness) -> None:
+    async with chat_sse.factory() as db:
+        actor_a = await actors.make_actor(db)
+        generation_a = await _make_generation(db, actor_a)
+        audio_a, transcript_a, chunk_a, segment_a = await _indexed_class(
+            db, actor_a, generation=generation_a, content="tema del actor a"
+        )
+        actor_b = await actors.make_actor(db)
+        generation_b = await _make_generation(db, actor_b)
+        await _indexed_class(db, actor_b, generation=generation_b, content="tema del actor b")
+        await db.commit()
+
+        source = _retrieved_source(audio_a, transcript_a, chunk_a, segment_a)
+        assert (
+            await validate_citation_source(db, user_id=actor_a.user_id, source=source)
+            is not None
+        )
+        assert (
+            await validate_citation_source(db, user_id=actor_b.user_id, source=source) is None
+        )
+
+
+async def test_validate_citation_source_rejects_stale_transcript_version(
+    chat_sse: Harness,
+) -> None:
+    async with chat_sse.factory() as db:
+        actor = await actors.make_actor(db)
+        generation = await _make_generation(db, actor)
+        audio, transcript, chunk, segment = await _indexed_class(
+            db, actor, generation=generation, content="tema integral definida"
+        )
+        await db.commit()
+        source = _retrieved_source(audio, transcript, chunk, segment)
+
+        await db.execute(
+            update(Audio)
+            .where(Audio.id == audio.id)
+            .values(active_transcript_version=2)
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+
+        assert await validate_citation_source(db, user_id=actor.user_id, source=source) is None
+
+
+async def test_validate_citation_source_rejects_retired_generation(
+    chat_sse: Harness,
+) -> None:
+    async with chat_sse.factory() as db:
+        actor = await actors.make_actor(db)
+        generation = await _make_generation(db, actor)
+        audio, transcript, chunk, segment = await _indexed_class(
+            db, actor, generation=generation, content="tema integral definida"
+        )
+        await db.commit()
+        source = _retrieved_source(audio, transcript, chunk, segment)
+
+        await db.execute(
+            update(IndexGeneration)
+            .where(IndexGeneration.id == generation.id)
+            .values(status="retired")
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+
+        assert await validate_citation_source(db, user_id=actor.user_id, source=source) is None
+
+
+async def test_validate_citation_source_rejects_a_segment_from_another_chunk(
+    chat_sse: Harness,
+) -> None:
+    async with chat_sse.factory() as db:
+        actor = await actors.make_actor(db)
+        generation = await _make_generation(db, actor)
+        audio, transcript, chunk, segment = await _indexed_class(
+            db, actor, generation=generation, content="primera clase", ordinal=1
+        )
+        _, _, _, foreign_segment = await _indexed_class(
+            db, actor, generation=generation, content="segunda clase", ordinal=2
+        )
+        await db.commit()
+
+        assert (
+            await validate_citation_source(
+                db,
+                user_id=actor.user_id,
+                source=_retrieved_source(audio, transcript, chunk, segment),
+            )
+            is not None
+        )
+        assert (
+            await validate_citation_source(
+                db,
+                user_id=actor.user_id,
+                source=_retrieved_source(audio, transcript, chunk, foreign_segment),
+            )
+            is None
+        )
+
+
+async def test_chat_drops_citation_after_source_invalidation(chat_sse: Harness) -> None:
+    actor, conversation, _, generation = await _setup_corpus(chat_sse.factory)
+    gated = GatedCitationLLM()
+    service = RAGService(
+        session_factory=chat_sse.factory,
+        embedding_provider=chat_sse.embeddings,
+        llm_provider=gated,
+        cancel_poll_seconds=0.01,
+        heartbeat_seconds=10.0,
+        checkpoint_seconds=10.0,
+    )
+    prepared = await service.prepare(
+        user_id=actor.user_id,
+        conversation_id=conversation.id,
+        content="¿Qué hace la integral?",
+        client_message_id="invalidate-1",
+    )
+    stream = service.stream_events(prepared)
+    assert _event_name(await anext(stream)) == "snapshot"
+    first = await anext(stream)
+    assert _event_name(first) == "delta"
+    assert _event_data(first)["text"] == "Según tu clase, "
+    await gated.before_marker.wait()
+
+    async with chat_sse.factory() as db:
+        await db.execute(
+            update(IndexGeneration)
+            .where(IndexGeneration.id == generation.id)
+            .values(status="retired")
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+
+    gated.release.set()
+    frames = [frame async for frame in stream]
+    names = [_event_name(frame) for frame in frames]
+    assert "citation" not in names
+    assert names[-1] == "done"
+    visible = "".join(
+        _event_data(frame)["text"] for frame in frames if _event_name(frame) == "delta"
+    )
+    assert visible == " la integral acumula área."
+    done = next(_event_data(frame) for frame in frames if _event_name(frame) == "done")
+    assert done["status"] == "completed"
+
+    async with chat_sse.factory() as db:
+        assistant = await db.get(Message, prepared.assistant_message_id)
+        assert assistant is not None
+        assert assistant.status == "completed"
+        assert assistant.content == "Según tu clase,  la integral acumula área."
+        assert assistant.citas == []
+        sources = (
+            (
+                await db.execute(
+                    select(MessageSource).where(MessageSource.message_id == assistant.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(sources) == 1
+        assert sources[0].chunk_id is not None
+
+
+async def test_chat_replay_revalidates_citations_after_invalidation(
+    chat_sse: Harness,
+) -> None:
+    actor, conversation, _, generation = await _setup_corpus(chat_sse.factory)
+    first = await _post(chat_sse, actor, conversation.id)
+    assert first.status_code == 200
+    first_events = _events(first.text)
+    assert any(name == "citation" for name, _, _ in first_events)
+    first_content = "".join(data["text"] for name, _, data in first_events if name == "delta")
+
+    async with chat_sse.factory() as db:
+        await db.execute(
+            update(IndexGeneration)
+            .where(IndexGeneration.id == generation.id)
+            .values(status="retired")
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+
+    replay = await _post(chat_sse, actor, conversation.id)
+    assert replay.status_code == 200
+    events = _events(replay.text)
+    assert not any(name == "citation" for name, _, _ in events)
+    visible = "".join(data["text"] for name, _, data in events if name == "delta")
+    assert visible == first_content
+    assert events[-1][0] == "done"
+    assert events[-1][2]["status"] == "completed"
+    assert chat_sse.llm is not None and chat_sse.llm.calls == 1
 
 
 async def test_chat_selects_at_most_eight_chunks_under_budget(chat_sse: Harness) -> None:

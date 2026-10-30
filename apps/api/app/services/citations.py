@@ -1,16 +1,22 @@
-"""Citation markers and source labels for streaming chat (L2.5, M7).
+"""Citation markers and source labels for streaming chat (L2.5/L2.6, M7).
 
 The model is asked to cite transcript evidence as `[S1]`, `[S2]`, ... The server never trusts
 those indices: it only turns a marker into a citation event when it maps to a source that was
-actually selected from the database. Unknown or malformed markers are emitted as literal text.
+actually selected from the database and still exists, belongs to the tenant and uses the
+active transcript/index version. Unknown or malformed markers are emitted as literal text.
 Markers can be split across provider deltas, so the buffer keeps an incomplete suffix until the
 next delta (or until the stream ends, where it becomes literal text).
 """
 
+import math
 import re
+import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from app.services.search import RetrievedChunk
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.services.search import RetrievedChunk, SearchService
 
 _MARKER = re.compile(r"\[S([1-9][0-9]*)\]")
 _MARKER_PREFIX = re.compile(r"^\[S?[0-9]*$")
@@ -26,10 +32,20 @@ def format_timestamp(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
+def _has_reliable_offsets(t_start: float | None, t_end: float | None) -> bool:
+    if t_start is None or t_end is None:
+        return False
+    return math.isfinite(t_start) and math.isfinite(t_end) and 0 <= t_start < t_end
+
+
 def citation_label(chunk: RetrievedChunk) -> str:
     """Human label built only from hydrated columns; no model-provided title is trusted."""
     parts = [chunk.subject_name, chunk.class_date.isoformat()]
-    if chunk.t_start is not None and chunk.t_end is not None:
+    if (
+        chunk.t_start is not None
+        and chunk.t_end is not None
+        and _has_reliable_offsets(chunk.t_start, chunk.t_end)
+    ):
         parts.append(format_timestamp(chunk.t_start))
     elif chunk.segment_ordinal is not None:
         parts.append(f"segment {chunk.segment_ordinal}")
@@ -52,6 +68,114 @@ class CitationRef:
     offset: int
 
 
+CitationValidator = Callable[[uuid.UUID, RetrievedChunk], Awaitable[RetrievedChunk | None]]
+
+
+def citation_source_matches(current: RetrievedChunk, source: RetrievedChunk) -> bool:
+    """The fresh DB row must be the exact source the model was shown.
+
+    The model only chooses an index; the durable identity always comes from the server's
+    selected source. A chunk, audio, transcript version or segment that changed between
+    retrieval and emission is rejected instead of being silently substituted.
+    """
+    return (
+        current.chunk_id == source.chunk_id
+        and current.audio_id == source.audio_id
+        and current.transcript_id == source.transcript_id
+        and current.transcript_version == source.transcript_version
+        and current.segment_id == source.segment_id
+    )
+
+
+async def validate_citation_source(
+    db: AsyncSession, *, user_id: uuid.UUID, source: RetrievedChunk
+) -> RetrievedChunk | None:
+    """Re-read a selected source and return it only while the DB still authorizes it."""
+    if source.transcript_id is None or source.transcript_version is None:
+        return None
+    current = await SearchService(db, provider=None).rehydrate_source(
+        user_id=user_id, source=source
+    )
+    if current is None or not citation_source_matches(current, source):
+        return None
+    return current
+
+
+def _record_uuid(record: dict[str, object], key: str) -> uuid.UUID | None:
+    raw = record.get(key)
+    if isinstance(raw, uuid.UUID):
+        return raw
+    if not isinstance(raw, str):
+        return None
+    try:
+        return uuid.UUID(raw)
+    except ValueError:
+        return None
+
+
+def _record_int(record: dict[str, object], key: str) -> int | None:
+    raw = record.get(key)
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+        return None
+    return raw
+
+
+async def validate_citation_record(
+    db: AsyncSession, *, user_id: uuid.UUID, record: dict[str, object]
+) -> RetrievedChunk | None:
+    """Revalidate a persisted citation before replaying it.
+
+    Records are JSONB written by this service, but a malformed or partial entry must fail
+    closed rather than emit a stale link. The fresh row is returned so the replay event uses
+    current labels and timestamps.
+    """
+    audio_id = _record_uuid(record, "audio_id")
+    transcript_id = _record_uuid(record, "transcript_id")
+    chunk_id = _record_uuid(record, "chunk_id")
+    transcript_version = _record_int(record, "transcript_version")
+    raw_segment = record.get("segment_id")
+    segment_id = None if raw_segment is None else _record_uuid(record, "segment_id")
+    if (
+        audio_id is None
+        or transcript_id is None
+        or chunk_id is None
+        or transcript_version is None
+        or (raw_segment is not None and segment_id is None)
+    ):
+        return None
+    current = await SearchService(db, provider=None).rehydrate_chunk_ids(
+        user_id=user_id,
+        chunk_id=chunk_id,
+        audio_id=audio_id,
+    )
+    if current is None:
+        return None
+    if (
+        current.chunk_id != chunk_id
+        or current.audio_id != audio_id
+        or current.transcript_id != transcript_id
+        or current.transcript_version != transcript_version
+        or current.segment_id != segment_id
+    ):
+        return None
+    return current
+
+
+async def resolve_citation(
+    *,
+    index: int,
+    source: RetrievedChunk,
+    offset: int,
+    user_id: uuid.UUID,
+    validate: CitationValidator,
+) -> CitationRef | None:
+    """Resolve one model marker through the DB validator; unauthorized markers disappear."""
+    current = await validate(user_id, source)
+    if current is None:
+        return None
+    return CitationRef(index=index, chunk=current, offset=offset)
+
+
 def citation_event(ref: CitationRef) -> dict[str, object]:
     """SSE `citation` data. Payload IDs are durable row keys; label/url are server-derived."""
     chunk = ref.chunk
@@ -69,7 +193,7 @@ def citation_event(ref: CitationRef) -> dict[str, object]:
 
 
 def citation_record(ref: CitationRef) -> dict[str, object]:
-    """Persisted JSONB citation; L2.6 may add a validated `quote` field.
+    """Persisted JSONB citation; `quote` stays null until a later ticket populates it.
 
     `label` and `url` are stored so a completed message can be replayed without trusting or
     re-reading a chunk that may have been tombstoned later. They are computed from hydrated

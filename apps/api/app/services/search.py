@@ -35,9 +35,10 @@ What this module guarantees (S2.md §1.3 and §L2.3, ESPECIFICACION §M6/DISENO 
 
 L2.4/A2.11 adds the reusable public `SearchService` (chat calls `retrieve`, the endpoint
 calls `page`), hydration, plain-text snippets, honest segment times and an opaque keyset
-cursor over the bounded RRF window. What it still does NOT do (later tickets): the chat
-pipeline and prompt (L2.5), validated citations (L2.6), the G4 metrics (L2.7) and the
-latency harness (L2.8). It never writes: read-only retrieval.
+cursor over the bounded RRF window. L2.6 adds `rehydrate_chunk_ids`/`rehydrate_source` so a
+citation is reread with the same filters immediately before it is emitted. What it still
+does NOT do (later tickets): the G4 metrics (L2.7) and the latency harness (L2.8). It never
+writes: read-only retrieval.
 """
 
 import base64
@@ -1092,6 +1093,45 @@ class SearchService:
             "search.retrieve_precomputed version=%s hits=%d", generation.version, len(results)
         )
         return results
+
+    async def rehydrate_chunk_ids(
+        self,
+        *,
+        user_id: uuid.UUID,
+        chunk_id: uuid.UUID,
+        audio_id: uuid.UUID,
+        query: str = "",
+        score_rrf: float = 0.0,
+    ) -> RetrievedChunk | None:
+        """Re-read one chunk with the same filters retrieval applies before the top-k.
+
+        Citation validation calls this immediately before exposing a source. A chunk that
+        was tombstoned, reindexed or moved to a stale transcript version after retrieval must
+        not become a citation, so this path fails closed with `None`.
+        """
+        generation = await active_generation(self._db, user_id)
+        if generation is None:
+            return None
+        hydrated = await _hydrate(
+            self._db,
+            user_id=user_id,
+            query=query,
+            version=generation.version,
+            hits=[FusedHit(chunk_id=chunk_id, audio_id=audio_id, score_rrf=score_rrf)],
+        )
+        return hydrated[0] if hydrated else None
+
+    async def rehydrate_source(
+        self, *, user_id: uuid.UUID, source: RetrievedChunk
+    ) -> RetrievedChunk | None:
+        """Re-read a previously hydrated source; `None` means it is no longer authorized."""
+        return await self.rehydrate_chunk_ids(
+            user_id=user_id,
+            chunk_id=source.chunk_id,
+            audio_id=source.audio_id,
+            query=source.snippet,
+            score_rrf=source.score_rrf,
+        )
 
     async def page(
         self,
