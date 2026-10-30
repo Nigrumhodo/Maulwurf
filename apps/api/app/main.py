@@ -18,6 +18,7 @@ from app.routers import (
     search,
     subjects,
 )
+from app.services.ingest_sink import close_ingest_client
 from app.services.llm import close_llm_http_client
 
 try:
@@ -32,6 +33,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
     # Cierra el pool al parar (compose stop / SIGTERM) en vez de abandonar conexiones.
     await close_llm_http_client()
+    await close_ingest_client()
     await engine.dispose()
 
 

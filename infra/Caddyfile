@@ -8,15 +8,20 @@
 https://localhost {
 	tls internal
 
-	# 1) PUT binario: en S1 el esqueleto vive en la API (A1.8); en S2 pasa a
-	#    ingest:8000 cuando exista la recepción real (plan J1.3 §2.2).
-	#    Streaming puro, sin compresión ni buffering.
+	# 1) Binary PUT: ends at api; api streams to ingest over the internal network (ADR-0008).
 	@upload {
 		method PUT
 		path /audios/*/content
 	}
 	handle @upload {
 		reverse_proxy api:8000
+	}
+
+	# ADR-0008: ingest's internal API is never public. Caddy answers 404 before any other
+	# route match; any variant that does not match falls through to the web fallback.
+	@internal path /internal/*
+	handle @internal {
+		respond 404
 	}
 
 	# 2) SSE de progreso: flush inmediato por evento.

@@ -49,6 +49,7 @@ _SECRET_FIELDS = (
 # migration and a whole new index generation, so startup validates it instead of silently
 # accepting a model with another dimension.
 EMBEDDING_DIMENSION = 1536
+INGEST_SECRET_MIN_BYTES = 32
 _DEV_DEFAULT_FIELDS = ("database_url", "redis_url", "public_origin")
 # `.env` que usa la construcción en curso (respeta `_env_file`, p. ej. None en tests).
 _active_env_files: ContextVar[tuple[str, ...]] = ContextVar("_active_env_files", default=ENV_FILES)
@@ -107,6 +108,11 @@ class Settings(BaseSettings):
     # la lee de MAULWURF_INGESTION_CAPABILITIES como un objeto JSON; sin ella el endpoint
     # devuelve el shape seguro sin límites aprobados.
     ingestion_capabilities: IngestionCapabilities = Field(default_factory=IngestionCapabilities)
+    # Reception hop to `ingest` (ADR-0008 §1-§2). Unset: `get_reception_sink()` keeps the
+    # unavailable sink (503). Both the URL and the secret are needed to stream.
+    ingest_url: AnyHttpUrl | None = None
+    ingest_credential_secret: SecretStr | None = None
+    ingest_credential_kid: str = Field(default="k1", pattern=r"^[a-z0-9]{1,16}$")
     # Versioned embeddings (L2.2, M6/D5): provider compatible with the embeddings API.
     # `base_url` is the base to which `/embeddings` is appended. Without base_url and api_key
     # indexing fails with `embedding_not_configured`; there is never a default provider nor
@@ -181,6 +187,30 @@ class Settings(BaseSettings):
     def _reject_incomplete_oauth(self) -> "Settings":
         if (self.google_client_id is None) != (self.google_client_secret is None):
             raise ValueError("google_client_id y google_client_secret van juntos")
+        return self
+
+    @model_validator(mode="after")
+    def _reject_incomplete_ingest_config(self) -> "Settings":
+        if (self.ingest_url is None) != (self.ingest_credential_secret is None):
+            raise ValueError("ingest_url e ingest_credential_secret van juntos")
+        return self
+
+    @model_validator(mode="after")
+    def _reject_weak_ingest_secret(self) -> "Settings":
+        # ADR-0008 §2: a 32-byte floor and no placeholder in every environment, local included.
+        # This is a security floor, not a capacity limit.
+        secret = self.ingest_credential_secret
+        if secret is None:
+            return self
+        raw = secret.get_secret_value()
+        if "change-me" in raw:
+            raise ValueError("ingest_credential_secret inseguro")
+        try:
+            decoded = bytes.fromhex(raw.strip())
+        except ValueError:
+            raise ValueError("ingest_credential_secret debe ser hexadecimal") from None
+        if len(decoded) < INGEST_SECRET_MIN_BYTES:
+            raise ValueError("ingest_credential_secret debe tener al menos 32 bytes")
         return self
 
     @model_validator(mode="after")

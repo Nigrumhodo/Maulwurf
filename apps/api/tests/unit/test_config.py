@@ -291,3 +291,57 @@ def test_llm_defaults_are_fail_closed() -> None:
     assert settings.llm_base_url is None
     assert settings.llm_api_key is None
     assert settings.llm_model_window is None
+
+
+# A2.13 / ADR-0008 §1-§2: the reception hop is configured as a pair, and its secret is a floor.
+
+INGEST_SECRET_HEX = "ab" * 32
+
+
+def test_ingest_url_and_secret_go_together() -> None:
+    with pytest.raises(ValidationError, match="ingest_url e ingest_credential_secret"):
+        _settings(ingest_url="http://ingest:8000")
+    with pytest.raises(ValidationError, match="ingest_url e ingest_credential_secret"):
+        _settings(ingest_credential_secret=INGEST_SECRET_HEX)
+
+
+def test_ingest_pair_unset_is_valid() -> None:
+    settings = _settings()
+
+    assert settings.ingest_url is None and settings.ingest_credential_secret is None
+    assert settings.ingest_credential_kid == "k1"
+
+
+@pytest.mark.parametrize("env", ["local", "staging"])
+def test_change_me_ingest_secret_is_rejected_in_every_environment(env: str) -> None:
+    with pytest.raises(ValidationError, match="ingest_credential_secret"):
+        _settings(
+            env=env,
+            ingest_url="http://ingest:8000",
+            ingest_credential_secret="change-me-" + INGEST_SECRET_HEX,
+        )
+
+
+def test_ingest_secret_shorter_than_32_bytes_is_rejected() -> None:
+    thirty_one = "ab" * 31
+    with pytest.raises(ValidationError, match="32 bytes"):
+        _settings(ingest_url="http://ingest:8000", ingest_credential_secret=thirty_one)
+
+
+def test_ingest_secret_must_be_hex() -> None:
+    with pytest.raises(ValidationError, match="hexadecimal"):
+        _settings(ingest_url="http://ingest:8000", ingest_credential_secret="z" * 64)
+
+
+def test_ingest_secret_of_32_bytes_is_accepted() -> None:
+    settings = _settings(
+        ingest_url="http://ingest:8000", ingest_credential_secret=INGEST_SECRET_HEX
+    )
+
+    assert settings.ingest_credential_secret is not None
+    assert len(settings.ingest_credential_secret.get_secret_value()) == 64
+
+
+def test_ingest_kid_is_a_short_label() -> None:
+    with pytest.raises(ValidationError, match="ingest_credential_kid"):
+        _settings(ingest_credential_kid="Key-One")
