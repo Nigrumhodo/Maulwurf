@@ -58,7 +58,7 @@ jobs:
       - if: matrix.app == 'ingest'
         run: sudo apt-get update && sudo apt-get install -y espeak-ng
       - run: uv sync --frozen --extra dev
-      # Sin tolerancia al código 5: una suite vacía debe fallar el job.
+      # No tolerance for exit code 5: an empty suite must fail the job.
       - name: Unit tests
         run: uv run pytest -m "not integration and not provider and not load" -q
 
@@ -128,7 +128,7 @@ jobs:
           done
           echo "redis no respondio" >&2
           exit 1
-      # Igual que compose (ADR-0005): sin persistencia y con maxmemory + noeviction.
+      # Same as compose (ADR-0005): no persistence, with maxmemory + noeviction.
       - name: Assert Redis policy matches ADR-0005
         run: |
           check() {
@@ -204,7 +204,7 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
-      # Bloquea licencias incompatibles con AGPL-3.0; UNKNOWN solo avisa.
+      # Blocks licenses incompatible with AGPL-3.0; UNKNOWN only warns.
       - name: License report
         run: bash scripts/ci/license_report.sh ${{ matrix.app }} reports/licenses
       - if: always()
