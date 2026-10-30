@@ -1,7 +1,7 @@
 """Bounded-jitter backoff for outbox publish retries (J2.1).
 
-Pure function: the RNG and the clock are injectable, so tests fix the seed and do not
-depend on real time. The maximum number of attempts lives in `outbox_events.max_attempts`,
+Pure function: the RNG is injectable, so tests fix the seed (the dispatcher injects the
+clock). The maximum number of attempts lives in `outbox_events.max_attempts`,
 not here.
 """
 
