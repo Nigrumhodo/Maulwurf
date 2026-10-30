@@ -37,9 +37,13 @@ from app.services.chunking import count_tokens_default, tokenizer_is_exact
 from app.services.citations import (
     CitationBuffer,
     CitationRef,
+    CitationValidator,
     citation_event,
     citation_record,
     format_timestamp,
+    resolve_citation,
+    validate_citation_record,
+    validate_citation_source,
 )
 from app.services.embeddings import (
     EmbeddingDimensionMismatch,
@@ -84,6 +88,7 @@ HEARTBEAT_SECONDS = 15.0
 CHECKPOINT_SECONDS = 1.0
 CANCEL_POLL_SECONDS = 0.5
 REPLAY_POLL_SECONDS = 0.5
+CITATION_VALIDATION_TIMEOUT_SECONDS = 2.0
 MAX_CHUNKS = DEFAULT_TOP_K
 MESSAGE_OVERHEAD_TOKENS = 4
 SOURCE_OVERHEAD_TOKENS = 4
@@ -471,6 +476,7 @@ class RAGService:
         cancel_poll_seconds: float = CANCEL_POLL_SECONDS,
         replay_poll_seconds: float = REPLAY_POLL_SECONDS,
         count_tokens: Callable[[str], int] = count_tokens_default,
+        citation_validator: CitationValidator | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._embedding_provider = embedding_provider
@@ -484,10 +490,58 @@ class RAGService:
         self._cancel_poll_seconds = cancel_poll_seconds
         self._replay_poll_seconds = replay_poll_seconds
         self._count_tokens = count_tokens
+        self._citation_validator = citation_validator
 
     @property
     def _context_window(self) -> int | None:
         return self._llm.context_window if self._llm is not None else None
+
+    async def _validate_citation(
+        self, user_id: uuid.UUID, source: RetrievedChunk
+    ) -> RetrievedChunk | None:
+        """Revalidate one source with a short session; any failure drops the citation."""
+        try:
+            async with asyncio.timeout(CITATION_VALIDATION_TIMEOUT_SECONDS):
+                if self._citation_validator is not None:
+                    return await self._citation_validator(user_id, source)
+                async with self._session_factory() as db:
+                    return await validate_citation_source(db, user_id=user_id, source=source)
+        except TimeoutError:
+            logger.warning("chat.citation.validation_timeout chunk_id=%s", source.chunk_id)
+            return None
+        except Exception as exc:  # CancelledError is BaseException and must propagate.
+            # The SSE response may already be open. A citation is optional evidence, so a
+            # failed revalidation must fail closed instead of leaking a stale source.
+            logger.warning(
+                "chat.citation.validation_failed error=%s chunk_id=%s",
+                type(exc).__name__,
+                source.chunk_id,
+            )
+            return None
+
+    async def _replay_citation_ref(
+        self, user_id: uuid.UUID, record: dict[str, object]
+    ) -> CitationRef | None:
+        """Revalidate a persisted citation before replaying it."""
+        index = record.get("index")
+        if isinstance(index, bool) or not isinstance(index, int) or index <= 0:
+            return None
+        offset = _record_offset(record)
+        if offset is None:
+            return None
+        try:
+            async with self._session_factory() as db:
+                current = await validate_citation_record(
+                    db, user_id=user_id, record=record
+                )
+        except Exception as exc:  # CancelledError is BaseException and must propagate.
+            logger.warning(
+                "chat.citation.replay_validation_failed error=%s", type(exc).__name__
+            )
+            return None
+        if current is None:
+            return None
+        return CitationRef(index=index, chunk=current, offset=offset)
 
     async def prepare(
         self,
@@ -771,6 +825,20 @@ class RAGService:
         buffer = CitationBuffer(len(prepared.sources))
         content = ""
         citations: list[dict[str, object]] = []
+        # A model may repeat the same marker. Validation is a DB round-trip, so reuse the
+        # first result for the lifetime of this stream.
+        validated_sources: dict[uuid.UUID, RetrievedChunk | None] = {}
+
+        async def validate_cached(
+            user_id: uuid.UUID, source: RetrievedChunk
+        ) -> RetrievedChunk | None:
+            if source.chunk_id not in validated_sources:
+                validated_sources[source.chunk_id] = await self._validate_citation(
+                    user_id, source
+                )
+            return validated_sources[source.chunk_id]
+
+        dropped_citations = 0
         terminal = False
         cancelled = False
         producer_error: LLMError | None = None
@@ -834,11 +902,17 @@ class RAGService:
                     for index in indices:
                         if index > len(prepared.sources):
                             continue
-                        ref = CitationRef(
+                        source = prepared.sources[index - 1].chunk
+                        ref = await resolve_citation(
                             index=index,
-                            chunk=prepared.sources[index - 1].chunk,
+                            source=source,
                             offset=len(content),
+                            user_id=prepared.user_id,
+                            validate=validate_cached,
                         )
+                        if ref is None:
+                            dropped_citations += 1
+                            continue
                         record = citation_record(ref)
                         citations.append(record)
                         yield encode_event(
@@ -888,6 +962,8 @@ class RAGService:
         finally:
             await self._stop_producer(producer)
             _CANCEL_EVENTS.pop(prepared.assistant_message_id, None)
+            if dropped_citations:
+                logger.info("chat.citation.dropped count=%d", dropped_citations)
             if not terminal:
                 try:
                     # A client disconnect may cancel the generator task; the durable
@@ -942,17 +1018,23 @@ class RAGService:
         yield self._snapshot_event(state.message_id, offset, state.status)
         sent = offset
         emitted_citations = len(state.citations)
-        for record in sorted(state.citations, key=_record_offset):
-            citation_offset = min(max(0, _record_offset(record)), len(state.content))
+        for record in sorted(state.citations, key=_record_sort_offset):
+            citation_offset = _record_offset(record)
+            if citation_offset is None:
+                continue
+            citation_offset = min(citation_offset, len(state.content))
             if citation_offset < offset:
                 continue
             if citation_offset > sent:
                 yield self._delta_event(state.content[sent:citation_offset], citation_offset)
                 sent = citation_offset
+            ref = await self._replay_citation_ref(prepared.user_id, record)
+            if ref is None:
+                continue
             yield encode_event(
                 name="citation",
                 id=citation_offset,
-                data=_stored_citation_data(record),
+                data=cast(dict[str, Any], citation_event(ref)),
             )
         if len(state.content) > sent:
             yield self._delta_event(state.content[sent:], len(state.content))
@@ -989,17 +1071,23 @@ class RAGService:
                 return
             new_citations = snapshot.citations[emitted_citations:]
             emitted_citations = len(snapshot.citations)
-            for record in sorted(new_citations, key=_record_offset):
-                citation_offset = min(max(0, _record_offset(record)), len(snapshot.content))
+            for record in sorted(new_citations, key=_record_sort_offset):
+                citation_offset = _record_offset(record)
+                if citation_offset is None:
+                    continue
+                citation_offset = min(citation_offset, len(snapshot.content))
                 if citation_offset > sent:
                     yield self._delta_event(snapshot.content[sent:citation_offset], citation_offset)
                     sent = citation_offset
+                ref = await self._replay_citation_ref(prepared.user_id, record)
+                if ref is None:
+                    continue
                 # A citation can be persisted after the content checkpoint that already
                 # exposed its text. Reusing the last sent offset keeps event ids monotonic.
                 yield encode_event(
                     name="citation",
                     id=max(citation_offset, sent),
-                    data=_stored_citation_data(record),
+                    data=cast(dict[str, Any], citation_event(ref)),
                 )
             if len(snapshot.content) > sent:
                 yield self._delta_event(snapshot.content[sent:], len(snapshot.content))
@@ -1560,24 +1648,15 @@ def _map_llm_error(exc: LLMError) -> ChatStreamError:
     )
 
 
-def _record_offset(record: dict[str, object]) -> int:
-    raw = record.get("offset", 0)
-    return int(raw) if isinstance(raw, (int, float)) else 0
+def _record_offset(record: dict[str, object]) -> int | None:
+    """Persisted offset: a non-negative int; bools, floats and negatives are malformed."""
+    raw = record.get("offset")
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        return None
+    return raw
 
 
-_CITATION_EVENT_KEYS = (
-    "index",
-    "audio_id",
-    "transcript_version",
-    "chunk_id",
-    "segment_id",
-    "t_start",
-    "t_end",
-    "label",
-    "url",
-)
-
-
-def _stored_citation_data(record: dict[str, object]) -> dict[str, Any]:
-    """Keep the replay payload identical to the live `citation_event` shape."""
-    return {key: record[key] for key in _CITATION_EVENT_KEYS if key in record}
+def _record_sort_offset(record: dict[str, object]) -> int:
+    """Malformed offsets sort first and are dropped before any event is emitted."""
+    offset = _record_offset(record)
+    return 0 if offset is None else offset
