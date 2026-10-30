@@ -43,6 +43,7 @@
   --animate-blink: blink 1s steps(1, end) infinite;
   --animate-flicker: flicker 2.6s steps(1, end) infinite;
   --animate-fade-in: fade-in 0.45s ease-out both;
+  --animate-reel: reel-spin 6s linear infinite;
 
   @keyframes caret {
     0%,
@@ -99,6 +100,12 @@
     to {
       opacity: 1;
       transform: translateY(0);
+    }
+  }
+
+  @keyframes reel-spin {
+    to {
+      transform: rotate(360deg);
     }
   }
 }
@@ -251,5 +258,14 @@
   .eq-bar {
     transform-origin: center;
     animation: eq 1.4s ease-in-out infinite;
+  }
+
+  /* Rejilla de puntos retro para fondos tipo "hardware" (cassette/VU). */
+  .retro-grid {
+    background-image: radial-gradient(
+      color-mix(in srgb, var(--color-lavender) 16%, transparent) 1px,
+      transparent 1px
+    );
+    background-size: 14px 14px;
   }
 }
