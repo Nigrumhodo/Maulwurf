@@ -6,7 +6,7 @@ import { buttonClasses } from "@/components/ui/buttonStyles";
 
 export function WelcomePage() {
   return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center px-4 py-10">
+    <div className="relative z-10 flex min-h-screen flex-col items-center justify-center px-4 py-10">
       <div className="crt-overlay" aria-hidden="true" />
 
       <div className="absolute right-4 top-4">

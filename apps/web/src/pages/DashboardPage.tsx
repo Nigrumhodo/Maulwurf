@@ -1,23 +1,48 @@
-import { Card } from "@/components/ui/Card";
+import { useAuth } from "@/components/auth/AuthProvider";
+import { ChatButton } from "@/components/chat/ChatButton";
+import { StatusTicker } from "@/components/dashboard/StatusTicker";
+import { TelemetryBanner } from "@/components/dashboard/TelemetryBanner";
+import { TapeDeck } from "@/components/dashboard/TapeDeck";
+import { ActivityFeed } from "@/components/dashboard/ActivityFeed";
+import { TaskLog } from "@/components/dashboard/TaskLog";
+import { MoleCompanion } from "@/components/dashboard/MoleCompanion";
 
-// D1.2 — Dashboard esqueleto (M9). Solo estructura de navegación; el contenido
-// real (agenda, pendientes, ingesta) llega en D2.x/D3.x/D4.x.
+// D- (Dashboard / M9) — command center layout: telemetry strip on top, then a
+// three-column grid (ingest deck · activity radar · tasks + mole companion) and a
+// footer status marquee. Static mock data for now; real wiring lands in D2.x/D3.x.
 export function DashboardPage() {
-  return (
-    <div className="flex flex-col gap-6">
-      <h1 className="lowercase text-2xl text-mint">panel de mando</h1>
+  const { guest } = useAuth();
 
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
-        <Card title="próximos vencimientos">
-          <p className="lowercase text-lavender">— sin tareas confirmadas</p>
-        </Card>
-        <Card title="para confirmar">
-          <p className="lowercase text-lavender">— bandeja vacía</p>
-        </Card>
-        <Card title="estado de ingesta">
-          <p className="lowercase text-lavender">— sin clases subidas</p>
-        </Card>
-      </div>
+  return (
+    <div className="relative flex flex-col gap-4">
+      <div className="crt-overlay" aria-hidden="true" />
+
+      <TelemetryBanner guest={guest} />
+
+      <main className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
+        <section className="flex flex-col gap-4 lg:col-span-4">
+          <TapeDeck />
+        </section>
+
+        <section className="flex flex-col gap-4 lg:col-span-5">
+          <ActivityFeed />
+        </section>
+
+        <section className="flex flex-col gap-4 lg:col-span-3">
+          <TaskLog />
+          <MoleCompanion />
+        </section>
+      </main>
+
+      <footer className="flex flex-col gap-2">
+        <StatusTicker guest={guest} />
+        <div className="lowercase flex flex-wrap items-center justify-between gap-2 border-2 border-pure-black bg-surface px-3 py-1.5 text-lavender/60">
+          <span>audio no conservado · cifrado aes-gcm · solo texto persistido</span>
+          <span>maulwurf@lab © 2026</span>
+        </div>
+      </footer>
+
+      <ChatButton />
     </div>
   );
 }

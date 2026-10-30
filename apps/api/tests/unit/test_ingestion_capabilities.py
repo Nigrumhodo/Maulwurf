@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from app.core.config import Settings
 from app.main import app
 from app.routers import ingestion
+from app.schemas.ingestion import IngestionCapabilitiesOut
 
 _SECRETS: dict[str, Any] = {
     "secret_key": "test-secret",
@@ -55,7 +56,7 @@ def test_capabilities_reflects_the_published_spike_configuration(
     response = client.get("/ingestion/capabilities")
 
     assert response.status_code == 200
-    assert response.json() == published
+    assert response.json() == {**published, "privacy_notice_version": "2026-09-v1"}
 
 
 def test_capabilities_without_publication_hide_provisional_s1_values(
@@ -71,6 +72,7 @@ def test_capabilities_without_publication_hide_provisional_s1_values(
         "source_report": None,
         "source_version": None,
         "limits_validated": False,
+        "privacy_notice_version": "2026-09-v1",
         "max_upload_bytes": None,
         "max_duration_seconds": None,
         "accepted_input_formats": [],
@@ -97,3 +99,14 @@ def test_incomplete_or_unvalidated_publication_fails_fast() -> None:
     unvalidated["limits_validated"] = False
     with pytest.raises(ValidationError, match="límites nulos y listas vacías"):
         _settings(ingestion_capabilities=unvalidated)
+
+
+def test_public_response_requires_the_notice_version() -> None:
+    """El contrato publicado no puede volver a declarar el aviso como opcional."""
+    published = IngestionCapabilitiesOut.model_validate(
+        {**_published_capabilities(), "privacy_notice_version": "2026-09-v1"}
+    )
+    with pytest.raises(ValidationError, match="privacy_notice_version"):
+        IngestionCapabilitiesOut.model_validate(
+            published.model_dump(exclude={"privacy_notice_version"})
+        )

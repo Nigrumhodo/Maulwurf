@@ -6,12 +6,12 @@ const base =
 
 const variants: Record<ButtonVariant, string> = {
   primary:
-    'bg-mint text-on-accent shadow-block hover:bg-lavender active:shadow-block-sm',
+    'bg-mint text-on-accent shadow-block hover:bg-surface hover:text-mint active:shadow-block-sm',
   secondary:
     'bg-transparent text-lavender shadow-block hover:border-mint hover:text-mint active:shadow-block-sm',
   ghost: 'bg-transparent text-lavender border-transparent hover:text-mint',
   danger:
-    'bg-pure-black text-pure-white shadow-block-black hover:text-mint active:shadow-block-sm-black',
+    'bg-transparent text-mint shadow-block hover:bg-mint hover:text-on-accent active:shadow-block-sm',
 }
 
 const sizes: Record<ButtonSize, string> = {

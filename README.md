@@ -255,7 +255,7 @@ See [docs/RUNBOOK-dev.md](docs/RUNBOOK-dev.md) for the reproducible commands. Su
 | --- | --- |
 | Install dependencies | `uv sync --extra dev` per Python app; `npm ci` in `apps/web` |
 | Run the stack | `docker compose up -d --build --wait` in `infra/` (8 services) |
-| Tests | pytest (api/ingest: unit + integration suites); Vitest (web, no tests yet) |
+| Tests | pytest (api/ingest: unit + integration suites); Vitest (web: unit tests) |
 | Lint and formatting | Ruff (Python) and ESLint (web), configured |
 | Type checking | mypy strict (Python) and `tsc --noEmit` (web), configured |
 | Migrations | Merged (A1.7): the `api` container runs `alembic upgrade head` on boot (runbook §5) |
