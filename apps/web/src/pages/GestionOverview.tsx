@@ -16,9 +16,7 @@ export function GestionOverview() {
               &gt;
             </span>
             <h1 className="lowercase text-xl text-mint">gestión // panel académico</h1>
-            <span className="lowercase border-2 border-mint px-1.5 py-0.5 text-mint">
-              [ 6 tomos · 5 entregas ]
-            </span>
+            <span className="lowercase border-2 border-mint px-1.5 py-0.5 text-mint">[demo]</span>
           </div>
           <div className="flex items-center gap-2">
             <Link to="/gestion/materias" className={buttonClasses("primary", "sm")}>
@@ -52,7 +50,6 @@ export function GestionOverview() {
 
             <div className="flex flex-1 flex-col gap-2 p-3">
               <p className="lowercase text-lavender/60">{module.desc}</p>
-              <p className="lowercase text-mint">{module.stat}</p>
 
               <div className="mt-auto flex flex-col gap-2">
                 {module.items.map((item) => (

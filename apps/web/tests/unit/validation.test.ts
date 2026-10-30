@@ -2,7 +2,6 @@
 // renderizados (base del formulario de materias/upload). Sin DOM: se prueban los
 // helpers puros que alimentan los inputs y el renderizado de errores.
 import { describe, expect, it } from "vitest";
-import { isLanguageAllowed } from "@/lib/languages";
 import {
   fieldMessage,
   isRequired,
@@ -20,20 +19,6 @@ describe("isRequired (U-S1-DA-02)", () => {
 
   it("acepta strings con contenido", () => {
     expect(isRequired("cálculo i")).toBe(true);
-  });
-});
-
-describe("isLanguageAllowed (idioma sin preselección)", () => {
-  it("solo acepta la allowlist es/en/fr", () => {
-    expect(isLanguageAllowed("es")).toBe(true);
-    expect(isLanguageAllowed("en")).toBe(true);
-    expect(isLanguageAllowed("fr")).toBe(true);
-  });
-
-  it("rechaza idiomas fuera de la allowlist y valores vacíos", () => {
-    expect(isLanguageAllowed("de")).toBe(false);
-    expect(isLanguageAllowed("xx")).toBe(false);
-    expect(isLanguageAllowed("")).toBe(false);
   });
 });
 

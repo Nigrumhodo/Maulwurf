@@ -1,15 +1,16 @@
-// Assets visuales (proporcionados en src/components/Visual/).
-// Nombres de archivo EXACTOS: en el build de Docker (Linux) importa la mayúscula.
-import avatar from "./avatar.png";
-import avatarred from "./avatarred.png";
-import chat1 from "./chat1.png";
-import chat2 from "./chat2.png";
-import folder from "./Folder.png";
-import gokured from "./gokured.png";
-import loginup from "./LOGINUP.png";
-import loginuposcuro from "./loginuposcuro.png";
-import madriguera from "./Madriguera.png";
-import topogoku from "./topogoku.png";
+// Assets visuales (proporcionados en src/components/Visual/), empaquetados como WebP sin
+// pérdida: el PNG original sumaba 6,6 MiB y dominaba la primera carga. Todos los nombres
+// van en minúsculas porque el build de Docker (Linux) distingue mayúsculas.
+import avatar from "./avatar.webp";
+import avatarred from "./avatarred.webp";
+import chat1 from "./chat1.webp";
+import chat2 from "./chat2.webp";
+import folder from "./folder.webp";
+import gokured from "./gokured.webp";
+import loginup from "./loginup.webp";
+import loginuposcuro from "./loginuposcuro.webp";
+import madriguera from "./madriguera.webp";
+import topogoku from "./topogoku.webp";
 
 export {
   avatar,

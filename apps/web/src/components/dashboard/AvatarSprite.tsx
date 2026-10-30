@@ -45,6 +45,11 @@ export function AvatarSprite({
   } as CSSProperties & Record<string, string>;
 
   return (
-    <div className={`inline-block ${className}`} style={style} role="img" aria-label="avatar animado" />
+    <div
+      className={`sprite-anim inline-block ${className}`}
+      style={style}
+      role="img"
+      aria-label="avatar animado"
+    />
   );
 }

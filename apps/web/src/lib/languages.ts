@@ -7,7 +7,3 @@ export const LANGUAGES = [
 ] as const;
 
 export type LanguageCode = (typeof LANGUAGES)[number]["code"];
-
-export function isLanguageAllowed(code: string): boolean {
-  return LANGUAGES.some((language) => language.code === code);
-}

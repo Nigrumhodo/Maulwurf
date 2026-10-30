@@ -61,7 +61,7 @@ export function SpriteAnimator({
 
   return (
     <div
-      className={`inline-block ${className}`}
+      className={`sprite-anim inline-block ${className}`}
       style={style}
       role="img"
       aria-label="sprite animation"

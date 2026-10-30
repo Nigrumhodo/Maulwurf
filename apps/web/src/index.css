@@ -269,3 +269,18 @@
     background-size: 14px 14px;
   }
 }
+
+/* Decorative motion is optional: honour the OS setting and stop the loops. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-caret,
+  .animate-blink,
+  .animate-flicker,
+  .animate-reel,
+  .glitch-hover:hover,
+  .glitch-once,
+  .marquee,
+  .eq-bar,
+  .sprite-anim {
+    animation: none !important;
+  }
+}

@@ -15,10 +15,11 @@ export function GestionLayout() {
   }
 
   return (
-    <div className="flex items-start gap-4">
+    // Stack on small screens: a fixed 64-wide sidebar left ~100px of content at 375px.
+    <div className="flex flex-col gap-4 md:flex-row md:items-start">
       <aside
-        className={`shrink-0 border-2 border-pure-black bg-surface shadow-block transition-[width] ${
-          collapsed ? "w-14" : "w-64"
+        className={`shrink-0 border-2 border-pure-black bg-surface shadow-block transition-[width] md:sticky md:top-24 ${
+          collapsed ? "w-full md:w-14" : "w-full md:w-64"
         }`}
       >
         <header className="flex items-center justify-between border-b-2 border-pure-black bg-mint px-2 py-2 text-on-accent">
@@ -54,7 +55,29 @@ export function GestionLayout() {
             ))}
           </nav>
         ) : (
-          <div className="flex flex-col gap-3 p-3">
+          <>
+            {/* Mobile: a flat list keeps the menu short; the module cards (three
+                stacked panels plus telemetry) would push the content ~850px down. */}
+            <nav className="flex flex-col gap-1 p-2 md:hidden" aria-label="gestión">
+              {GESTION_ITEMS.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  className={({ isActive }) =>
+                    `lowercase flex items-center gap-2 border-2 px-2 py-1 ${
+                      isActive
+                        ? "border-mint bg-mint text-on-accent"
+                        : "border-pure-black text-lavender hover:border-mint hover:text-mint"
+                    }`
+                  }
+                >
+                  <span aria-hidden="true">{item.glyph}</span>
+                  <span>{item.label}</span>
+                </NavLink>
+              ))}
+            </nav>
+
+            <div className="hidden flex-col gap-3 p-3 md:flex">
             <div className="border-2 border-pure-black bg-surface p-2.5">
               <p className="lowercase text-lavender/50">// workspace_modules</p>
               <p className="lowercase flex items-center justify-between text-lavender">
@@ -109,7 +132,7 @@ export function GestionLayout() {
 
             <div className="border-2 border-pure-black bg-surface p-3 shadow-block">
               <div className="lowercase flex items-center justify-between text-lavender">
-                <span className="text-lavender/60">// mem_store</span>
+                <span className="text-lavender/60">// mem_store · demo</span>
                 <span className="text-mint">64.2%</span>
               </div>
               <div className="mt-1 h-2.5 w-full border-2 border-pure-black p-0.5">
@@ -120,7 +143,8 @@ export function GestionLayout() {
                 <span className="text-mint">sector: 0x7f</span>
               </div>
             </div>
-          </div>
+            </div>
+          </>
         )}
       </aside>
 

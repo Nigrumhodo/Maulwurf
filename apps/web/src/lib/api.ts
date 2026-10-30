@@ -33,6 +33,12 @@ const MAX_RETRY_DELAY_MS = 30_000;
 /** Reintentos extra permitidos ante 429 (además del intento original). */
 const DEFAULT_RETRIES = 1;
 
+/** Métodos que se pueden repetir sin crear un segundo efecto en el servidor. */
+const RETRYABLE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/** Techo del jitter para que un Retry-After grande no añada otra espera completa. */
+const MAX_JITTER_MS = 1_000;
+
 /** Envelope de error de la API: `{"error": {code, message, details}}` (DISENO §3.2). */
 interface ApiErrorBody {
   code?: string;
@@ -114,12 +120,17 @@ export interface ApiRequestInit extends Omit<RequestInit, "headers"> {
   headers?: Record<string, string>;
   /** Reintentos extra ante 429 con `Retry-After` (por defecto 1). */
   retries?: number;
+  /** Opt-in explícito para reintentar una mutación cuyo contrato es idempotente. */
+  idempotent?: boolean;
 }
 
 /** Realiza una petición same-origin aplicando CSRF e interceptores. */
 export async function apiFetch(path: string, init: ApiRequestInit = {}): Promise<Response> {
   const retries = init.retries ?? DEFAULT_RETRIES;
   const method = (init.method ?? "GET").toUpperCase();
+  // Repeating a POST can create a second reservation: only retry reads unless the
+  // caller proves the mutation is idempotent.
+  const mayRetry = RETRYABLE_METHODS.has(method) || init.idempotent === true;
   const headers = new Headers(init.headers);
   if (MUTATING_METHODS.has(method)) {
     const token = getCsrfToken();
@@ -128,10 +139,15 @@ export async function apiFetch(path: string, init: ApiRequestInit = {}): Promise
 
   const res = await fetch(apiUrl(path), { ...init, headers, credentials: "include" });
 
-  if (res.status === 429) {
+  if (res.status === 429 && mayRetry) {
     const retryAfter = parseRetryAfter(res.headers.get("retry-after"));
     if (retryAfter !== null && retries > 0) {
-      const delay = Math.min(retryAfter, MAX_RETRY_DELAY_MS);
+      // Release the unread body before sleeping; otherwise the connection stays
+      // allocated until the garbage collector runs.
+      await res.body?.cancel();
+      const base = Math.min(retryAfter, MAX_RETRY_DELAY_MS);
+      // Jitter keeps every client from retrying in the same millisecond.
+      const delay = base + Math.random() * Math.min(base * 0.2, MAX_JITTER_MS);
       if (delay > 0) await sleep(delay);
       return apiFetch(path, { ...init, retries: retries - 1 });
     }

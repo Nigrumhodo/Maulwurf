@@ -37,6 +37,16 @@ export function languageOptions(codes: readonly string[]): LanguageOption[] {
   }));
 }
 
+/**
+ * Códigos que el servidor publica para el select. `multi` es un valor de política, no
+ * un idioma: ofrecerlo rompería la regla D2.1 de selección explícita sin multidioma.
+ */
+export function publishedLanguageCodes(
+  capabilities: IngestionCapabilities | null,
+): string[] {
+  return (capabilities?.languages ?? []).filter((code) => code !== "multi");
+}
+
 /** La subida solo es posible con límites validados y una versión de aviso vigente. */
 export function capabilitiesUsable(capabilities: IngestionCapabilities | null): boolean {
   return (
@@ -62,10 +72,21 @@ export function validateUpload(
       form: "el servidor no ha publicado límites de ingesta; la subida aún no está disponible.",
     };
   }
+  const languageCodes = publishedLanguageCodes(capabilities);
+  if (languageCodes.length === 0) {
+    return {
+      fields,
+      form: "el servidor no ha publicado idiomas de audio; la subida aún no está disponible.",
+    };
+  }
   if (draft.subjectId === "") fields.subjectId = "elige una materia";
   if (draft.classDate === "") fields.classDate = "indica la fecha de clase";
   if (draft.classTimezone === "") fields.classTimezone = "elige la zona horaria";
-  if (draft.languageCode === "") fields.languageCode = "elige el idioma del audio";
+  if (draft.languageCode === "") {
+    fields.languageCode = "elige el idioma del audio";
+  } else if (!languageCodes.includes(draft.languageCode)) {
+    fields.languageCode = "elige uno de los idiomas publicados por el servidor";
+  }
   if (!draft.cloudAccepted || !draft.voiceAcknowledged) {
     return { fields, consent: "acepta ambos consentimientos para continuar" };
   }

@@ -96,3 +96,13 @@ class IngestionCapabilities(BaseModel):
         ):
             raise ValueError("limits_validated=true exige todos los límites efectivos")
         return self
+
+
+class IngestionCapabilitiesOut(IngestionCapabilities):
+    """Respuesta pública de ``GET /ingestion/capabilities``.
+
+    El endpoint siempre inyecta la versión vigente del aviso, así que el contrato publicado
+    la exige: ``None`` solo existe en el objeto de configuración interno.
+    """
+
+    privacy_notice_version: str = Field(min_length=1, max_length=64)

@@ -21,6 +21,11 @@ export default defineConfig({
     port: 3000,
     strictPort: true,
   },
+  test: {
+    // Unit suites stay DOM-free by default; component tests opt in with the
+    // `@vitest-environment jsdom` docblock so the fast suites keep running in node.
+    include: ["tests/**/*.test.{ts,tsx}"],
+  },
   build: {
     // `dist/public` para el cliente y `dist/server` para el servidor (tsconfig.server.json),
     // de modo que `node dist/server/index.js` sirve estáticos sin colisionar salidas.

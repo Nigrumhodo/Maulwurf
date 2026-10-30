@@ -160,17 +160,43 @@ describe("interceptor 403", () => {
 });
 
 describe("interceptor 429", () => {
-  it("reintenta tras Retry-After (segundos) y resuelve", async () => {
+  it("reintenta una lectura tras Retry-After (segundos) y resuelve", async () => {
     vi.useFakeTimers();
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(429, {}, { "retry-after": "2" }))
       .mockResolvedValueOnce(jsonResponse(200, { ok: true }));
     vi.stubGlobal("fetch", fetchMock);
-    setCsrfToken("tok-a");
 
-    const promise = apiFetch("/subjects", { method: "POST" });
-    await vi.advanceTimersByTimeAsync(2000);
+    const promise = apiFetch("/subjects");
+    // The delay adds up to 20% jitter on top of Retry-After.
+    await vi.advanceTimersByTimeAsync(2600);
+    const res = await promise;
+
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("no reintenta una mutación aunque haya Retry-After", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(429, { error: { code: "rate_limited" } }, { "retry-after": "1" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(apiFetch("/audios", { method: "POST" })).rejects.toMatchObject({ status: 429 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reintenta una mutación solo con idempotent explícito", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(429, {}, { "retry-after": "1" }))
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const promise = apiFetch("/audios", { method: "POST", idempotent: true });
+    await vi.advanceTimersByTimeAsync(1500);
     const res = await promise;
 
     expect(res.status).toBe(200);
@@ -181,7 +207,7 @@ describe("interceptor 429", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(429, { error: { code: "rate_limited" } }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(apiFetch("/subjects", { method: "POST" })).rejects.toMatchObject({
+    await expect(apiFetch("/subjects")).rejects.toMatchObject({
       status: 429,
       code: "rate_limited",
     });
@@ -191,10 +217,15 @@ describe("interceptor 429", () => {
   it("agota los reintentos y lanza el 429", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValue(jsonResponse(429, { error: { code: "rate_limited" } }, { "retry-after": "1" }));
+      // Fresh Response per call: the retry path cancels the first body on purpose.
+      .mockImplementation(() =>
+        Promise.resolve(
+          jsonResponse(429, { error: { code: "rate_limited" } }, { "retry-after": "1" }),
+        ),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(apiFetch("/subjects", { method: "POST", retries: 1 })).rejects.toMatchObject({
+    await expect(apiFetch("/subjects", { retries: 1 })).rejects.toMatchObject({
       status: 429,
       code: "rate_limited",
     });

@@ -10,6 +10,7 @@ import {
   buildAudioCreate,
   capabilitiesUsable,
   languageOptions,
+  publishedLanguageCodes,
   uploadFormError,
   validateUpload,
 } from "@/lib/upload";
@@ -69,6 +70,20 @@ describe("capabilitiesUsable", () => {
   });
 });
 
+describe("publishedLanguageCodes", () => {
+  it("quita `multi`, que es política y no un idioma ofrecible", () => {
+    expect(publishedLanguageCodes({ ...CAPABILITIES, languages: ["es", "multi", "en"] })).toEqual([
+      "es",
+      "en",
+    ]);
+  });
+
+  it("no inventa códigos cuando el servidor no publica ninguno", () => {
+    expect(publishedLanguageCodes({ ...CAPABILITIES, languages: [] })).toEqual([]);
+    expect(publishedLanguageCodes(null)).toEqual([]);
+  });
+});
+
 describe("validateUpload (U-S2-DA-01)", () => {
   it("exige idioma SIN preselección", () => {
     const errors = validateUpload({ ...DRAFT, languageCode: "" }, CAPABILITIES);
@@ -78,6 +93,24 @@ describe("validateUpload (U-S2-DA-01)", () => {
   it("exige los DOS consentimientos", () => {
     expect(validateUpload({ ...DRAFT, cloudAccepted: false }, CAPABILITIES).consent).toBeDefined();
     expect(validateUpload({ ...DRAFT, voiceAcknowledged: false }, CAPABILITIES).consent).toBeDefined();
+  });
+
+  it("rechaza un idioma que el servidor no publicó", () => {
+    const errors = validateUpload({ ...DRAFT, languageCode: "de" }, CAPABILITIES);
+    expect(errors.fields.languageCode).toBeDefined();
+  });
+
+  it("rechaza `multi` aunque venga en la lista publicada", () => {
+    const errors = validateUpload(
+      { ...DRAFT, languageCode: "multi" },
+      { ...CAPABILITIES, languages: ["es", "multi"] },
+    );
+    expect(errors.fields.languageCode).toBeDefined();
+  });
+
+  it("bloquea el envío si no hay idiomas publicados", () => {
+    const errors = validateUpload(DRAFT, { ...CAPABILITIES, languages: [] });
+    expect(errors.form).toBeDefined();
   });
 
   it("exige materia, fecha y zona", () => {

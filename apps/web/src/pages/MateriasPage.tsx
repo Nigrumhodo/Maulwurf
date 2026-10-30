@@ -114,6 +114,10 @@ export function MateriasPage() {
       {form !== null && (
         <Card title={editing != null ? `editar · ${editing.name}` : "nueva materia"} variant="accent">
           <SubjectForm
+            // Remount when the edited subject changes: useState initializers only run
+            // on mount, so without this key editing B reused A's values and PATCHed B
+            // with them.
+            key={editing?.id ?? "create"}
             initial={
               editing != null
                 ? { name: editing.name, color: editing.color, teacher: editing.teacher ?? "" }

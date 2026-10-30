@@ -1,9 +1,10 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Navigate, Outlet } from "react-router-dom";
+import { Navigate, Outlet, useNavigate } from "react-router-dom";
 import { fetchMe, postLogout } from "@/lib/auth";
 import type { Me } from "@/lib/auth";
-import { clearCsrfToken, getCsrfToken } from "@/lib/csrf";
+import { configureApiHandlers } from "@/lib/api";
+import { clearCsrfToken } from "@/lib/csrf";
 import { BlinkingCaret } from "@/components/motion/BlinkingCaret";
 
 // D1.2/D1.4 — Estado de sesión compartido. `GET /me` decide si hay sesión (cookie
@@ -16,7 +17,6 @@ const GUEST_KEY = "maulwurf-guest";
 
 interface AuthContextValue {
   user: Me | null;
-  csrfToken: string | null;
   loading: boolean;
   guest: boolean;
   enterAsGuest: () => void;
@@ -26,6 +26,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const navigate = useNavigate();
   const [user, setUser] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
   const [guest, setGuest] = useState(() => {
@@ -36,6 +37,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return false;
     }
   });
+  // The interceptor is registered once, so it reads the live guest flag from a ref
+  // instead of closing over the value from the first render.
+  const guestRef = useRef(guest);
+  useEffect(() => {
+    guestRef.current = guest;
+  }, [guest]);
+
+  useEffect(() => {
+    configureApiHandlers({
+      onUnauthorized: () => {
+        // Guest mode only unlocks navigation; its 401s must not eject the visitor.
+        if (guestRef.current) return;
+        clearCsrfToken();
+        setUser(null);
+        navigate("/login", { replace: true });
+      },
+      // A 403 is a normal outcome, so it surfaces as a toast instead of a modal
+      // alert that blocks the main thread.
+      onForbidden: (error) => {
+        window.dispatchEvent(new CustomEvent("mw:forbidden", { detail: error.message }));
+      },
+    });
+    return () => configureApiHandlers({});
+  }, [navigate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -79,7 +104,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, csrfToken: getCsrfToken(), loading, guest, enterAsGuest, logout }}
+      value={{ user, loading, guest, enterAsGuest, logout }}
     >
       {children}
     </AuthContext.Provider>

@@ -16,6 +16,7 @@ import {
   buildAudioCreate,
   capabilitiesUsable,
   languageOptions,
+  publishedLanguageCodes,
   uploadFormError,
   validateUpload,
 } from "@/lib/upload";
@@ -84,7 +85,11 @@ export function UploadForm() {
 
   const usable = capabilitiesUsable(capabilities);
   const noticeVersion = capabilities?.privacy_notice_version ?? null;
-  const languageCodes = languageOverride ?? capabilities?.languages ?? [];
+  // A server hint about allowed languages still must not expose the `multi` policy value.
+  const languageCodes =
+    languageOverride !== null
+      ? languageOverride.filter((code) => code !== "multi")
+      : publishedLanguageCodes(capabilities);
   const languages = useMemo(() => languageOptions(languageCodes), [languageCodes]);
   const consentReady = draft.cloudAccepted && draft.voiceAcknowledged;
   const canSubmit = usable && consentReady && !busy;

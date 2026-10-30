@@ -9,7 +9,6 @@ export interface GestionModule {
   title: string;
   tag: string;
   desc: string;
-  stat: string;
   items: GestionNavItem[];
 }
 
@@ -22,7 +21,6 @@ export const GESTION_MODULES: GestionModule[] = [
     title: "materias & tareas",
     tag: "plan",
     desc: "planificador académico y sprint log",
-    stat: "6 tomos · 5 entregas",
     items: [
       { to: "/gestion/materias", label: "materias", glyph: "▤" },
       { to: "/gestion/tareas", label: "tareas", glyph: "✓" },
@@ -33,7 +31,6 @@ export const GESTION_MODULES: GestionModule[] = [
     title: "biblioteca & ingesta",
     tag: "tape",
     desc: "biblioteca y archivo de audio",
-    stat: "8 audios · 100% transcrito",
     items: [
       { to: "/gestion/subir", label: "subir clase", glyph: "↑" },
       { to: "/gestion/biblioteca", label: "biblioteca", glyph: "▣" },
@@ -44,7 +41,6 @@ export const GESTION_MODULES: GestionModule[] = [
     title: "terminal ia & agenda",
     tag: "exec",
     desc: "agente de chat y calendario",
-    stat: "1 hilo · 3 eventos",
     items: [
       { to: "/gestion/chat", label: "chat", glyph: "›" },
       { to: "/gestion/agenda", label: "agenda", glyph: "▦" },

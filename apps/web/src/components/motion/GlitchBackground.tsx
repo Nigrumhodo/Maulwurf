@@ -13,9 +13,14 @@ export function GlitchBackground() {
     const ctx = canvas.getContext("2d");
     if (ctx === null) return;
 
+    // Decorative full-screen loop: honour the OS preference instead of burning
+    // ~60 fps of canvas work.
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
     let width = 0;
     let height = 0;
     let rafId = 0;
+    let running = true;
     const mouse = { x: -9999, y: -9999 };
 
     const readAccent = (): string => {
@@ -56,6 +61,7 @@ export function GlitchBackground() {
     const RADIUS = 180;
 
     const draw = () => {
+      if (!running) return;
       ctx.clearRect(0, 0, width, height);
       ctx.fillStyle = accent;
 
@@ -99,10 +105,19 @@ export function GlitchBackground() {
     };
     rafId = requestAnimationFrame(draw);
 
+    // Stop drawing while the tab is hidden; the callback would otherwise keep
+    // running (throttled) and never settle.
+    const onVisibility = () => {
+      running = !document.hidden;
+      if (running) rafId = requestAnimationFrame(draw);
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
     return () => {
       cancelAnimationFrame(rafId);
       window.removeEventListener("resize", resize);
       window.removeEventListener("mousemove", onMove);
+      document.removeEventListener("visibilitychange", onVisibility);
       observer.disconnect();
     };
   }, []);

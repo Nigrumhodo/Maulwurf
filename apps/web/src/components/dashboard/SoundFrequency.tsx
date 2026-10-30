@@ -26,12 +26,16 @@ export function SoundFrequency() {
         <img
           src={gokured}
           alt=""
+          loading="lazy"
+          decoding="async"
           className="img-dark-only h-32 w-auto shrink-0"
           style={{ imageRendering: "pixelated" }}
         />
         <img
           src={topogoku}
           alt=""
+          loading="lazy"
+          decoding="async"
           className="img-light-only h-32 w-auto shrink-0"
           style={{ imageRendering: "pixelated" }}
         />

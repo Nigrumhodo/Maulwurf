@@ -58,7 +58,7 @@ export function ActivityFeed() {
           <span className="font-bold tracking-wider">02 · radar de actividad // clases recientes</span>
         </div>
         <span className="lowercase border-2 border-pure-black bg-mint px-1.5 py-0.5 text-on-accent">
-          3 procesadas hoy
+          demo
         </span>
       </div>
 

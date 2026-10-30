@@ -1,8 +1,8 @@
 import { BlinkingCaret } from "@/components/motion/BlinkingCaret";
 
 // Dashboard — telemetry strip: a blinking system line plus quick counters
-// (mock numbers, replaced by real metrics later). Keeps the Cyber Y2K tokens:
-// `mint` accent, `surface` panels and hard `shadow-block` shadows.
+// (mock numbers labelled as demo, replaced by real metrics later). Keeps the Cyber
+// Y2K tokens: `mint` accent, `surface` panels and hard `shadow-block` shadows.
 interface TelemetryBannerProps {
   guest: boolean;
 }
@@ -26,6 +26,9 @@ export function TelemetryBanner({ guest }: TelemetryBannerProps) {
             //
           </span>
           <span className="border-2 border-mint bg-mint px-1 text-on-accent">en línea</span>
+          <span className="lowercase border-2 border-lavender/40 px-1 text-lavender/60">
+            demo
+          </span>
           <span className="text-lavender/40" aria-hidden="true">
             //
           </span>
@@ -46,13 +49,8 @@ export function TelemetryBanner({ guest }: TelemetryBannerProps) {
           <div className="lowercase flex items-center gap-2 border-2 border-pure-black bg-surface px-2 py-1">
             <span className="text-lavender/60">mem_store:</span>
             <span className="font-bold text-mint">84% ok</span>
-            <div
-              className="flex h-2 w-12 overflow-hidden border border-pure-black"
-              role="progressbar"
-              aria-valuenow={84}
-              aria-valuemin={0}
-              aria-valuemax={100}
-            >
+            {/* Decorative only: no role="progressbar", which would announce a fake value. */}
+            <div className="flex h-2 w-12 overflow-hidden border border-pure-black" aria-hidden="true">
               <div className="bg-mint" style={{ width: "84%" }} />
             </div>
           </div>

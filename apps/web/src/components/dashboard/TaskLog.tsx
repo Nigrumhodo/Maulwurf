@@ -25,7 +25,7 @@ export function TaskLog() {
           03 · bitácora de tareas urgentes
         </span>
         <span className="lowercase border-2 border-on-accent px-1.5 py-0.5 text-xs">
-          pendientes: 3
+          demo
         </span>
       </header>
 
