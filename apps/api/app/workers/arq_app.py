@@ -16,6 +16,7 @@ from arq.worker import Function, func
 
 from app.core.config import settings
 from app.core.db import session_scope
+from app.core.logging import configure_logging
 from app.workers.dispatcher import dispatch_pending
 from app.workers.index_job import JOB_TIMEOUT_S, MAX_TRIES, index
 
@@ -45,6 +46,11 @@ async def dispatch_outbox(ctx: dict[str, Any]) -> None:
         logger.info("dispatch_outbox %s", dict(report))
 
 
+async def startup(ctx: dict[str, Any]) -> None:
+    """Worker and scheduler startup: JSON logs with redaction (J2.5)."""
+    configure_logging()
+
+
 class WorkerSettings:
     # `index` has its own retry budget (J2.2); `analyze` still has none.
     functions: ClassVar[list[Function | Callable[..., Awaitable[None]]]] = [
@@ -53,6 +59,7 @@ class WorkerSettings:
     ]
     queue_name = WORKER_QUEUE
     redis_settings = _REDIS
+    on_startup = startup
     health_check_interval = HEALTH_CHECK_INTERVAL_S
     keep_result = 60
     max_tries = 1  # no retries for functions without their own budget
@@ -63,6 +70,7 @@ class SchedulerSettings:
     cron_jobs: ClassVar[list[CronJob]] = [cron(dispatch_outbox, second=0, run_at_startup=True)]
     queue_name = SCHEDULER_QUEUE
     redis_settings = _REDIS
+    on_startup = startup
     health_check_interval = HEALTH_CHECK_INTERVAL_S
     keep_result = 60
     max_tries = 1

@@ -34,7 +34,7 @@ from pathlib import Path
 
 import asyncpg
 
-from maulwurf_ingest import admission, cancel, cleanup, persistence
+from maulwurf_ingest import admission, cancel, cleanup, metrics, persistence
 from maulwurf_ingest import lease as leases
 from maulwurf_ingest.asr_job import ORIGINAL, SCRIPTED_NAME, STUB_TRANSCRIPT_NAME
 from maulwurf_ingest.audio.validate import probe_file
@@ -287,6 +287,8 @@ async def _note_cleanup_failure(
     logger.error(
         "supervisor.cleanup_error attempt_id=%s error=%s", attempt_id, type(exc).__name__,
     )
+    cleanup.log_cleanup_failed(str(attempt_id), None, error_type=type(exc).__name__)
+    metrics.record_failure("cleanup", "cleanup_error")
     result.evidence = {"verified": False, "error": type(exc).__name__}
     recorded = False
     if owned_audio:
@@ -316,6 +318,8 @@ async def _note_cleanup_evidence(
     )
     if not evidence.verified:
         logger.error("supervisor.cleanup_failed attempt_id=%s", attempt_id)
+        cleanup.log_cleanup_failed(str(attempt_id), evidence)
+        metrics.record_failure("cleanup", "verification_failed")
         # Solo un `failed` persistido con el token de este run. Si el lease
         # ya no es nuestro, la fila sigue `pending` y la admisión no se cierra.
         if recorded:
@@ -330,6 +334,10 @@ async def _note_cleanup_evidence(
     )
     if not enabled:
         result.outcome = Outcome.LEASE_LOST
+
+
+def _error_name(exc: Exception | None) -> str | None:
+    return None if exc is None else type(exc).__name__
 
 
 async def _note_cancelled_cleanup(
@@ -349,6 +357,9 @@ async def _note_cancelled_cleanup(
     recorded = await cancel.record_cancelled_cleanup(
         pool, lease, verified=verified, evidence=result.evidence,
     )
+    if not verified:
+        cleanup.log_cleanup_failed(str(attempt_id), evidence, error_type=_error_name(exc))
+        metrics.record_failure("cleanup", "verification_failed")
     if recorded and not verified:
         admission.halt(attempt_id)
     result.outcome = Outcome.CANCELLED

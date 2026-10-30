@@ -85,6 +85,9 @@ class _Gate:
                 if self._used:
                     self._used -= 1
 
+    def in_use(self) -> int:
+        return self._used
+
     def reset(self) -> None:
         self._used = 0
         self._users.clear()
@@ -109,6 +112,11 @@ class _Hold:
 
 
 _gate = _Gate(ACTIVE_SLOTS)
+
+
+def slots_in_use() -> int:
+    """Reception slots in use right now, for `/internal/metrics`."""
+    return _gate.in_use()
 _holds: dict[uuid.UUID, _Hold] = {}
 # A discard retry only needs recent attempts. Older rows are already terminal.
 _FINISHED_MAX = 1024
