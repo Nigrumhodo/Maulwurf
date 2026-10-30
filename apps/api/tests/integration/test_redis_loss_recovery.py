@@ -9,11 +9,14 @@ Audio is never reconstructed: an attempt that never committed text is not regene
 index job is queued for it. The embeddings provider is `FakeProvider` (no network).
 """
 
+import sys
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
+import asyncpg
 import pytest
 from arq.connections import ArqRedis
 from arq.worker import Worker, func
@@ -46,6 +49,10 @@ from tests.integration.actors import (
     make_class_with_transcript,
 )
 from tests.unit.test_indexing import FakeProvider
+
+# The ingest sweep lives in apps/ingest; it imports only the standard library and asyncpg.
+sys.path.append(str(Path(__file__).resolve().parents[3] / "ingest"))
+from maulwurf_ingest.reconciler import sweep_stranded  # noqa: E402
 
 pytestmark = pytest.mark.integration
 
@@ -223,24 +230,36 @@ async def test_audio_without_committed_text_is_never_reconstructed(
     assert transcripts_after == transcripts_before
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Gap, not in the approved J2.4 design: no path ends an ingest attempt whose lease expired "
-        "in receiving/transcribing. LOSS_REASONS maps technical_loss to requires_reupload "
-        "(services/state_machine.py), but no sweeper applies it. Needs a decision before code."
-    ),
-)
+async def _driver_connection(db: AsyncSession) -> asyncpg.Connection:
+    """The asyncpg connection behind the test transaction, so the sweep sees its rows."""
+    connection = await db.connection()
+    raw = await connection.get_raw_connection()
+    return cast(asyncpg.Connection, raw.driver_connection)
+
+
 async def test_stranded_attempt_ends_requires_reupload(
     db_session: AsyncSession,
     redis: tuple[ArqRedis, str],
 ) -> None:
+    """I-S2-JF-03: the ingest sweep ends a stranded attempt. No ASR, no audio, no index job."""
     pool, queue = redis
     actor = await make_actor(db_session)
     stranded = await _stranded_attempt(db_session, actor)
+    await db_session.refresh(stranded)
+    token_before = stranded.fencing_token
+    transcripts_before = await db_session.scalar(
+        select(sql_func.count()).select_from(Transcript).where(Transcript.user_id == actor.user_id)
+    )
     await pool.flushall()
 
-    await reconcile_once(_sessions(db_session), pool, queue_name=queue)
+    ended = await sweep_stranded(await _driver_connection(db_session))
 
+    assert stranded.id in ended
     await db_session.refresh(stranded)
     assert (stranded.status, stranded.error_code) == ("requires_reupload", "technical_loss")
+    assert stranded.fencing_token == token_before + 1
+    assert await _queued_args(pool, queue) == []
+    transcripts_after = await db_session.scalar(
+        select(sql_func.count()).select_from(Transcript).where(Transcript.user_id == actor.user_id)
+    )
+    assert transcripts_after == transcripts_before
