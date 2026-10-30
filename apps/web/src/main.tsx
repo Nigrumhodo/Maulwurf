@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { App } from "./App";
+import { GlitchBackground } from "./components/motion/GlitchBackground";
 import { applyTheme, getStoredTheme } from "./lib/theme";
 import "./index.css";
 
@@ -15,6 +16,7 @@ if (container === null) {
 
 createRoot(container).render(
   <StrictMode>
+    <GlitchBackground />
     <BrowserRouter>
       <App />
     </BrowserRouter>

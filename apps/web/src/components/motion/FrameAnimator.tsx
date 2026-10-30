@@ -20,6 +20,8 @@ export function FrameAnimator({
 
   useEffect(() => {
     if (frames.length <= 1) return
+    // Decorative frame loop: keep the first frame when the OS asks for less motion.
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
     const id = window.setInterval(() => {
       setIndex((i) => {
         if (!loop && i >= frames.length - 1) return i

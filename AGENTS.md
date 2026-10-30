@@ -245,7 +245,8 @@ indexing can retry from persisted text.
 Real suites exist for `apps/api` (unit + integration: config, crypto, sessions/CSRF, DB
 schema, outbox policy, dispatcher, endpoints) and `apps/ingest` (unit + integration:
 admission, cleanup, leases, hardening, capacity, failure matrix, no-audio-persistence,
-synthetic audio via `espeak-ng`); `apps/web` has no tests yet (`--passWithNoTests`). Pytest
+synthetic audio via `espeak-ng`); `apps/web` runs Vitest unit suites (HTTP client, status
+contract, form validation). Pytest
 markers are configured (`integration`, `provider`, `load`). The documented layers (see
 `docs/PLAN_TESTS.md` for the per-sprint catalog):
 

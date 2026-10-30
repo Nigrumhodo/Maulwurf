@@ -42,7 +42,7 @@ export function Menu({
                 active
                   ? 'bg-mint text-on-accent'
                   : 'bg-transparent'
-              } ${item.danger ? 'hover:bg-pure-black hover:text-pure-white' : ''}`}
+              } ${item.danger ? 'hover:bg-mint hover:text-on-accent' : ''}`}
             >
               {item.label}
             </button>
