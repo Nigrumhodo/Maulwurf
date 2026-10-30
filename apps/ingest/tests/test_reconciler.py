@@ -171,6 +171,29 @@ async def test_missing_directory_stays_pending_and_does_not_retranscribe(
     assert event["blocked_reason"] == "cleanup_pending"
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Open contract question (I-S2-JF-05d): no safe resolution exists without a change to "
+        "ESPECIFICACION M3/S1.B6. An absent directory in this namespace does not prove the "
+        "previous tmpfs was destroyed, so the attempt stays HELD and the outbox stays disabled."
+    ),
+)
+async def test_held_attempt_is_enabled_by_a_new_owner_after_verified_cleanup(
+    pool: asyncpg.Pool,
+) -> None:
+    """Desired end state if the contract allowed it. Strict xfail: HELD is correct today."""
+    attempt, owned, audio_id = await _ready(pool)
+    assert (await _commit(pool, owned, _draft())).outcome is CommitOutcome.COMMITTED
+    await _expire(pool, attempt.attempt_id)
+
+    results = await reconcile_committed(pool, instance=_INSTANCE)
+    mine = [item for item in results if item.attempt_id == attempt.attempt_id]
+
+    assert mine == [ReconcileResult(attempt.attempt_id, ReconcileAction.ENABLED)]
+    event = await _outbox(pool, audio_id)
+    assert event["enabled"] is True
+
 async def test_failed_cleanup_is_not_retried(pool: asyncpg.Pool) -> None:
     attempt, owned, audio_id = await _ready(pool)
     assert (await _commit(pool, owned, _draft())).outcome is CommitOutcome.COMMITTED

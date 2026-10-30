@@ -19,12 +19,16 @@ from app.core.db import session_scope
 from app.core.logging import configure_logging
 from app.workers.dispatcher import dispatch_pending
 from app.workers.index_job import JOB_TIMEOUT_S, MAX_TRIES, index
+from app.workers.reconciler import reconcile_once
 
 logger = logging.getLogger(__name__)
 
 WORKER_QUEUE = "arq:queue"
 SCHEDULER_QUEUE = "arq:scheduler"
 HEALTH_CHECK_INTERVAL_S = 30
+# Offset from the dispatcher's second 0 so the two crons do not start together.
+RECONCILE_EVERY_MINUTES = 5
+RECONCILE_SECOND = 30
 
 _REDIS = RedisSettings.from_dsn(str(settings.redis_url))
 
@@ -44,6 +48,11 @@ async def dispatch_outbox(ctx: dict[str, Any]) -> None:
         return
     if report:
         logger.info("dispatch_outbox %s", dict(report))
+
+
+async def reconcile(ctx: dict[str, Any]) -> None:
+    """Scheduler cron (J2.4): repairs lost dispatches, dead index runs and orphan generations."""
+    await reconcile_once(session_scope, ctx["redis"], queue_name=WORKER_QUEUE)
 
 
 async def startup(ctx: dict[str, Any]) -> None:
@@ -67,7 +76,14 @@ class WorkerSettings:
 
 class SchedulerSettings:
     # Cada minuto en el segundo 0: latencia máxima de despacho ~60 s.
-    cron_jobs: ClassVar[list[CronJob]] = [cron(dispatch_outbox, second=0, run_at_startup=True)]
+    cron_jobs: ClassVar[list[CronJob]] = [
+        cron(dispatch_outbox, second=0, run_at_startup=True),
+        cron(
+            reconcile,
+            minute=set(range(0, 60, RECONCILE_EVERY_MINUTES)),
+            second=RECONCILE_SECOND,
+        ),
+    ]
     queue_name = SCHEDULER_QUEUE
     redis_settings = _REDIS
     on_startup = startup

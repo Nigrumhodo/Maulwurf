@@ -8,10 +8,12 @@ from arq.worker import Function
 from app.workers import arq_app
 from app.workers.arq_app import (
     HEALTH_CHECK_INTERVAL_S,
+    RECONCILE_EVERY_MINUTES,
     SchedulerSettings,
     WorkerSettings,
     analyze,
     dispatch_outbox,
+    reconcile,
 )
 from app.workers.index_job import MAX_TRIES, index
 
@@ -37,9 +39,9 @@ def test_worker_registers_index_with_its_retry_budget_and_analyze_as_stub() -> N
     assert analyze_function is analyze
 
 
-def test_scheduler_runs_only_the_outbox_cron() -> None:
+def test_scheduler_runs_only_the_outbox_and_reconciler_crons() -> None:
     assert not hasattr(SchedulerSettings, "functions")
-    assert [job.coroutine for job in SchedulerSettings.cron_jobs] == [dispatch_outbox]
+    assert [job.coroutine for job in SchedulerSettings.cron_jobs] == [dispatch_outbox, reconcile]
 
 
 def test_functions_without_their_own_budget_do_not_retry() -> None:
@@ -68,6 +70,12 @@ async def test_dispatch_cron_survives_a_database_failure(
 
 
 def test_dispatch_cron_runs_every_minute_at_second_zero() -> None:
-    (job,) = SchedulerSettings.cron_jobs
-    assert job.second == 0
-    assert job.minute is None and job.run_at_startup
+    dispatch, _reconcile = SchedulerSettings.cron_jobs
+    assert dispatch.second == 0
+    assert dispatch.minute is None and dispatch.run_at_startup
+
+
+def test_reconciler_cron_runs_on_a_fixed_minute_grid_off_the_dispatcher_second() -> None:
+    _dispatch, reconciler = SchedulerSettings.cron_jobs
+    assert reconciler.second != 0
+    assert reconciler.minute == set(range(0, 60, RECONCILE_EVERY_MINUTES))
