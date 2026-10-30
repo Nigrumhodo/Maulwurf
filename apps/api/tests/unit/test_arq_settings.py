@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import pytest
+from arq.worker import Function
 
 from app.workers import arq_app
 from app.workers.arq_app import (
@@ -11,8 +12,8 @@ from app.workers.arq_app import (
     WorkerSettings,
     analyze,
     dispatch_outbox,
-    index,
 )
+from app.workers.index_job import MAX_TRIES, index
 
 
 def test_worker_and_scheduler_use_separate_queues() -> None:
@@ -28,8 +29,12 @@ def test_health_key_expires_fast_enough_to_detect_a_dead_process() -> None:
     assert HEALTH_CHECK_INTERVAL_S <= 60
 
 
-def test_worker_registers_only_s1_stubs() -> None:
-    assert WorkerSettings.functions == [index, analyze]
+def test_worker_registers_index_with_its_retry_budget_and_analyze_as_stub() -> None:
+    index_function, analyze_function = WorkerSettings.functions
+    assert isinstance(index_function, Function)
+    assert index_function.coroutine is index
+    assert index_function.max_tries == MAX_TRIES
+    assert analyze_function is analyze
 
 
 def test_scheduler_runs_only_the_outbox_cron() -> None:
@@ -37,7 +42,8 @@ def test_scheduler_runs_only_the_outbox_cron() -> None:
     assert [job.coroutine for job in SchedulerSettings.cron_jobs] == [dispatch_outbox]
 
 
-def test_no_retries_until_backoff_policy_exists() -> None:
+def test_functions_without_their_own_budget_do_not_retry() -> None:
+    # Only `index` has a retry budget (J2.2); the default stays one try.
     assert WorkerSettings.max_tries == 1
     assert SchedulerSettings.max_tries == 1
 
