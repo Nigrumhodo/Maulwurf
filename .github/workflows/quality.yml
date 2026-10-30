@@ -179,3 +179,11 @@ jobs:
       - run: docker build -t maulwurf-api:ci apps/api
       - run: docker build --target runtime -t maulwurf-ingest:ci apps/ingest
       - run: docker build -t maulwurf-web:ci apps/web
+
+  # I-S2-JF-11: el entorno que Compose renderiza para ingest (J2.8). Solo necesita docker.
+  compose-ingest-env:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/ci/check_compose_ingest_env.py
