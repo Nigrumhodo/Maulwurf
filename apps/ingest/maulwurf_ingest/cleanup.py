@@ -10,6 +10,7 @@ La evidencia contiene solo booleanos y conteos, nunca rutas de ficheros ni conte
 """
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import signal
@@ -18,9 +19,10 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from maulwurf_ingest import hardening
+from maulwurf_ingest import hardening, metrics
 
 PROC = Path("/proc")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,25 @@ class CleanupEvidence:
 
     def as_json(self) -> dict[str, object]:
         return {**asdict(self), "verified": self.verified}
+
+
+def log_cleanup_failed(
+    attempt_id: str, evidence: CleanupEvidence | None, *, error_type: str | None = None
+) -> None:
+    """Raise the immediate `cleanup.failed` ERROR alert with counters, never paths or content.
+
+    Admission is closed separately by `admission.halt`; this function only alerts and counts.
+    """
+    counters: dict[str, object] = (
+        evidence.as_json() if evidence is not None else {"verified": False}
+    )
+    if error_type is not None:
+        counters["error"] = error_type
+    metrics.record_cleanup_failure()
+    logger.error(
+        "cleanup.failed attempt_id=%s", attempt_id,
+        extra={"attempt_id": attempt_id, "fields": counters},
+    )
 
 
 def create_workdir(attempt_id: str, tmp_dir: str | None = None) -> Path:
