@@ -9,8 +9,8 @@ from pathlib import Path
 
 import asyncpg
 import pytest
-from test_commit import _commit, _draft, _ready, _seed  # noqa: E402
-from test_supervisor import tmpfs_dir  # noqa: E402
+from test_commit import _commit, _draft, _ready  # noqa: E402
+from test_supervisor import _seed, tmpfs_dir  # noqa: E402
 
 from maulwurf_ingest import cleanup, persistence
 from maulwurf_ingest import lease as leases
@@ -240,6 +240,10 @@ async def test_leftover_directory_is_verified_and_enabled_without_asr(
     pool: asyncpg.Pool, tmpfs_dir: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """I-S2-SG-08: the process died after the commit, with audio still on tmpfs."""
+    # On a multi-UID host an unreadable /proc/<pid>/fd makes cleanup fail closed by design
+    # (S1.B4); the success path needs the single-UID environment used by CI (`sudo`).
+    if cleanup.open_descriptors_under(tmpfs_dir)[1]:
+        pytest.skip("multi-UID /proc: cleanup is fail-closed; run the ingest suite as root")
     attempt, owned, audio_id = await _ready(pool)
     assert (await _commit(pool, owned, _draft())).outcome is CommitOutcome.COMMITTED
     workdir = cleanup.create_workdir(str(attempt.attempt_id), str(tmpfs_dir))
