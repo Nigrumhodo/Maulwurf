@@ -1,3 +1,4 @@
+import { apiFetch } from "./api";
 import type { ApiHttpError } from "./api";
 
 // D1.6 — Tipos y validación del formulario de materias (U-S1-DA-02). El contrato
@@ -8,6 +9,13 @@ export interface Subject {
   color: string;
   teacher: string | null;
   class_count: number;
+}
+
+/** Lista las materias del tenant; reutilizado por `MateriasPage` (D1.6) y `UploadForm` (D2.1). */
+export async function fetchSubjects(): Promise<Subject[]> {
+  const res = await apiFetch("/subjects");
+  const data = (await res.json()) as { items: Subject[] };
+  return data.items;
 }
 
 /** Valores que edita el formulario; `teacher` vacío se envía como `null`. */

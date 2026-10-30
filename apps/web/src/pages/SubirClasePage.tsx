@@ -1,9 +1,9 @@
 import { Card } from "@/components/ui/Card";
 import { UploadForm } from "@/components/upload/UploadForm";
 
-// D1.7 — Borrador estático de la subida de clase (sin wiring): formulario de
-// upload (consentimiento versionado, idioma sin preselección, «audio no
-// conservado»). El envío real de bytes llega en D2.1/D2.2.
+// D2.1 — Subida de clase (M2): el formulario reserva la clase con `POST /audios`
+// (consentimiento versionado, idioma sin preselección, límites publicados y «audio no
+// conservado»). El envío del binario en streaming llega en D2.2.
 export function SubirClasePage() {
   return (
     <div className="flex flex-col gap-6">

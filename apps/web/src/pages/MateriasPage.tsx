@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { useToast } from "@/components/ui/ToastProvider";
 import { SubjectForm } from "@/components/subjects/SubjectForm";
 import { apiFetch, ApiHttpError } from "@/lib/api";
+import { fetchSubjects } from "@/lib/subjects";
 import type { Subject, SubjectDraft } from "@/lib/subjects";
 
 // D1.6 — CRUD de materias contra la API real (A1.6 / M2a §3.4): lista del tenant,
@@ -27,9 +28,7 @@ export function MateriasPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await apiFetch("/subjects");
-      const data = (await res.json()) as { items: Subject[] };
-      setSubjects(data.items);
+      setSubjects(await fetchSubjects());
     } catch (error) {
       toast(error instanceof Error ? error.message : "no se pudieron cargar las materias", "error");
     } finally {

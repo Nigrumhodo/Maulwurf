@@ -13,10 +13,23 @@ export interface LanguageSelectProps
   prompt?: boolean;
   /** placeholder shown when nothing is selected */
   placeholder?: string;
+  /** opciones a ofrecer; por defecto la allowlist estática (D1.5). D2.1 pasa las publicadas. */
+  options?: ReadonlyArray<{ code: string; label: string }>;
 }
 
 export const LanguageSelect = forwardRef<HTMLSelectElement, LanguageSelectProps>(
-  ({ label, prompt = true, id, placeholder = "selecciona idioma", className = "", ...rest }, ref) => (
+  (
+    {
+      label,
+      prompt = true,
+      id,
+      placeholder = "selecciona idioma",
+      className = "",
+      options = LANGUAGES,
+      ...rest
+    },
+    ref,
+  ) => (
     <label className="lowercase font-pixel flex flex-col gap-1">
       {label != null && (
         <span className="text-mint">
@@ -33,7 +46,7 @@ export const LanguageSelect = forwardRef<HTMLSelectElement, LanguageSelectProps>
         <option value="" disabled>
           {placeholder}
         </option>
-        {LANGUAGES.map((language) => (
+        {options.map((language) => (
           <option key={language.code} value={language.code}>
             {language.label}
           </option>

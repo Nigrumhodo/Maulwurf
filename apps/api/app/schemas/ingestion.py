@@ -45,6 +45,10 @@ class IngestionCapabilities(BaseModel):
     source_report: str | None = Field(default=None, min_length=1, max_length=500)
     source_version: str | None = Field(default=None, min_length=1, max_length=100)
     limits_validated: bool = False
+    # Versión vigente del aviso de privacidad (M2/D2.1). No es un límite del spike: el
+    # endpoint la inyecta desde `settings.privacy_notice_version`, nunca viene de la
+    # configuración publicada. `None` solo en el objeto de configuración interno.
+    privacy_notice_version: str | None = Field(default=None, min_length=1, max_length=64)
     max_upload_bytes: int | None = Field(default=None, ge=1)
     max_duration_seconds: int | None = Field(default=None, ge=1)
     accepted_input_formats: tuple[str, ...] = ()

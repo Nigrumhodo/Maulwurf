@@ -55,7 +55,7 @@ def test_capabilities_reflects_the_published_spike_configuration(
     response = client.get("/ingestion/capabilities")
 
     assert response.status_code == 200
-    assert response.json() == published
+    assert response.json() == {**published, "privacy_notice_version": "2026-09-v1"}
 
 
 def test_capabilities_without_publication_hide_provisional_s1_values(
@@ -71,6 +71,7 @@ def test_capabilities_without_publication_hide_provisional_s1_values(
         "source_report": None,
         "source_version": None,
         "limits_validated": False,
+        "privacy_notice_version": "2026-09-v1",
         "max_upload_bytes": None,
         "max_duration_seconds": None,
         "accepted_input_formats": [],

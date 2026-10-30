@@ -12,5 +12,9 @@ async def ingestion_capabilities() -> IngestionCapabilities:
     """Devuelve exclusivamente la configuración publicada por el spike.
 
     No lee los valores provisionales de la reserva S1 ni consulta proveedores externos.
+    La versión del aviso de privacidad se inyecta aquí (M2/D2.1): es la vigente, no un
+    límite publicado, para que el formulario la muestre ANTES de aceptar bytes.
     """
-    return settings.ingestion_capabilities
+    return settings.ingestion_capabilities.model_copy(
+        update={"privacy_notice_version": settings.privacy_notice_version}
+    )
