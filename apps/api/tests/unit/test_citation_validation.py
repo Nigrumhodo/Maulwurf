@@ -1,7 +1,9 @@
 """U-S2-JL-05: citations only reference DB-validated source identities (L2.6)."""
 
+import asyncio
 import math
 import uuid
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import replace
 from datetime import date
 from typing import Any, cast
@@ -9,6 +11,7 @@ from typing import Any, cast
 import pytest
 from sqlalchemy.exc import OperationalError
 
+from app.services import rag as rag_module
 from app.services.citations import (
     CitationBuffer,
     CitationRef,
@@ -21,7 +24,13 @@ from app.services.citations import (
     validate_citation_record,
     validate_citation_source,
 )
-from app.services.rag import RAGService
+from app.services.llm import ChatMessage
+from app.services.rag import (
+    PreparedStream,
+    RAGService,
+    SourceItem,
+    _record_offset,
+)
 from app.services.search import RetrievedChunk, SearchService
 
 
@@ -277,6 +286,183 @@ async def test_db_error_fails_closed_without_citation() -> None:
     )
 
     assert await service._validate_citation(uuid.uuid4(), _chunk()) is None
+
+
+async def test_unexpected_error_fails_closed_without_citation() -> None:
+    async def failing(user_id: uuid.UUID, source: RetrievedChunk) -> RetrievedChunk | None:
+        del user_id, source
+        raise RuntimeError("unexpected validator failure")
+
+    service = RAGService(
+        session_factory=cast(Any, object()),
+        embedding_provider=cast(Any, object()),
+        llm_provider=None,
+        citation_validator=failing,
+    )
+
+    assert await service._validate_citation(uuid.uuid4(), _chunk()) is None
+
+
+async def test_validation_timeout_fails_closed_without_citation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def hanging(user_id: uuid.UUID, source: RetrievedChunk) -> RetrievedChunk | None:
+        del user_id, source
+        await asyncio.sleep(60)
+        return None
+
+    monkeypatch.setattr(rag_module, "CITATION_VALIDATION_TIMEOUT_SECONDS", 0.01)
+    service = RAGService(
+        session_factory=cast(Any, object()),
+        embedding_provider=cast(Any, object()),
+        llm_provider=None,
+        citation_validator=hanging,
+    )
+
+    assert await service._validate_citation(uuid.uuid4(), _chunk()) is None
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {},
+        {"offset": None},
+        {"offset": True},
+        {"offset": False},
+        {"offset": -1},
+        {"offset": 1.5},
+        {"offset": "3"},
+        {"offset": []},
+    ],
+)
+def test_malformed_offsets_are_rejected(record: dict[str, object]) -> None:
+    assert _record_offset(record) is None
+
+
+@pytest.mark.parametrize("offset", [0, 1, 42])
+def test_non_negative_integer_offsets_are_accepted(offset: int) -> None:
+    assert _record_offset({"offset": offset}) == offset
+
+
+async def test_replay_rejects_malformed_offsets_before_validation() -> None:
+    service = RAGService(
+        session_factory=cast(Any, object()),
+        embedding_provider=cast(Any, object()),
+        llm_provider=None,
+    )
+    record = citation_record(CitationRef(index=1, chunk=_chunk(), offset=0))
+
+    for malformed in (True, -1, 1.5, None):
+        record["offset"] = malformed
+        assert await service._replay_citation_ref(uuid.uuid4(), record) is None
+
+
+async def test_repeated_markers_validate_once_per_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _chunk()
+    calls: list[RetrievedChunk] = []
+
+    async def validate(
+        user_id: uuid.UUID, item: RetrievedChunk
+    ) -> RetrievedChunk | None:
+        del user_id
+        calls.append(item)
+        return item
+
+    class RepeatedLLM:
+        model = "test-model"
+        context_window = 4096
+
+        async def stream(
+            self, messages: Sequence[ChatMessage], *, max_tokens: int
+        ) -> AsyncIterator[str]:
+            del messages, max_tokens
+            yield "Dato [S1]"
+            yield " y de nuevo [S1]."
+
+    service = RAGService(
+        session_factory=cast(Any, object()),
+        embedding_provider=cast(Any, object()),
+        llm_provider=RepeatedLLM(),
+        citation_validator=validate,
+        checkpoint_seconds=60.0,
+        cancel_poll_seconds=60.0,
+        heartbeat_seconds=60.0,
+    )
+
+    async def streaming(user_id: uuid.UUID, message_id: uuid.UUID) -> str:
+        del user_id, message_id
+        return "streaming"
+
+    async def checkpoint(
+        prepared: PreparedStream,
+        content: str,
+        citations: Sequence[dict[str, object]],
+    ) -> bool:
+        del prepared, content, citations
+        return True
+
+    async def finalize(
+        prepared: PreparedStream,
+        status: str,
+        content: str,
+        citations: Sequence[dict[str, object]],
+    ) -> str:
+        del prepared, content, citations
+        return status
+
+    monkeypatch.setattr(service, "_message_status", streaming)
+    monkeypatch.setattr(service, "_checkpoint", checkpoint)
+    monkeypatch.setattr(service, "_finalize", finalize)
+
+    prepared = PreparedStream(
+        user_id=uuid.uuid4(),
+        conversation_id=uuid.uuid4(),
+        assistant_message_id=uuid.uuid4(),
+        messages=(ChatMessage(role="user", content="¿Qué es la integral?"),),
+        sources=(SourceItem(index=1, chunk=source, block=""),),
+    )
+    frames = [frame async for frame in service._live_events(prepared)]
+
+    assert len(calls) == 1
+    assert sum(frame.startswith("event: citation") for frame in frames) == 2
+
+
+async def test_rehydrate_source_does_not_reuse_the_old_snippet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _chunk(snippet="snippet viejo")
+    seen: dict[str, object] = {}
+
+    async def fake_rehydrate(
+        self: SearchService,
+        *,
+        user_id: uuid.UUID,
+        chunk_id: uuid.UUID,
+        audio_id: uuid.UUID,
+        query: str = "",
+        score_rrf: float = 0.0,
+    ) -> RetrievedChunk | None:
+        del self
+        seen.update(
+            {
+                "user_id": user_id,
+                "chunk_id": chunk_id,
+                "audio_id": audio_id,
+                "query": query,
+                "score_rrf": score_rrf,
+            }
+        )
+        return source
+
+    monkeypatch.setattr(SearchService, "rehydrate_chunk_ids", fake_rehydrate)
+    service = SearchService(cast(Any, object()), provider=None)
+
+    assert await service.rehydrate_source(user_id=uuid.uuid4(), source=source) is source
+    assert seen["query"] == ""
+    assert seen["chunk_id"] == source.chunk_id
+    assert seen["audio_id"] == source.audio_id
 
 
 async def test_model_text_cannot_inject_ids_or_urls() -> None:

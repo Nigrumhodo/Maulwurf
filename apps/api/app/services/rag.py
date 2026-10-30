@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from sqlalchemy import and_, select, update
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.chat import Conversation, Message, MessageSource
@@ -88,6 +88,7 @@ HEARTBEAT_SECONDS = 15.0
 CHECKPOINT_SECONDS = 1.0
 CANCEL_POLL_SECONDS = 0.5
 REPLAY_POLL_SECONDS = 0.5
+CITATION_VALIDATION_TIMEOUT_SECONDS = 2.0
 MAX_CHUNKS = DEFAULT_TOP_K
 MESSAGE_OVERHEAD_TOKENS = 4
 SOURCE_OVERHEAD_TOKENS = 4
@@ -498,16 +499,24 @@ class RAGService:
     async def _validate_citation(
         self, user_id: uuid.UUID, source: RetrievedChunk
     ) -> RetrievedChunk | None:
-        """Revalidate one source with a short session; a DB failure drops the citation."""
+        """Revalidate one source with a short session; any failure drops the citation."""
         try:
-            if self._citation_validator is not None:
-                return await self._citation_validator(user_id, source)
-            async with self._session_factory() as db:
-                return await validate_citation_source(db, user_id=user_id, source=source)
-        except SQLAlchemyError as exc:
+            async with asyncio.timeout(CITATION_VALIDATION_TIMEOUT_SECONDS):
+                if self._citation_validator is not None:
+                    return await self._citation_validator(user_id, source)
+                async with self._session_factory() as db:
+                    return await validate_citation_source(db, user_id=user_id, source=source)
+        except TimeoutError:
+            logger.warning("chat.citation.validation_timeout chunk_id=%s", source.chunk_id)
+            return None
+        except Exception as exc:  # CancelledError is BaseException and must propagate.
             # The SSE response may already be open. A citation is optional evidence, so a
             # failed revalidation must fail closed instead of leaking a stale source.
-            logger.warning("chat.citation.validation_failed error=%s", type(exc).__name__)
+            logger.warning(
+                "chat.citation.validation_failed error=%s chunk_id=%s",
+                type(exc).__name__,
+                source.chunk_id,
+            )
             return None
 
     async def _replay_citation_ref(
@@ -517,19 +526,22 @@ class RAGService:
         index = record.get("index")
         if isinstance(index, bool) or not isinstance(index, int) or index <= 0:
             return None
+        offset = _record_offset(record)
+        if offset is None:
+            return None
         try:
             async with self._session_factory() as db:
                 current = await validate_citation_record(
                     db, user_id=user_id, record=record
                 )
-        except SQLAlchemyError as exc:
+        except Exception as exc:  # CancelledError is BaseException and must propagate.
             logger.warning(
                 "chat.citation.replay_validation_failed error=%s", type(exc).__name__
             )
             return None
         if current is None:
             return None
-        return CitationRef(index=index, chunk=current, offset=_record_offset(record))
+        return CitationRef(index=index, chunk=current, offset=offset)
 
     async def prepare(
         self,
@@ -813,6 +825,19 @@ class RAGService:
         buffer = CitationBuffer(len(prepared.sources))
         content = ""
         citations: list[dict[str, object]] = []
+        # A model may repeat the same marker. Validation is a DB round-trip, so reuse the
+        # first result for the lifetime of this stream.
+        validated_sources: dict[uuid.UUID, RetrievedChunk | None] = {}
+
+        async def validate_cached(
+            user_id: uuid.UUID, source: RetrievedChunk
+        ) -> RetrievedChunk | None:
+            if source.chunk_id not in validated_sources:
+                validated_sources[source.chunk_id] = await self._validate_citation(
+                    user_id, source
+                )
+            return validated_sources[source.chunk_id]
+
         dropped_citations = 0
         terminal = False
         cancelled = False
@@ -883,7 +908,7 @@ class RAGService:
                             source=source,
                             offset=len(content),
                             user_id=prepared.user_id,
-                            validate=self._validate_citation,
+                            validate=validate_cached,
                         )
                         if ref is None:
                             dropped_citations += 1
@@ -993,8 +1018,11 @@ class RAGService:
         yield self._snapshot_event(state.message_id, offset, state.status)
         sent = offset
         emitted_citations = len(state.citations)
-        for record in sorted(state.citations, key=_record_offset):
-            citation_offset = min(max(0, _record_offset(record)), len(state.content))
+        for record in sorted(state.citations, key=_record_sort_offset):
+            citation_offset = _record_offset(record)
+            if citation_offset is None:
+                continue
+            citation_offset = min(citation_offset, len(state.content))
             if citation_offset < offset:
                 continue
             if citation_offset > sent:
@@ -1043,8 +1071,11 @@ class RAGService:
                 return
             new_citations = snapshot.citations[emitted_citations:]
             emitted_citations = len(snapshot.citations)
-            for record in sorted(new_citations, key=_record_offset):
-                citation_offset = min(max(0, _record_offset(record)), len(snapshot.content))
+            for record in sorted(new_citations, key=_record_sort_offset):
+                citation_offset = _record_offset(record)
+                if citation_offset is None:
+                    continue
+                citation_offset = min(citation_offset, len(snapshot.content))
                 if citation_offset > sent:
                     yield self._delta_event(snapshot.content[sent:citation_offset], citation_offset)
                     sent = citation_offset
@@ -1617,6 +1648,15 @@ def _map_llm_error(exc: LLMError) -> ChatStreamError:
     )
 
 
-def _record_offset(record: dict[str, object]) -> int:
-    raw = record.get("offset", 0)
-    return int(raw) if isinstance(raw, (int, float)) else 0
+def _record_offset(record: dict[str, object]) -> int | None:
+    """Persisted offset: a non-negative int; bools, floats and negatives are malformed."""
+    raw = record.get("offset")
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        return None
+    return raw
+
+
+def _record_sort_offset(record: dict[str, object]) -> int:
+    """Malformed offsets sort first and are dropped before any event is emitted."""
+    offset = _record_offset(record)
+    return 0 if offset is None else offset

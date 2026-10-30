@@ -857,6 +857,7 @@ async def _hydrate(
     query: str,
     version: str,
     hits: Sequence[FusedHit],
+    audio_id: uuid.UUID | None = None,
 ) -> list[RetrievedChunk]:
     """Hydrate fused hits in RRF order with tenant/version checks repeated in SQL."""
     if not hits:
@@ -915,6 +916,8 @@ async def _hydrate(
             Transcript.version == Audio.active_transcript_version,
         )
     )
+    if audio_id is not None:
+        statement = statement.where(Chunk.audio_id == audio_id)
     rows = (await db.execute(statement)).all()
     metadata: dict[uuid.UUID, Any] = {}
     segments: dict[uuid.UUID, tuple[tuple[int, int], Any]] = {}
@@ -1118,6 +1121,7 @@ class SearchService:
             query=query,
             version=generation.version,
             hits=[FusedHit(chunk_id=chunk_id, audio_id=audio_id, score_rrf=score_rrf)],
+            audio_id=audio_id,
         )
         return hydrated[0] if hydrated else None
 
@@ -1129,7 +1133,9 @@ class SearchService:
             user_id=user_id,
             chunk_id=source.chunk_id,
             audio_id=source.audio_id,
-            query=source.snippet,
+            # `query` only feeds make_snippet; reusing the old snippet would recompute a
+            # snippet nobody reads.
+            query="",
             score_rrf=source.score_rrf,
         )
 
