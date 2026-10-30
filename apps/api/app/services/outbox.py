@@ -31,7 +31,7 @@ class Outcome(StrEnum):
     UNKNOWN_TYPE = "unknown_type"
     # Contador, no decisión: el job ya estaba en Redis y no se volvió a encolar.
     DEDUPLICATED = "deduplicated"
-    # Resultados de entrega (J2.1): cada fila cuenta una sola vez, con su resultado final.
+    # Delivery outcomes (J2.1): each row is counted once, with its final result.
     RETRY_SCHEDULED = "retry_scheduled"
     FAILED = "failed"
     DEFERRED_INFRA = "deferred_infra"

@@ -1,21 +1,22 @@
-"""Dispatcher de la outbox (J1.5, J2.1): de `outbox_events` en PostgreSQL a jobs ARQ en Redis.
+"""Outbox dispatcher (J1.5, J2.1): from `outbox_events` in PostgreSQL to ARQ jobs in Redis.
 
 Cada ciclo toma un lote con `FOR UPDATE SKIP LOCKED` (dos schedulers no publican el mismo
-evento), aplica `services.outbox.decide`, revalida el evento y encola solo IDs.
+event), applies `services.outbox.decide`, revalidates the event and enqueues only IDs.
 
-- El lote solo contiene eventos que pueden avanzar: los publicables, los que hay que
-  descartar y los que ya cumplen su espera de reintento. Quedan fuera, sin ocupar huecos,
-  los tipos sin consumidor en S1, los index/analyze sin cleanup verificado y los reintentos
-  pendientes (`next_attempt_at` en el futuro).
-- Cada fila cuenta una sola vez con su resultado final (`Outcome`).
-- Errores de encolado (`workers/outbox_errors.py`):
-  - infra (Redis caído, OOM): se corta el ciclo sin tocar los eventos restantes ni gastar
-    intentos. Se reintenta en el siguiente ciclo del scheduler.
-  - transitorio: `attempts + 1` y `next_attempt_at` con backoff y jitter; al llegar a
-    `max_attempts` pasa a `failed`.
-  - permanente: `failed` sin reintento.
-- Revalidación justo antes de publicar (`workers/outbox_revalidation.py`): audio borrado,
-  dueño sin cuenta activa o versión desplazada dejan el evento `skipped` sin publicar.
+- The batch only contains events that can advance: publishable ones, ones to discard,
+  and those whose retry wait has elapsed. Left out without leaving gaps or staying `pending`:
+  types with no consumer in S1, index/analyze events without verified cleanup, and retries
+  still waiting (`next_attempt_at` in the future).
+- Each row is counted once, with its final result (`Outcome`).
+- Enqueue errors (`workers/outbox_errors.py`):
+  - infra (Redis down, OOM): the cycle stops without touching the remaining events or spending
+    attempts. It is retried in the scheduler's next cycle.
+  - transient: `attempts + 1` and `next_attempt_at` with backoff and jitter; once
+    `max_attempts` is reached, it moves to `failed`.
+  - permanent: `failed` with no retry.
+- Revalidation right before publishing (`workers/outbox_revalidation.py`): deleted audio,
+  an owner without an active account, or a superseded version, leaves the event
+  `skipped` unpublished.
 - Entrega al menos una vez, no exactamente una: si el commit falla después de encolar, el
   evento sigue pendiente y el siguiente ciclo lo reencola. `_job_id = outbox:<id>` solo
   deduplica mientras el job o su resultado siguen en Redis (`keep_result = 60 s`); pasado
@@ -145,7 +146,8 @@ async def dispatch_pending(
         )
         report[outcome] += 1
         if outcome is Outcome.DEFERRED_INFRA:
-            # Redis no responde: el resto del lote fallaría igual, y cada fallo bloquea tiempo.
+            # Redis is not responding: the rest of the batch would fail the same way,
+            # and each failure blocks for a while.
             break
     return report
 

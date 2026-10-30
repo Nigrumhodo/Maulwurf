@@ -1,6 +1,7 @@
-"""U-S2-JF-01: backoff con jitter acotado (máx. 3 transitorios); los no transitorios no reintentan.
+"""U-S2-JF-01: bounded-jitter backoff (max. 3 transient failures); non-transient
+errors are not retried.
 
-Sin Redis ni BD: la política recibe un RNG con semilla y el clasificador es una función pura.
+No Redis or DB: the policy receives a seeded RNG and the classifier is a pure function.
 """
 
 import random
@@ -16,7 +17,7 @@ from app.workers.outbox_errors import ErrorKind, classify_enqueue_error
 
 
 class _MaxJitter(random.Random):
-    """RNG que siempre devuelve el extremo superior del jitter."""
+    """RNG that always returns the upper bound of the jitter."""
 
     def uniform(self, a: float, b: float) -> float:
         return b
@@ -45,7 +46,7 @@ def test_jitter_stays_within_bounded_fraction(failed_attempts: int) -> None:
     delay = policy.delay(failed_attempts)
 
     assert floor <= delay <= floor * (1 + policy.jitter_fraction)
-    # El tope absoluto incluye el jitter: nunca más de cap * (1 + fracción).
+    # The absolute cap includes the jitter: never more than cap * (1 + fraction).
     assert delay <= timedelta(seconds=policy.cap_seconds * (1 + policy.jitter_fraction))
 
 

@@ -1,6 +1,6 @@
-"""Encolado de un evento de la outbox y contabilidad de sus reintentos (J2.1).
+"""Enqueues an outbox event and tracks its retry accounting (J2.1).
 
-Solo IDs y versión llegan a Redis: nunca payload, audio, tokens ni texto.
+Only IDs and the version reach Redis: never payload, audio, tokens or text.
 """
 
 import logging
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def job_args(event: OutboxEvent, job: str) -> tuple[object, ...]:
-    # Solo IDs y versión: nunca payload, audio, tokens ni texto.
+    # Only IDs and version: never payload, audio, tokens or text.
     if job == "index":
         return (str(event.resource_id), event.resource_version)
     return (str(event.resource_id),)
@@ -49,8 +49,8 @@ async def enqueue(
     event.status = "dispatched"
     event.published_at = clock()
     if queued is None:
-        # `arq:job/result:<id>` ya existía: un ciclo anterior encoló y su commit falló.
-        # El job ya está en cola, así que marcar dispatched es correcto.
+        # `arq:job/result:<id>` already existed: an earlier cycle enqueued it and its commit failed.
+        # The job is already queued, so marking it dispatched is correct.
         report[Outcome.DEDUPLICATED] += 1
     return Outcome.PUBLISH
 
@@ -62,7 +62,7 @@ def _record_enqueue_failure(
     retry: RetryPolicy,
     clock: Callable[[], datetime],
 ) -> Outcome:
-    # Solo el tipo: el mensaje puede incluir el DSN o datos del servidor.
+    # Only the type: the message may include the DSN or server data.
     error = type(exc).__name__
     if kind is ErrorKind.INFRA:
         logger.warning("outbox.deferred_infra event_id=%s error=%s", event.id, error)

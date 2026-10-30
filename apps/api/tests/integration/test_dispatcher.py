@@ -299,7 +299,7 @@ async def test_requeue_after_failed_commit_is_counted_as_deduplicated(
 
 
 class _FakeClock:
-    """Reloj inyectado: el backoff se prueba sin esperar ni leer la hora real."""
+    """Injected clock: backoff is tested without waiting or reading the real time."""
 
     def __init__(self, now: datetime) -> None:
         self.now = now
@@ -309,9 +309,9 @@ class _FakeClock:
 
 
 class _ScriptedPool:
-    """Doble de `ArqRedis`: cada llamada consume una entrada; `None` delega en el pool real.
+    """Test double for `ArqRedis`: each call consumes one entry; `None` delegates to the real pool.
 
-    Una entrada que sea excepción se lanza en lugar de encolar.
+    An entry that is an exception is raised instead of enqueued.
     """
 
     def __init__(self, real: ArqRedis, script: Sequence[BaseException | None]) -> None:
@@ -388,7 +388,7 @@ async def test_third_transient_failure_marks_event_failed(
     assert [r[Outcome.RETRY_SCHEDULED] for r in outcomes[:2]] == [1, 1]
     assert outcomes[2][Outcome.FAILED] == 1
     assert (event.status, event.attempts) == ("failed", 3)
-    # Terminal: ni el reloj ni un Redis sano lo vuelven a tomar.
+    # Terminal: neither the clock nor a healthy Redis picks it up again.
     clock.now = start + timedelta(days=30)
     later = await dispatch_pending(db_session, pool, queue_name=queue, clock=clock)
     assert sum(later.values()) == 0
@@ -420,7 +420,7 @@ async def test_permanent_error_fails_without_retry(
 async def test_infra_error_stops_cycle_without_charging_events(
     db_session: AsyncSession, redis: tuple[ArqRedis, str]
 ) -> None:
-    # Redis caído no es culpa del evento: no gasta intentos ni pasa a failed.
+    # Redis being down is not the event's fault: it spends no attempts and does not move to failed.
     pool, queue = redis
     start = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
     clock = _FakeClock(start)
@@ -487,7 +487,7 @@ async def test_stale_transcript_version_is_not_published(
     pool, queue = redis
     user, audio = await _audio(db_session, "verified")
     audio.active_transcript_version = 2
-    event = _event(user, audio, "index_requested")  # resource_version=1: superada por la 2
+    event = _event(user, audio, "index_requested")  # resource_version=1: superseded by version 2
     db_session.add(event)
     await db_session.flush()
 
@@ -504,7 +504,7 @@ async def test_current_transcript_version_still_publishes(
     pool, queue = redis
     user, audio = await _audio(db_session, "verified")
     audio.active_transcript_version = 1
-    event = _event(user, audio, "index_requested")  # resource_version=1 == activa
+    event = _event(user, audio, "index_requested")  # resource_version=1 == active
     db_session.add(event)
     await db_session.flush()
 

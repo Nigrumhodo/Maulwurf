@@ -1,7 +1,7 @@
-"""Revalidación de un evento justo antes de publicarlo (J2.1).
+"""Revalidates an event right before it is published (J2.1).
 
-Un evento puede quedar pendiente mientras su audio se borra, su dueño pierde el acceso o
-llega una versión nueva. Esta lectura decide si el job todavía debe salir.
+An event can stay pending while its audio is deleted, its owner loses access, or
+a new version arrives. This read decides whether the job should still be published.
 """
 
 from sqlalchemy import select
@@ -12,12 +12,12 @@ from app.services.outbox import Outcome
 
 
 async def revalidate(db: AsyncSession, event: OutboxEvent) -> Outcome | None:
-    """Devuelve el motivo de rechazo, o `None` si el evento sigue siendo publicable.
+    """Returns the rejection reason, or `None` if the event is still publishable.
 
-    Solo se llama con eventos de audio (el gate ya descarta los demás). Lectura de snapshot,
-    sin `FOR SHARE`: `delete_audio` toma `audios` antes que `outbox_events`, y un bloqueo
-    aquí invertiría ese orden y provocaría deadlock. La ventana entre esta lectura y el
-    encolado la cierra la comprobación dentro del job (J2.2), no esta.
+    Only called with audio events (the gate already drops the others). Snapshot read,
+    without `FOR SHARE`: `delete_audio` locks `audios` before `outbox_events`, and a lock here would
+    reverse that order and cause a deadlock. The window between this read and enqueueing is
+    closed by the check inside the job (J2.2), not by this one.
     """
     row = (
         await db.execute(
@@ -30,8 +30,8 @@ async def revalidate(db: AsyncSession, event: OutboxEvent) -> Outcome | None:
         return Outcome.TOMBSTONED
     if row.status != "active":
         return Outcome.OWNER_REVOKED
-    # Sin versión activa no hay con qué comparar. Es el caso de los eventos creados antes de
-    # activar un transcript: se publican igual, como hasta ahora.
+    # Without an active version there is nothing to compare against. This covers events
+    # created before a transcript was activated: they are published anyway, as before.
     active = row.active_transcript_version
     if active is not None and event.resource_version != active:
         return Outcome.STALE_VERSION
