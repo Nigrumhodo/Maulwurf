@@ -161,3 +161,58 @@ async def reconcile_committed(
                 continue
         results.append(ReconcileResult(attempt_id, await _enable(pool, lease)))
     return tuple(results)
+
+
+# Same status and error code as ``LOSS_REASONS["technical_loss"]`` in
+# ``apps/api/app/services/state_machine.py``. Ingest cannot import the API package.
+STRANDED_STATES = ("receiving", "transcribing")
+STRANDED_STATUS = "requires_reupload"
+STRANDED_ERROR_CODE = "technical_loss"
+SWEEP_BATCH_SIZE = 100
+SWEEP_MAX_BATCHES = 10
+
+# Bumping ``fencing_token`` in the same statement fences the dead owner: its
+# ``transition``, ``heartbeat`` and ``record_cleanup`` now match no row.
+_SWEEP_SQL = """
+WITH due AS (
+    SELECT id, user_id
+      FROM ingestion_attempts
+     WHERE status = ANY($1::text[])
+       AND lease_expires_at <= now()
+     ORDER BY lease_expires_at
+     LIMIT $2
+       FOR UPDATE SKIP LOCKED
+)
+UPDATE ingestion_attempts AS ia
+   SET status = $3, error_code = $4,
+       fencing_token = ia.fencing_token + 1, updated_at = now()
+  FROM due
+ WHERE ia.id = due.id AND ia.user_id = due.user_id
+   AND ia.status = ANY($1::text[]) AND ia.lease_expires_at <= now()
+RETURNING ia.id, ia.user_id
+"""
+
+
+async def sweep_stranded(pool: asyncpg.Pool) -> tuple[uuid.UUID, ...]:
+    """End receiving/transcribing attempts whose lease expired. Bounded, never retranscribes.
+
+    Committed attempts sit in ``transcript_committed_cleanup_pending`` and are not selected.
+    ``awaiting_upload`` is not selected either. ``cleanup_status`` is not touched.
+    """
+    ended: list[uuid.UUID] = []
+    for _ in range(SWEEP_MAX_BATCHES):
+        rows = await pool.fetch(
+            _SWEEP_SQL, list(STRANDED_STATES), SWEEP_BATCH_SIZE,
+            STRANDED_STATUS, STRANDED_ERROR_CODE,
+        )
+        for row in rows:
+            attempt_id = row["id"]
+            ended.append(attempt_id)
+            logger.info(
+                "reconciler.stranded_ended attempt_id=%s user_id=%s", attempt_id, row["user_id"],
+            )
+        if len(rows) < SWEEP_BATCH_SIZE:
+            break
+    if ended:
+        logger.info("reconciler.stranded_swept count=%s", len(ended))
+    return tuple(ended)
