@@ -33,8 +33,21 @@
 | S1.B1 | S | done | 2026-09-27 UTC, Arch Linux, Python 3.12.11 (`apps/ingest` venv recreated from 3.13), Docker 29.8.0, image `maulwurf-ingest:local`. Branch `s1/b1-hardening` (`9f0b991`, `d6204bd`). Ingest unit tests: 59 passed. `pytest -m integration tests/test_hardening_container.py` against compose's `ingest`: 10 passed (I-S1-SG-06, part B1: `docker inspect`, self-check `[]`, `/readyz` 200, writes outside the tmpfs rejected, `ENOSPC` before 256 MiB, no dump after SIGSEGV, tmpfs empty on restart). Negative control: the non-hardened image does not start (8 failures) and in `report` mode 5 tests fail. Merged in #33. |
 | S1.B3 | S | done | 2026-09-27 UTC, Arch Linux, Python 3.12.11, Docker 29.8.0, system ffmpeg and `7:7.1.5` in the image, disposable `pgvector/pgvector:pg16`. Branch `s1/b3-supervisor` (`269691b`). `pytest tests/test_supervisor.py`: 8 passed, 5 of 5 runs (success, SIGKILL to the child with ffmpeg alive, timeout, descriptor to a deleted file → `failed`, expired lease does not publish, 4 concurrent `acquire` → 1 wins, per-user lease). Negative control: without `killpg` the SIGKILL test fails. In the hardened container against compose's DB: `succeeded`, 5 fragments, `verified`, tmpfs empty; test rows deleted. Ingest suite: 77 passed. Merged in #34. |
 
+### Week 2 (S2) — Knowledge
+
+| Ticket | Area | Status | Evidence (command, date, environment, result) |
+|---|---|---|---|
+| A2.13 | A | in progress | 2026-10-30 UTC, Arch Linux, Python 3.12, Docker, disposable `pgvector/pgvector:pg16` at `127.0.0.1:55432` and `redis:7.4-alpine` (`--save "" --appendonly no --maxmemory 256mb noeviction`) at `127.0.0.1:56379`. Branch `feature/A2.13-reception-client` (`b270f66`, `b14666a`, `7f377b6`, `98c4d43`). `ruff` + `mypy` green (140 files); unit 698 passed; integration 315 passed. I-S2-AN-12 against an in-memory ingest served by uvicorn: cases 1–4, 6–13 and 12a–12d green; case 13 streams 32 MiB with ~0.6 MB RSS growth. Case 5 partial (D-5, see notes); case 14 (`load`) written, not run. Ingest credential vectors: 4 passed. Negative controls: without the hash comparison case 8 fails; without `abort()` on disconnect case 9 fails. |
+| J2.1 | J | in progress | 2026-10-30 UTC, same environment. Branch `feature/J2.1-outbox-dispatcher` (`d85675a`, `7f9efa4`, `605b3bf`). `ruff` + `mypy` green; unit 684 passed (U-S2-JF-01: 22 cases); integration 305 passed (`test_dispatcher.py` 23, A2.10 gate tests unchanged). No migration: uses `attempts`, `max_attempts`, `next_attempt_at`. Negative control: retrying a permanent error makes 5 tests fail. |
+| J2.7 | J | in progress | 2026-10-30 UTC. Branch `feature/J2.7-fault-injection` (`c6c0610`). Ingest integration as root in `python:3.12-bookworm` with ffmpeg and espeak-ng (own PID namespace, so `unreadable_processes = 0`): 51 passed, 10 skipped; the 3 new I-S2-JF-05 cases pass 3 times in a row. API `test_fault_injection_outbox.py`: 5 passed. Negative control: removing the fencing-token guard of `record_cleanup` makes case (c) fail; `lease.py` restored byte for byte. |
+| J2.8 | J | in progress | 2026-10-30 UTC. Branch `feature/J2.8-ingest-compose-wiring` (`d3accc7`, stacked on A2.13). `python3 scripts/ci/check_compose_ingest_env.py` (I-S2-JF-11): 24 assertions pass with a dummy env (names only, no values). `docker compose config -q` OK. Negative controls: an API secret in `ingest`, a default `NVIDIA_API_KEY` and user `0:0` each fail. Full stack not started. |
+| J2.9 | J | in progress | 2026-10-30 UTC. Branch `feature/J2.9-ci-hygiene` (`05e7dfc`, `e2a8b8e`). `scripts/ci/check_no_secrets.sh`: 488 tracked files, 0 findings; a seeded fake `nvapi-` key in a throwaway clone fails it. License report (pip-licenses 5.5.5, license-checker 25.0.1): api 45, ingest 28, web 73 packages, 0 denied. Empty suite (`pytest -m nonexistent`, exit 5) now fails the step; unit suites pass without the tolerance. Redis CI asserts `maxmemory=268435456`, `noeviction`. Pending: a real PR with a seeded secret must turn `secret-scan` red. |
+
 ## Blockers and dependencies
 
+- 2026-10-30: J2.4 must resolve the `HELD` attempt left when the owner loses the token after a
+  verified cleanup (found in J2.7). J2.2 must revalidate tombstone, owner and version inside the
+  `index` job (J2.1 revalidates with a snapshot read).
 - (every Monday: note whom you are waiting on for a frozen contract §6 or real code, and which day)
 
 ## Week notes
@@ -79,4 +92,22 @@
   WSL or without a container, processes of another UID leave `unreadable_processes > 0` and
   the attempt ends `failed` on purpose (L1.6, exception 5). It is not relaxed without a
   security review.
+- 2026-10-30: A2.13 D-5: httpx sends the whole request body before reading the response, so an
+  early `413`/`415` from ingest reaches the browser only after the API has read the body up to
+  its own size cut. Bounded by that cut; a full fix needs a lower-level HTTP/1.1 client.
+  Lead decision: accepted as a bounded risk for S2; a full fix becomes its own ticket only if
+  the ingress measurement of J2.10 shows the extra read matters.
+- 2026-10-30: J2.8 keeps `MAULWURF_INGEST_URL` and `MAULWURF_INGEST_CREDENTIAL_SECRET` as a
+  pass-through pair: a fixed URL without the secret would stop `api` from starting. Without
+  both in `.env` the `PUT` keeps answering `503`.
+- 2026-10-30: J2.7 finding, decided: `record_cleanup` may write `verified` after the lease
+  expired if the fencing token did not change. Lead decision: the code stands. ESPECIFICACION
+  §M3 and S1.B6 say an expired lease does not *prove* cleanup and only cleanup evidence does;
+  here `verified` comes from `destroy_and_verify` evidence, never from the expiry, and the
+  outbox stays closed (`LEASE_LOST`). No contract change.
+- 2026-10-30: J2.7 finding, decided: an owner that loses the token after a verified cleanup
+  leaves the attempt `HELD` with no automatic exit. Lead decision: J2.4 (reconciler) owns it
+  and must detect and resolve that state; it is not closed by J2.7.
+- 2026-10-30: J2.1 does not dispatch Calendar, notification or deletion events (no handler
+  yet), and its revalidation is a snapshot read; J2.2 must revalidate inside the job.
 - (decisions, findings, scope deviations — one line per event, with date)
