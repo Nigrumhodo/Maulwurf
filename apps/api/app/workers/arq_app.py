@@ -46,7 +46,7 @@ async def dispatch_outbox(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    # `index` tiene su propio presupuesto de reintentos (J2.2); `analyze` sigue sin reintentos.
+    # `index` has its own retry budget (J2.2); `analyze` still has none.
     functions: ClassVar[list[Function | Callable[..., Awaitable[None]]]] = [
         func(index, max_tries=MAX_TRIES, timeout=JOB_TIMEOUT_S),
         analyze,
@@ -55,7 +55,7 @@ class WorkerSettings:
     redis_settings = _REDIS
     health_check_interval = HEALTH_CHECK_INTERVAL_S
     keep_result = 60
-    max_tries = 1  # S1 sin reintentos para las funciones sin presupuesto propio
+    max_tries = 1  # no retries for functions without their own budget
 
 
 class SchedulerSettings:
