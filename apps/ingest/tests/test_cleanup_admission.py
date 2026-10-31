@@ -16,6 +16,7 @@ from pathlib import Path
 import asyncpg
 import pytest
 from test_supervisor import (  # noqa: E402
+    PROVEN_CLEANUP,
     SYNTHETIC_TEXT,
     _config,
     _row,
@@ -110,3 +111,63 @@ async def test_cleanup_failure_halts_admission_and_alerts(
     assert any("code=cleanup_failed" in message for message in messages)
     assert all(str(tmpfs_dir) not in message for message in messages)
     assert all("RIFF" not in message for message in messages)
+
+
+@pytest.mark.integration
+async def test_incomplete_evidence_never_stamps_audio_deleted_at(
+    pool: asyncpg.Pool,
+) -> None:
+    """S4.2: a bare ``verified`` claim is not proof of absence."""
+    attempt = await _seed(pool)
+    owned = await lease.acquire(
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, instance="ingest:a",
+        ttl=timedelta(seconds=30),
+    )
+    assert owned is not None
+
+    assert await lease.record_cleanup(
+        pool, owned, verified=True,
+        evidence={**PROVEN_CLEANUP, "open_descriptors": 1},
+    ) is False
+    row = await _row(pool, attempt)
+    assert row["cleanup_status"] == "pending"
+    assert row["cleanup_verified_at"] is None and row["audio_deleted_at"] is None
+
+
+@pytest.mark.integration
+async def test_failed_cleanup_cannot_be_upgraded_to_verified(pool: asyncpg.Pool) -> None:
+    """S4.2: a failed cleanup is terminal; later evidence cannot reopen it."""
+    attempt = await _seed(pool)
+    owned = await lease.acquire(
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, instance="ingest:a",
+        ttl=timedelta(seconds=30),
+    )
+    assert owned is not None
+    assert await lease.record_cleanup(
+        pool, owned, verified=False, evidence={"verified": False, "error": "OSError"},
+    )
+
+    assert await lease.record_cleanup(
+        pool, owned, verified=True, evidence=PROVEN_CLEANUP,
+    ) is False
+    row = await _row(pool, attempt)
+    assert row["cleanup_status"] == "failed"
+    assert row["cleanup_verified_at"] is None and row["audio_deleted_at"] is None
+
+
+@pytest.mark.integration
+async def test_failed_cleanup_blocks_a_new_owner(pool: asyncpg.Pool) -> None:
+    """S4.2: the failed latch also fences acquisition, not only ``reclaim_committed``."""
+    attempt = await _seed(pool)
+    await pool.execute(
+        """UPDATE ingestion_attempts
+              SET status = 'transcribing', cleanup_status = 'failed',
+                  lease_expires_at = now() - interval '1 second'
+            WHERE id = $1""",
+        attempt.attempt_id,
+    )
+
+    assert await lease.acquire(
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, instance="ingest:b",
+        ttl=timedelta(seconds=30),
+    ) is None

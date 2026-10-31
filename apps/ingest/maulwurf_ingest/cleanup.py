@@ -16,6 +16,7 @@ import shutil
 import signal
 import tempfile
 import time
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -23,6 +24,29 @@ from maulwurf_ingest import hardening, metrics
 
 PROC = Path("/proc")
 logger = logging.getLogger(__name__)
+
+_ABSENCE_FLAGS = ("workdir_absent", "tmp_is_tmpfs")
+_ABSENCE_COUNTERS = (
+    "live_processes", "open_descriptors", "mounts_under_workdir", "unreadable_processes",
+)
+
+
+def absence_verified(evidence: Mapping[str, object]) -> bool:
+    """True only when the evidence proves that no temporary survived.
+
+    A deleted file can stay readable through an open descriptor, an orphan ffmpeg can
+    keep writing into the tmpfs, and a mount can hide the directory. File names alone
+    are not proof, so every descriptor/process/mount check must be present and exact.
+    A missing or malformed counter means "unknown", never zero.
+    """
+    if any(evidence.get(name) is not True for name in _ABSENCE_FLAGS):
+        return False
+    for name in _ABSENCE_COUNTERS:
+        value = evidence.get(name)
+        # bool is an int subclass: `False` must not pass as a zero counter.
+        if isinstance(value, bool) or not isinstance(value, int) or value != 0:
+            return False
+    return True
 
 
 @dataclass(frozen=True)

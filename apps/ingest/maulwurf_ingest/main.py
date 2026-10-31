@@ -9,6 +9,7 @@ Al arrancar se ejecuta el autochequeo de `hardening`: en modo `enforce` (defecto
 fallo impide servir, así un contenedor mal configurado no llega a aceptar audio.
 """
 import asyncio
+import contextlib
 import logging
 import os
 import secrets
@@ -28,8 +29,8 @@ from maulwurf_ingest.logs import configure_logging
 from maulwurf_ingest.prometheus_text import PROMETHEUS_CONTENT_TYPE, render
 from maulwurf_ingest.receptions import open_service_pool
 from maulwurf_ingest.receptions import router as receptions_router
-from maulwurf_ingest.reconciler import reconcile_committed, sweep_stranded
 from maulwurf_ingest.request_context import RequestIdMiddleware
+from maulwurf_ingest.supervisor import run_sweeper, sweep_once
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +56,11 @@ def enforce_hardening() -> None:
 
 
 async def reconcile_on_startup() -> None:
-    """One recovery pass. A database miss leaves the outbox blocked and the process up.
+    """One recovery pass before serving. A database miss keeps admission closed.
 
-    There is no sweeper loop here: repeating this pass on a timer is S4.2.
-    A persisted failed cleanup closes admission before the process serves.
+    The periodic sweeper (`run_sweeper`) repeats this recovery every 60 s once the
+    service pool is open. A persisted failed cleanup closes admission before the
+    process serves.
     """
     if not settings.database_url:
         return
@@ -71,10 +73,9 @@ async def reconcile_on_startup() -> None:
         if created is None:
             admission.close()
             return
-        await reconcile_committed(
+        await sweep_once(
             created, instance=f"ingest:{socket.gethostname()}", tmp_dir=tempfile.gettempdir(),
         )
-        await sweep_stranded(created)
         await admission.restore_from_database(created)
     except Exception as exc:
         # The DSN is in the exception text. Log only the type.
@@ -83,6 +84,25 @@ async def reconcile_on_startup() -> None:
     finally:
         if created is not None:
             await created.close()
+
+
+def _sweeper_pool(app: FastAPI) -> asyncpg.Pool | None:
+    pool = getattr(app.state, "pool", None)
+    return pool if isinstance(pool, asyncpg.Pool) else None
+
+
+def start_sweeper(app: FastAPI) -> asyncio.Task[None] | None:
+    """Start the periodic recovery loop on the service pool. No pool, no loop."""
+    pool = _sweeper_pool(app)
+    if pool is None:
+        return None
+    return asyncio.create_task(
+        run_sweeper(
+            pool, instance=f"ingest:{socket.gethostname()}",
+            interval_s=settings.sweep_interval_s, tmp_dir=tempfile.gettempdir(),
+        ),
+        name="maulwurf-ingest-sweeper",
+    )
 
 
 def refuse_bad_credential() -> None:
@@ -117,10 +137,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.pool = None
     await reconcile_on_startup()
     await open_service_pool(app)
-    yield
-    pool = getattr(app.state, "pool", None)
-    if isinstance(pool, asyncpg.Pool):
-        await pool.close()
+    app.state.sweeper = start_sweeper(app)
+    try:
+        yield
+    finally:
+        sweeper = getattr(app.state, "sweeper", None)
+        if sweeper is not None:
+            sweeper.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sweeper
+            app.state.sweeper = None
+        pool = getattr(app.state, "pool", None)
+        if isinstance(pool, asyncpg.Pool):
+            await pool.close()
 
 
 app = FastAPI(title="Maulwurf Ingest", version="0.1.0", lifespan=lifespan)

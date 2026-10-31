@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     fragment_overlap_s: float = Field(
         default=0.25, gt=0, le=2, validation_alias="INGEST_FRAGMENT_OVERLAP_S"
     )
+    # Recovery sweeper target (S4.2). Not an instant-deletion promise: normal
+    # cleanup stays immediate.
+    sweep_interval_s: float = Field(
+        default=60.0, ge=1, validation_alias="INGEST_SWEEP_INTERVAL_S"
+    )
     # Piso que Riva aceptó en el spike. No es un máximo aprobado; el uso lo recorta a 30 s.
     fragment_seconds: int = Field(
         default=30, ge=1, validation_alias="INGEST_FRAGMENT_SECONDS"

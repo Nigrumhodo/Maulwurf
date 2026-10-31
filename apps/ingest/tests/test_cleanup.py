@@ -35,6 +35,36 @@ def test_unreadable_processes_fails_closed() -> None:
     assert _evidence(unreadable_processes=1).verified is False
 
 
+def test_absence_requires_every_proc_check() -> None:
+    """S4.2: `audio_deleted_at` needs descriptors, processes and mounts, not a name."""
+    evidence = _evidence().as_json()
+    assert cleanup.absence_verified(evidence) is True
+    for field in ("workdir_absent", "tmp_is_tmpfs"):
+        assert cleanup.absence_verified({**evidence, field: False}) is False
+    for field in (
+        "live_processes", "open_descriptors", "mounts_under_workdir", "unreadable_processes",
+    ):
+        assert cleanup.absence_verified({**evidence, field: 1}) is False
+
+
+def test_absence_is_not_proven_by_a_partial_report() -> None:
+    # A caller that only says "verified" has not inspected /proc; a missing counter is
+    # unknown, not zero.
+    assert cleanup.absence_verified({}) is False
+    assert cleanup.absence_verified({"verified": True}) is False
+    assert cleanup.absence_verified({"workdir_absent": True, "tmp_is_tmpfs": True}) is False
+
+
+def test_absence_rejects_booleans_and_strings_in_counters() -> None:
+    evidence = _evidence().as_json()
+    for field in (
+        "live_processes", "open_descriptors", "mounts_under_workdir", "unreadable_processes",
+    ):
+        assert cleanup.absence_verified({**evidence, field: False}) is False
+        assert cleanup.absence_verified({**evidence, field: "0"}) is False
+        assert cleanup.absence_verified({**evidence, field: 0.0}) is False
+
+
 def _spawn_sleeper() -> tuple[subprocess.Popen[bytes], int]:
     proc = subprocess.Popen(  # noqa: S603 — argv fija, sin shell
         [sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True

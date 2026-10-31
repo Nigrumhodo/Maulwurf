@@ -15,6 +15,11 @@ Un lease vencido que no llega a escribir esa fila deja `pending` y no cierra la 
 Si el supervisor muere entero (SIGKILL al contenedor), el tmpfs desaparece con el
 contenedor (S1.B1) y el intento queda con lease vencido y `cleanup_status = pending`: la
 reconciliación de ese caso es S1.B4/S1.B6.
+
+Since S4.2, `run_sweeper` adds the periodic pass (60 s target): it reconciles
+post-commit attempts and ends stranded ones. A failed pass closes admission (fail
+closed) but does not kill the loop: the next pass still tries to recover. Passes
+never overlap.
 """
 from __future__ import annotations
 
@@ -41,8 +46,16 @@ from maulwurf_ingest.audio.validate import probe_file
 from maulwurf_ingest.config import settings
 from maulwurf_ingest.outcomes import CATALOG
 from maulwurf_ingest.receiver import PayloadTooLarge, receive
+from maulwurf_ingest.reconciler import (
+    DEFAULT_LEASE_TTL,
+    ReconcileResult,
+    reconcile_committed,
+    sweep_stranded,
+)
 
 logger = logging.getLogger(__name__)
+
+SWEEP_INTERVAL_S = 60.0
 
 
 def _default_fragment_seconds() -> int:
@@ -87,6 +100,65 @@ class RunResult:
     evidence: dict[str, object] = field(default_factory=dict)
     # Code from the child's stderr. Not an ``error_code`` unless it is in the catalog.
     child_error: str | None = None
+
+
+@dataclass(frozen=True)
+class SweepResult:
+    committed: tuple[ReconcileResult, ...]
+    stranded: tuple[uuid.UUID, ...]
+
+
+async def sweep_once(
+    pool: asyncpg.Pool, *, instance: str, tmp_dir: str | None = None,
+    lease_ttl: timedelta = DEFAULT_LEASE_TTL,
+) -> SweepResult:
+    """One recovery pass: post-commit reconciliation, then stranded attempts."""
+    committed = await reconcile_committed(
+        pool, instance=instance, tmp_dir=tmp_dir, lease_ttl=lease_ttl,
+    )
+    stranded = await sweep_stranded(pool)
+    return SweepResult(committed=committed, stranded=stranded)
+
+
+async def run_sweeper(
+    pool: asyncpg.Pool, *, instance: str, interval_s: float = SWEEP_INTERVAL_S,
+    tmp_dir: str | None = None,
+) -> None:
+    """Run one recovery pass per interval until cancelled (S4.2).
+
+    A failed pass closes admission (fail closed) but does not kill the loop: the
+    next pass still tries to recover. Passes run sequentially and never overlap,
+    and a pass that overruns the interval does not trigger a burst of catch-up
+    passes.
+    """
+    if interval_s <= 0:
+        raise ValueError("sweep interval must be positive")
+    loop = asyncio.get_running_loop()
+    next_at = loop.time() + interval_s
+    while True:
+        await asyncio.sleep(max(0.0, next_at - loop.time()))
+        try:
+            result = await sweep_once(pool, instance=instance, tmp_dir=tmp_dir)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — a failed pass must not kill the loop
+            # Only the type: driver errors can include the DSN with credentials.
+            logger.error("supervisor.sweep_failed error=%s", type(exc).__name__)
+            if admission.uploads_admitted():
+                admission.close()
+        else:
+            if result.committed or result.stranded:
+                logger.info(
+                    "supervisor.sweep committed=%s stranded=%s",
+                    len(result.committed), len(result.stranded),
+                )
+            else:
+                logger.debug("supervisor.sweep_idle")
+        next_at += interval_s
+        if next_at < loop.time():
+            # The pass overran a whole interval. Start the next one from now instead
+            # of firing back-to-back passes.
+            next_at = loop.time() + interval_s
 
 
 # Gancho de pruebas: recibe (pid del trabajo ASR, directorio) al arrancar el hijo.

@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock
 import asyncpg
 import pytest
 from test_supervisor import (  # noqa: E402
+    PROVEN_CLEANUP,
     SYNTHETIC_TEXT,
     Attempt,
     _config,
@@ -220,7 +221,7 @@ async def test_lease_lost_during_cleanup_is_fenced_and_stays_held(
             attempt.attempt_id, attempt.user_id, "ingest:a", old_token, _LEASE_TTL,
         )
         assert await leases.record_cleanup(
-            pool, stale, verified=True, evidence={"verified": True},
+            pool, stale, verified=True, evidence=PROVEN_CLEANUP,
         ) is False
     finally:
         release.set()

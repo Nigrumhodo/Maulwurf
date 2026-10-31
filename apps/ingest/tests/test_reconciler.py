@@ -10,7 +10,7 @@ from pathlib import Path
 import asyncpg
 import pytest
 from test_commit import _commit, _draft, _ready  # noqa: E402
-from test_supervisor import _seed, tmpfs_dir  # noqa: E402
+from test_supervisor import PROVEN_CLEANUP, _seed, tmpfs_dir  # noqa: E402
 
 from maulwurf_ingest import cleanup, persistence
 from maulwurf_ingest import lease as leases
@@ -22,6 +22,7 @@ from maulwurf_ingest.reconciler import (
     reconcile_committed,
     sweep_stranded,
 )
+from maulwurf_ingest.supervisor import sweep_once
 
 # Re-export the tmpfs fixture so the directory case can collect it.
 _ = (tmpfs_dir,)
@@ -356,7 +357,7 @@ async def test_old_token_cannot_write_after_the_sweep(pool: asyncpg.Pool) -> Non
     ) is False
     assert await leases.heartbeat(pool, owned) is False
     assert await leases.record_cleanup(
-        pool, owned, verified=True, evidence={"zombie": True},
+        pool, owned, verified=True, evidence=PROVEN_CLEANUP,
     ) is False
     row = await _status_and_token(pool, attempt.attempt_id)
     assert row["status"] == "transcribing"
@@ -376,3 +377,30 @@ async def test_second_sweep_leaves_the_result_unchanged(pool: asyncpg.Pool) -> N
     after = await _status_and_token(pool, attempt.attempt_id)
     assert after == before
     assert after["fencing_token"] == owned.fencing_token + 1
+
+
+async def test_sweep_once_composes_post_commit_and_stranded_recovery(
+    pool: asyncpg.Pool, tmpfs_dir: Path,
+) -> None:
+    """S4.2: the periodic pass runs the reconciler and the stranded sweep together."""
+    if cleanup.open_descriptors_under(tmpfs_dir)[1]:
+        pytest.skip("multi-UID /proc: cleanup is fail-closed; run the ingest suite as root")
+    committed, owned, _audio_id = await _ready(pool)
+    assert (await _commit(pool, owned, _draft())).outcome is CommitOutcome.COMMITTED
+    workdir = cleanup.create_workdir(str(committed.attempt_id), str(tmpfs_dir))
+    cleanup.write_private(workdir / "original", b"RIFF" + b"\x00" * 8)
+    await _expire(pool, committed.attempt_id)
+
+    stranded = await _seed(pool)
+    await pool.execute(
+        "UPDATE ingestion_attempts SET status = 'transcribing' WHERE id = $1",
+        stranded.attempt_id,
+    )
+    await _expire(pool, stranded.attempt_id)
+
+    result = await sweep_once(pool, instance=_INSTANCE, tmp_dir=str(tmpfs_dir))
+
+    assert committed.attempt_id in {item.attempt_id for item in result.committed}
+    assert stranded.attempt_id in result.stranded
+    assert not workdir.exists()
+    assert (await _attempt_row(pool, stranded.attempt_id))["status"] == "requires_reupload"
