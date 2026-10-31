@@ -9,10 +9,11 @@ different things and keeps them separate:
   operator input; without it the cost stays ``NO VERIFICADO`` instead of inventing a
   number.
 * **RAM and tmpfs under load:** ``--slots`` concurrent worker processes, each running the
-  real ``asr_job`` audio path (ffprobe, silencedetect, ffmpeg fragment extraction) over a
-  synthetic clip generated in RAM. Only the stub transcriber is used: no Riva channel, no
-  key and no provider call. The original and the active fragment live on a private tmpfs
-  directory that every worker deletes and verifies.
+  production ``pipeline.process`` audio path (ffprobe, silencedetect, ffmpeg fragment
+  extraction) used by ``asr_job``, over a synthetic clip generated in RAM. Only the
+  transcriber is replaced by an empty-words stub: no Riva channel, no key and no provider
+  call. The original and the active fragment live on a private tmpfs directory that every
+  worker deletes and verifies.
 
 Run from the repository root with the ingest environment::
 
@@ -53,7 +54,7 @@ if str(_INGEST_ROOT) not in sys.path:
     sys.path.insert(0, str(_INGEST_ROOT))
 
 from maulwurf_ingest import hardening  # noqa: E402
-from maulwurf_ingest.asr_job import run as run_asr_job  # noqa: E402
+from maulwurf_ingest.audio.fragmenter import wav_duration_s  # noqa: E402
 from maulwurf_ingest.audio.synthetic import (  # noqa: E402
     DEFAULT_PHRASE_ES,
     generate_synthetic_utterance,
@@ -66,6 +67,8 @@ from maulwurf_ingest.capacity import (  # noqa: E402
     PROVISIONAL_TMPFS_BYTES,
 )
 from maulwurf_ingest.config import settings  # noqa: E402
+from maulwurf_ingest.pipeline import FragmentWords  # noqa: E402
+from maulwurf_ingest.pipeline import process as process_audio  # noqa: E402
 
 NOT_VERIFIED = "NO VERIFICADO"
 TICKET = "S3.5"
@@ -78,7 +81,6 @@ MAX_SLOTS = 4
 DEFAULT_WORKER_TIMEOUT_S = 300.0
 SAMPLE_INTERVAL_S = 0.01
 _TMPFS_PREFIX = "mw-s35-"
-_STUB_TRANSCRIPT = '{"text": "synthetic stub phrase", "precision": "none"}'
 _MIB = 1024 * 1024
 
 
@@ -97,7 +99,7 @@ class AsrUsage:
             raise ValueError("fragments must be >= 1")
         if not math.isfinite(self.billed_seconds) or self.billed_seconds <= 0:
             raise ValueError("billed_seconds must be a positive finite number")
-        if self.billed_seconds + 1e-6 < self.source_seconds:
+        if self.billed_seconds + 1e-3 < self.source_seconds:
             raise ValueError("billed_seconds cannot be below the source duration")
 
     @property
@@ -692,29 +694,38 @@ def measure_slot(
     workdir: Path,
     fragment_seconds: int,
 ) -> SlotMeasurement:
-    """Run the real stub ASR audio path once and delete every byte it wrote."""
+    """Run the production audio pipeline once and delete every byte it wrote.
+
+    The transcriber callback is the measurement point: the fragment exists on disk when
+    it is called, so the tmpfs peak is exact rather than a sleep-sampling guess. It returns
+    empty words, like the ``asr_job --read-stub-transcript`` double, and never builds a
+    Riva client.
+    """
     workdir.mkdir(parents=True, exist_ok=True)
-    (workdir / "stub_transcript.json").write_text(_STUB_TRANSCRIPT, encoding="utf-8")
     rss_before = process_rss_bytes()
     sampler = _DirectorySampler(workdir)
+    billed_seconds = 0.0
+    peak_bytes = directory_bytes(workdir)
+
+    def _hear_fragment(path: Path) -> FragmentWords:
+        nonlocal billed_seconds, peak_bytes
+        billed_seconds += wav_duration_s(path)
+        peak_bytes = max(peak_bytes, directory_bytes(workdir))
+        return FragmentWords()
+
     started = time.perf_counter()
     sampler.start()
     try:
-        result = run_asr_job(
+        result = process_audio(
+            workdir / "original",
             workdir,
-            realtime=False,
-            fragment_seconds=fragment_seconds,
-            read_stub=True,
+            fragment_seconds=float(fragment_seconds),
+            overlap_s=settings.fragment_overlap_s,
+            transcribe=_hear_fragment,
         )
     finally:
         sampler.stop()
     wall_seconds = time.perf_counter() - started
-    fragments = result.get("fragments")
-    billed_seconds = result.get("seconds")
-    if isinstance(fragments, bool) or not isinstance(fragments, int):
-        raise RuntimeError("asr_job returned no fragment count")
-    if isinstance(billed_seconds, bool) or not isinstance(billed_seconds, int | float):
-        raise RuntimeError("asr_job returned no billed duration")
     tmpfs_after = directory_bytes(workdir)
     rss_peak = process_hwm_bytes()
     rss_after = process_rss_bytes()
@@ -722,10 +733,10 @@ def measure_slot(
     shutil.rmtree(workdir, ignore_errors=True)
     return SlotMeasurement(
         slot=slot,
-        fragments=fragments,
-        billed_seconds=float(billed_seconds),
+        fragments=result.fragments,
+        billed_seconds=billed_seconds,
         wall_seconds=wall_seconds,
-        tmpfs_peak_bytes=sampler.peak_bytes,
+        tmpfs_peak_bytes=max(peak_bytes, sampler.peak_bytes),
         tmpfs_after_bytes=tmpfs_after,
         rss_before_bytes=rss_before,
         rss_peak_bytes=rss_peak,

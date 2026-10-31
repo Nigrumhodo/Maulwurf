@@ -1,13 +1,13 @@
 S3.5 — ASR effective minutes and RAM/tmpfs under load (basis for C-S4-SG-04)
-Date (UTC): 2026-10-31T14:14:32Z
+Date (UTC): 2026-10-31T14:18:15Z
 Host: Linux 7.0.0-39-generic x86_64
 Command (60 s): cd apps/ingest && uv run python ../../scripts/load/asr_cost.py --slots 2 --clip-seconds 60
 S3.5 ASR cost and RAM/tmpfs under load (basis for C-S4-SG-04)
 Environment: python=3.12.3, system=Linux 7.0.0-39-generic, ffmpeg=ffmpeg version 8.1.2, espeak_ng=eSpeak NG text-to-speech: 1.51, riva_call=none
 Load: 2 concurrent slot(s), 60.0 s synthetic clip, fragment cap 30 s, overlap 0.25 s
 slot  frags  billed_s   wall_s   tmpfs_peak  tmpfs_after  rss_before   rss_peak  rss_delta
-   0      3    60.500    1.289     3.40 MiB     2.52 MiB   34.95 MiB  35.23 MiB   0.29 MiB
-   1      3    60.500    1.287     3.40 MiB     2.52 MiB   35.01 MiB  35.30 MiB   0.29 MiB
+   0      3    60.500    0.908     3.40 MiB     2.52 MiB   34.59 MiB  34.88 MiB   0.29 MiB
+   1      3    60.500    0.899     3.40 MiB     2.52 MiB   34.28 MiB  34.75 MiB   0.48 MiB
 Cleanup: all slot dirs removed by their worker=yes; harness tmpfs root emptied=yes
 ASR usage per slot: 3 fragments, 60.500 billed s, overlap 0.500 s, amplification 1.008333
 ASR effective minutes per class hour: 60.500
@@ -15,8 +15,8 @@ ASR rate: NO VERIFICADO
 ASR cost per class hour: NO VERIFICADO
 RAM/tmpfs: tmpfs peak (sum of slot maxima) 6.81 MiB <= provisional 256.00 MiB: yes
            sampled concurrent tmpfs peak: 6.81 MiB
-           worker RSS peak (sum) 70.54 MiB <= provisional 1024.00 MiB: yes
-           ffmpeg child max RSS (max of children, not additive): 47.75 MiB
+           worker RSS peak (sum) 69.63 MiB <= provisional 1024.00 MiB: yes
+           ffmpeg child max RSS (max of children, not additive): 46.98 MiB
 Limits: 200 MiB and 3 h are not approved; D4 is blocked. No Riva call, no key and no audio kept.
 
 Command (300 s): cd apps/ingest && uv run python ../../scripts/load/asr_cost.py --slots 2 --clip-seconds 300
@@ -24,17 +24,17 @@ S3.5 ASR cost and RAM/tmpfs under load (basis for C-S4-SG-04)
 Environment: python=3.12.3, system=Linux 7.0.0-39-generic, ffmpeg=ffmpeg version 8.1.2, espeak_ng=eSpeak NG text-to-speech: 1.51, riva_call=none
 Load: 2 concurrent slot(s), 300.0 s synthetic clip, fragment cap 30 s, overlap 0.25 s
 slot  frags  billed_s   wall_s   tmpfs_peak  tmpfs_after  rss_before   rss_peak  rss_delta
-   0     11   302.500    3.372    13.47 MiB    12.62 MiB   35.16 MiB  35.58 MiB   0.42 MiB
-   1     11   302.500    3.424    13.47 MiB    12.62 MiB   35.11 MiB  35.41 MiB   0.30 MiB
+   0     11   302.500    3.107    13.47 MiB    12.62 MiB   34.41 MiB  34.77 MiB   0.36 MiB
+   1     11   302.500    3.109    13.47 MiB    12.62 MiB   34.38 MiB  34.74 MiB   0.36 MiB
 Cleanup: all slot dirs removed by their worker=yes; harness tmpfs root emptied=yes
 ASR usage per slot: 11 fragments, 302.500 billed s, overlap 2.500 s, amplification 1.008333
 ASR effective minutes per class hour: 60.500
 ASR rate: NO VERIFICADO
 ASR cost per class hour: NO VERIFICADO
 RAM/tmpfs: tmpfs peak (sum of slot maxima) 26.94 MiB <= provisional 256.00 MiB: yes
-           sampled concurrent tmpfs peak: 26.34 MiB
-           worker RSS peak (sum) 70.99 MiB <= provisional 1024.00 MiB: yes
-           ffmpeg child max RSS (max of children, not additive): 47.80 MiB
+           sampled concurrent tmpfs peak: 26.94 MiB
+           worker RSS peak (sum) 69.51 MiB <= provisional 1024.00 MiB: yes
+           ffmpeg child max RSS (max of children, not additive): 47.11 MiB
 Limits: 200 MiB and 3 h are not approved; D4 is blocked. No Riva call, no key and no audio kept.
 
 Command (JSON, 300 s): cd apps/ingest && uv run python ../../scripts/load/asr_cost.py --slots 2 --clip-seconds 300 --format json
@@ -60,40 +60,40 @@ Command (JSON, 300 s): cd apps/ingest && uv run python ../../scripts/load/asr_co
     {
       "slot": 0,
       "fragments": 11,
-      "billed_seconds": 302.5,
-      "wall_seconds": 2.572061,
-      "tmpfs_peak_bytes": 14122538,
-      "tmpfs_after_bytes": 13230098,
-      "rss_before_bytes": 36929536,
-      "rss_peak_bytes": 37306368,
-      "rss_after_bytes": 37306368,
+      "billed_seconds": 302.499875,
+      "wall_seconds": 3.217756,
+      "tmpfs_peak_bytes": 14122484,
+      "tmpfs_after_bytes": 13230044,
+      "rss_before_bytes": 36003840,
+      "rss_peak_bytes": 36380672,
+      "rss_after_bytes": 36380672,
       "rss_delta_bytes": 376832,
-      "ffmpeg_child_maxrss_bytes": 49917952,
+      "ffmpeg_child_maxrss_bytes": 50151424,
       "cleanup_removed": true
     },
     {
       "slot": 1,
       "fragments": 11,
-      "billed_seconds": 302.5,
-      "wall_seconds": 2.680924,
-      "tmpfs_peak_bytes": 14122538,
-      "tmpfs_after_bytes": 13230098,
-      "rss_before_bytes": 36962304,
-      "rss_peak_bytes": 37208064,
-      "rss_after_bytes": 37208064,
+      "billed_seconds": 302.499875,
+      "wall_seconds": 3.189804,
+      "tmpfs_peak_bytes": 14122484,
+      "tmpfs_after_bytes": 13230044,
+      "rss_before_bytes": 36085760,
+      "rss_peak_bytes": 36331520,
+      "rss_after_bytes": 36331520,
       "rss_delta_bytes": 245760,
-      "ffmpeg_child_maxrss_bytes": 49860608,
+      "ffmpeg_child_maxrss_bytes": 50225152,
       "cleanup_removed": true
     }
   ],
   "aggregate": {
     "fragments_per_slot": 11,
-    "billed_seconds_per_slot": 302.5,
-    "tmpfs_peak_sum_of_slot_maxima_bytes": 28245076,
-    "tmpfs_peak_sampled_bytes": 28245052,
-    "worker_rss_peak_sum_bytes": 74514432,
+    "billed_seconds_per_slot": 302.499875,
+    "tmpfs_peak_sum_of_slot_maxima_bytes": 28244968,
+    "tmpfs_peak_sampled_bytes": 28244944,
+    "worker_rss_peak_sum_bytes": 72712192,
     "worker_rss_delta_sum_bytes": 622592,
-    "ffmpeg_child_maxrss_bytes": 49917952,
+    "ffmpeg_child_maxrss_bytes": 50225152,
     "fits_provisional_tmpfs_upper_bound": true,
     "fits_provisional_mem_limit_upper_bound": true,
     "worker_cleanup_all_removed": true,
@@ -102,18 +102,18 @@ Command (JSON, 300 s): cd apps/ingest && uv run python ../../scripts/load/asr_co
   "asr_usage": {
     "source_seconds": 300.0,
     "fragments": 11,
-    "billed_seconds": 302.5,
-    "overlap_seconds": 2.5,
+    "billed_seconds": 302.499875,
+    "overlap_seconds": 2.499875,
     "amplification": 1.008333,
-    "billed_minutes": 5.041667,
-    "effective_minutes_per_class_hour": 60.5
+    "billed_minutes": 5.041665,
+    "effective_minutes_per_class_hour": 60.499975
   },
   "asr_cost": {
     "rate_usd_per_minute": null,
     "rate_status": "NO VERIFICADO",
     "rate_source": "F0.1 spike S1.A7: NO VERIFICADO (no authorized rate was measured)",
-    "billed_minutes": 5.041667,
-    "effective_minutes_per_class_hour": 60.5,
+    "billed_minutes": 5.041665,
+    "effective_minutes_per_class_hour": 60.499975,
     "cost_usd": "NO VERIFICADO",
     "cost_per_class_hour_usd": "NO VERIFICADO",
     "formula": "effective minutes per class hour x rate per minute"

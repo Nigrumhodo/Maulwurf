@@ -255,7 +255,7 @@ def test_concurrent_audio_path_measures_and_cleans_up() -> None:
     assert len(report.measurements) == 2
     assert report.usage.source_seconds == 5.0
     assert report.usage.fragments >= 1
-    assert report.usage.billed_seconds >= 5.0
+    assert report.usage.billed_seconds >= 5.0 - 1e-3
     assert report.usage.amplification >= 1.0
     assert report.usage.effective_minutes_per_class_hour >= 60.0 - 1e-6
     assert report.cost.cost_usd == "NO VERIFICADO"
