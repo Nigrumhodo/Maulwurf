@@ -472,6 +472,25 @@ async def test_request_forwards_caller_headers_without_exposing_the_token() -> N
     assert seen[0].headers["authorization"] == "Bearer test-access-token"
 
 
+@pytest.mark.parametrize("name", ["authorization", "AUTHORIZATION", "Accept"])
+async def test_request_rejects_reserved_headers_in_any_case(name: str) -> None:
+    """J3.6 fix2: a caller header can never coexist with the bearer token or `Accept`."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    with pytest.raises(ValueError):
+        await _service(handler).request(
+            "GET",
+            "/calendars/primary/events/event-1",
+            headers={name: "Bearer attacker"},
+        )
+
+    assert seen == []  # rejected before any HTTP call
+
+
 async def test_request_forwards_method_path_params_and_body() -> None:
     seen: list[httpx.Request] = []
 

@@ -227,6 +227,19 @@ async def disconnect_google_credential(db: AsyncSession, user_id: uuid.UUID) -> 
     return True
 
 
+_RESERVED_HEADER_NAMES = frozenset({"authorization", "accept"})
+
+
+def _reject_reserved_headers(headers: Mapping[str, str] | None) -> None:
+    # HTTP header names are case-insensitive: a lowercase "authorization" would be sent next
+    # to the bearer token instead of replacing it, so the check must ignore case.
+    for name in headers or {}:
+        if name.lower() in _RESERVED_HEADER_NAMES:
+            raise ValueError(
+                f"caller header {name!r} is managed by GoogleCalendarService"
+            )
+
+
 class GoogleCalendarService:
     """Minimal blocking Calendar client consumed by J3.3–J3.7."""
 
@@ -268,12 +281,14 @@ class GoogleCalendarService:
         """Run one Calendar request in a worker thread and return its JSON object.
 
         `headers` adds conditional-write headers (``If-Match`` for J3.6). The bearer token
-        is applied by the service and cannot be overridden by the caller.
+        and `Accept` are applied by the service; a caller header with either name (in any
+        case) is rejected instead of being sent alongside the real values.
 
         `retry_transient=False` makes the call single-attempt. It is required for
         non-idempotent writes such as `POST /calendars`: a retry after a lost response can
         create a second remote object, so only the caller may reconcile and decide.
         """
+        _reject_reserved_headers(headers)
         try:
             return await asyncio.to_thread(
                 self._request, method, path, params, json, headers, retry_transient

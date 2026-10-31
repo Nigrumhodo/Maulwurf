@@ -64,7 +64,12 @@ class GoogleCalendarGateway:
         *,
         if_match: str,
     ) -> Mapping[str, Any]:
-        """Patch an event; `if_match` is mandatory so an external edit is never overwritten."""
+        """Patch an event under `If-Match`; a write without an ETag is never issued.
+
+        The precondition covers edits made after the ETag was read: Google answers 412 and
+        the caller decides, instead of the stale body silently replacing the remote edit.
+        Detecting an edit made *before* that read requires the caller's persisted baseline.
+        """
         if not if_match.strip():
             # Fail closed: the gateway never issues an unconditional PATCH.
             raise ValueError("update_event requires a non-empty If-Match ETag")
