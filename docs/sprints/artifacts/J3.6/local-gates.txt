@@ -167,3 +167,77 @@ develop; the PR is MERGEABLE (the previous CONFLICTING state was the stale base)
 Result: ruff/mypy clean, 1217 unit passed, I-S3-JF-04 10 + I-S3-JF-03 13 passed, full
 integration 447/32 (same untouched pgvector 0.6 modules), docs refs OK. Final Quality CI
 on the last pushed docs head must be 17/17; the PR stays open and is never merged here.
+
+################################################################################
+# Review fix3 (2026-10-31) - hoplite findings 2-3 on head 3a06774
+################################################################################
+Branch: task/MAULW-119 (PR #132, never merged here)
+Base: origin/develop @ 06beb01 (PR #131, J3.7/MAULW-120) merged into the branch first;
+      docs/sprints/CLAIMS.md conflict resolved keeping J3.3, J3.6 and J3.7 and every
+      other row. apps/web untouched.
+
+== TDD reproduction (before the fix, head 1d0e077)
+NO_PROXY="*" no_proxy="*" uv run pytest tests/unit/test_task_event_sync.py -q
+  5 failed, 37 passed
+  - test_a_lost_patch_response_is_adopted_instead_of_flagged
+  - test_a_lost_patch_response_that_did_not_land_fails_closed
+  - test_a_transient_repair_read_keeps_the_patch_etag
+  - test_a_transient_repair_write_keeps_the_patch_etag
+  - test_a_lost_repair_response_records_the_repaired_etag
+  All five reached the old outer handler: TaskEventTransientError
+  ("calendar_insert_transient"), i.e. the task was marked failed and ARQ would retry
+  with a stale ETag baseline.
+
+== uv run ruff check . (apps/api)
+All checks passed!
+
+== uv run mypy . (apps/api)
+Success: no issues found in 233 source files
+
+== uv run pytest tests/unit -q (apps/api, NO_PROXY sanitized)
+1260 passed, 35 warnings in 9.64s
+Without the sanitized NO_PROXY the two pre-existing bracketed-IPv6 failures
+(test_ingest_sink, test_llm) reappear; neither module is touched here.
+
+== uv run pytest tests/unit/test_task_event_sync.py -q
+42 passed (37 before fix3 + 5 regressions).
+
+== uv run pytest tests/integration/test_calendar_revision_patch.py \
+     tests/integration/test_calendar_sync_job.py -q (PostgreSQL 16 + Redis 7)
+23 passed (I-S3-JF-04: 10; I-S3-JF-03: 13).
+
+== uv run pytest tests/integration -q (full API suite, local sandbox)
+32 failed, 468 passed in 89.06s
+  17 FAILED tests/integration/test_chat_sse.py
+   4 FAILED tests/integration/test_g4_eval.py
+  11 FAILED tests/integration/test_search.py
+All 32 are the known pgvector 0.6.0 < 0.8 modules (pre-existing, documented in the S3.6
+claim); none of them imports the J3.6 code.
+
+== python3 scripts/docs/check_refs.py (repo root)
+OK: 782 documented repository paths exist or are expected.
+
+== apps/web / apps/ingest
+untouched (no fix3 change outside apps/api and docs).
+
+== fix3 summary
+1. [Media] Transient reconcile PATCH. `_reconcile` now catches
+   GoogleCalendarTransientError around `gateway.update_event` and re-reads the event:
+   it adopts the write (RECONCILED, ETag of the new state persisted) only when the
+   event already carries the exact body this delivery sent; otherwise it leaves the
+   event untouched, marks the task failed and returns EXTERNAL_CONFLICT. A lost
+   response can no longer be retried against the old baseline and reported as a false
+   external edit.
+2. [Media] ETag of the reconciliation PATCH persists before the newer-version repair.
+   `_repair_newer_version` writes the ETag of the PATCH that already landed on the
+   newer row before any repair GET/PATCH (skipped only when another delivery recorded
+   a different, therefore newer, baseline), and swallows transient repair read/write
+   errors as deferred. A lost repair response is re-read and adopted only when the
+   event carries the newest body. The next delivery no longer sees the ETag produced
+   by our own write as an external edit.
+3. [Riesgo de despliegue, sin cambios] No migration in this PR creates `tasks` or
+   `tasks.calendar_etag`; A3.1 must add the nullable column before any producer is
+   enabled. No migration or endpoint was added here.
+Tests: 5 new unit cases (42 in test_task_event_sync.py). ruff/mypy clean (233 files),
+1260 API unit passed, targeted integration 23 passed, full integration 468/32 (same
+untouched pgvector 0.6 modules), docs refs OK. `apps/web` untouched; no secret.
