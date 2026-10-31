@@ -64,7 +64,11 @@ sweeper.
 
 - **Executor:** an operator with access to the compose host and the incident record.
 - **Reviewer:** an active Infra claim or the lead. The reviewer executes or witnesses the
-  reference-environment drill and signs the record.
+  reference-environment drill, verifies every destruction-evidence fact against the
+  provider record, and signs the record.
+- **Security/privacy reviewer:** confirms any destruction fact the provider cannot prove
+  (snapshot, swap, memory image, checkpoint) and owns the stop decision that keeps the text
+  outbox blocked.
 - Run commands from `infra/` unless a step says otherwise. Use UTC for every timestamp.
 - Never `cat`, `strings`, `cp`, `tar`, `docker cp`, screenshot or attach a file from
   `/work/tmp`. Only counts, booleans and attempt UUIDs leave the tmpfs.
@@ -315,7 +319,8 @@ attempt=<ATTEMPT_ID> action=would_verify status=transcript_committed_cleanup_pen
 
 If the decision is `refused`, read its `reason`: `live_lease` (wait and repeat 5.3),
 `local_attempt_directory_present` (the tmpfs still has the attempt; repeat 5.1),
-`not_covered_by_evidence` (the attestation instant is before the last heartbeat),
+`not_covered_by_evidence` (the attempt was created after the attested destruction, or its
+last heartbeat/update is later than the destruction plus the one-minute clock-skew margin),
 `no_audio_received` (nothing to attest), or `already_resolved` (nothing to do).
 
 ### 5.6 Apply, then let the sweeper release the text
@@ -397,9 +402,11 @@ docker compose exec -T ingest python -m maulwurf_ingest.recovery sweep \
 
 Expected: one `pass=1 ...` line immediately, then one line every 60 seconds. `Ctrl+C`
 stops it. The interval is enforced at a minimum of 60 s by `run_sweeper`; there is no
-hidden retry loop or jitter. Each pass uses the real `reconcile_committed` and
-`sweep_stranded` functions: it never runs ASR, never retranscribes, never steals a live
-lease, and never retries a failed cleanup.
+hidden retry loop or jitter. `--interval` is validated and used only with `--watch`: a
+single pass runs once and ignores it, so `sweep` without `--watch` is valid even if no
+interval is supplied. Each pass uses the real `reconcile_committed` and `sweep_stranded`
+functions: it never runs ASR, never retranscribes, never steals a live lease, and never
+retries a failed cleanup.
 
 If a pass reports `cleanup_failed` other than `0`, the process stops with exit `3`. The
 failed row is persisted and the alert is in the sweeper's output, but the **running
@@ -456,6 +463,17 @@ The ingest startup already runs one recovery pass. It cannot prove the old tmpfs
 so a committed attempt with `cleanup_status = pending` and no local directory is left
 `held`; a stranded `receiving`/`transcribing` attempt is ended as
 `requires_reupload` with `technical_loss`. Neither is retranscribed.
+
+**Residual risk: the empty local tmpfs is not evidence.** After a real host loss,
+`local_attempt_dirs=0` is expected because the new host starts with an empty tmpfs; it does
+**not** prove that the old host's audio is gone, and the
+`local_attempt_directory_present` refusal cannot fire in this path. The safety of `resolve`
+therefore rests on two other controls: the destruction attestation (memory and tmpfs
+destroyed, no snapshot/image created after the upload, no swap, dump or checkpoint) and the
+expired lease. The **active Infra claim or lead verifies the evidence** against the provider
+record and signs the incident; the **security/privacy reviewer** must confirm any fact the
+provider cannot prove. If a fact remains unproven, keep the text outbox blocked and require
+a reupload. Do not treat an empty directory listing as proof.
 
 ### 7.2 List the attempts that need the attestation
 
@@ -516,14 +534,14 @@ VERIFIED**. The local compose drill is the only executable equivalent in this re
 
 | Check | Command | Result in this revision |
 |---|---|---|
-| Unit behavior of the runbook tool | `cd apps/ingest && uv run pytest tests/test_cleanup_recovery.py -m "not integration" -q` | 14 passed |
-| Unit suite of the area | `cd apps/ingest && uv run pytest -m "not integration and not provider and not load" -q --ignore=tests/test_synthetic_audio.py` | 203 passed. Without `--ignore`, 204 passed and the 8 `test_synthetic_audio.py` cases fail only because `espeak-ng` is absent in this sandbox; CI installs it |
+| Unit behavior of the runbook tool | `cd apps/ingest && uv run pytest tests/test_cleanup_recovery.py -m "not integration" -q` | 19 passed |
+| Unit suite of the area | `cd apps/ingest && uv run pytest -m "not integration and not provider and not load" -q --ignore=tests/test_synthetic_audio.py` | 230 passed. Without `--ignore`, the 8 `test_synthetic_audio.py` cases fail only because `espeak-ng` is absent in this sandbox; CI installs it |
 | Ruff | `cd apps/ingest && uv run ruff check .` | pass |
 | Mypy | `cd apps/ingest && uv run mypy .` | pass |
 | Documentation paths | `python3 scripts/docs/check_refs.py` | pass |
-| I-S4-SG-03 integration | `cd apps/ingest && uv run pytest -m integration -q tests/test_cleanup_recovery.py` | Local sandbox: 5 skipped (no PostgreSQL). Quality CI run `41246550059` (head `28472da`), job `integration (ingest)`: **63 passed**, 11 skipped, 1 xfailed; the 5 cases in this file are included |
-| Quality CI | all jobs in `.github/workflows/quality.yml` | Run `41246550059` (head `28472da`): all 17 checks green, including `python-unit (ingest)` 206 passed and `integration (ingest)` 63 passed |
-| Compose detection/recovery drill | steps 4–6 | **NOT RUN HERE**: no Docker in this sandbox; must be executed by the reviewer in the reference environment |
+| I-S4-SG-03 integration | `cd apps/ingest && uv run pytest -m integration -q tests/test_cleanup_recovery.py` | Local sandbox: 6 skipped (no PostgreSQL). The final Quality CI run and its `integration (ingest)` count are recorded in section 8.1 |
+| Quality CI | all jobs in `.github/workflows/quality.yml` | See section 8.1: the run on the final head must be green before the claim leaves `in progress` |
+| Compose detection/recovery drill | steps 4–6 | **NOT RUN HERE**: this sandbox has no `docker`, `podman`, `docker-compose` or `/var/run/docker.sock`; the reviewer must execute it on the reference stack |
 | Host-loss restoration | section 7 | **NOT RUN HERE**: needs J4.7 provider evidence and a real host; the reviewer records it |
 
 The integration cases use the real migrated PostgreSQL schema and the real

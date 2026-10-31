@@ -50,9 +50,11 @@ from maulwurf_ingest.reconciler import (
 # The runbook's recurring pass. S4.2 owns moving this interval into the supervisor; until
 # then the operator process is the only 60 s sweeper.
 SWEEP_INTERVAL_S = 60.0
-# Database and operator clocks can differ by a few seconds. A minute of skew cannot hide an
-# attempt that was created after the reported destruction, and the explicit attempt ids
-# remain the primary control.
+# ``created_at`` is checked against the attested destruction with no tolerance: an attempt
+# created after the host was destroyed cannot have had its audio destroyed by that event.
+# ``heartbeat_at``/``updated_at`` keep one minute of tolerance because the database clock
+# and the provider or operator clock that supplies ``destroyed_at`` can differ. The
+# explicit attempt ids remain the primary control.
 CLOCK_SKEW_TOLERANCE = timedelta(seconds=60)
 EVIDENCE_MAX_BYTES = 8192
 ATTESTATION_SOURCE = "operator_attestation"
@@ -106,8 +108,8 @@ SELECT id
 """
 
 RESOLVE_ROWS_SQL = """
-SELECT id, user_id, status, cleanup_status, fencing_token, heartbeat_at, updated_at,
-       lease_expires_at
+SELECT id, user_id, status, cleanup_status, fencing_token, heartbeat_at, created_at,
+       updated_at, lease_expires_at
   FROM ingestion_attempts
  WHERE id = ANY($1::uuid[])
  ORDER BY id
@@ -313,7 +315,8 @@ def _parse_destroyed_at(value: object) -> datetime:
 def load_evidence(path: Path) -> DestructionEvidence:
     """Read and validate the destruction attestation. No value is echoed on failure."""
     try:
-        raw = path.read_bytes()
+        with path.open("rb") as handle:
+            raw = handle.read(EVIDENCE_MAX_BYTES + 1)
     except OSError:
         raise EvidenceError("the evidence file cannot be read") from None
     if len(raw) > EVIDENCE_MAX_BYTES:
@@ -517,6 +520,9 @@ def _refused(
 
 
 def _evidence_covers(evidence: DestructionEvidence, row: asyncpg.Record) -> bool:
+    created = _datetime_value(row, "created_at")
+    if created > evidence.destroyed_at:
+        return False
     heartbeat = _optional_datetime(row, "heartbeat_at")
     last_activity = heartbeat if heartbeat is not None else _datetime_value(row, "updated_at")
     return last_activity <= evidence.destroyed_at + CLOCK_SKEW_TOLERANCE
@@ -697,6 +703,8 @@ async def _sweep_command(pool: asyncpg.Pool, args: argparse.Namespace) -> int:
     max_passes = _optional_positive_int(getattr(args, "max_passes", None))
     if max_passes is not None and not watch:
         raise RecoveryError("--max-passes requires --watch")
+    if watch and interval < SWEEP_INTERVAL_S:
+        raise RecoveryError(f"the sweeper interval must be at least {SWEEP_INTERVAL_S:.0f} s")
     passes: int | None = max_passes if watch else 1
     tmp_dir = _optional_str(getattr(args, "tmp_dir", None))
 
@@ -710,7 +718,8 @@ async def _sweep_command(pool: asyncpg.Pool, args: argparse.Namespace) -> int:
             print(render_sweep(report), flush=True)
 
     reports = await run_sweeper(
-        interval_s=interval,
+        # ``--interval`` only paces ``--watch``; a single pass never sleeps.
+        interval_s=interval if watch else SWEEP_INTERVAL_S,
         max_passes=passes,
         run_pass=run_pass,
         on_report=report_pass,
@@ -770,7 +779,10 @@ def build_parser() -> argparse.ArgumentParser:
     sweep.add_argument("--watch", action="store_true", help="keep running the 60 s sweeper")
     sweep.add_argument(
         "--interval", type=float, default=SWEEP_INTERVAL_S,
-        help=f"seconds between passes in --watch mode (minimum {SWEEP_INTERVAL_S:.0f})",
+        help=(
+            f"seconds between passes in --watch mode (minimum {SWEEP_INTERVAL_S:.0f}); "
+            "ignored by a single pass"
+        ),
     )
     sweep.add_argument(
         "--max-passes", type=int, default=None, help="bounded number of passes for a drill"

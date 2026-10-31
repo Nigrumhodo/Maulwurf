@@ -1,0 +1,27 @@
+S4.1 / MAULW-149 fix1 local gates
+Date (UTC): 2026-10-31
+Environment: development sandbox, Linux 7.0.0-39-generic, Python 3.12, uv from ~/.local/bin
+Head before this capture: 20f4e40 (task/MAULW-149 after merging origin/develop f7c3f03)
+
+$ cd apps/ingest && uv run ruff check .
+All checks passed!
+
+$ cd apps/ingest && uv run mypy .
+Success: no issues found in 80 source files
+
+$ cd apps/ingest && uv run pytest tests/test_cleanup_recovery.py -m "not integration" -q
+19 passed, 6 deselected
+
+$ cd apps/ingest && uv run pytest -m "not integration and not provider and not load" -q --ignore=tests/test_synthetic_audio.py
+230 passed, 78 deselected
+
+The same suite without --ignore runs 8 failures, all in tests/test_synthetic_audio.py:
+each one raises "espeak-ng is required for synthetic audio (S1.A1)". espeak-ng is absent
+from this sandbox; the runbook already documents this environment gap and CI installs it.
+
+$ python3 scripts/docs/check_refs.py
+OK: 813 documented repository paths exist or are expected.
+
+Integration cases (I-S4-SG-03) were not executed locally: this sandbox has no PostgreSQL
+(MAULWURF_DATABASE_URL unset, no psql/pg_isready). The final Quality CI run is recorded in
+docs/runbooks/cleanup.md section 8.1 and in the PR body.

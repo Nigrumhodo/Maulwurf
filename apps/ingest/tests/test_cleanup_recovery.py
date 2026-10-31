@@ -22,6 +22,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, cast
 
 import asyncpg
 import pytest
@@ -41,11 +42,13 @@ from maulwurf_ingest.config import settings
 from maulwurf_ingest.persistence import CommitOutcome
 from maulwurf_ingest.receiver import iter_bytes
 from maulwurf_ingest.recovery import (
+    DestructionEvidence,
     EvidenceError,
     RecoveryError,
     ResolveAction,
     StatusReport,
     SweepReport,
+    _evidence_covers,
     collect_status,
     load_evidence,
     render_status,
@@ -177,6 +180,80 @@ def test_evidence_document_contains_only_fixed_facts(tmp_path: Path) -> None:
     assert "notes" not in document
 
 
+def test_evidence_is_read_at_most_one_byte_past_the_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "oversize.json"
+    path.write_bytes(b" " * (recovery.EVIDENCE_MAX_BYTES * 2))
+    reads: list[int] = []
+    real_open = Path.open
+
+    class _TrackingHandle:
+        def __init__(self, handle: Any) -> None:
+            self._handle = handle
+
+        def read(self, size: int = -1) -> bytes:
+            reads.append(size)
+            return cast(bytes, self._handle.read(size))
+
+        def __enter__(self) -> _TrackingHandle:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self._handle.close()
+
+    def tracking_open(
+        self: Path, mode: str = "r", *args: Any, **kwargs: Any,
+    ) -> _TrackingHandle:
+        return _TrackingHandle(real_open(self, mode, *args, **kwargs))
+
+    monkeypatch.setattr(Path, "open", tracking_open)
+
+    with pytest.raises(EvidenceError, match="exceeds"):
+        load_evidence(path)
+    assert reads == [recovery.EVIDENCE_MAX_BYTES + 1]
+
+
+def _coverage_evidence(destroyed_at: datetime) -> DestructionEvidence:
+    return DestructionEvidence(
+        host="ingest-test-1", destroyed_at=destroyed_at, reviewer="area-s-reviewer",
+        reference="INC-2026-10-31-01", sha256="0" * 64,
+    )
+
+
+def _coverage_row(*, created_at: datetime, heartbeat_at: datetime | None) -> asyncpg.Record:
+    return cast(
+        asyncpg.Record,
+        {"created_at": created_at, "heartbeat_at": heartbeat_at, "updated_at": created_at},
+    )
+
+
+def test_evidence_coverage_rejects_an_attempt_created_after_the_destruction() -> None:
+    destroyed_at = datetime(2026, 10, 31, 12, 0, tzinfo=UTC)
+    row = _coverage_row(
+        created_at=destroyed_at + timedelta(seconds=1),
+        heartbeat_at=destroyed_at - timedelta(seconds=10),
+    )
+
+    assert _evidence_covers(_coverage_evidence(destroyed_at), row) is False
+
+
+def test_evidence_coverage_allows_one_minute_of_heartbeat_clock_skew() -> None:
+    destroyed_at = datetime(2026, 10, 31, 12, 0, tzinfo=UTC)
+    evidence = _coverage_evidence(destroyed_at)
+    created_at = destroyed_at - timedelta(hours=1)
+
+    inside = _coverage_row(
+        created_at=created_at, heartbeat_at=destroyed_at + timedelta(seconds=59),
+    )
+    outside = _coverage_row(
+        created_at=created_at, heartbeat_at=destroyed_at + timedelta(seconds=61),
+    )
+
+    assert _evidence_covers(evidence, inside) is True
+    assert _evidence_covers(evidence, outside) is False
+
+
 def test_status_text_marks_a_persisted_failure_as_closed() -> None:
     attempt_id = uuid.UUID(int=11)
     report = StatusReport(
@@ -262,6 +339,35 @@ async def test_the_sweeper_refuses_an_interval_below_sixty_seconds() -> None:
 
     with pytest.raises(RecoveryError, match="at least 60"):
         await run_sweeper(interval_s=59, max_passes=1, run_pass=run_pass)
+
+
+async def test_a_single_pass_ignores_the_interval_option(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instances: list[str] = []
+
+    async def fake_sweep_once(
+        pool: asyncpg.Pool, *, instance: str, tmp_dir: str | None = None,
+    ) -> SweepReport:
+        instances.append(instance)
+        return SweepReport()
+
+    monkeypatch.setattr(recovery, "sweep_once", fake_sweep_once)
+    args = recovery.build_parser().parse_args(["sweep", "--interval", "5"])
+
+    exit_code = await recovery._sweep_command(cast(asyncpg.Pool, None), args)
+
+    assert exit_code == recovery.EXIT_OK
+    assert instances == ["ops:cleanup-recover"]
+
+
+async def test_watch_mode_rejects_an_interval_below_sixty_seconds() -> None:
+    args = recovery.build_parser().parse_args(
+        ["sweep", "--watch", "--interval", "5", "--max-passes", "1"]
+    )
+
+    with pytest.raises(RecoveryError, match="at least 60"):
+        await recovery._sweep_command(cast(asyncpg.Pool, None), args)
 
 
 def test_the_operator_script_runs_from_a_checkout() -> None:
@@ -500,6 +606,37 @@ async def test_resolve_refuses_an_attempt_without_bytes_and_uncovered_evidence(
     )
     assert uncovered.decisions[0].reason == "not_covered_by_evidence"
     assert (await _row(pool, failed))["cleanup_status"] == "failed"
+
+
+@pytest.mark.integration
+async def test_resolve_refuses_an_attempt_created_after_the_destruction(
+    pool: asyncpg.Pool, tmpfs_dir: Path, tmp_path: Path,
+) -> None:
+    attempt = await _seed(pool)
+    await pool.execute(
+        "UPDATE ingestion_attempts"
+        " SET cleanup_status = 'failed', status = 'requires_reupload',"
+        "     heartbeat_at = now() - interval '30 seconds'"
+        " WHERE id = $1",
+        attempt.attempt_id,
+    )
+    await _expire(pool, attempt.attempt_id)
+    # ``created_at`` is later than this instant, while the heartbeat is inside the
+    # one-minute clock-skew window: only the creation guard can refuse the attestation.
+    evidence = load_evidence(
+        _write_evidence(
+            tmp_path,
+            destroyed_at=(datetime.now(UTC) - timedelta(seconds=30)).isoformat(),
+        )
+    )
+
+    report = await resolve_attempts(
+        pool, attempt_ids=[attempt.attempt_id], evidence=evidence, apply=True,
+        tmp_dir=str(tmpfs_dir),
+    )
+
+    assert report.decisions[0].reason == "not_covered_by_evidence"
+    assert (await _row(pool, attempt))["cleanup_status"] == "failed"
 
 
 @pytest.mark.integration
