@@ -123,6 +123,12 @@ variables `test_ingest_reception.py` adds 19 `httpx.InvalidURL: Invalid port ':1
 I-S3-JF-06 grows from 18 to 21 integration cases and the deterministic unit file from 18 to
 22 cases; `test_google_calendar.py` gains one case for the `CalendarListEntry` path.
 
+Quality CI (2026-10-31): run `41230423161` on head `6af66e6` (last code change) is green in
+all 16 jobs of `quality.yml`, including `python-unit (api)`, `python-static (api)`,
+`integration (api)`, `integration (ingest)`, `e2e-smoke`, `docs` and `build-images`; the
+external `Trigger Hoplite QA` workflow is green too (17/17 overall). Later commits are
+documentation only.
+
 ## Not executed
 
 - Any real Google OAuth/Calendar call (J3.1's protected account and the cloud leg of
