@@ -1,7 +1,7 @@
 # Canonical claims registry — Maulwurf
 
-> Status: **S2 open**. Review: 2026-10-09. S3.1 is recorded under a directed claim for
-> MAULW-108; the rest of S3 remains closed.
+> Status: **S2 open**. Review: 2026-10-09. S3.1 and S3.2 are recorded under directed
+> claims for MAULW-108 and MAULW-109; the rest of S3 remains closed.
 >
 > This file is the single source of truth for ticket ownership. Personal logbooks keep
 > evidence, blockers, and notes, but a row there does not assign a ticket by itself. Rows
@@ -161,12 +161,14 @@ MAULW-108 recorded below. D2 and D6 remain `pending`; D3-Audio and D4 remain `bl
 
 ### S3 — Action (extraction and Calendar)
 
-> Only S3.1 is recorded: it was directed by MAULW-108. The remaining S3 backlog stays
-> unclaimable until the lead opens the sprint and updates the status above.
+> Only S3.1 and S3.2 are recorded: they were directed by MAULW-108 and MAULW-109. The
+> remaining S3 backlog stays unclaimable until the lead opens the sprint and updates the
+> status above.
 
 | Action | Ticket | Owner | Status | Claimed at (UTC) | Cloud eligibility | Contributors / reviewers | Reason, evidence, or PR |
 |---|---|---|---|---|---|---|---|
 | claim | S3.1 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area S, area A | MAULW-108: explicit analysis backfill for F1 classes over persisted text only (no reupload/retranscription), `app/services/analysis_backfill.py` + `scripts/backfill_analysis.py`, `analysis_backfill_available` on `GET /audios/{id}`, I-S3-SG-01. L3.6/A3.1 are not in `develop`; the queue reaches the S2 `analyze` no-op, so extraction output is not claimed. PR #119: Quality CI green, `integration (api)` 404 passed and `integration (ingest)` passed. Branch `task/MAULW-108` |
+| claim | S3.2 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area S, area A | MAULW-109: sentence-aligned analysis windows with a bounded overlap and a hard total-token budget, evidence-identity dedupe, `app/services/analysis_windows.py`, the offline `scripts/eval/window_cost.py` harness and U-S3-SG-02 (43 tests; 926 API unit passed). Default 800/100 measures 10,894–15,705 transcript tokens/class-hour with a 1.073–1.111 amplification; provider latency `NO VERIFICADO`. Token numbers come from authored/redacted spike-derived text; no real LLM call. Branch `task/MAULW-109`; PR #121 open with all Quality CI checks green (926 API unit, 408 API integration, e2e-smoke and web included). |
 
 ## 4. Change history
 
@@ -227,3 +229,4 @@ MAULW-108 recorded below. D2 and D6 remain `pending`; D3-Audio and D4 remain `bl
 | 2026-10-31 | J2.6 moves back to `in progress`: `_timed_segments` now includes the separator in the preceding word segment, so the committed ranges partition the transcript and keep the L2.1 contiguity invariant without changing the chunker. The E2E helper findings are also addressed (shared SSE parser with the async path tested, 640 TLS key with group access, required ephemeral opt-in plus an isolated compose project). Local gates in the claim row; final `e2e-smoke` green is the remaining evidence for `done`. | This PR |
 | 2026-10-31 | J2.6 is `done`: Quality CI run `41200218783` (head `350c5c7`) passed all 16 checks, including `e2e-smoke` (`index: succeeded`, fixture match, citation index 1, empty ingest tmpfs, 25.1 s driver). Re-review fixes for the four PR findings are in the same head; PR #118 stays open for review and merge. | This PR |
 | 2026-10-31 | S3.1 is claimed by jpinillaz (`in progress`) for the directed MAULW-108 ticket: explicit analysis backfill for F1 classes only from persisted text, an operator script with dry-run by default and the `analysis_backfill_available` detail flag. L3.6/A3.1 are absent from `develop`, so the queue reaches the S2 `analyze` no-op and no extraction result is claimed. S3 is not declared open here; the remaining S3 tickets stay blocked. PR #119: all Quality CI checks green, `integration (api)` 404 passed. | This PR |
+| 2026-10-31 | S3.2 is claimed by jpinillaz (`in progress`) for the directed MAULW-109 ticket: bounded analysis windows, evidence-identity dedupe and the offline window-cost harness (U-S3-SG-02). The cost numbers use authored/redacted textual fixtures derived from the F0.1 spike scenario; no real provider call, no audio and no real class text are involved. S3 is not declared open; the rest of S3 stays blocked. PR #121. | This PR |
