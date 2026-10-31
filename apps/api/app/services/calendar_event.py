@@ -91,7 +91,7 @@ def build_event_content(
     zone = _timezone(task.timezone)
     _validate_due(task)
     start, end = _event_block(task)
-    link = _reader_link(task, public_origin=public_origin)
+    link = _reader_line(task, public_origin=public_origin)
     return {
         "summary": summary,
         "description": _description(task, zone=zone, link=link),
@@ -102,7 +102,7 @@ def build_event_content(
 
 def _summary(title: str) -> str:
     cleaned = title.strip()
-    if cleaned.startswith(EVENT_TITLE_PREFIX):
+    while cleaned.startswith(EVENT_TITLE_PREFIX):
         cleaned = cleaned[len(EVENT_TITLE_PREFIX) :].strip()
     if not cleaned:
         raise CalendarEventContentError(
@@ -175,7 +175,7 @@ def _event_block(task: TaskEventContent) -> tuple[dict[str, str], dict[str, str]
     return {"date": start_date.isoformat()}, {"date": end_date.isoformat()}
 
 
-def _reader_link(task: TaskEventContent, *, public_origin: str) -> str | None:
+def _reader_line(task: TaskEventContent, *, public_origin: str) -> str | None:
     if task.audio_id is None:
         return None
     origin = _origin(public_origin)
@@ -225,6 +225,8 @@ def _description(
     if len(body) > budget:
         # Keep the reader link intact: only the task text is shortened.
         body = body[: max(0, budget - 1)].rstrip() + "…"
+    if not body:
+        return link or ""
     return f"{body}{suffix}"
 
 

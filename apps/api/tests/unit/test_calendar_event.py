@@ -93,6 +93,14 @@ def test_an_existing_prefix_is_not_duplicated() -> None:
     assert body["summary"] == f"{EVENT_TITLE_PREFIX} Midterm exam"
 
 
+def test_repeated_prefixes_collapse_to_one() -> None:
+    task = _timed(title=f"{EVENT_TITLE_PREFIX} {EVENT_TITLE_PREFIX} Midterm exam")
+
+    body = build_event_content(task, public_origin=ORIGIN)
+
+    assert body["summary"] == f"{EVENT_TITLE_PREFIX} Midterm exam"
+
+
 def test_description_carries_task_details_and_the_authenticated_link() -> None:
     body = build_event_content(_timed(), public_origin=ORIGIN)
 
@@ -145,6 +153,16 @@ def test_due_date_is_omitted_when_the_date_is_not_resolved() -> None:
 
     assert "Fecha límite" not in body["description"]
     assert "00:00" not in body["description"]
+
+
+def test_a_bare_task_description_starts_with_the_reader_link() -> None:
+    task = _timed(detail=None, subject_name=None, tipo="", due_at=None)
+
+    body = build_event_content(task, public_origin=ORIGIN)
+
+    assert body["description"] == (
+        f"Ver segmento 3 en Maulwurf: {ORIGIN}/biblioteca/{AUDIO_ID}?segment={SEGMENT_ID}"
+    )
 
 
 def test_trailing_slash_in_the_origin_does_not_duplicate_the_separator() -> None:
