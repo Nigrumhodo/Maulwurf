@@ -1041,6 +1041,7 @@ Typed codes (no PII or sensitive content):
 
 | Code | HTTP | Usage |
 |---|---|---|
+| `bad_request` | 400 | Framework-level client error without a more specific code |
 | `auth_required` | 401 | No session or expired |
 | `csrf_invalid` | 403 | Missing/invalid `X-CSRF-Token` or Origin |
 | `forbidden` | 403 | Another tenant's resource |
@@ -1071,10 +1072,11 @@ Typed codes (no PII or sensitive content):
 | `internal_error` | 500 | No sensitive details |
 
 Errors raised by the framework before a router runs use the same envelope: an unknown
-route is `404 not_found`, a wrong method is `405 method_not_allowed`, and any unhandled
-exception is `500 internal_error`. The framework `detail` is never forwarded (it can echo
-request input) and the 500 body never carries exception text; the request id is logged with
-the failure.
+route is `404 not_found`, a wrong method is `405 method_not_allowed`, an unmapped 4xx keeps
+its status with `bad_request`, and any unhandled exception is `500 internal_error`. The
+framework `detail` is never forwarded (it can echo request input) and the 500 body never
+carries exception text; the request id is logged with the failure. Uvicorn's own error
+logger is redacted too, because it prints the traceback outside the application logger.
 
 Ingest persists a smaller set (S2.13, `maulwurf_ingest/outcomes.py`). The public `PUT`
 uses the row below; the stored `error_code` can be more specific than the public code.

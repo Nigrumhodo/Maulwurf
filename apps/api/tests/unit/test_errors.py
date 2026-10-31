@@ -124,3 +124,17 @@ def test_http_exception_detail_is_not_echoed() -> None:
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "not_found"
     assert SECRET not in response.text
+
+
+def test_unmapped_client_error_keeps_its_status() -> None:
+    app = _app()
+
+    @app.get("/bad-request")
+    async def bad_request() -> None:
+        raise StarletteHTTPException(status_code=400, detail=f"bad {SECRET}")
+
+    response = TestClient(app).get("/bad-request")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "bad_request"
+    assert SECRET not in response.text

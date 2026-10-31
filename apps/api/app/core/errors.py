@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 # Statuses Starlette/FastAPI raise before a router runs. Messages are fixed on purpose: the
 # framework detail can echo request input and is never forwarded (DISENO §3.2).
 _HTTP_ERRORS: dict[int, tuple[str, str]] = {
+    400: ("bad_request", "Solicitud inválida."),
     401: ("auth_required", "Inicia sesión para continuar."),
     403: ("forbidden", "No tienes permiso para realizar esta operación."),
     404: ("not_found", "Recurso no encontrado."),
@@ -79,9 +80,15 @@ def _request_id(request: Request) -> str | None:
 
 
 def _http_error(status_code: int) -> ApiError:
-    code, message = _HTTP_ERRORS.get(status_code, _INTERNAL_ERROR)
-    # A status outside the catalog is a bug, not a contract answer: fail closed with a 500.
-    return ApiError(status_code if status_code in _HTTP_ERRORS else 500, code, message)
+    if status_code in _HTTP_ERRORS:
+        code, message = _HTTP_ERRORS[status_code]
+        return ApiError(status_code, code, message)
+    if 400 <= status_code < 500:
+        # Preserve a client-error status even when the catalog has no specific code yet.
+        # Turning it into a 500 would page on malformed input and make clients retry.
+        return ApiError(status_code, "bad_request", "Solicitud inválida.")
+    # An unmapped 5xx is a bug: fail closed with the typed internal error.
+    return ApiError(500, *_INTERNAL_ERROR)
 
 
 async def _handle_http(request: Request, exc: Exception) -> JSONResponse:
