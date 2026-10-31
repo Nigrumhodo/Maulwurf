@@ -25,6 +25,7 @@ from app.services.google_calendar import (
     GoogleCalendarForbidden,
     GoogleCalendarInvalidGrant,
     GoogleCalendarNotFound,
+    GoogleCalendarPreconditionFailed,
     GoogleCalendarRateLimited,
     GoogleCalendarResponseError,
     GoogleCalendarService,
@@ -434,6 +435,60 @@ async def test_not_found_is_not_retried() -> None:
 
     assert len(calls) == 1
     assert failure.value.transient is False
+
+
+async def test_precondition_failed_is_not_retried() -> None:
+    """J3.6: a stale `If-Match` is a terminal conflict, never a retry."""
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(412, json={"error": {"code": 412}})
+
+    with pytest.raises(GoogleCalendarPreconditionFailed) as failure:
+        await _service(handler).request(
+            "PATCH",
+            "/calendars/primary/events/event-1",
+            headers={"If-Match": '"etag-1"'},
+        )
+
+    assert len(calls) == 1
+    assert failure.value.transient is False
+    assert failure.value.details["status"] == 412
+
+
+async def test_request_forwards_caller_headers_without_exposing_the_token() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    await _service(handler).request(
+        "PATCH", "/calendars/primary/events/event-1", headers={"If-Match": '"etag-1"'}
+    )
+
+    assert seen[0].headers["if-match"] == '"etag-1"'
+    assert seen[0].headers["authorization"] == "Bearer test-access-token"
+
+
+@pytest.mark.parametrize("name", ["authorization", "AUTHORIZATION", "Accept"])
+async def test_request_rejects_reserved_headers_in_any_case(name: str) -> None:
+    """J3.6 fix2: a caller header can never coexist with the bearer token or `Accept`."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    with pytest.raises(ValueError):
+        await _service(handler).request(
+            "GET",
+            "/calendars/primary/events/event-1",
+            headers={name: "Bearer attacker"},
+        )
+
+    assert seen == []  # rejected before any HTTP call
 
 
 async def test_request_forwards_method_path_params_and_body() -> None:
