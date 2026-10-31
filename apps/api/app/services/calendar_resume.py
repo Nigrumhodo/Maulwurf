@@ -22,6 +22,15 @@ module checks for the table at runtime: before A3.1 lands it reports `available=
 changes nothing, so the connection still succeeds without touching a table that does not
 exist yet. The statement follows the DISENO §2.8 shape and is exercised by I-S3-JF-06
 against that shape.
+
+Validation status of the raw SQL (2026-10-31): the `ON CONFLICT` target
+`(type, resource_id, resource_version, dedupe_key)` matches the real unique constraint
+`uq_outbox_events_type_resource_id_resource_version_dedupe_key` created by migration
+`0001` (`NULLS NOT DISTINCT`), and an integration case inserts twice against the real
+`outbox_events` table to prove PostgreSQL infers it. `outbox_events` exists in `develop`,
+so that half no longer needs A3.1. The `UPDATE tasks ... RETURNING` statement and the
+`tasks.version`/`calendar_sync_status` columns still have no real table: they remain
+pending until A3.1's migration lands, and no integration case may claim otherwise.
 """
 
 import logging
@@ -120,6 +129,10 @@ async def _ensure_outbox(
     if existing is not None:
         return existing, False
     cycle = await _cycle(db, user_id=user_id, task_id=task_id)
+    # The conflict target mirrors migration 0001's unique constraint exactly; PostgreSQL
+    # infers a `NULLS NOT DISTINCT` unique index for the same column set (validated by
+    # `test_sync_task_event_conflict_target_matches_the_real_unique_index`). `dedupe_key`
+    # is always set here, so the NULLS NOT DISTINCT semantics are not relied upon.
     inserted = await db.execute(
         pg_insert(OutboxEvent)
         .values(

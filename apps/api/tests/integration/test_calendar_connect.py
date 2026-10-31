@@ -15,6 +15,12 @@ Covered:
 - A grant for another Google account or another session is rejected.
 - The single "Maulwurf" calendar is created once (or reused) and its ID is stored in
   `settings`; `GET /integrations/status` exposes it.
+- Only a calendar the account owns (`accessRole='owner'`, never `primary`) is adopted: a
+  shared/subscribed copy that shares the marker is skipped and an owned calendar is created.
+- Two concurrent connects for the same user create exactly one remote calendar: the
+  per-user transaction advisory lock serializes the list-then-create binding.
+- The `sync_task_event` `ON CONFLICT` target is proven against the real `outbox_events`
+  unique index (migration `0001`); only the `tasks` statements still await A3.1.
 - After a reconnect, only current blocked tasks move to `pending` and one
   `sync_task_event` outbox row is created or reused; dismissed/completed tasks and stale
   revisions are never reactivated.
@@ -26,7 +32,9 @@ table if one ever exists), so the SQL is exercised against PostgreSQL without pr
 A3.1's migration.
 """
 
+import asyncio
 import json
+import threading
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -37,14 +45,14 @@ import pytest
 from httpx import ASGITransport, AsyncClient, Response
 from pydantic import SecretStr
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core import crypto
 from app.core.config import settings
 from app.core.db import get_session
 from app.core.deps import OAUTH_COOKIE_NAME
 from app.main import app
-from app.models import GoogleCredential
+from app.models import GoogleCredential, User
 from app.services import calendar_connection, oauth_google
 from app.services.google_calendar import GoogleCalendarService
 from app.services.oauth_google import CALENDAR_SCOPES
@@ -163,35 +171,61 @@ def _fake_google(
 
 
 def _calendar_handler(
-    *, existing: list[dict[str, object]] | None = None, create_status: int = 200
+    *,
+    existing: list[dict[str, object]] | None = None,
+    create_status: int = 200,
+    create_id: str = MAULWURF_ID,
 ) -> dict[str, Any]:
-    """Deterministic Calendar double: list, create and get."""
+    """Deterministic Calendar double: list, list entry, create and get."""
     state: dict[str, Any] = {
         "existing": list(existing or []),
         "create_status": create_status,
+        "create_id": create_id,
         "created": [],
         "calls": [],
     }
 
     def handler(request: httpx.Request) -> httpx.Response:
-        state["calls"].append((request.method, request.url.path))
-        if request.method == "GET" and "/calendarList" in request.url.path:
+        path = request.url.path
+        state["calls"].append((request.method, path))
+        if request.method == "GET" and path.endswith("/calendarList"):
             return httpx.Response(200, json={"items": state["existing"]})
-        if request.method == "POST" and request.url.path.endswith("/calendars"):
+        if request.method == "GET" and "/calendarList/" in path:
+            # CalendarListEntry (carries `accessRole`), unlike the Calendar resource.
+            wanted = path.rsplit("/", 1)[-1]
+            for entry in state["existing"]:
+                if entry.get("id") == wanted:
+                    return httpx.Response(200, json=entry)
+            return httpx.Response(404, json={"error": {"errors": [{"reason": "notFound"}]}})
+        if request.method == "POST" and path.endswith("/calendars"):
             body = json.loads(request.content)
             state["created"].append(body)
             if create_status != 200:
                 return httpx.Response(create_status, json={"error": {"reason": "backendError"}})
-            return httpx.Response(200, json={**body, "id": MAULWURF_ID})
-        if request.method == "GET" and "/calendars/" in request.url.path:
+            entry = {**body, "id": create_id, "accessRole": "owner"}
+            state["existing"].append(entry)
+            return httpx.Response(200, json={**body, "id": create_id})
+        if request.method == "GET" and "/calendars/" in path:
             for entry in state["existing"]:
-                if entry.get("id") in request.url.path:
+                if entry.get("id") in path:
                     return httpx.Response(200, json=entry)
             return httpx.Response(404, json={"error": {"errors": [{"reason": "notFound"}]}})
         return httpx.Response(404, json={"error": {"errors": [{"reason": "notFound"}]}})
 
     state["handler"] = handler
     return state
+
+
+def _maulwurf_entry(
+    calendar_id: str = MAULWURF_ID, *, access_role: str = "owner"
+) -> dict[str, object]:
+    """A calendar-list entry carrying the app marker and the given ownership role."""
+    return {
+        "id": calendar_id,
+        "summary": calendar_connection.MAULWURF_CALENDAR_SUMMARY,
+        "description": calendar_connection.MAULWURF_CALENDAR_DESCRIPTION,
+        "accessRole": access_role,
+    }
 
 
 async def _start(
@@ -483,15 +517,7 @@ async def test_connect_reuses_an_existing_maulwurf_calendar(
 ) -> None:
     actor = await make_actor(db_session)
     _fake_google(monkeypatch, sub=actor.google_sub, scope=" ".join(CALENDAR_SCOPES))
-    calendar = _calendar_handler(
-        existing=[
-            {
-                "id": MAULWURF_ID,
-                "summary": calendar_connection.MAULWURF_CALENDAR_SUMMARY,
-                "description": calendar_connection.MAULWURF_CALENDAR_DESCRIPTION,
-            }
-        ]
-    )
+    calendar = _calendar_handler(existing=[_maulwurf_entry()])
     _use_calendar(monkeypatch, calendar)
 
     _, state, cookie = await _start(client, actor)
@@ -500,6 +526,28 @@ async def test_connect_reuses_an_existing_maulwurf_calendar(
     assert response.headers["location"] == "/settings?calendar=connected"
     assert calendar["created"] == []
     assert await _settings_calendar_id(db_session, actor) == MAULWURF_ID
+
+
+async def test_connect_never_adopts_a_read_only_maulwurf_lookalike(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A shared/subscribed copy with the same marker is not a writable target."""
+    actor = await make_actor(db_session)
+    _fake_google(monkeypatch, sub=actor.google_sub, scope=" ".join(CALENDAR_SCOPES))
+    shared_id = "shared@group.calendar.google.com"
+    calendar = _calendar_handler(
+        existing=[_maulwurf_entry(shared_id, access_role="reader")]
+    )
+    _use_calendar(monkeypatch, calendar)
+
+    _, state, cookie = await _start(client, actor)
+    response = await _callback(client, actor, state, cookie)
+
+    assert response.headers["location"] == "/settings?calendar=connected"
+    # The read-only look-alike is skipped and an owned calendar is created instead.
+    assert len(calendar["created"]) == 1
+    stored = await _settings_calendar_id(db_session, actor)
+    assert stored == MAULWURF_ID and stored != shared_id
 
 
 async def test_ambiguous_create_is_reconciled_over_http(
@@ -514,13 +562,7 @@ async def test_ambiguous_create_is_reconciled_over_http(
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
-            calendar["existing"] = [
-                {
-                    "id": MAULWURF_ID,
-                    "summary": calendar_connection.MAULWURF_CALENDAR_SUMMARY,
-                    "description": calendar_connection.MAULWURF_CALENDAR_DESCRIPTION,
-                }
-            ]
+            calendar["existing"] = [_maulwurf_entry()]
         response: httpx.Response = original(request)
         return response
 
@@ -534,6 +576,107 @@ async def test_ambiguous_create_is_reconciled_over_http(
     assert await _settings_calendar_id(db_session, actor) == MAULWURF_ID
     # One POST only: a transport retry after the lost response would duplicate the calendar.
     assert len(calendar["created"]) == 1
+
+
+async def _noop_disconnect() -> None:
+    return None
+
+
+async def test_two_concurrent_connects_create_a_single_calendar(
+    migrated_database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concurrent double callback must not list-empty/create twice.
+
+    `connect_calendar` takes a per-user transaction advisory lock before listing, so the
+    second callback waits and then reuses the ID the first committed. Without the lock both
+    callbacks reach the calendar list before either creates, so the barrier makes the race
+    deterministic: both see an empty list and both `POST /calendars`.
+    """
+    engine = create_async_engine(migrated_database_url)
+    user_id = uuid.uuid4()
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT INTO users (id, google_sub, email) "
+                "VALUES (:id, :sub, :email)"
+            ),
+            {
+                "id": user_id,
+                "sub": f"sub-{uuid.uuid4()}",
+                "email": f"{uuid.uuid4().hex[:8]}@example.test",
+            },
+        )
+
+    barrier = threading.Barrier(2, timeout=1.0)
+    created: list[dict[str, Any]] = []
+    entries: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "GET" and path.endswith("/calendarList"):
+            try:
+                # Wait for a peer list call: the race window this test exists to close.
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                pass  # Correct behavior: the second connect never reached the list.
+            return httpx.Response(200, json={"items": list(entries)})
+        if request.method == "GET" and "/calendarList/" in path:
+            wanted = path.rsplit("/", 1)[-1]
+            for entry in entries:
+                if entry.get("id") == wanted:
+                    return httpx.Response(200, json=entry)
+            return httpx.Response(404, json={"error": {"errors": [{"reason": "notFound"}]}})
+        if request.method == "POST" and path.endswith("/calendars"):
+            body = json.loads(request.content)
+            created.append(body)
+            calendar_id = f"mw-{len(created)}@group.calendar.google.com"
+            entries.append({**body, "id": calendar_id, "accessRole": "owner"})
+            return httpx.Response(200, json={**body, "id": calendar_id})
+        return httpx.Response(404, json={"error": {"errors": [{"reason": "notFound"}]}})
+
+    def factory(access_token: str, on_invalid_grant: Any) -> GoogleCalendarService:
+        return GoogleCalendarService(
+            access_token=access_token,
+            base_url=CALENDAR_BASE,
+            max_retries=0,
+            transport=httpx.MockTransport(handler),
+            sleeper=lambda _delay: None,
+            jitter=lambda: 0.0,
+            on_invalid_grant=on_invalid_grant,
+        )
+
+    monkeypatch.setattr(calendar_connection, "calendar_service", factory)
+
+    async def connect_once() -> calendar_connection.CalendarBinding:
+        async with AsyncSession(engine) as session:
+            user = await session.get(User, user_id)
+            assert user is not None
+            binding = await calendar_connection.connect_calendar(
+                session,
+                user=user,
+                access_token="ya29.concurrent",  # noqa: S106 - fixture, not a credential
+                on_invalid_grant=_noop_disconnect,
+            )
+            await session.commit()
+            return binding
+
+    try:
+        first, second = await asyncio.gather(connect_once(), connect_once())
+
+        assert len(created) == 1
+        assert first.calendar_id == second.calendar_id == entries[0]["id"]
+        async with AsyncSession(engine) as session:
+            stored = await session.scalar(
+                text(
+                    "SELECT calendar_write_calendar_id FROM settings WHERE user_id = :id"
+                ),
+                {"id": user_id},
+            )
+        assert stored == entries[0]["id"]
+    finally:
+        async with engine.begin() as connection:
+            await connection.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+        await engine.dispose()
 
 
 async def test_callback_for_another_google_account_is_rejected(
@@ -595,6 +738,54 @@ async def test_invalid_grant_from_the_calendar_api_leaves_the_integration_discon
     credential = await _credential(db_session, actor)
     assert credential is not None
     assert credential.status == "disconnected"
+
+
+# --- Raw SQL validation ----------------------------------------------------------------
+
+
+async def test_sync_task_event_conflict_target_matches_the_real_unique_index(
+    db_session: AsyncSession,
+) -> None:
+    """`_ensure_outbox`'s `ON CONFLICT` must match a real unique index on `outbox_events`.
+
+    A3.1's `tasks` table is still absent, so only the half of `calendar_resume` that has a
+    real table can be validated today: the conflict target and the dedupe-key uniqueness.
+    The `UPDATE tasks ... RETURNING` shape stays pending until A3.1's migration lands.
+    """
+    definition = await db_session.scalar(
+        text(
+            "SELECT indexdef FROM pg_indexes "
+            "WHERE schemaname = current_schema() AND tablename = 'outbox_events' "
+            "AND indexname = "
+            "'uq_outbox_events_type_resource_id_resource_version_dedupe_key'"
+        )
+    )
+    assert definition is not None
+    assert definition.startswith("CREATE UNIQUE INDEX")
+    for column in ("type", "resource_id", "resource_version", "dedupe_key"):
+        assert column in definition
+    assert "NULLS NOT DISTINCT" in definition
+    assert " WHERE " not in definition
+
+    actor = await make_actor(db_session)
+    task_id = uuid.uuid4()
+    statement = text(
+        "INSERT INTO outbox_events "
+        "(user_id, type, resource_type, resource_id, resource_version, payload, enabled, "
+        " dedupe_key) "
+        "VALUES (:user, 'sync_task_event', 'task', :task, 1, '{}'::jsonb, true, "
+        "        'reconnect:1:0') "
+        "ON CONFLICT (type, resource_id, resource_version, dedupe_key) DO NOTHING "
+        "RETURNING id"
+    )
+    params = {"user": actor.user_id, "task": task_id}
+    first = (await db_session.execute(statement, params)).scalar_one_or_none()
+    second = (await db_session.execute(statement, params)).scalar_one_or_none()
+
+    # The first insert lands and the identical second one is swallowed by the real index:
+    # PostgreSQL inferred the constraint from exactly the columns `_ensure_outbox` names.
+    assert first is not None
+    assert second is None
 
 
 # --- Reconnect resumption (A3.1 table shape) ------------------------------------------
@@ -667,15 +858,7 @@ async def test_reconnect_resumes_only_current_blocked_tasks(
     _fake_google(monkeypatch, sub=actor.google_sub, scope=" ".join(CALENDAR_SCOPES))
     _use_calendar(
         monkeypatch,
-        _calendar_handler(
-            existing=[
-                {
-                    "id": MAULWURF_ID,
-                    "summary": calendar_connection.MAULWURF_CALENDAR_SUMMARY,
-                    "description": calendar_connection.MAULWURF_CALENDAR_DESCRIPTION,
-                }
-            ]
-        ),
+        _calendar_handler(existing=[_maulwurf_entry()]),
     )
 
     _, state, cookie = await _start(client, actor, RECONNECT)

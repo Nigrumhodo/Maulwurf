@@ -13,6 +13,8 @@ Covered:
   retrying, so a lost response never produces a second calendar.
 - Multiple matches from an earlier ambiguous creation pin one deterministic ID and never
   delete a remote calendar.
+- Only an owned (`accessRole='owner'`, never `primary`) calendar is adopted, both from the
+  list and from a stored ID; a shared/read-only look-alike is skipped.
 - The stored ID wins while it still exists; a deleted stored calendar is reconciled again.
 """
 
@@ -60,6 +62,7 @@ def _marked(calendar_id: str = "mw@group.calendar.google.com") -> dict[str, obje
         "id": calendar_id,
         "summary": calendar_connection.MAULWURF_CALENDAR_SUMMARY,
         "description": calendar_connection.MAULWURF_CALENDAR_DESCRIPTION,
+        "accessRole": "owner",
     }
 
 
@@ -113,6 +116,17 @@ def test_identity_requires_summary_description_and_a_secondary_calendar() -> Non
     assert not is_maulwurf_calendar({**_marked(), "primary": True})
 
 
+def test_identity_requires_an_owned_calendar_never_a_shared_or_subscribed_copy() -> None:
+    """Why: a read-only copy with the same marker would 403 or write to a foreign agenda."""
+    assert not is_maulwurf_calendar({**_marked(), "accessRole": "reader"})
+    assert not is_maulwurf_calendar({**_marked(), "accessRole": "writer"})
+    assert not is_maulwurf_calendar({**_marked(), "accessRole": "freeBusyReader"})
+    # A response without the field cannot prove ownership: fail closed.
+    unmarked = _marked()
+    del unmarked["accessRole"]
+    assert not is_maulwurf_calendar(unmarked)
+
+
 # --- Reconciliation -------------------------------------------------------------------
 
 
@@ -121,7 +135,10 @@ async def test_stored_calendar_is_reused_while_it_still_exists() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
-        assert request.url.path.endswith("/calendars/mw@group.calendar.google.com")
+        # The list entry carries `accessRole`; the plain Calendar resource does not.
+        assert request.url.path.endswith(
+            "/users/me/calendarList/mw@group.calendar.google.com"
+        )
         return httpx.Response(200, json=_marked())
 
     binding = await binding_from_google(
@@ -134,9 +151,42 @@ async def test_stored_calendar_is_reused_while_it_still_exists() -> None:
     assert [request.method for request in calls] == ["GET"]
 
 
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {**_marked(), "accessRole": "reader"},
+        {**_marked(), "accessRole": "writer"},
+        {key: value for key, value in _marked().items() if key != "accessRole"},
+    ],
+)
+async def test_a_stored_calendar_not_owned_by_the_account_is_never_reused(
+    entry: dict[str, object],
+) -> None:
+    """Why: a shared/subscribed copy (or an entry without a role) is not a write target."""
+    created: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            created.append(request)
+            return httpx.Response(200, json=_marked("owned@group.calendar.google.com"))
+        if request.url.path.endswith("/moving@group.calendar.google.com"):
+            return httpx.Response(200, json=entry)
+        return _calendar_list(entry)
+
+    binding = await binding_from_google(
+        _service(handler), stored_calendar_id="moving@group.calendar.google.com", timezone="UTC"
+    )
+
+    # Neither the stored ID nor the read-only look-alike may be returned: a new calendar is
+    # created instead, and the marker match is not enough to adopt someone else's copy.
+    assert binding.calendar_id == "owned@group.calendar.google.com"
+    assert binding.reused is False
+    assert len(created) == 1
+
+
 async def test_deleted_stored_calendar_is_reconciled_from_the_calendar_list() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "GET" and "/calendarList" in request.url.path:
+        if request.method == "GET" and request.url.path.endswith("/calendarList"):
             return _calendar_list(_marked("replacement@group.calendar.google.com"))
         return httpx.Response(404, json={"error": {"errors": [{"reason": "notFound"}]}})
 

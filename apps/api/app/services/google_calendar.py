@@ -321,7 +321,11 @@ class GoogleCalendarService:
                 return self._parse(response)
 
     async def list_calendars(self) -> list[dict[str, Any]]:
-        """Every entry of the user's calendar list, following pagination up to the cap."""
+        """Every entry of the user's calendar list, following pagination up to the cap.
+
+        Entries are `CalendarListEntry` objects, so they carry `accessRole` (unlike the
+        plain `Calendar` resource). J3.3 reads it to refuse calendars owned by someone else.
+        """
         items: list[dict[str, Any]] = []
         page_token: str | None = None
         for _ in range(CALENDAR_LIST_MAX_PAGES):
@@ -351,6 +355,17 @@ class GoogleCalendarService:
     async def get_calendar(self, calendar_id: str) -> dict[str, Any]:
         """One calendar by ID; a deleted or unknown ID raises `GoogleCalendarNotFound`."""
         path = f"calendars/{urllib.parse.quote(calendar_id, safe='')}"
+        return await self.request("GET", path)
+
+    async def get_calendar_list_entry(self, calendar_id: str) -> dict[str, Any]:
+        """One `CalendarListEntry` by calendar ID, including its `accessRole`.
+
+        The plain `Calendar` resource (`get_calendar`) does not expose `accessRole`, so
+        adopting a stored ID requires this entry: a read-only or subscribed copy that shares
+        the "Maulwurf" name must never become the write target. An ID absent from the list
+        (deleted, or no longer subscribed) raises `GoogleCalendarNotFound`.
+        """
+        path = f"users/me/calendarList/{urllib.parse.quote(calendar_id, safe='')}"
         return await self.request("GET", path)
 
     async def create_calendar(

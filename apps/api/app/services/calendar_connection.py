@@ -8,6 +8,16 @@ Contract (ESPECIFICACION M5, DISENO §3.3/§3.8):
 - One "Maulwurf" secondary calendar per user is created the first time Calendar is
   connected. Its remote ID is stored in `settings.calendar_write_calendar_id`; the primary
   calendar is never used.
+- **Only an owned secondary calendar is adopted.** The calendar list exposes `accessRole`;
+  a calendar merely named/marked "Maulwurf" that the account does not own (a shared copy, a
+  subscribed feed) is read-only or someone else's agenda and would fail writes with `403`
+  or write into a foreign calendar. Identity therefore requires `accessRole='owner'` and
+  `primary` not true, and the stored ID is revalidated through its `CalendarListEntry`
+  (the plain `Calendar` resource does not carry `accessRole`).
+- **One binding per user, serialized.** A transaction-scoped advisory lock keyed by the user
+  serializes `connect_calendar`, so two concurrent callbacks cannot both list an empty
+  calendar list and both `POST /calendars`. Without it the `ON CONFLICT` upsert merely makes
+  the stored ID converge; the second remote calendar would still exist.
 - **Reconciliation before retrying.** A create whose response was lost may still have
   created the calendar. A create failure whose outcome is ambiguous (`transient`,
   unparseable response or `409`) re-lists the calendar list by identity (summary +
@@ -20,10 +30,11 @@ Contract (ESPECIFICACION M5, DISENO §3.3/§3.8):
 """
 
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -61,8 +72,19 @@ def calendar_service(
     return GoogleCalendarService(access_token=access_token, on_invalid_grant=on_invalid_grant)
 
 
+def is_owned_calendar(entry: dict[str, object]) -> bool:
+    """Whether the entry is a secondary calendar this account owns and may write to.
+
+    `accessRole` comes from the calendar list entry. A shared or subscribed copy can carry
+    the same summary/description marker while being read-only (`reader`) or owned by another
+    account; writing there would fail with `403` or pollute a foreign agenda, so a missing
+    or non-owner role fails closed.
+    """
+    return entry.get("accessRole") == "owner" and entry.get("primary") is not True
+
+
 def is_maulwurf_calendar(entry: dict[str, object]) -> bool:
-    """Identity of the app-created calendar: exact summary + description, never primary.
+    """Identity of the app-created calendar: marker + owner role, never primary.
 
     The description is a stable marker written at creation, so a user calendar that merely
     shares the name is never adopted. `created_time` is not exposed by the Calendar API, so
@@ -71,7 +93,7 @@ def is_maulwurf_calendar(entry: dict[str, object]) -> bool:
     return (
         entry.get("summary") == MAULWURF_CALENDAR_SUMMARY
         and entry.get("description") == MAULWURF_CALENDAR_DESCRIPTION
-        and entry.get("primary") is not True
+        and is_owned_calendar(entry)
     )
 
 
@@ -100,13 +122,17 @@ async def binding_from_google(
     """
     if stored_calendar_id:
         try:
-            await service.get_calendar(stored_calendar_id)
+            entry = await service.get_calendar_list_entry(stored_calendar_id)
         except GoogleCalendarNotFound:
             logger.warning("calendar.binding_missing")
         else:
-            return CalendarBinding(
-                calendar_id=stored_calendar_id, reused=True, reconciled=False
-            )
+            if is_owned_calendar(entry):
+                return CalendarBinding(
+                    calendar_id=stored_calendar_id, reused=True, reconciled=False
+                )
+            # The stored ID now points to a calendar this account does not own (shared copy,
+            # or a stale ID from before the ownership rule). Never write there: reconcile.
+            logger.warning("calendar.binding_not_owned")
     matches = await _find_maulwurf(service)
     if matches:
         return CalendarBinding(calendar_id=matches[0], reused=True, reconciled=False)
@@ -135,6 +161,22 @@ async def binding_from_google(
     )
 
 
+async def _lock_calendar_binding(db: AsyncSession, user_id: uuid.UUID) -> None:
+    """Serialize every connect of one user for the rest of the transaction.
+
+    `binding_from_google` is list-then-create; without a lock two callbacks can both list an
+    empty calendar list and both create a remote "Maulwurf". The lock is transaction-scoped
+    (`pg_advisory_xact_lock`), so it releases on commit or rollback with no cleanup path, and
+    it is keyed by the user through the 64-bit `hashtextextended` hash. Collisions only
+    serialize two unrelated users; they cannot leak data. `connect_calendar` is the only
+    caller, so no other lock order exists to deadlock with.
+    """
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(CAST(:key AS text), 0))"),
+        {"key": f"calendar_binding:{user_id}"},
+    )
+
+
 async def connect_calendar(
     db: AsyncSession,
     *,
@@ -145,8 +187,12 @@ async def connect_calendar(
     """Reconcile the calendar and persist its ID in the user's `settings` row.
 
     The caller owns the transaction: tokens, settings and the reconnect resumption commit
-    together, so a Calendar failure never leaves a half-connected integration behind.
+    together, so a Calendar failure never leaves a half-connected integration behind. The
+    advisory lock makes concurrent callbacks for the same user take turns, so the invariant
+    "exactly one Maulwurf calendar" holds across concurrent connects, not just across
+    sequential retries.
     """
+    await _lock_calendar_binding(db, user.id)
     service = calendar_service(access_token, on_invalid_grant)
     row = await db.get(CalendarSettings, user.id)
     binding = await binding_from_google(
@@ -206,5 +252,6 @@ __all__ = [
     "connect_calendar",
     "grant_covers_calendar",
     "is_maulwurf_calendar",
+    "is_owned_calendar",
     "requested_scopes",
 ]
