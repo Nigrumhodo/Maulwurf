@@ -2,8 +2,8 @@
 
 > **Status:** processes derived from [ESPECIFICACION.md](ESPECIFICACION.md) (modules M1–M9 and
 > §5), from [DISENO_BD_API_SPRINTS.md](DISENO_BD_API_SPRINTS.md) (§2.10 and §3) and from the
-> plans [S1](plan/S1.md)–[S4](plan/S4.md), contrasted with the `develop` code at `2298e1b`
-> (2026-10-11). They create no contracts: on any difference, the specification and the
+> plans [S1](plan/S1.md)–[S4](plan/S4.md), contrasted with the `develop` code at `16cf45b`
+> (2026-10-30). They create no contracts: on any difference, the specification and the
 > [implementation plan](PLAN_IMPLEMENTACION.md) prevail. The architecture is in
 > [ARCH.md](ARCH.md).
 
@@ -33,13 +33,13 @@ it happens" of a use case. It does not replace the project's other diagrams:
 | Diamond | Decision; branches carry their condition |
 | Rounded terminal | Outcome, with its HTTP code or status |
 
-| Process | Phase and sprint | Status at `2298e1b` | SVG |
+| Process | Phase and sprint | Status (reconciled 2026-10-30) | SVG |
 |---|---|---|---|
 | P0 · Process map | All | — | [proc-00-mapa.svg](diagrams/proc-00-mapa.svg) |
-| P1 · Upload: reservation, reception and dedupe | F1 · S2 | Partial | [proc-01-subida.svg](diagrams/proc-01-subida.svg) |
-| P2 · Transcription, commit and cleanup | F1 · S2 | Partial (library) | [proc-02-transcripcion.svg](diagrams/proc-02-transcripcion.svg) |
-| P3 · Indexing and hybrid search | F1 · S2 | Planned | [proc-03-indexacion-busqueda.svg](diagrams/proc-03-indexacion-busqueda.svg) |
-| P4 · Chat with citations | F1 · S2 | Planned | [proc-04-chat.svg](diagrams/proc-04-chat.svg) |
+| P1 · Upload: reservation, reception and dedupe | F1 · S2 | Partial: default sink answers 503 | [proc-01-subida.svg](diagrams/proc-01-subida.svg) |
+| P2 · Transcription, commit and cleanup | F1 · S2 | Partial: internal routes and library; default sink 503 | [proc-02-transcripcion.svg](diagrams/proc-02-transcripcion.svg) |
+| P3 · Indexing and hybrid search | F1 · S2 | Implemented API-side; no browser flow | [proc-03-indexacion-busqueda.svg](diagrams/proc-03-indexacion-busqueda.svg) |
+| P4 · Chat with citations | F1 · S2 | Implemented API-side; no browser flow | [proc-04-chat.svg](diagrams/proc-04-chat.svg) |
 | P5 · Extraction, review and Calendar | F2 · S3 | Planned | [proc-05-extraccion-calendar.svg](diagrams/proc-05-extraccion-calendar.svg) |
 | P6 · Reminders and digests | F3 · S4 | Planned | [proc-06-recordatorios.svg](diagrams/proc-06-recordatorios.svg) |
 | P7 · Class and account deletion | S2 and S4 | Planned | [proc-07-borrado.svg](diagrams/proc-07-borrado.svg) |
@@ -183,9 +183,11 @@ flowchart LR
 ```
 
 **Status: partial.** `POST /audios` (A2.3) and the `PUT` validations (A2.4) are implemented.
-Since the reception sink has no real implementation, the `PUT` responds `503` before reading the
-body. The rest of phase 2 and all of phase 3 exist and are tested with an injected sink
-(`test_put_content_dedupe.py`), but they are unreachable today.
+The API has an `IngestReceptionSink` client (A2.13) and `ingest` serves the internal reception
+routes (S2.11), but the default configuration does not set `MAULWURF_INGEST_URL` or the ingest
+credential, so the `PUT` responds `503` before reading the body. Phase 2 and phase 3 are tested
+with an injected sink (`test_put_content_dedupe.py`); the default local configuration cannot
+reach them.
 
 | Rule | Detail |
 |---|---|
@@ -274,13 +276,15 @@ flowchart LR
     style C fill:#fafafa,stroke:#9aa0a6,color:#111
 ```
 
-**Status: partial.** The supervisor, the lease with fencing, ffprobe and ffmpeg, fragmentation,
-reconciliation, the Riva client and cleanup verification exist as a library with tests, but
-`main` does not import them and `asr_job` is a stub that does not call Riva. The supervisor
-already writes `transcript_committed_cleanup_pending` and `succeeded`, but without persisting the
-transcript or enabling the outbox (S2.5, A2.10 and S2.6); the reconciler does not exist (S2.7).
+**Status: partial.** The supervisor, lease with fencing, ffprobe/ffmpeg, fragmentation,
+reconciliation, Riva client, atomic transcript commit, cleanup gate and post-commit reconciler
+exist with tests. `ingest` exposes the internal reception routes (S2.11) and the API has the
+`IngestReceptionSink` client (A2.13), but the default local configuration answers `503` before
+reading a byte (C2), so the upload flow is not demonstrated end to end in Compose. `asr_job`
+uses the Riva client with stub or scripted transports in tests; no real NVIDIA channel is
+exercised.
 
-**Retry or reupload** (A2.8). Both endpoints are specified and neither exists yet:
+**Retry or reupload** (A2.8). Both endpoints exist:
 
 | Situation | Action | Response |
 |---|---|---|
@@ -365,16 +369,17 @@ flowchart LR
     style QRY fill:#fafafa,stroke:#9aa0a6,color:#111
 ```
 
-**Status: planned** (L2.1–L2.4, J2.1–J2.2, A2.11). Today the chunk and embedding models, the
-dispatcher and the cleanup gate exist; `index` and `analyze` are no-ops and there is no
-`GET /search` route. Design rules:
+**Status: implemented API-side** (L2.1–L2.4, J2.1–J2.2, A2.11). Chunking, embeddings, the
+index job, the dispatcher and the cleanup gate exist; `GET /search` returns hybrid results with
+a stable cursor. `analyze` remains a no-op and there is no browser flow. Design rules:
 
 - An `index_requested` event is only dispatched if the latest attempt has `cleanup_status` at
   `verified`.
 - Embeddings have a fixed model and dimension per index generation; changing them requires a new
   generation and reindexing, never mixing vectors.
 - Without D3-Text closed for the provider, only synthetic or authored text is indexed.
-- The RRF `k` value and the HTTP code of `GET /search` are not specified.
+- The RRF `k`, the candidate window and the `GET /search` response are implemented in
+  `apps/api/app/services/search.py` and `apps/api/app/routers/search.py`.
 
 ## 7. P4 · Chat with Verified Citations
 
@@ -448,8 +453,9 @@ flowchart LR
     style C fill:#fafafa,stroke:#9aa0a6,color:#111
 ```
 
-**Status: planned** (L2.5–L2.6, A2.12, D2.5–D2.7). There are conversation and message models,
-but no chat routes.
+**Status: implemented API-side** (L2.5–L2.6, A2.12; `D2.5`–`D2.7` are still open). The chat
+SSE route and turn persistence exist; citations are revalidated against the database. There is
+no browser flow yet.
 
 | Aspect | Contract |
 |---|---|
@@ -684,8 +690,9 @@ flowchart LR
     style CT2 fill:#fafafa,stroke:#9aa0a6,color:#111
 ```
 
-**Status: planned.** Class deletion is A2.7 (S2) and account deletion is A4.4 (S4);
-`routers/audios.py` only implements `POST` and `PUT`, and `routers/me.py` only `GET` and `PATCH`.
+**Status: partial.** Class deletion (`DELETE /audios/{id}` tombstone) is implemented (A2.7);
+account deletion is A4.4 (S4) and still planned. `routers/me.py` only implements `GET` and
+`PATCH`; there is no account-deletion route.
 
 | Aspect | Contract |
 |---|---|

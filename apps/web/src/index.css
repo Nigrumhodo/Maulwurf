@@ -1,38 +1,38 @@
 @import "tailwindcss";
 
 /*
- * Maulwurf — sistema de diseño retro (terminal / CRT), dos temas:
- *   - oscuro (por defecto): mint #7cf5c2 + lavender #b7a6ff sobre negro.
- *   - claro  (clase `.light` en <html>): fondo #e4e4e7, mint #4a5565, lavender #18181b.
+ * Maulwurf — estética Cyber Y2K / Retro OS / Glitch Terminal, dos temas:
+ *   - oscuro (por defecto): fondo #050505, acento #ff0033 (rojo neón), texto #ffffff.
+ *   - claro  (clase `.light` en <html>): fondo #ebebeb, acento #0000ff (cobalto), texto #000000.
  *
  * Los colores son variables CSS que se sobreescriben bajo `:root.light`; los
  * utilities de Tailwind referencian `var(--color-*)`, así que cambiar la clase
  * de `<html>` basta para conmutar todo el árbol.
  *
  * Semántica de los tokens:
- *   --color-dark        → superficie principal / fondo de página.
- *   --color-pure-black  → tinta / bordes / sombras (siempre oscuro).
+ *   --color-dark        → fondo de página.
+ *   --color-mint        → acento primario (cobalto en claro, rojo neón en oscuro).
+ *   --color-lavender    → texto secundario (negro en claro, blanco en oscuro).
+ *   --color-pure-black  → tinta / bordes / sombras (negro en claro, blanco en oscuro).
  *   --color-pure-white  → papel / texto sobre superficies oscuras.
- *   --color-mint        → acento primario (también se usa como texto).
- *   --color-lavender    → acento/texto secundario.
- *   --color-on-accent   → texto sobre fondos `mint`/`lavender` (invierte).
- *   --color-surface     → fondo de inputs (oscuro en dark, papel en light).
+ *   --color-on-accent   → texto sobre fondos `mint`/`lavender`.
+ *   --color-surface     → superficie de ventanas/cards e inputs.
  */
 @theme {
-  /* Color */
-  --color-pure-black: #0a0a12;
-  --color-dark: #141422;
-  --color-pure-white: #f0ede4;
-  --color-mint: #7cf5c2;
-  --color-lavender: #b7a6ff;
-  --color-on-accent: #0a0a12;
-  --color-surface: #0a0a12;
+  /* Color — modo oscuro (default) */
+  --color-pure-black: #ffffff;
+  --color-dark: #050505;
+  --color-pure-white: #ffffff;
+  --color-mint: #ff0033;
+  --color-lavender: #ffffff;
+  --color-on-accent: #ffffff;
+  --color-surface: #0a0a0a;
 
-  /* Tipografía */
+  /* Tipografía retro monospaced */
   --font-pixel: "VT323", "Courier New", monospace;
-  --font-code: "Fira Code", "Courier New", monospace;
+  --font-code: "Fira Code", "Space Mono", monospace;
 
-  /* Sombras "bloque" (estética de botón oprimido) */
+  /* Sombras "bloque" (bordes rígidos, sin radio) */
   --shadow-block: 4px 4px 0 0 var(--color-pure-black);
   --shadow-block-sm: 2px 2px 0 0 var(--color-pure-black);
   --shadow-block-black: 4px 4px 0 0 var(--color-pure-white);
@@ -42,6 +42,8 @@
   --animate-caret: caret 1s steps(1, end) infinite;
   --animate-blink: blink 1s steps(1, end) infinite;
   --animate-flicker: flicker 2.6s steps(1, end) infinite;
+  --animate-fade-in: fade-in 0.45s ease-out both;
+  --animate-reel: reel-spin 6s linear infinite;
 
   @keyframes caret {
     0%,
@@ -89,21 +91,38 @@
       opacity: 1;
     }
   }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes reel-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
 }
 
 /* Tema claro: sobrescribe las mismas variables. */
 :root.light {
-  --color-pure-black: #18181b;
-  --color-dark: #e4e4e7;
+  --color-pure-black: #000000;
+  --color-dark: #ebebeb;
   --color-pure-white: #ffffff;
-  --color-mint: #4a5565;
-  --color-lavender: #18181b;
+  --color-mint: #0000ff;
+  --color-lavender: #000000;
   --color-on-accent: #ffffff;
   --color-surface: #ffffff;
 }
 
 /*
- * Keyframes usados por estilos inline (SpriteAnimator), disponibles siempre.
+ * Keyframes usados por estilos inline / hover, disponibles siempre.
  */
 @keyframes sprite-move {
   from {
@@ -114,6 +133,47 @@
   }
 }
 
+@keyframes glitch-shake {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  20% {
+    transform: translate(-1px, 1px);
+  }
+  40% {
+    transform: translate(1px, -1px);
+  }
+  60% {
+    transform: translate(-1px, -1px);
+  }
+  80% {
+    transform: translate(1px, 1px);
+  }
+}
+
+/* Cinta de estado del dashboard: desplaza el contenido duplicado a -50%
+   para un bucle sin salto. */
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* Barras del ecualizador (frecuencias de audio). */
+@keyframes eq {
+  0%,
+  100% {
+    transform: scaleY(0.25);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
 @layer base {
   :root {
     color-scheme: dark;
@@ -121,6 +181,11 @@
 
   :root.light {
     color-scheme: light;
+  }
+
+  /* Bordes siempre rectos (Cyber Y2K / Retro OS). */
+  * {
+    border-radius: 0;
   }
 
   body {
@@ -137,24 +202,85 @@
 }
 
 @layer utilities {
-  /* Superposición CRT: scanlines + viñeta, para páginas de auth. */
+  /* Scanlines CRT estáticas (el ruido dinámico lo aporta GlitchBackground). */
   .crt-overlay {
     pointer-events: none;
     position: fixed;
     inset: 0;
     z-index: 60;
-    background:
-      repeating-linear-gradient(
-        to bottom,
-        rgba(0, 0, 0, 0) 0,
-        rgba(0, 0, 0, 0) 2px,
-        rgba(0, 0, 0, 0.18) 3px,
-        rgba(0, 0, 0, 0) 4px
-      ),
-      radial-gradient(
-        ellipse at center,
-        rgba(0, 0, 0, 0) 55%,
-        rgba(0, 0, 0, 0.35) 100%
-      );
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0) 0,
+      rgba(0, 0, 0, 0) 2px,
+      rgba(0, 0, 0, 0.09) 3px,
+      rgba(0, 0, 0, 0) 4px
+    );
+  }
+
+  /* Sacudida + RGB split al pasar el cursor sobre una ventana. */
+  .glitch-hover {
+    transition: none;
+  }
+  .glitch-hover:hover {
+    animation: glitch-shake 0.22s steps(2, end) infinite;
+    text-shadow: 1px 0 rgba(255, 0, 51, 0.55), -1px 0 rgba(0, 255, 255, 0.55);
+  }
+
+  /* Glitch de un solo disparo (p. ej. al entrar como invitado). */
+  .glitch-once {
+    animation: glitch-shake 0.3s steps(2, end);
+    text-shadow: 1px 0 rgba(255, 0, 51, 0.55), -1px 0 rgba(0, 255, 255, 0.55);
+  }
+
+  /* Imágenes específicas por tema: la oscura es el default, la clara en .light. */
+  .img-dark-only {
+    display: block;
+  }
+  .img-light-only {
+    display: none;
+  }
+  :root.light .img-dark-only {
+    display: none;
+  }
+  :root.light .img-light-only {
+    display: block;
+  }
+
+  /* Cinta de estado (StatusTicker): una sola línea, dos copias enlazadas. */
+  .marquee {
+    display: inline-flex;
+    animation: marquee 18s linear infinite;
+  }
+
+  /* Barra del ecualizador: el retardo/duración se fijan inline por barra.
+     `center` hace que cada barra pulse en torno al eje central (onda centrada),
+     no desde abajo. */
+  .eq-bar {
+    transform-origin: center;
+    animation: eq 1.4s ease-in-out infinite;
+  }
+
+  /* Rejilla de puntos retro para fondos tipo "hardware" (cassette/VU). */
+  .retro-grid {
+    background-image: radial-gradient(
+      color-mix(in srgb, var(--color-lavender) 16%, transparent) 1px,
+      transparent 1px
+    );
+    background-size: 14px 14px;
+  }
+}
+
+/* Decorative motion is optional: honour the OS setting and stop the loops. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-caret,
+  .animate-blink,
+  .animate-flicker,
+  .animate-reel,
+  .glitch-hover:hover,
+  .glitch-once,
+  .marquee,
+  .eq-bar,
+  .sprite-anim {
+    animation: none !important;
   }
 }

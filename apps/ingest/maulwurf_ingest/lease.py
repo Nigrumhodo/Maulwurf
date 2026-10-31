@@ -63,10 +63,12 @@ async def acquire_bound(
     pool: asyncpg.Pool, *, user_id: uuid.UUID, audio_id: uuid.UUID, attempt_id: uuid.UUID,
     expected_token: int, instance: str, ttl: timedelta,
 ) -> Lease | None:
-    """Take one awaiting attempt and move it to ``receiving`` in the same statement.
+    """Take the reservation and move it to ``receiving`` in the same statement.
 
-    The credential is bound to ``expected_token``. A second receive finds the token
-    already incremented and matches no row.
+    ``api`` claims the reservation (``awaiting_upload → receiving``) before the first byte
+    (A2.14), so the guarded statement accepts both the claimed state and the legacy
+    ``awaiting_upload`` one. The credential is bound to ``expected_token``; a second receive
+    finds the token already incremented and matches no row.
     """
     row = await pool.fetchrow(
         """
@@ -74,11 +76,12 @@ async def acquire_bound(
            SET owner_instance = $3, fencing_token = fencing_token + 1, status = 'receiving',
                lease_expires_at = now() + $4, heartbeat_at = now(), updated_at = now()
          WHERE id = $1 AND user_id = $2 AND audio_id = $5 AND fencing_token = $6
-           AND status = 'awaiting_upload'
+           AND status = ANY($7::text[])
            AND (lease_expires_at IS NULL OR lease_expires_at <= now())
         RETURNING fencing_token
         """,
         attempt_id, user_id, instance, ttl, audio_id, expected_token,
+        ["awaiting_upload", "receiving"],
     )
     if row is None:
         return None

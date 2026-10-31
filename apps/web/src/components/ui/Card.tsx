@@ -15,9 +15,9 @@ export interface CardProps extends Omit<HTMLAttributes<HTMLElement>, 'title'> {
 }
 
 const variants: Record<CardVariant, string> = {
-  default: 'border-pure-black bg-dark shadow-block',
+  default: 'border-pure-black bg-surface shadow-block',
   outline: 'border-lavender bg-transparent shadow-block',
-  accent: 'border-mint bg-pure-black shadow-block-black',
+  accent: 'border-mint bg-surface shadow-block',
 }
 
 const barBorder: Record<CardVariant, string> = {
@@ -29,7 +29,7 @@ const barBorder: Record<CardVariant, string> = {
 /** terminal title-bar styling per variant: distinct bg + readable text */
 const headerBar: Record<CardVariant, string> = {
   default: 'bg-mint text-on-accent',
-  outline: 'bg-lavender text-on-accent',
+  outline: 'bg-mint text-on-accent',
   accent: 'bg-mint text-on-accent',
 }
 

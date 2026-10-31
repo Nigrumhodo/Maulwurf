@@ -45,10 +45,22 @@ _SECRET_FIELDS = (
     "embedding_api_key",
     "llm_api_key",
 )
+# Policy floor for secrets we generate. HKDF in `crypto.py` derives the AES-256 key, so this
+# is not an AES-GCM requirement. Provider-issued keys are excluded below: their length and
+# format belong to the provider (a 24-character Google client secret is valid).
+BOUNDARY_SECRET_MIN_BYTES = 32
+# These three guard different boundaries (sessions, encrypted data, OAuth state); reusing
+# one value would let a leak in one boundary compromise the others.
+_BOUNDARY_SECRET_FIELDS = ("secret_key", "encryption_key", "oauth_state_secret")
+# One gateway key may serve embeddings and chat; the Google OAuth client secret is a
+# different trust domain and must not alias either gateway key.
+_GATEWAY_SECRET_FIELDS = ("embedding_api_key", "llm_api_key")
+_PROVIDER_SECRET_FIELDS = ("google_client_secret", *_GATEWAY_SECRET_FIELDS)
 # Pinned by `embeddings.vector vector(1536)` in migration 0002 (M6). Changing it requires a
 # migration and a whole new index generation, so startup validates it instead of silently
 # accepting a model with another dimension.
 EMBEDDING_DIMENSION = 1536
+INGEST_SECRET_MIN_BYTES = 32
 _DEV_DEFAULT_FIELDS = ("database_url", "redis_url", "public_origin")
 # `.env` que usa la construcción en curso (respeta `_env_file`, p. ej. None en tests).
 _active_env_files: ContextVar[tuple[str, ...]] = ContextVar("_active_env_files", default=ENV_FILES)
@@ -80,7 +92,9 @@ class Settings(BaseSettings):
         finally:
             _active_env_files.reset(token)
 
-    env: Literal["local", "ci", "staging", "prod"] = "local"
+    # No default: a deployment that forgets MAULWURF_ENV must not inherit the local guards
+    # and their lenient secret rules (A2.16).
+    env: Literal["local", "ci", "staging", "prod"]
     secret_key: SecretStr  # sin default: obliga a definirlo por entorno
     encryption_key: SecretStr  # AES-GCM (M1); nunca loguear .get_secret_value()
     encryption_key_version: int = Field(default=1, ge=1)  # se guarda junto a cada cifrado
@@ -107,6 +121,11 @@ class Settings(BaseSettings):
     # la lee de MAULWURF_INGESTION_CAPABILITIES como un objeto JSON; sin ella el endpoint
     # devuelve el shape seguro sin límites aprobados.
     ingestion_capabilities: IngestionCapabilities = Field(default_factory=IngestionCapabilities)
+    # Reception hop to `ingest` (ADR-0008 §1-§2). Unset: `get_reception_sink()` keeps the
+    # unavailable sink (503). Both the URL and the secret are needed to stream.
+    ingest_url: AnyHttpUrl | None = None
+    ingest_credential_secret: SecretStr | None = None
+    ingest_credential_kid: str = Field(default="k1", pattern=r"^[a-z0-9]{1,16}$")
     # Versioned embeddings (L2.2, M6/D5): provider compatible with the embeddings API.
     # `base_url` is the base to which `/embeddings` is appended. Without base_url and api_key
     # indexing fails with `embedding_not_configured`; there is never a default provider nor
@@ -184,6 +203,30 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _reject_incomplete_ingest_config(self) -> "Settings":
+        if (self.ingest_url is None) != (self.ingest_credential_secret is None):
+            raise ValueError("ingest_url e ingest_credential_secret van juntos")
+        return self
+
+    @model_validator(mode="after")
+    def _reject_weak_ingest_secret(self) -> "Settings":
+        # ADR-0008 §2: a 32-byte floor and no placeholder in every environment, local included.
+        # This is a security floor, not a capacity limit.
+        secret = self.ingest_credential_secret
+        if secret is None:
+            return self
+        raw = secret.get_secret_value()
+        if "change-me" in raw:
+            raise ValueError("ingest_credential_secret inseguro")
+        try:
+            decoded = bytes.fromhex(raw.strip())
+        except ValueError:
+            raise ValueError("ingest_credential_secret debe ser hexadecimal") from None
+        if len(decoded) < INGEST_SECRET_MIN_BYTES:
+            raise ValueError("ingest_credential_secret debe tener al menos 32 bytes")
+        return self
+
+    @model_validator(mode="after")
     def _reject_incomplete_embedding_config(self) -> "Settings":
         if (self.embedding_base_url is None) != (self.embedding_api_key is None):
             raise ValueError("embedding_base_url y embedding_api_key van juntos")
@@ -225,17 +268,71 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _reject_insecure_defaults(self) -> "Settings":
-        # Fail-fast fuera de local: secreto vacío o "change-me", u Origin sin TLS.
+        # Fail-fast outside local: empty, placeholder, too short or reused secrets, or a
+        # public origin without TLS. Local keeps the development placeholders usable.
         if self.env == "local":
             return self
+        secret_values: dict[str, str] = {}
         for name in _SECRET_FIELDS:
             value: SecretStr | None = getattr(self, name)
             if value is None:
                 continue
-            if not value.get_secret_value().strip():
+            # Validate exactly what the runtime uses: a newline injected by a secret file is
+            # an explicit error, not something `.strip()` should hide.
+            raw = value.get_secret_value()
+            if not raw.strip():
                 raise ValueError(f"{name} vacío en env={self.env}")
-            if "change-me" in value.get_secret_value():
+            if raw != raw.strip():
+                raise ValueError(
+                    f"{name} tiene espacios o saltos de línea alrededor en env={self.env}"
+                )
+            if "change-me" in raw:
                 raise ValueError(f"{name} inseguro en env={self.env}")
+            # Length is our policy only for the secrets we generate, not for provider keys.
+            if (
+                name in _BOUNDARY_SECRET_FIELDS
+                and len(raw.encode("utf-8")) < BOUNDARY_SECRET_MIN_BYTES
+            ):
+                raise ValueError(
+                    f"{name} debe tener al menos {BOUNDARY_SECRET_MIN_BYTES} bytes "
+                    f"en env={self.env}"
+                )
+            secret_values[name] = raw
+        missing = [name for name in _BOUNDARY_SECRET_FIELDS if name not in secret_values]
+        if missing:
+            raise ValueError(
+                f"faltan secretos de frontera: {', '.join(missing)} en env={self.env}"
+            )
+        boundary = {secret_values[name] for name in _BOUNDARY_SECRET_FIELDS}
+        if len(boundary) != len(_BOUNDARY_SECRET_FIELDS):
+            raise ValueError(
+                "secret_key, encryption_key y oauth_state_secret deben ser distintos "
+                f"en env={self.env}"
+            )
+        for name in _PROVIDER_SECRET_FIELDS:
+            provider_value = secret_values.get(name)
+            if provider_value is not None and provider_value in boundary:
+                raise ValueError(
+                    f"{name} reutiliza secret_key, encryption_key u "
+                    f"oauth_state_secret en env={self.env}"
+                )
+        google_secret = secret_values.get("google_client_secret")
+        gateway = {
+            secret_values[name] for name in _GATEWAY_SECRET_FIELDS if name in secret_values
+        }
+        if google_secret is not None and google_secret in gateway:
+            raise ValueError(
+                "google_client_secret no puede reutilizar embedding_api_key ni "
+                f"llm_api_key en env={self.env}"
+            )
+        ingest_secret = self.ingest_credential_secret
+        if (
+            ingest_secret is not None
+            and ingest_secret.get_secret_value() in secret_values.values()
+        ):
+            raise ValueError(
+                f"ingest_credential_secret reutiliza otro secreto en env={self.env}"
+            )
         if self.public_origin.scheme != "https":
             raise ValueError(f"public_origin debe usar https en env={self.env}")
         for name in _DEV_DEFAULT_FIELDS:

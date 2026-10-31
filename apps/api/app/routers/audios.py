@@ -35,7 +35,8 @@ SRT only when the measured times are usable (`409 srt_unavailable`). All SQL liv
 """
 
 import uuid
-from datetime import UTC, date, datetime
+from contextlib import suppress
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, Header, Query, Request, Response
@@ -64,13 +65,16 @@ from app.services import library, progress
 from app.services.audios import (
     allowed_languages,
     cancel_attempt,
+    cancel_reservation,
     check_quota,
     consume_variant_token,
     create_reservation,
+    open_reception,
     reserve_slot,
     tombstone_audio,
 )
 from app.services.exports import render_srt, render_txt, srt_exportable
+from app.services.ingest_sink import get_reception_sink
 from app.services.runs import (
     ensure_reupload_allowed,
     open_reupload,
@@ -80,7 +84,6 @@ from app.services.tenant import get_owned
 from app.services.uploads import (
     ReceptionSink,
     effective_upload_limit,
-    get_reception_sink,
     receive_content,
 )
 
@@ -442,44 +445,65 @@ async def upload_content(
     sink: Annotated[ReceptionSink, Depends(get_reception_sink)],
     content_length: Annotated[int | None, Header()] = None,
 ) -> Response:
-    """A2.4: recibe el binario en streaming sin spool y devuelve 200/202 (o un error tipado).
+    """A2.4/A2.14: claim the attempt, then receive the stream without spool.
 
-    Todas las validaciones de abajo ocurren ANTES de leer un byte; la recepción, el SHA-256,
-    el corte en caliente, el dedupe y la compensación viven en `services/uploads` (el router
-    no hace SQL ni toca el cuerpo, guardia ADR-0006).
+    Ownership, the upload window and the declared size are checked before any byte; the
+    claim (`awaiting_upload → receiving`, row-locked) also happens before the first byte, so
+    a second PUT stops at the API with `409 attempt_not_active` instead of reaching the sink.
+    The reception, SHA-256, hot cut, dedupe and compensation live in `services/uploads`; this
+    router only resolves ownership and delegates SQL to the services (ADR-0006).
     """
-    audio = await get_owned(db, Audio, session.user_id, audio_id)
-    if audio is None or audio.deleted_at is not None:
-        raise not_found()
-    attempt = await get_owned(db, IngestionAttempt, session.user_id, attempt_id)
-    if attempt is None or attempt.audio_id != audio.id:
-        raise not_found()
-    if attempt.status != "awaiting_upload":
-        raise ApiError(409, "attempt_not_active", "Este intento de subida ya no está activo.")
-    if attempt.upload_expires_at is None:
-        # Un intento sin ventana de subida no admite bytes: no "expiró", nunca estuvo activo.
-        raise ApiError(409, "attempt_not_active", "Este intento de subida ya no está activo.")
-    if attempt.upload_expires_at <= datetime.now(UTC):
-        raise ApiError(410, "upload_expired", "La subida expiró; vuelve a crear la clase.")
-    # Pre-filtro por cabecera, sin leer bytes: el límite real se impone contando los bytes
-    # durante el streaming (una subida chunked no declara Content-Length).
+    # Plain value: `open_reception` commits the claim and a committing session may expire
+    # the ORM `session` object (tests use `expire_on_commit=True`).
+    user_id = session.user_id
+    # Ownership, status, window and the atomic claim: a foreign id is a 404, a second PUT a
+    # 409 and an elapsed window a 410, all before the sink is opened (A2.14).
+    claim = await open_reception(
+        db, user_id=user_id, audio_id=audio_id, attempt_id=attempt_id
+    )
+    # Header pre-filter, no bytes read: the real limit is enforced while streaming (a chunked
+    # upload does not declare Content-Length). A rejection releases the claim now, so the
+    # slot does not stay held until `upload_expires_at`.
     limit = effective_upload_limit()
     if content_length is not None and content_length > limit:
+        await cancel_reservation(
+            db,
+            user_id=user_id,
+            attempt_id=attempt_id,
+            fencing_token=claim.fencing_token,
+            from_status="receiving",
+        )
         raise ApiError(
             413,
             "payload_too_large",
             "El archivo supera el tamaño máximo permitido.",
             {"max_bytes": limit},
         )
-    outcome = await receive_content(
-        db,
-        request,
-        sink,
-        user_id=session.user_id,
-        audio=audio,
-        attempt=attempt,
-        content_length=content_length,
-    )
+    try:
+        outcome = await receive_content(
+            db,
+            request,
+            sink,
+            user_id=user_id,
+            audio=claim.audio,
+            attempt=claim.attempt,
+            content_length=content_length,
+        )
+    except BaseException:
+        # Release only while the API still owns the row: the fencing token in the
+        # conditional update makes this a no-op once `ingest` acquired the reception, so
+        # `ingest` writes the terminal state under its lease (ADR-0008 §5). `BaseException`
+        # includes a client disconnect and task cancellation; the release itself never
+        # raises, and an unreleased row is reaped by `expire_stale_reservations`.
+        with suppress(BaseException):
+            await cancel_reservation(
+                db,
+                user_id=user_id,
+                attempt_id=attempt_id,
+                fencing_token=claim.fencing_token,
+                from_status="receiving",
+            )
+        raise
     return JSONResponse(status_code=outcome.status_code, content=outcome.payload)
 
 

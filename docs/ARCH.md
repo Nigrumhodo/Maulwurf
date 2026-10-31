@@ -1,7 +1,7 @@
 # System Architecture — Maulwurf
 
 > **Status:** architecture view derived from [ESPECIFICACION.md](ESPECIFICACION.md), which is the
-> normative source, and contrasted with the `develop` code at `2298e1b` (2026-10-11). It creates
+> normative source, and contrasted with the `develop` code at `16cf45b` (2026-10-30). It creates
 > no contracts: on any difference, the specification and the
 > [implementation plan](PLAN_IMPLEMENTACION.md) prevail. Step-by-step flows are in
 > [PROCESOS.md](PROCESOS.md).
@@ -21,7 +21,8 @@ remains planned.
 | Blue fill | Actor or system outside the repository |
 | Dashed line | Planned flow or not yet wired |
 
-Each figure is exported to SVG in [diagrams/](diagrams/) (see §8).
+Each figure is exported to SVG in [diagrams/](diagrams/) (see §8). The status tables in
+§4–§6 are the authoritative text when a figure's colors lag behind the code.
 
 | Fig. | Diagram | SVG |
 |---|---|---|
@@ -63,15 +64,16 @@ flowchart LR
     style MW fill:#fafafa,stroke:#9aa0a6,color:#111
 ```
 
-Today **no third-party call is wired**: the Riva client exists in isolation and unused, and
-Google appears only as configuration and status read from the database.
+Today Google OAuth is wired (A1.3). The Riva client exists behind a scripted transport and no
+automated test opens a real NVIDIA channel; LLM and embedding adapters are implemented but CI
+does not call a real provider.
 
 | System | What it exchanges | Guarantees and limits | Status |
 |---|---|---|---|
-| Student | Uploads audio with chosen language and consent; consults, reviews and confirms | Every Calendar write requires explicit confirmation | API partial; the web is a scaffold |
-| NVIDIA Riva | Receives audio in fragments and returns text and offsets | `grpc.nvcf.nvidia.com:443`, `whisper-large-v3`, transcription only (never `task:translate`). Retention and region unverified: D3-Audio `blocked`; D2 contract `pending` | Isolated client (S2.4 in progress), not wired |
-| LLM and embeddings | Receive text chunks and questions | Provisional: `gpt-4o-mini` via LiteLLM and `text-embedding-3-small` (1536 dimensions). D3-Text is closed per provider and model before the first real transcript | Planned (S2–S3) |
-| Google | OAuth login, Calendar events, mail via Gmail | Tokens only in the backend, encrypted with AES-GCM. Gmail is opt-in and only writes to the verified email | Configuration and status only; no login (A1.3) |
+| Student | Uploads audio with chosen language and consent; consults, reviews and confirms | Every Calendar write requires explicit confirmation | API partial; the web SPA has login, subjects and upload-form pieces, without an end-to-end upload flow |
+| NVIDIA Riva | Receives audio in fragments and returns text and offsets | `grpc.nvcf.nvidia.com:443`, `whisper-large-v3`, transcription only (never `task:translate`). Retention and region unverified: D3-Audio `blocked`; D2 contract `pending` | Client with a scripted transport (S2.4/S2.10); no real channel in CI |
+| LLM and embeddings | Receive text chunks and questions | Provisional: `gpt-4o-mini` via LiteLLM and `text-embedding-3-small` (1536 dimensions). D3-Text is closed per provider and model before the first real transcript | Adapters and API-side search/chat (L2.x); real calls only in protected `P-*` tests |
+| Google | OAuth login, Calendar events, mail via Gmail | Tokens only in the backend, encrypted with AES-GCM. Gmail is opt-in and only writes to the verified email | OAuth login implemented (A1.3); Calendar and Gmail planned for S3–S4 |
 
 ## 3. Containers
 
@@ -142,18 +144,21 @@ image is J1.2, Caddy J1.3, the ARQ processes J1.5, and the Redis policy J1.6.
 |---|---|---|
 | `PUT /audios/*/content` | `api:8000` | Streaming without compression or buffering. It stays on `api`, which streams to `ingest` internally ([ADR-0008](adr/ADR-0008-api-ingest-reception.md)); `/internal/*` is never routed |
 | `/audios/*/progress` | `api:8000` with `flush_interval -1` | Progress SSE: the route exists in Caddy, but not in the API routers |
-| `/auth/*`, `/me`, `/me/*`, `/subjects`, `/subjects/*`, `/integrations/*`, `/audios`, `/audios/*`, `/ingestion/*`, `/readyz` | `api:8000` | `/subjects` has no router yet in `develop` (A1.6) |
+| `/auth/*`, `/me`, `/me/*`, `/subjects`, `/subjects/*`, `/integrations/*`, `/audios`, `/audios/*`, `/ingestion/*`, `/search`, `/chat/*`, `/readyz` | `api:8000` | Implemented routers; the `PUT` still answers `503` with the default ingest sink |
 | Anything else | `web:3000` | Fallback |
 
 **What is not connected yet**
 
-- `ingest` receives no traffic from Caddy nor from `api`: its ASGI exposes only `GET /healthz` and
-  `GET /readyz`, and `api` has no client towards it. The `PUT` ends at `api`, whose reception sink
-  responds `503` (point C2, see §4.1).
-- `worker` registers `index` and `analyze`, which only write the ID to the log (`max_tries=1`).
-- `scheduler` runs `dispatch_outbox` at startup and every minute: it takes up to 100 events and
-  enqueues IDs and version into Redis, without ACK nor retries (J2.1 pending).
-- No container calls Riva, an LLM, or Google.
+- `ingest` serves the internal reception routes (S2.11), and `api` has an `IngestReceptionSink`
+  client (A2.13). Compose leaves `MAULWURF_INGEST_URL` and the ingest credential unset by
+  default, so the sink answers `503` until they are configured; `/internal/*` is never routed
+  from the edge.
+- `worker` registers `index` (real, J2.2) and `analyze` (still a log-only no-op until S3).
+- `scheduler` runs `dispatch_outbox` every minute with bounded retries and revalidation
+  (J2.1), plus the `reconcile` cycle (J2.4). A lost Redis queue is recovered from the database
+  (J2.3).
+- Search and chat are implemented as API routes (L2.3–L2.6) but the browser end-to-end flow
+  (`D2.x`) is not. No automated test calls Riva, an LLM, an embedding provider, or Google.
 
 ## 4. Components
 
@@ -224,21 +229,22 @@ flowchart TB
 | Layer | Module | Purpose | Status |
 |---|---|---|---|
 | routers | `health` | `/healthz` and `/readyz` (Postgres and Redis) | Implemented |
-| | `auth` | `POST /auth/logout` | Implemented; Google login does not exist (A1.3) |
+| | `auth` | `GET /auth/google/start`, `/auth/google/callback`, `POST /auth/logout` | Implemented (A1.3) |
 | | `me` | `GET /me` (profile and CSRF token) and `PATCH /me` | Implemented |
+| | `subjects` | Subject CRUD with the active-classes deletion rule | Implemented (A1.6) |
 | | `ingestion` | `GET /ingestion/capabilities` (A2.2) | Implemented; publishes `null` limits until D4 is closed |
 | | `integrations` | `GET /integrations/status`, reads only the DB | Implemented |
 | | `audios` | `POST /audios` (A2.3) and `PUT /audios/{id}/content` (A2.4) | Partial: the `PUT` responds 503 with the default sink |
-| services | `sessions` | Opaque session (`mw_session`) and CSRF | Implemented |
+| | `search`, `chat` | `GET /search` (A2.11) and chat SSE (L2.5/L2.6) | Implemented; real provider calls are protected `P-*` tests |
+| services | `sessions`, `oauth_google` | Opaque session (`mw_session`), CSRF, Google OAuth and encrypted tokens | Implemented |
 | | `tenant` | `get_owned`: access filtered by `user_id` (ADR-0006) | Implemented |
-| | `audios` | Slot reservation, quota, and versioned consent | Implemented; quota and slot are conditional (D4) |
-| | `uploads` | Streaming reception, SHA-256, compensation, and the `ReceptionSink` port | Partial: there is no real sink implementation |
-| | `dedupe` | Exact or variant identity and one-time-use token | Implemented; tested with an injected sink |
-| | `outbox` | Pure policy: which events are published and the cleanup gate | Implemented |
-| workers | `arq_app`, `dispatcher` | `worker` and `scheduler` processes; the dispatcher moves IDs from `outbox_events` to Redis with `FOR UPDATE SKIP LOCKED` | Partial: no ACK nor retries; `index` and `analyze` do nothing |
-| core | `config`, `deps`, `db`, `errors`, `validation` | `MAULWURF_*` settings with fail-fast validation, session, CSRF and Origin, async SQLAlchemy, error envelope, and validators | Implemented |
-| | `crypto` | AES-GCM with key version | It exists, but no process uses it today |
-| models | `core`, `ingestion`, `transcript`, `chunk`, `chat` | S1 and S2 tables (migrations `0001` and `0002`) | Schema implemented; no services use it beyond ingestion |
+| | `audios`, `uploads` | Slot reservation, quota, versioned consent, streaming reception, SHA-256, dedupe and compensation | Implemented; the default sink is `503` (C2) |
+| | `search`, `rag`, `citations`, `llm`, `embeddings` | Hybrid retrieval, prompt assembly, citation validation and provider adapters | Implemented; provider calls only in protected tests |
+| | `outbox`, `indexing`, `index_job`, `reconciliation` | Publication policy, cleanup gate, index generations and recovery | Implemented |
+| workers | `arq_app`, `dispatcher`, `index_job`, `reconciler` | `worker` and `scheduler` processes; outbox dispatch with retry/backoff, idempotent index job, periodic reconciliation | Implemented; `analyze` is still a no-op until S3 |
+| core | `config`, `deps`, `db`, `errors`, `logging`, `validation` | `MAULWURF_*` settings with fail-fast validation, session, CSRF and Origin, async SQLAlchemy, error envelope, JSON logs and validators | Implemented |
+| | `crypto` | AES-GCM with key version | Used by Google credentials |
+| models | `core`, `ingestion`, `transcript`, `chunk`, `chat` | S1 and S2 tables (migrations `0001`–`0004`) | Schema implemented; services use ingestion, search and chat |
 | schemas | `ingestion` | Capabilities contract | Implemented |
 | | `analysis`, `chunk` | Pydantic contracts for extraction and chunks | Draft, unused at runtime |
 
@@ -299,16 +305,16 @@ flowchart TB
 
 | Module | Purpose | Status |
 |---|---|---|
-| `main` | FastAPI app with `/healthz` and `/readyz` (hardening, tmpfs and Postgres); it does not serve if a `hardening` guarantee is missing | Implemented |
+| `main` | FastAPI app with `/healthz`, `/readyz` and the internal reception routes; it does not serve if a `hardening` guarantee is missing | Implemented |
 | `config`, `hardening` | `MAULWURF_DATABASE_URL` and `INGEST_*` settings; self-check of rootfs, tmpfs, swap and core dumps by reading `/proc` and the cgroup | Implemented |
 | `supervisor` | Orchestrates one attempt: lease, reception, ASR in a subprocess and cleanup in `finally`; kills the process group, deletes the directory and verifies in `/proc` | Library |
 | `admission`, `lease` | Instance admission latch; lease, heartbeat and fencing of `ingestion_attempts` | Library |
 | `receiver` | Streaming reception into a private file for the attempt; SHA-256 per chunk; cuts and deletes when the cap is exceeded | Library |
 | `audio/validate` | ffprobe: decides to accept, normalize or reject by container, duration and streams | Library; `m4a` is listed as unverified |
 | `audio/ffmpeg`, `audio/fragmenter` | ffmpeg with no shell nor network and with CPU, memory and output limits; fragments of up to 30 s with 0.25 s overlap | Library |
-| `pipeline`, `asr_job` | One active fragment at a time; `asr_job` runs as a subprocess and is today a stub without provider calls | Library (stub) |
+| `pipeline`, `asr_job` | One active fragment at a time; `asr_job` runs as a subprocess and uses the Riva client with a stub or scripted transport in tests | Library; no real provider channel in CI |
 | `audio/reconcile`, `audio/timestamps` | Boundary and overlap reconciliation; global offsets | Library |
-| `asr/riva_client` | Isolated gRPC TLS client; up to 3 attempts with backoff for transient errors | Library; `asr_job` does not use it |
+| `asr/riva_client` | Isolated gRPC TLS client; up to 3 attempts with backoff for transient errors | Library; used by `asr_job` |
 | `cleanup` | Ephemeral directory per attempt and cleanup verification in `/proc`: descriptors, group processes and mounts | Library; used by the `supervisor` |
 | `audio_absence` | Audio-absence sweep across disk, Redis, logs, traces and caches; returns only booleans and counts | Tests only: imported by `test_no_audio_persistence.py` |
 | `capacity`, `capabilities` | RAM budget per slot; capabilities observed in the spike | Library; D4 remains blocked |
@@ -391,15 +397,15 @@ flowchart LR
 |---|---|---|
 | 8-service Compose stack with healthchecks and quality CI | Implemented | `infra/`, `.github/workflows/quality.yml`; CI green at `2298e1b` |
 | Opaque session, CSRF, `GET` and `PATCH /me`, `POST /auth/logout` | Implemented | `test_session_csrf.py`, `test_a18_endpoints.py` |
-| Google login | Not implemented | A1.3 without claim; PR #42 proposes a different web stack |
-| Subject CRUD | Not in `develop` | A1.6 `in progress`; PR #50 open |
+| Google login | Implemented (A1.3, #42) | `test_oauth_google.py`; local test-client setup in `RUNBOOK-dev.md` |
+| Subject CRUD | Implemented (A1.6, #50) | `test_subjects.py` |
 | `POST /audios` and `PUT /audios/{id}/content` | Partial | A2.3 (#51), A2.4 (#52); the default sink responds 503 (C2) |
-| Ephemeral ingestion: admission, reception, supervisor, lease, cleanup, ffprobe and ffmpeg, fragmentation, reconciliation and Riva client | Partial: unwired library | S1.B*, S2.1–S2.2 (#54), S2.3–S2.4 (#55, `in progress`); `asr_job` is a stub |
-| Transcript commit and post-commit reconciler | Not implemented | S2.5 and A2.10, S2.7 |
-| Outbox dispatcher | Partial | J1.5; no ACK nor retries (J2.1) |
-| Indexing, hybrid search and chat | Not implemented | L2.x, A2.11 and A2.12; models exist, but no routes or jobs |
+| Ephemeral ingestion: reception, admission, supervisor, lease, cleanup, ffprobe/ffmpeg, fragmentation, reconciliation and Riva client | Partial: internal routes and library implemented | S1.B*, S2.1–S2.13; the real Riva channel is not exercised |
+| Transcript commit and post-commit reconciler | Implemented | S2.5–S2.7 (#75, #76) |
+| Outbox dispatcher | Implemented | J2.1 (#85), J2.2 (#91), J2.3 (#95), J2.4 (#94) |
+| Indexing, hybrid search and chat | Implemented API-side | L2.1–L2.6, A2.11; no browser end-to-end flow |
 | Analysis, review, Calendar, Gmail and account deletion | Not implemented | S3 and S4 remain closed |
-| Web | Scaffold | `apps/web/app/page.tsx` is a placeholder; the `D-` area has not started |
+| Web | Partial | Vite SPA with login, base routes, subject CRUD and upload-form work (`D2.1` in progress) |
 | Upload limits (200 MiB and 3 h target) | Not approved | `capabilities` publishes `null`; the Caddyfile sets no body limits or timeouts |
 
 ## 7. Open Decisions That Constrain the Architecture
@@ -412,7 +418,7 @@ flowchart LR
 | D4 Capacity | `blocked` | Upload limits, RAM per slot and deadlines | F0.1 minutes |
 | D6 Temporality | `pending` (proposal `none`) | Decides `timestamp_precision`, the citation format and SRT | F0.1 minutes |
 | D8 Retention and backups | The spec lists it as pending; `plan/S4.md` treats it as approved | Text and chat retention, and backup policy | ESPECIFICACION §12, `plan/S4.md` |
-| `PUT` route (C2) | Decided ([ADR-0008](adr/ADR-0008-api-ingest-reception.md)), implementation pending | `api` terminates the `PUT` and streams to `ingest` in two phases (receive and hold, then admit or discard) with a per-attempt internal credential. Until A2.13/S2.11 land, the default sink still responds 503 | `infra/Caddyfile`, `services/uploads.py`; tickets A2.13, S2.11, J2.8 |
+| `PUT` route (C2) | Decided ([ADR-0008](adr/ADR-0008-api-ingest-reception.md)); transport implemented, disabled by default | `api` terminates the `PUT` and streams to `ingest` in two phases (receive and hold, then admit or discard) with a per-attempt internal credential. The client landed with A2.13/S2.11; the default sink still responds 503 until `MAULWURF_INGEST_URL` and the credential are configured | `infra/Caddyfile`, `services/uploads.py`, `services/ingest_sink.py`; tickets A2.13, S2.11, J2.8 |
 | Web framework | Closed 2026-10-11 | Vite + React SPA served by Express, decided by the lead | [ADR-0007](adr/ADR-0007-web-stack.md); PR #42; ticket L2.10 |
 | Ingress and upload limit | Not defined | Cloudflare Tunnel is no longer planned and the documents do not say what replaces it. Any ingress in front of Caddy has its own request-body limit and timeouts and may buffer, so the effective limit against the 200 MiB target is unknown; ticket J2.10 | `infra/Caddyfile` (no body limit nor timeouts), [PROPUESTA_PROYECTO_FINAL.md](PROPUESTA_PROYECTO_FINAL.md) |
 

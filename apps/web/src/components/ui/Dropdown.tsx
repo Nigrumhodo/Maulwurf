@@ -75,7 +75,7 @@ export function Dropdown({
                   item.onSelect?.()
                   setOpen(false)
                 }}
-                className={`block w-full px-3 py-2 text-left lowercase text-lavender hover:bg-mint hover:text-on-accent disabled:opacity-40 ${item.danger ? 'hover:bg-pure-black hover:text-pure-white' : ''}`}
+                className={`block w-full px-3 py-2 text-left lowercase text-lavender hover:bg-mint hover:text-on-accent disabled:opacity-40 ${item.danger ? 'hover:bg-mint hover:text-on-accent' : ''}`}
               >
                 {item.label}
               </button>

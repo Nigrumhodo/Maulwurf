@@ -12,6 +12,7 @@ from app.models import (
     Conversation,
     Message,
     MessageSource,
+    ProcessingRun,
     VariantConfirmationToken,
 )
 from tests.integration.actors import make_actor, make_audio, make_subject
@@ -71,6 +72,26 @@ async def test_i_s2_an_05_dedupe_unique_identity_is_scoped_to_live_audio(
         db_session.add(Audio(**fields))
         with pytest.raises(IntegrityError):
             await db_session.flush()
+
+
+async def test_i_s2_jf_15_processing_run_starts_with_a_zero_fencing_token(
+    db_session: AsyncSession,
+) -> None:
+    """The ledger starts at `0`; only a claim moves it, so a pending retry is not a claim."""
+    owner = await make_actor(db_session)
+    audio = await make_audio(db_session, owner)
+    run = ProcessingRun(
+        user_id=owner.user_id,
+        audio_id=audio.id,
+        stage="index",
+        transcript_version=1,
+        config_version="test-v1",
+    )
+    db_session.add(run)
+    await db_session.flush()
+    await db_session.refresh(run)
+
+    assert run.fencing_token == 0
 
 
 async def test_i_s2_an_11_chat_scope_idempotency_and_cascade_sources(

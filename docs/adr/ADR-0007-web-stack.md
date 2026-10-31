@@ -43,6 +43,7 @@ and an optional PWA (D4.5) whose service worker excludes upload, API and transcr
   - `D2.x` build on this stack; D4.5 uses a Vite PWA plugin, reviewed under ADR-0003.
   - `index.html` loads fonts from Google Fonts, a third-party request on every visit. Self-host
     them before real users (D2.8, browser privacy).
-  - Planning documents that still say Next.js (`PLAN_SPRINTS.md`, `plan/S1.md`–`S4.md`,
-    `DISENO_BD_API_SPRINTS.md`) are reconciled in L2.11. The specification, the implementation
-    plan, ADR-0001, `ARCH.md`, `AGENTS.md` and `README.md` change in the same PR as this ADR.
+  - Planning documents that still said Next.js (`PLAN_SPRINTS.md`, `plan/S1.md`–`S4.md`,
+    `DISENO_BD_API_SPRINTS.md`, `PROPUESTA_PROYECTO_FINAL.md`) were reconciled in L2.11
+    (2026-10-30). The specification, the implementation plan, ADR-0001, `ARCH.md`,
+    `AGENTS.md` and `README.md` changed in the same PR as this ADR.

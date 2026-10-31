@@ -8,9 +8,9 @@ from pydantic import Field, RedisDsn, ValidationError
 from app.core.config import Settings
 
 SECRETS: dict[str, Any] = {
-    "secret_key": "s3cret-value-for-test",
-    "encryption_key": "enc-value-for-test",
-    "oauth_state_secret": "state-value-for-test",
+    "secret_key": "s2-test-secret-key-0123456789abcdef",
+    "encryption_key": "s2-test-encryption-key-0123456789ab",
+    "oauth_state_secret": "s2-test-oauth-state-secret-0123456789",
 }
 
 
@@ -56,6 +56,142 @@ def test_change_me_placeholder_rejected_outside_local(field: str) -> None:
 
 def test_change_me_placeholder_allowed_in_local() -> None:
     assert _settings(secret_key="change-me").env == "local"
+
+
+# --- A2.16 / U-S2-AN-15: fail-closed settings -----------------------------------------
+
+
+def test_env_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Without MAULWURF_ENV the local guard must not be inherited by accident.
+    monkeypatch.delenv("MAULWURF_ENV", raising=False)
+
+    with pytest.raises(ValidationError, match="env"):
+        Settings(_env_file=None, **SECRETS)
+
+
+def test_empty_env_is_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MAULWURF_ENV", "")
+
+    with pytest.raises(ValidationError, match="env"):
+        Settings(_env_file=None, **SECRETS)
+
+
+@pytest.mark.parametrize("field", ["secret_key", "encryption_key", "oauth_state_secret"])
+def test_weak_secret_rejected_outside_local(field: str) -> None:
+    with pytest.raises(ValidationError, match=f"{field}.*32"):
+        _prod(**{field: "x" * 31})
+
+
+def test_secret_of_minimum_length_is_accepted_outside_local() -> None:
+    assert _prod(secret_key="k" * 32).env == "prod"
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("secret_key", "encryption_key"),
+        ("secret_key", "oauth_state_secret"),
+        ("encryption_key", "oauth_state_secret"),
+    ],
+)
+def test_reused_secrets_rejected_outside_local(first: str, second: str) -> None:
+    shared = "shared-secret-value-0123456789abcdef"
+
+    with pytest.raises(ValidationError, match="distintos"):
+        _prod(**{first: shared, second: shared})
+
+
+def test_short_or_reused_secrets_remain_usable_in_local() -> None:
+    settings = _settings(
+        env="local",
+        secret_key="short",
+        encryption_key="short",
+        oauth_state_secret="short",
+    )
+
+    assert settings.env == "local"
+
+
+@pytest.mark.parametrize(
+    ("field", "context"),
+    [
+        ("google_client_secret", {"google_client_id": "client-id"}),
+        (
+            "embedding_api_key",
+            {"embedding_base_url": "https://api.openai.com/v1"},
+        ),
+        (
+            "llm_api_key",
+            {
+                "llm_base_url": "https://api.openai.com/v1",
+                "llm_model_window": 128_000,
+            },
+        ),
+    ],
+)
+def test_short_provider_secret_is_accepted_outside_local(
+    field: str, context: dict[str, Any]
+) -> None:
+    # Provider-issued keys keep the provider format; our 32-byte policy is only for the
+    # boundary secrets we generate.
+    assert _prod(**{**context, field: "short-provider-key"}).env == "prod"
+
+
+def test_provider_key_aliasing_a_boundary_secret_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="reutiliza"):
+        _prod(
+            llm_base_url="https://api.openai.com/v1",
+            llm_api_key=SECRETS["secret_key"],
+            llm_model_window=128_000,
+        )
+
+
+def test_provider_keys_may_alias_each_other() -> None:
+    shared = "one-gateway-key-0123456789abcdef"
+    settings = _prod(
+        embedding_base_url="https://api.openai.com/v1",
+        embedding_api_key=shared,
+        llm_base_url="https://api.openai.com/v1",
+        llm_api_key=shared,
+        llm_model_window=128_000,
+    )
+
+    assert settings.env == "prod"
+
+
+@pytest.mark.parametrize(
+    "context",
+    [
+        {"embedding_base_url": "https://api.openai.com/v1"},
+        {
+            "llm_base_url": "https://api.openai.com/v1",
+            "llm_model_window": 128_000,
+        },
+    ],
+)
+def test_google_client_secret_may_not_alias_a_gateway_key(
+    context: dict[str, Any],
+) -> None:
+    shared = "shared-oauth-and-gateway-0123456789"
+    field = "embedding_api_key" if "embedding_base_url" in context else "llm_api_key"
+
+    with pytest.raises(ValidationError, match="google_client_secret"):
+        _prod(
+            **context,
+            google_client_id="client-id",
+            google_client_secret=shared,
+            **{field: shared},
+        )
+
+
+def test_surrounding_whitespace_in_a_secret_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="espacios"):
+        _prod(secret_key=" " + "k" * 32)
+
+
+def test_surrounding_whitespace_in_a_provider_secret_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="espacios"):
+        _prod(google_client_id="client-id", google_client_secret=" " + "g" * 32)
 
 
 def test_public_origin_requires_https_outside_local() -> None:
@@ -291,3 +427,57 @@ def test_llm_defaults_are_fail_closed() -> None:
     assert settings.llm_base_url is None
     assert settings.llm_api_key is None
     assert settings.llm_model_window is None
+
+
+# A2.13 / ADR-0008 §1-§2: the reception hop is configured as a pair, and its secret is a floor.
+
+INGEST_SECRET_HEX = "ab" * 32
+
+
+def test_ingest_url_and_secret_go_together() -> None:
+    with pytest.raises(ValidationError, match="ingest_url e ingest_credential_secret"):
+        _settings(ingest_url="http://ingest:8000")
+    with pytest.raises(ValidationError, match="ingest_url e ingest_credential_secret"):
+        _settings(ingest_credential_secret=INGEST_SECRET_HEX)
+
+
+def test_ingest_pair_unset_is_valid() -> None:
+    settings = _settings()
+
+    assert settings.ingest_url is None and settings.ingest_credential_secret is None
+    assert settings.ingest_credential_kid == "k1"
+
+
+@pytest.mark.parametrize("env", ["local", "staging"])
+def test_change_me_ingest_secret_is_rejected_in_every_environment(env: str) -> None:
+    with pytest.raises(ValidationError, match="ingest_credential_secret"):
+        _settings(
+            env=env,
+            ingest_url="http://ingest:8000",
+            ingest_credential_secret="change-me-" + INGEST_SECRET_HEX,
+        )
+
+
+def test_ingest_secret_shorter_than_32_bytes_is_rejected() -> None:
+    thirty_one = "ab" * 31
+    with pytest.raises(ValidationError, match="32 bytes"):
+        _settings(ingest_url="http://ingest:8000", ingest_credential_secret=thirty_one)
+
+
+def test_ingest_secret_must_be_hex() -> None:
+    with pytest.raises(ValidationError, match="hexadecimal"):
+        _settings(ingest_url="http://ingest:8000", ingest_credential_secret="z" * 64)
+
+
+def test_ingest_secret_of_32_bytes_is_accepted() -> None:
+    settings = _settings(
+        ingest_url="http://ingest:8000", ingest_credential_secret=INGEST_SECRET_HEX
+    )
+
+    assert settings.ingest_credential_secret is not None
+    assert len(settings.ingest_credential_secret.get_secret_value()) == 64
+
+
+def test_ingest_kid_is_a_short_label() -> None:
+    with pytest.raises(ValidationError, match="ingest_credential_kid"):
+        _settings(ingest_credential_kid="Key-One")

@@ -19,14 +19,17 @@ from contextlib import asynccontextmanager
 
 import asyncpg
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
-from maulwurf_ingest import admission, hardening
+from maulwurf_ingest import admission, hardening, metrics, receptions
 from maulwurf_ingest.config import settings
 from maulwurf_ingest.credential import decode_secret
+from maulwurf_ingest.logs import configure_logging
+from maulwurf_ingest.prometheus_text import PROMETHEUS_CONTENT_TYPE, render
 from maulwurf_ingest.receptions import open_service_pool
 from maulwurf_ingest.receptions import router as receptions_router
-from maulwurf_ingest.reconciler import reconcile_committed
+from maulwurf_ingest.reconciler import reconcile_committed, sweep_stranded
+from maulwurf_ingest.request_context import RequestIdMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +74,7 @@ async def reconcile_on_startup() -> None:
         await reconcile_committed(
             created, instance=f"ingest:{socket.gethostname()}", tmp_dir=tempfile.gettempdir(),
         )
+        await sweep_stranded(created)
         await admission.restore_from_database(created)
     except Exception as exc:
         # The DSN is in the exception text. Log only the type.
@@ -106,6 +110,7 @@ def refuse_bad_credential() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    configure_logging()
     enforce_hardening()
     refuse_bad_credential()
     app.state.instance_id = secrets.token_hex(16)
@@ -119,6 +124,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Maulwurf Ingest", version="0.1.0", lifespan=lifespan)
+app.add_middleware(RequestIdMiddleware)
 app.include_router(receptions_router)
 
 
@@ -182,6 +188,18 @@ async def _passes(name: str, check: Callable[[], Awaitable[None]]) -> bool:
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/internal/metrics", response_class=PlainTextResponse)
+async def internal_metrics() -> PlainTextResponse:
+    """Instance metrics. Ingest is not public, so there is no extra boundary here."""
+    samples = metrics.collect_samples(
+        tmp_dir=tempfile.gettempdir(),
+        slots_in_use=receptions.slots_in_use(),
+        slots_total=receptions.ACTIVE_SLOTS,
+        admission_open=admission.uploads_admitted(),
+    )
+    return PlainTextResponse(render(samples), media_type=PROMETHEUS_CONTENT_TYPE)
 
 
 @app.get("/readyz", response_model=None)

@@ -7,6 +7,7 @@ las pruebas no dependen ni ensucian la BD de desarrollo.
 import asyncio
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -86,4 +87,23 @@ async def redis() -> AsyncIterator[tuple[ArqRedis, str]]:
         job_ids = await pool.zrange(queue, 0, -1)
         job_keys = [f"arq:job:{job_id.decode()}" for job_id in job_ids]
         await pool.delete(queue, *job_keys)
+        await pool.aclose()
+
+
+TEST_REDIS_DATABASE = 15
+
+
+@pytest.fixture
+async def redis_isolated() -> AsyncIterator[tuple[ArqRedis, str]]:
+    """ARQ pool on a dedicated Redis DB, so a test may flush it without touching DB 0."""
+    base = RedisSettings.from_dsn(str(settings.redis_url))
+    if base.database == TEST_REDIS_DATABASE:
+        pytest.fail("MAULWURF_REDIS_URL uses the test Redis database; choose another one")
+    pool = await create_pool(replace(base, database=TEST_REDIS_DATABASE))
+    queue = f"arq:test:{uuid.uuid4().hex}"
+    try:
+        yield pool, queue
+    finally:
+        # FLUSHDB clears only this dedicated test database, never the development DB.
+        await pool.flushdb()
         await pool.aclose()

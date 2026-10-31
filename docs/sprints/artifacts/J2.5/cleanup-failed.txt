@@ -1,0 +1,63 @@
+J2.5 / C-S2-JF-10 evidence — failed cleanup in compose
+
+Date (UTC): 2026-10-31
+Environment: infra/docker-compose.yml, ingest image maulwurf-ingest:local
+  (runtime target, UID 10001, read-only rootfs, /work/tmp tmpfs,
+  PostgreSQL 16 + Redis 7.4 compose services healthy).
+Injection: one-off `docker compose exec -T ingest python` in the running container.
+  It creates an attempt workdir under /work/tmp, opens a descriptor to
+  `original`, runs `cleanup.destroy_and_verify` (the descriptor makes the
+  /proc verification fail closed), then calls `cleanup.log_cleanup_failed`
+  and `admission.halt`. This exercises the same cleanup/alert/metrics path
+  as the supervisor; it is not a real class upload because the local stack
+  has no test Google session.
+
+Observed output (redacted: only the attempt UUID, counters and metrics):
+
+{"attempt_id": "11111111-1111-4111-8111-111111111111", "level": "ERROR", "live_processes": 0, "logger": "maulwurf_ingest.cleanup", "mounts_under_workdir": 0, "msg": "cleanup.failed attempt_id=11111111-1111-4111-8111-111111111111", "open_descriptors": 1, "tmp_is_tmpfs": true, "ts": "2026-10-31T02:36:00.784+00:00", "unreadable_processes": 0, "verified": false, "workdir_absent": true}
+{"level": "ERROR", "logger": "maulwurf_ingest.admission", "msg": "ingest.alert code=cleanup_failed attempt_id=11111111-1111-4111-8111-111111111111", "ts": "2026-10-31T02:36:00.784+00:00"}
+EVIDENCE_ATTEMPT 11111111-1111-4111-8111-111111111111
+EVIDENCE_CLEANUP {'workdir_absent': True, 'tmp_is_tmpfs': True, 'live_processes': 0, 'open_descriptors': 1, 'mounts_under_workdir': 0, 'unreadable_processes': 0, 'verified': False}
+EVIDENCE_METRICS_BEGIN
+# HELP maulwurf_ingest_tmpfs_free_bytes Free bytes in the tmpfs.
+# TYPE maulwurf_ingest_tmpfs_free_bytes gauge
+maulwurf_ingest_tmpfs_free_bytes 268435456
+# HELP maulwurf_ingest_tmpfs_total_bytes Total bytes in the tmpfs.
+# TYPE maulwurf_ingest_tmpfs_total_bytes gauge
+maulwurf_ingest_tmpfs_total_bytes 268435456
+# HELP maulwurf_ingest_temporary_oldest_age_seconds Age of the oldest temporary attempt directory.
+# TYPE maulwurf_ingest_temporary_oldest_age_seconds gauge
+maulwurf_ingest_temporary_oldest_age_seconds 0.0
+# HELP maulwurf_ingest_slots_in_use Reception slots in use.
+# TYPE maulwurf_ingest_slots_in_use gauge
+maulwurf_ingest_slots_in_use 0
+# HELP maulwurf_ingest_slots_total Configured reception slots.
+# TYPE maulwurf_ingest_slots_total gauge
+maulwurf_ingest_slots_total 1
+# HELP maulwurf_ingest_admission_open 1 when the instance accepts new uploads; 0 after a failed cleanup.
+# TYPE maulwurf_ingest_admission_open gauge
+maulwurf_ingest_admission_open 0
+# HELP maulwurf_ingest_cleanup_failed_total Temporary-file cleanups not verified since start.
+# TYPE maulwurf_ingest_cleanup_failed_total counter
+maulwurf_ingest_cleanup_failed_total 1
+# HELP maulwurf_ingest_memory_available_bytes MemAvailable of the host as seen by the process.
+# TYPE maulwurf_ingest_memory_available_bytes gauge
+maulwurf_ingest_memory_available_bytes 22725324800
+EVIDENCE_METRICS_END
+
+Checks:
+- `cleanup.failed` is an ERROR JSON line with the attempt id and counters; it
+  contains no path, file content, transcript, DSN or secret.
+- `ingest.alert code=cleanup_failed` is emitted; admission_open drops to 0.
+- `maulwurf_ingest_cleanup_failed_total` increases to 1; tmpfs, slots and
+  temporary-age metrics are present.
+- No audio bytes were written outside /work/tmp; the workdir was deleted and
+  only the held descriptor (the injected fault) kept the evidence.
+
+Limits:
+- This is a fault injection inside the compose container, not a real upload.
+  The local stack has no test Google session; the exercised functions are the
+  same ones the supervisor uses (`destroy_and_verify`, `log_cleanup_failed`,
+  `admission.halt`, `metrics.collect_samples`).
+- A real alert destination and a Prometheus scrape config are deployment
+  configuration, not application code; they remain outside this checklist.

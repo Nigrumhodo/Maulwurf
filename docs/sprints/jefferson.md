@@ -16,12 +16,34 @@
 
 | Ticket | Area | Status | Evidence (command, date, environment, result) |
 |---|---|---|---|
-| — | — | — | No claims yet: the S1 sprint opens through a PR in `CLAIMS.md`. |
+| D1.1 | D | done | 2026-10-03 UTC, Windows, Node 22. Scaffold migrated from Next to Vite + React 19 + Tailwind 4 (ADR-0007). Branch `frontJJ` (`437b53e`). `npm run lint` / `npm run typecheck` / `npm run build` green. Merged in #42. |
+| D1.2 | D | done | 2026-10-03 UTC, Windows, Node 22. Base routes (`/`, `/biblioteca`, `/chat`, `/materias`, `/settings`) with `RequireAuth`/`AppLayout`. `34701c1`; Cyber Y2K restyle in `c168669`. Merged in #42. |
+| D1.3 | D | done | 2026-10-02/03 UTC, Windows, Node 22. Google login: button → `/auth/google/start`, callback with loading/error, logout with revocation. `b164313`, `6a6c4da` (backend OAuth A1.3 included). Merged in #42. |
+| D1.4 | D | in progress | 2026-10-17 UTC, Windows, Node 22. Same-origin HTTP client: `lib/csrf.ts` (in-memory token) + `apiFetch` injecting `X-CSRF-Token` on mutations and interceptors 401→login / 403→message / 429→retry with `Retry-After`. `npm run typecheck && npm run lint && npm test && npm run build` → U-S1-DA-01: **15 tests green** (`ad75e7c`). No new dependencies (native fetch). Pending PR to `develop`. |
+| D1.5 | D | done | 2026-10-18 UTC, Windows, Node 22. Base components in `components/ui/`: `DateInput`, `TimezoneSelect`, `LanguageSelect` (language **without preselection**, allowlist es/en/fr), `StatusBadge` (exact contract values §1.4/§2.10, incl. `transcript_committed_cleanup_pending` and aggregates), `EmptyState`, `Toast`+`ToastProvider`. Logic in `lib/{status,languages,timezones,validation}.ts`. `npm run typecheck && npm run lint && npm test && npm run build` → U-S1-DA-02 (9) and C-S1-DA-03 (5) green; **29 tests total**. Pending PR to `develop`. |
+| D1.6 | D | done | 2026-10-18 UTC, Windows, Node 22. Subject CRUD against the real A1.6 API (`/subjects`): `SubjectForm` (required-name validation + `#rrggbb` color + API error mapping `subject_name_taken`/`validation_failed`) and `MateriasPage` (list/create/edit/delete + `ConfirmDialog` on `409 subject_has_active_audios`). `lib/subjects.ts` + `tests/unit/subjects.test.ts`. `npm run typecheck && npm run lint && npm test && npm run build` → U-S1-DA-02 extended (6 tests); **35 tests total**. Live CRUD verified in local compose. Closed retroactively on 2026-10-27 (S1 was already closed); PR to `develop` pending. |
+
+### Week 2 (S2) — Knowledge
+
+| Ticket | Area | Status (`pending/in progress/blocked/done/transferred`) | Evidence (command, date, environment, result) |
+|---|---|---|---|
+| D1.7 | D | in progress | 2026-10-18 UTC, Windows, Node 22. Static drafts (no wiring): `components/upload/UploadForm.tsx` (versioned consent `2026-09-19` + two mandatory acknowledgements, no language preselection, "audio not kept", mock error state) used by `SubirClasePage`, and `BibliotecaPage` (per-stage + aggregate `StatusBadge` incl. `transcript_committed_cleanup_pending`, permanent "audio not kept" notice, differentiated buttons). Transferred from S1 on 2026-10-27 because the Friday review had no reviewers. `npm run typecheck && npm run lint && npm test && npm run build` green (35 tests). Checklist and states: `D1.7-review.md`; screenshots deferred. Feeds D2.1/D2.4. |
+| D2.1 | D | in progress | 2026-10-29 UTC, Windows, Node 22. Upload form (M2) wired to A2.3/A2.2: subjects + capabilities loaded in parallel; subject/date/timezone/language without preselection (options from capabilities); versioned notice + two mandatory acknowledgements; honest "sin límites publicados" state (submit disabled when `limits_validated=false`); `POST /audios` reservation and error mapping (`consent_required` resets consent, `language_not_allowed` refreshes the allowlist, 429/503 advice). Adds `privacy_notice_version` to `GET /ingestion/capabilities` (area A, review pending). Plan `docs/plan/tickets/D2.1.md`; tests `tests/unit/upload.test.ts` (15). `npm run typecheck && npm run lint && npm test && npm run build` green (50 web tests); API `ruff`/`mypy` clean and 615 unit passed. No bytes sent yet (D2.2); live UI check and PR pending. |
 
 ## Blockers and dependencies
 
 - (every Monday: note whom you are waiting on for a frozen contract §6 or real code, and which day)
+- D1.7 waits on the product, privacy, accessibility and Web reviewers for the mandatory
+  checklist and screenshots (`D1.7-review.md`); no reviewers available as of 2026-10-27.
+- The D1.4 `403` handler still uses `window.alert`; D1.5 already ships `ToastProvider`/`useToast`, wiring that handler to the toast remains as polish.
+- Pending: PR of `frontJJ` to `develop` (D1.4–D1.7 still on the branch).
 
 ## Week notes
 
-- (decisions, findings, scope deviations — one line per event, with date)
+- 2026-10-17: Cyber Y2K restyle (palette, glitch, CRT, floating chat) and theme-aware login images.
+- 2026-10-17: D1.4 implemented with native `fetch` (no axios).
+- 2026-10-18: D1.5 complete (base components + tests). Navigation: the "académico" dropdown became the "Gestión" button → `/gestion` hub with a collapsible side menu (subir clase, biblioteca, chat, materias, tareas, agenda).
+- 2026-10-18: Merged `origin/develop` into `frontJJ` (develop was far ahead: S2, A1.6 done). D1.6 implemented (subject CRUD) against the real `/subjects` API and verified live.
+- 2026-10-18: D1.7 static drafts (upload form + library). UX decisions for D2.1/D2.4: consent versioned `2026-09-19` shown with two mandatory checkboxes before enabling submit; language select has no preselection; "audio not kept" is a permanent notice in both the form and the library; the library groups per stage (index/análisis) with the aggregate badge, and differentiates "volver a subir" (no transcript) from "reintentar análisis/índice" (transcript kept).
+- 2026-10-27: D1.6 closed retroactively. D1.7 transferred to S2 (S1 already closed and the Friday review had no reviewers). Added the `transcript_committed_cleanup_pending` library row and a mock error state to the upload form, plus `D1.7-review.md` with the role checklist; screenshots deferred. Fixed the history chronology in `CLAIMS.md` (the 2026-10-18 rows were after 2026-10-23).
+- 2026-10-29: Redesigned the "inicio" dashboard as a command center (telemetry banner, tape deck, activity feed, task log, mole companion) and regrouped the "gestión" panel into three modules with telemetry and a collapsible sidebar. Implemented D2.1 (upload form) against A2.3/A2.2, including the `privacy_notice_version` field on capabilities.

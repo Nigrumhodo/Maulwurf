@@ -2,15 +2,20 @@
 from fastapi import APIRouter
 
 from app.core.config import settings
-from app.schemas.ingestion import IngestionCapabilities
+from app.schemas.ingestion import IngestionCapabilitiesOut
 
 router = APIRouter(tags=["ingestion"])
 
 
 @router.get("/ingestion/capabilities")
-async def ingestion_capabilities() -> IngestionCapabilities:
+async def ingestion_capabilities() -> IngestionCapabilitiesOut:
     """Devuelve exclusivamente la configuración publicada por el spike.
 
     No lee los valores provisionales de la reserva S1 ni consulta proveedores externos.
+    La versión del aviso de privacidad se inyecta aquí (M2/D2.1): es la vigente, no un
+    límite publicado, para que el formulario la muestre ANTES de aceptar bytes.
     """
-    return settings.ingestion_capabilities
+    return IngestionCapabilitiesOut.model_validate(
+        settings.ingestion_capabilities.model_dump()
+        | {"privacy_notice_version": settings.privacy_notice_version}
+    )

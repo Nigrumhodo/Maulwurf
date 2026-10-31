@@ -1,4 +1,4 @@
-"""Procesos ARQ de S1 (J1.5): `worker` y `scheduler`, todavía sin jobs reales.
+"""Procesos ARQ de S1 (J1.5): `worker` y `scheduler`.
 
 Cada proceso usa su propia cola para que el scheduler nunca ejecute jobs del worker, y
 por tanto su propia clave de salud (`<cola>:health-check`). El healthcheck de Compose
@@ -12,24 +12,25 @@ from typing import Any, ClassVar
 
 from arq.connections import RedisSettings
 from arq.cron import CronJob, cron
-from arq.worker import Function
+from arq.worker import Function, func
 
 from app.core.config import settings
 from app.core.db import session_scope
+from app.core.logging import configure_logging
 from app.workers.dispatcher import dispatch_pending
+from app.workers.index_job import JOB_TIMEOUT_S, MAX_TRIES, index
+from app.workers.reconciler import reconcile_once
 
 logger = logging.getLogger(__name__)
 
 WORKER_QUEUE = "arq:queue"
 SCHEDULER_QUEUE = "arq:scheduler"
 HEALTH_CHECK_INTERVAL_S = 30
+# Offset from the dispatcher's second 0 so the two crons do not start together.
+RECONCILE_EVERY_MINUTES = 5
+RECONCILE_SECOND = 30
 
 _REDIS = RedisSettings.from_dsn(str(settings.redis_url))
-
-
-async def index(ctx: dict[str, Any], audio_id: str, transcript_version: int) -> None:
-    # S2/J2.1 conecta el índice real; aquí solo se registran IDs, nunca contenido.
-    logger.info("index.noop audio_id=%s transcript_version=%s", audio_id, transcript_version)
 
 
 async def analyze(ctx: dict[str, Any], audio_id: str) -> None:
@@ -49,20 +50,43 @@ async def dispatch_outbox(ctx: dict[str, Any]) -> None:
         logger.info("dispatch_outbox %s", dict(report))
 
 
+async def reconcile(ctx: dict[str, Any]) -> None:
+    """Scheduler cron (J2.4): repairs lost dispatches, dead index runs and orphan generations."""
+    await reconcile_once(session_scope, ctx["redis"], queue_name=WORKER_QUEUE)
+
+
+async def startup(ctx: dict[str, Any]) -> None:
+    """Worker and scheduler startup: JSON logs with redaction (J2.5)."""
+    configure_logging()
+
+
 class WorkerSettings:
-    functions: ClassVar[list[Function | Callable[..., Awaitable[None]]]] = [index, analyze]
+    # `index` has its own retry budget (J2.2); `analyze` still has none.
+    functions: ClassVar[list[Function | Callable[..., Awaitable[None]]]] = [
+        func(index, max_tries=MAX_TRIES, timeout=JOB_TIMEOUT_S),
+        analyze,
+    ]
     queue_name = WORKER_QUEUE
     redis_settings = _REDIS
+    on_startup = startup
     health_check_interval = HEALTH_CHECK_INTERVAL_S
     keep_result = 60
-    max_tries = 1  # S1 sin reintentos: backoff/jitter y presupuesto llegan en J2.x
+    max_tries = 1  # no retries for functions without their own budget
 
 
 class SchedulerSettings:
     # Cada minuto en el segundo 0: latencia máxima de despacho ~60 s.
-    cron_jobs: ClassVar[list[CronJob]] = [cron(dispatch_outbox, second=0, run_at_startup=True)]
+    cron_jobs: ClassVar[list[CronJob]] = [
+        cron(dispatch_outbox, second=0, run_at_startup=True),
+        cron(
+            reconcile,
+            minute=set(range(0, 60, RECONCILE_EVERY_MINUTES)),
+            second=RECONCILE_SECOND,
+        ),
+    ]
     queue_name = SCHEDULER_QUEUE
     redis_settings = _REDIS
+    on_startup = startup
     health_check_interval = HEALTH_CHECK_INTERVAL_S
     keep_result = 60
     max_tries = 1
