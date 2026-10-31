@@ -131,4 +131,10 @@ $ uv run pytest -m "not integration and not provider and not load" -q
 The 8 failures are the pre-existing `test_synthetic_audio.py` cases that need
 `espeak-ng` (installed by CI); the baseline before fix2 was 8 failed / 211 passed.
 The new integration cases are collected but skipped locally (`MAULWURF_DATABASE_URL`
-is unset); Quality CI runs them in `integration (ingest)`.
+is unset).
+
+Quality CI run `41249178989` (code head `1d1663f`) is green in all 17 checks:
+`python-unit (ingest)` **215 passed / 6 skipped** and `integration (ingest)`
+**69 passed / 11 skipped / 1 xfailed**, including the four new integration cases
+(the sweeper pool retry, the moved-token unrecorded cleanup, and the two
+`record_cleanup` failure paths). No provider or Riva call.
