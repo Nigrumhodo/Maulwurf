@@ -28,7 +28,7 @@ from maulwurf_ingest.logs import configure_logging
 from maulwurf_ingest.prometheus_text import PROMETHEUS_CONTENT_TYPE, render
 from maulwurf_ingest.receptions import open_service_pool
 from maulwurf_ingest.receptions import router as receptions_router
-from maulwurf_ingest.reconciler import reconcile_committed
+from maulwurf_ingest.reconciler import reconcile_committed, sweep_stranded
 from maulwurf_ingest.request_context import RequestIdMiddleware
 
 logger = logging.getLogger(__name__)
@@ -74,6 +74,7 @@ async def reconcile_on_startup() -> None:
         await reconcile_committed(
             created, instance=f"ingest:{socket.gethostname()}", tmp_dir=tempfile.gettempdir(),
         )
+        await sweep_stranded(created)
         await admission.restore_from_database(created)
     except Exception as exc:
         # The DSN is in the exception text. Log only the type.
