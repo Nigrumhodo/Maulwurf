@@ -65,7 +65,11 @@ def outbox_job_keys(event_id: uuid.UUID) -> tuple[str, ...]:
 
 
 def has_retry_budget(attempt_count: int) -> bool:
-    """Whether another delivery of a run that already made `attempt_count` claims is allowed."""
+    """Whether a run that already took `attempt_count` claims may take another.
+
+    `attempt_count` counts claims, while ARQ's `MAX_TRIES` counts deliveries; the values are
+    aligned today. A lost dispatch is separately bounded by `OutboxEvent.max_attempts`.
+    """
     return attempt_count < MAX_TRIES
 
 
