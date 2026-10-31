@@ -58,9 +58,9 @@ def enforce_hardening() -> None:
 async def reconcile_on_startup() -> None:
     """One recovery pass before serving. A database miss keeps admission closed.
 
-    The periodic sweeper (`run_sweeper`) repeats this recovery every 60 s once the
-    service pool is open. A persisted failed cleanup closes admission before the
-    process serves.
+    The periodic sweeper repeats this recovery every 60 s; when the service pool
+    cannot be opened here, ``run_sweeper_when_pool_ready`` retries until it can.
+    A persisted failed cleanup closes admission before the process serves.
     """
     if not settings.database_url:
         return
@@ -91,14 +91,42 @@ def _sweeper_pool(app: FastAPI) -> asyncpg.Pool | None:
     return pool if isinstance(pool, asyncpg.Pool) else None
 
 
-def start_sweeper(app: FastAPI) -> asyncio.Task[None] | None:
-    """Start the periodic recovery loop on the service pool. No pool, no loop."""
+async def run_sweeper_when_pool_ready(
+    app: FastAPI, *, instance: str, interval_s: float, tmp_dir: str | None,
+) -> None:
+    """Open the service pool, retrying on a startup failure, then run the sweeper.
+
+    ``open_service_pool`` returns without a pool when the database is down at
+    startup, and the startup pass has already closed admission. Giving up here
+    would leave the process with no periodic recovery for its whole lifetime:
+    nothing would reopen the transient close or end stranded attempts. The loop
+    retries the configured interval until a pool exists; only then does
+    ``run_sweeper`` take over. A pool-open exception is logged by type and also
+    retried, so a driver error cannot end recovery either.
+    """
+    if interval_s <= 0:
+        raise ValueError("sweep interval must be positive")
     pool = _sweeper_pool(app)
-    if pool is None:
-        return None
+    while pool is None:
+        try:
+            await open_service_pool(app)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — a failed open must not end recovery
+            # Only the type: driver errors can include the DSN with credentials.
+            logger.warning("supervisor.sweeper_pool_failed error=%s", type(exc).__name__)
+        pool = _sweeper_pool(app)
+        if pool is None:
+            logger.warning("supervisor.sweeper_waiting_pool")
+            await asyncio.sleep(interval_s)
+    await run_sweeper(pool, instance=instance, interval_s=interval_s, tmp_dir=tmp_dir)
+
+
+def start_sweeper(app: FastAPI) -> asyncio.Task[None]:
+    """Start the periodic recovery loop; it waits for the service pool if needed."""
     return asyncio.create_task(
-        run_sweeper(
-            pool, instance=f"ingest:{socket.gethostname()}",
+        run_sweeper_when_pool_ready(
+            app, instance=f"ingest:{socket.gethostname()}",
             interval_s=settings.sweep_interval_s, tmp_dir=tempfile.gettempdir(),
         ),
         name="maulwurf-ingest-sweeper",

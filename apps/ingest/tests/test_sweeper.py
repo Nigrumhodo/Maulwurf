@@ -9,6 +9,7 @@ stranded sweep.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from collections.abc import Iterator
@@ -21,6 +22,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from test_supervisor import _seed  # noqa: E402
 
 from maulwurf_ingest import admission, hardening, main, supervisor
 from maulwurf_ingest.config import Settings, settings
@@ -344,10 +346,46 @@ async def test_sweep_once_reconciles_then_ends_stranded_attempts(
     assert result == SweepResult(committed=(), stranded=())
 
 
-def test_start_sweeper_without_a_pool_starts_nothing() -> None:
+async def test_start_sweeper_retries_the_pool_until_it_opens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hoplite fix2 1: a database down at startup must not end periodic recovery."""
     app = FastAPI()
     app.state.pool = None
-    assert main.start_sweeper(app) is None
+    sentinel = object()
+    opened = 0
+    started = asyncio.Event()
+    observed: list[object] = []
+
+    async def flaky_open(target: object) -> None:
+        nonlocal opened
+        opened += 1
+        if opened >= 3:
+            target.state.pool = sentinel  # type: ignore[attr-defined]
+
+    async def fake_run(
+        pool: object, *, instance: str, interval_s: float, tmp_dir: str | None = None,
+    ) -> None:
+        observed.append(pool)
+        started.set()
+
+    monkeypatch.setattr(
+        main, "_sweeper_pool", lambda target: getattr(target.state, "pool", None),
+    )
+    monkeypatch.setattr(main, "open_service_pool", flaky_open)
+    monkeypatch.setattr(main, "run_sweeper", fake_run)
+    monkeypatch.setattr(settings, "sweep_interval_s", 0.01)
+
+    task = main.start_sweeper(app)
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    assert opened == 3
+    assert observed == [sentinel]
 
 
 def test_lifespan_starts_and_stops_the_sweeper(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -379,3 +417,48 @@ def test_lifespan_starts_and_stops_the_sweeper(monkeypatch: pytest.MonkeyPatch) 
     assert pool is sentinel
     assert instance.startswith("ingest:")
     assert interval == settings.sweep_interval_s
+
+
+@pytest.mark.integration
+async def test_the_sweeper_starts_after_a_failed_pool_open_at_startup(
+    pool: asyncpg.Pool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hoplite fix2 1: the sweeper retries ``open_service_pool`` and then recovers."""
+    attempt = await _seed(pool)
+    await pool.execute(
+        """UPDATE ingestion_attempts
+              SET status = 'transcribing', lease_expires_at = now() - interval '1 second'
+            WHERE id = $1""",
+        attempt.attempt_id,
+    )
+    app = FastAPI()
+    app.state.pool = None
+    opened = 0
+
+    async def flaky_open(target: object) -> None:
+        nonlocal opened
+        opened += 1
+        if opened >= 2:
+            target.state.pool = pool  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(main, "open_service_pool", flaky_open)
+    monkeypatch.setattr(settings, "sweep_interval_s", 0.01)
+    task = main.start_sweeper(app)
+    try:
+        row: asyncpg.Record | None = None
+        for _ in range(200):
+            row = await pool.fetchrow(
+                "SELECT status FROM ingestion_attempts WHERE id = $1",
+                attempt.attempt_id,
+            )
+            if row is not None and row["status"] == "requires_reupload":
+                break
+            await asyncio.sleep(0.01)
+        assert row is not None
+        assert row["status"] == "requires_reupload"
+        assert opened >= 2
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        admission.reset()
