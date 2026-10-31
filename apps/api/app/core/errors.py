@@ -6,6 +6,7 @@ documentada (plan A2.4, punto C7): el `409 duplicate_variant` lleva el
 pueda presentarlo en el segundo `POST`; igual que el `csrf_token` de `GET /me`, solo viaja
 en esa respuesta y nunca a logs ni a otros endpoints.
 """
+import logging
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
@@ -14,6 +15,25 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+logger = logging.getLogger(__name__)
+
+# Statuses Starlette/FastAPI raise before a router runs. Messages are fixed on purpose: the
+# framework detail can echo request input and is never forwarded (DISENO §3.2).
+_HTTP_ERRORS: dict[int, tuple[str, str]] = {
+    401: ("auth_required", "Inicia sesión para continuar."),
+    403: ("forbidden", "No tienes permiso para realizar esta operación."),
+    404: ("not_found", "Recurso no encontrado."),
+    405: ("method_not_allowed", "Método HTTP no permitido para esta ruta."),
+    409: ("invalid_transition", "La operación no está permitida en el estado actual."),
+    410: ("upload_expired", "La subida expiró; vuelve a crear la clase."),
+    413: ("payload_too_large", "El contenido supera el límite permitido."),
+    415: ("unsupported_format", "El formato del contenido no está admitido."),
+    422: ("validation_failed", "Hay campos inválidos."),
+    429: ("rate_limited", "Demasiadas solicitudes; inténtalo más tarde."),
+}
+_INTERNAL_ERROR: tuple[str, str] = ("internal_error", "Error interno del servidor.")
 
 
 class ApiError(Exception):
@@ -42,15 +62,65 @@ def csrf_invalid() -> ApiError:
     return ApiError(403, "csrf_invalid", "Solicitud rechazada; recarga la sesión con GET /me.")
 
 
+def _response(error: ApiError, extra_headers: dict[str, str] | None = None) -> JSONResponse:
+    body = {"error": {"code": error.code, "message": error.message, "details": error.details}}
+    headers = {**error.headers, **(extra_headers or {})}
+    return JSONResponse(status_code=error.status_code, content=body, headers=headers or None)
+
+
 async def _handle(_: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, ApiError)  # noqa: S101 - registrado solo para ApiError
-    body = {"error": {"code": exc.code, "message": exc.message, "details": exc.details}}
-    return JSONResponse(status_code=exc.status_code, content=body, headers=exc.headers or None)
+    return _response(exc)
+
+
+def _request_id(request: Request) -> str | None:
+    value = getattr(request.state, "request_id", None)
+    return value if isinstance(value, str) else None
+
+
+def _http_error(status_code: int) -> ApiError:
+    code, message = _HTTP_ERRORS.get(status_code, _INTERNAL_ERROR)
+    # A status outside the catalog is a bug, not a contract answer: fail closed with a 500.
+    return ApiError(status_code if status_code in _HTTP_ERRORS else 500, code, message)
+
+
+async def _handle_http(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, StarletteHTTPException)  # noqa: S101 - registrado solo para ella
+    error = _http_error(exc.status_code)
+    error.headers.update(exc.headers or {})
+    logger.warning(
+        "http.error method=%s path=%s status=%s code=%s",
+        request.method,
+        request.url.path,
+        error.status_code,
+        error.code,
+        extra={"request_id": _request_id(request)},
+    )
+    return _response(error)
+
+
+async def _handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
+    request_id = _request_id(request)
+    # Log the type only: the message, its arguments and the traceback can carry input,
+    # transcripts, DSNs or secrets (same rule as `readyz` in health.py).
+    logger.error(
+        "http.unhandled_exception method=%s path=%s exc_type=%s",
+        request.method,
+        request.url.path,
+        type(exc).__name__,
+        extra={"request_id": request_id},
+    )
+    extra_headers = {"X-Request-ID": request_id} if request_id else None
+    return _response(internal_error(), extra_headers)
 
 
 def not_found() -> ApiError:
     # Inexistente y ajeno responden igual: no se revela si el recurso existe (ADR-0006).
     return ApiError(404, "not_found", "Recurso no encontrado.")
+
+
+def internal_error() -> ApiError:
+    return ApiError(500, *_INTERNAL_ERROR)
 
 
 def consent_required(privacy_notice_version: str) -> ApiError:
@@ -141,3 +211,6 @@ async def _handle_validation(_: Request, exc: Exception) -> JSONResponse:
 def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(ApiError, _handle)
     app.add_exception_handler(RequestValidationError, _handle_validation)
+    # Framework 404/405 and any unhandled exception also answer with the envelope (A2.15).
+    app.add_exception_handler(StarletteHTTPException, _handle_http)
+    app.add_exception_handler(Exception, _handle_unexpected)

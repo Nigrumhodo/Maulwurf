@@ -43,6 +43,9 @@ class RequestIdMiddleware:
             return
         incoming = _header(scope, REQUEST_ID_HEADER)
         request_id = resolve_request_id(incoming)
+        # The 500 handler runs in ServerErrorMiddleware, outside this middleware's correlation
+        # block, so the id is also exposed on the scope for error responses and their logs.
+        scope.setdefault("state", {})["request_id"] = request_id
         started = time.perf_counter()
         status_holder: dict[str, int] = {}
 
