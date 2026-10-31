@@ -295,7 +295,7 @@ approval per language, not by global average.
 | P-S3-JF-02 | P | Insert with timeout → look up the deterministic ID; 409 → verify identity and reconcile; `Retry-After` respected; `invalid_grant` disconnects (do not retry) | G7-CAL |
 | I-S3-JF-03 | I | Sync idempotency: double click / lost response / concurrent retry → **exactly one event** | G5-F2/G7-CAL |
 | I-S3-JF-04 | I | Patch with ETag: an external conflict is not overwritten; completing/discarding cancels reminders but keeps the event | G7-CAL |
-| I-S3-JF-05 | I | -7/+60 day read: full pagination, expanded recurrences, deletions; **atomic** publication into `calendar_events`; never mixing `syncToken` with filters | G7-CAL |
+| I-S3-JF-05 | I | -7/+60 day read: full pagination, expanded recurrences, deletions; **atomic** publication into `calendar_events` (upsert on the natural key, pre-window pruning, one savepoint); never mixing `syncToken` with filters; a lone `from`/`to` anchors the other bound | G7-CAL |
 | I-S3-JF-06 | I | Missing scopes or `invalid_grant` leave sync `blocked` without breaking library/chat; on reconnect, only current blocked versions move atomically to `pending` and create/reuse outbox, never stale revisions/jobs | G5-F2/G7-CAL |
 | I-S3-JF-07 | I | Conflicts: time overlap ≠ delivery pile-up; correct `GET /calendar/conflicts` | M5 |
 

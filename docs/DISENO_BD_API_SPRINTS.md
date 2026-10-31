@@ -1431,7 +1431,9 @@ with its instant pair or the exclusive all-day pair, plus `from`, `to`, `last_sy
 `coverage_ok`, `stale` and a closed-set `coverage_notice` (`never_synced`,
 `no_read_calendars`, `calendar_set_changed`, `outside_coverage`, `stale`). A notice never
 hides the rows already mirrored; an inverted or oversized range answers `422
-validation_failed`.
+validation_failed`. When only one bound is sent, the other is derived from it (`from` →
+`from+60`, `to` → `to-7`) instead of from today's default window, so a future `from` cannot
+answer a misleading inverted-range error.
 
 ```json
 {

@@ -64,3 +64,58 @@ Workflow run 41225714988 on head 23d6ad7 (2026-10-31): all 17 checks green.
   integration (ingest), e2e-smoke, docs, web, build-images, secret-scan,
   license-report (api/ingest/web), python-static (api/ingest), caddy-limits
   and compose-ingest-env: green.
+
+Review fix1 (hoplite findings, 2026-10-31)
+------------------------------------------
+Reproduced on the pre-fix code (head 0c2626c) with the new tests: 9 cases failed. The key
+one, `test_an_event_reprogrammed_from_outside_the_window_updates_in_place`, raised
+`sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
+"uq_calendar_events_user_id_calendar_id_event_id"`; the same test passes with the fix.
+
+Corrections:
+1. [ALTA] `SqlCalendarMirror.replace_window` now upserts on `(user_id, calendar_id,
+   event_id)` (`ON CONFLICT DO UPDATE`) and prunes rows of the republished calendars that
+   ended before the window. `source` and `task_id` are preserved on conflict and
+   task-linked rows are never pruned (the write path owns them).
+2. [MEDIA] `_resolve_window` completes a lone bound from the bound actually sent
+   (`from` -> `from+60`, `to` -> `to-7`), so `GET /calendar/events?from=<today+90>` answers
+   200 with that window instead of a misleading inverted-range 422.
+3. [BAJA-MEDIA] The per-user advisory lock uses the two-int form with namespace `0x4D57`,
+   the same value as `services/audios.py` (A2.14), instead of a bare bigint key.
+4. [ROBUSTEZ] `GoogleCalendarEventSource` rejects a non-object Google payload with
+   `CalendarEventInvalid("events_payload_invalid")` instead of an `AttributeError` -> 500.
+
+Secondary, low risk: `CalendarService.page` documents the expected read bound (not
+paginated; width <= 366 days; no silent LIMIT that would hide rows), the event `timeZone`
+is validated before storing, and the `_dedupe` docstring states the real rule (last
+occurrence in read order wins).
+
+Commands and results (fix1 code commit 52774c6)
+-----------------------------------------------
+$ cd apps/api
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 224 source files
+
+$ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
+    uv run pytest tests/unit -q
+1188 passed, 35 warnings in 11.91s
+
+$ ... uv run pytest tests/integration/test_calendar_read.py -q
+15 passed
+
+$ ... uv run pytest tests/integration/test_migrations.py tests/integration/test_rls.py -q
+19 passed
+
+$ ... uv run pytest tests/integration -q
+32 failed, 432 passed, 434 warnings in 103.47s
+
+The 32 failures are the same pre-existing pgvector 0.6 search/chat/G4 set listed above; no
+new failure was introduced. `python3 scripts/docs/check_refs.py` -> OK (770 paths).
+
+Quality CI: not observable from the development sandbox (the GitHub credentials in this
+environment are invalid), so the fix1 commit was pushed to update PR #131 and trigger a
+fresh workflow. The prior run 41225714988 on 23d6ad7 was green in all 17 checks.
+
