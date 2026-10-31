@@ -374,6 +374,46 @@ def test_mount_reports_unavailable_without_the_binary(tmp_path: Path) -> None:
     assert not any(tmp_path.iterdir())
 
 
+def _fake_umount(tmp_path: Path, *, clean_exit: int, lazy_exit: int) -> Path:
+    script = tmp_path / "fake-umount"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'if [ "$1" = "-l" ]; then exit {lazy_exit}; fi\n'
+        f"exit {clean_exit}\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return script
+
+
+def test_clean_unmount_reports_success(tmp_path: Path) -> None:
+    harness = _load()
+    point = tmp_path / "bounded"
+    point.mkdir()
+    fake = _fake_umount(tmp_path, clean_exit=0, lazy_exit=0)
+
+    ok, entries = harness.unmount_and_remove(point, umount_binary=str(fake))
+
+    assert ok is True
+    assert entries == 0
+    assert not point.exists()
+
+
+def test_a_failed_unmount_is_not_masked_by_a_successful_lazy_attempt(
+    tmp_path: Path,
+) -> None:
+    harness = _load()
+    point = tmp_path / "bounded"
+    point.mkdir()
+    fake = _fake_umount(tmp_path, clean_exit=1, lazy_exit=0)
+
+    ok, entries = harness.unmount_and_remove(point, umount_binary=str(fake))
+
+    assert ok is False
+    assert entries == 0
+    assert not point.exists()
+
+
 def test_worker_command_prefixes_unshare_only_when_isolated(tmp_path: Path) -> None:
     harness = _load()
     options = harness.SlotOptions(
