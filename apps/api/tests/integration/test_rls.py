@@ -17,7 +17,7 @@ Covered:
 """
 import hashlib
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from typing import Any, cast
 
@@ -55,6 +55,16 @@ TENANT_MODELS: list[type[TenantOwned]] = sorted(
 TENANT_TABLES = {str(cast(Any, model).__tablename__) for model in TENANT_MODELS}
 RLS_TABLES = TENANT_TABLES | {"users"}
 JOBS_TABLES = (TENANT_TABLES | {"users"}) - {"sessions", "google_credentials"}
+
+
+@pytest.fixture(autouse=True)
+def _clear_tenant_context() -> Iterator[None]:
+    """No test may inherit a tenant or the cross-tenant switch from another one."""
+    db.clear_user()
+    db.clear_cross_tenant()
+    yield
+    db.clear_user()
+    db.clear_cross_tenant()
 
 
 @asynccontextmanager

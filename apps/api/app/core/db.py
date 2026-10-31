@@ -69,6 +69,11 @@ def reset_cross_tenant(token: Token[bool]) -> None:
     _cross_tenant.reset(token)
 
 
+def clear_cross_tenant() -> None:
+    """Drop the explicit cross-tenant switch from the context."""
+    _cross_tenant.set(False)
+
+
 async def set_current_user(db: AsyncSession, user_id: uuid.UUID) -> None:
     """Bind the tenant now, for the open transaction and for the ones that follow.
 

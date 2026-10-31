@@ -66,4 +66,3 @@ async def test_get_session_yields_session_without_connecting() -> None:
     assert isinstance(session, AsyncSession)
     assert not session.in_transaction()
     await sessions.aclose()
-
