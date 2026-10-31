@@ -37,7 +37,7 @@ path is `apps/ingest/maulwurf_ingest/recovery.py`.
 | Admission stays closed across restart | Yes. Startup reads a persisted `cleanup_status = 'failed'` and closes the latch again | `admission.restore_from_database` in `main.py` |
 | One recovery pass at startup | Yes. `reconcile_committed` then `sweep_stranded` | `main.reconcile_on_startup` |
 | Recurring 60 s sweeper inside the service | **No.** The startup pass does not loop; embedding the timer in the supervisor is S4.2 | `main.py` says so explicitly |
-| 60 s sweeper as an operator process | Yes. `cleanup_recover.py sweep --watch --interval 60` runs the same two functions | `recovery.py` |
+| 60 s sweeper as an operator process | Yes. `sweep --watch --interval 60` runs the same two functions | `recovery.py` |
 | Host-loss attestation | Yes, as an operator attestation; the tool refuses to write without it | `recovery.resolve_attempts` |
 
 The CLI is available from a checkout as `scripts/ops/cleanup_recover.py`; inside the
@@ -335,8 +335,10 @@ docker compose exec -T ingest python -m maulwurf_ingest.recovery sweep
 echo "sweep_exit=$?"
 ```
 
-Expected: `pass=1` with `enabled` at least `1` for a committed attempt, `cleanup_failed=0`,
-and `sweep_exit=0`. `enabled` is the number of committed attempts whose index/analyze
+Expected: `pass=1` and `sweep_exit=0`. If the failed attempt was committed
+(`status=transcript_committed_cleanup_pending`), `enabled` is at least `1`; a stranded
+failed attempt has no text, so `enabled=0` and there is nothing to release. `cleanup_failed`
+must be `0`. `enabled` is the number of committed attempts whose index/analyze
 outbox rows were released after verified cleanup. A `cleanup_failed` value other than `0`
 means the sweep found another failure: restart `ingest` immediately and return to 4.1.
 
@@ -378,11 +380,13 @@ SELECT o.type, o.enabled, o.blocked_reason
 SQL
 ```
 
-Expected: `succeeded | verified | t | t | operator_attestation`; exactly one transcript
-(the commit is not repeated); the outbox rows are `analyze_requested | t |` and
-`index_requested | t |` with a `NULL` reason. A
-`transcript_committed_cleanup_pending` status means the sweeper has not enabled the text
-yet; run 5.6's sweep again. No transcript text is selected.
+Expected: for a committed failed attempt, `succeeded | verified | t | t |
+operator_attestation`, exactly one transcript (the commit is not repeated), and the outbox
+rows `analyze_requested | t |` and `index_requested | t |` with a `NULL` reason. For a
+stranded failed attempt the status stays `requires_reupload`, the transcript count is `0`
+and there are no outbox rows to release. A `transcript_committed_cleanup_pending` status
+means the sweeper has not enabled the text yet; run 5.6's sweep again. No transcript text is
+selected.
 
 ## 6. The 60 s sweeper
 
