@@ -28,8 +28,9 @@ explicit Definition of Done. See "Sprint Model" below.
 
 - `.github/workflows/quality.yml` — Quality CI (J1.4): ruff+mypy, unit tests, web
   lint/typecheck/test/build, integration tests with service containers, image builds,
-  secret/license scans, the compose ingest environment check (J2.8) and the documentation
-  reference check (L2.11); runs on PRs and pushes to `develop`.
+  secret/license scans, the compose ingest environment check (J2.8), the Caddy edge-limit
+  check (J2.10) and the documentation reference check (L2.11); runs on PRs and pushes to
+  `develop`.
 - `.github/workflows/trigger-hoplite-qa.yml` — External QA webhook trigger on PRs (not a
   build/test pipeline; does not replace `quality.yml`).
 - `apps/api/` — FastAPI service (area `A-`): routers (health, auth including Google OAuth,
@@ -78,7 +79,8 @@ explicit Definition of Done. See "Sprint Model" below.
     migrations, tests, lint).
 - `infra/` — Local development stack (area `J-`, merged): `docker-compose.yml` (8 services
   with healthchecks, images pinned by digest) and `Caddyfile` (local TLS proxy without
-  buffering). See `infra/README.md` and `docs/RUNBOOK-dev.md`.
+  buffering, with the J2.10 edge body/timeout limits; [ADR-0010](docs/adr/ADR-0010-ingress.md)
+  makes Caddy the only HTTP ingress). See `infra/README.md` and `docs/RUNBOOK-dev.md`.
 - `scripts/scaffold_monorepo.sh` — Generated the original skeleton (historical; see
   `README.scaffold.md`); `scripts/ci/` holds the CI guards, `scripts/docs/` the
   documentation checks and diagram export, `scripts/provider/` the Riva spike scripts

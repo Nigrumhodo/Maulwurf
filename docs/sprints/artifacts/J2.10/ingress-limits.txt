@@ -1,0 +1,22 @@
+Caddyfile: /home/hatch/workspace/repos/mwt-186/infra/Caddyfile
+Mode: native | upload ceiling: 220000000 bytes | @api JSON ceiling: 10000000 bytes
+API provisional contract: 209715200 bytes
+Date: 2026-10-31T11:03:21Z | Host: Linux 7.0.0-39-generic x86_64
+
+  OK   1 MiB upload                                 202
+  OK   1 MiB received by the sink                   1048576
+  OK   exact request_body.max_size                  202
+  OK   exact bytes received by the sink             220000000
+  OK   one byte over the upload ceiling             413
+  OK   one byte over the @api 10 MB ceiling         413
+  OK   one byte over the web fallback 10 MB ceiling 413
+  OK   sink received only valid bodies              3
+  OK   read_body=2s cuts a 5 s upload               http=000 rc=55
+  OK   timed-out upload never reached the sink      3
+  OK   no new proxy files from the upload           none
+  OK   no deleted file descriptors (spool)          0
+  OK   no request bodies in the proxy log           0
+  INFO Caddy peak RSS (VmHWM): 44892 kB
+  OK   peak RSS below 256 MiB (no whole-body buffer) 44892 kB
+
+OK: C-S2-JF-13 — ingress limits and no-buffering checks passed.

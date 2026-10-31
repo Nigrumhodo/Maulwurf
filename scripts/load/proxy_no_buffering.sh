@@ -2,12 +2,15 @@
 # I-S1-JF-02 (J1.3): sube un flujo grande a través de Caddy y falla si aparece
 # cualquier rastro de buffering (archivos, spools o bodies en logs).
 #
+# J2.10: keep the default below Caddy's 220 MB edge ceiling so the sink can
+# answer 202; a larger SIZE_BYTES is cut at the edge with 413.
+#
 # Requiere el stack de infra levantado (docker compose) y genera el dato en RAM
 # (/dev/zero): no se versiona ni se conserva audio ni artefacto alguno.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SIZE_BYTES="${SIZE_BYTES:-536870912}" # 512 MiB por defecto
+SIZE_BYTES="${SIZE_BYTES:-209715200}" # 200 MiB, below the J2.10 ceiling
 TEST_PORT="${TEST_PORT:-9443}"
 NETWORK="${NETWORK:-maulwurf_edge}"
 SINK_NAME="mw-sink"

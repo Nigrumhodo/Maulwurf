@@ -1,7 +1,7 @@
 # System Architecture — Maulwurf
 
 > **Status:** architecture view derived from [ESPECIFICACION.md](ESPECIFICACION.md), which is the
-> normative source, and contrasted with the `develop` code at `16cf45b` (2026-10-30). It creates
+> normative source, and contrasted with the `develop` code at `44b576a` (2026-10-31). It creates
 > no contracts: on any difference, the specification and the
 > [implementation plan](PLAN_IMPLEMENTACION.md) prevail. Step-by-step flows are in
 > [PROCESOS.md](PROCESOS.md).
@@ -125,7 +125,7 @@ flowchart TB
 
 | Service | Image or build | Networks | Exposed | Limits and hardening | Runs |
 |---|---|---|---|---|---|
-| `caddy` | `caddy:2.8-alpine` (pinned digest) | edge | 80 and 443 on the host (configurable) | Read-only Caddyfile, admin API disabled; no healthcheck | Reverse proxy with internal TLS (`https://localhost`) |
+| `caddy` | `caddy:2.8-alpine` (pinned digest) | edge | 80 and 443 on the host (configurable) | Read-only Caddyfile, admin API disabled; upload `request_body` 220 MB and 10 MB on every other proxying route (JSON, SSE progress, web fallback); `read_body` 20m, `read_header` 30s, `write` 0 (SSE), `idle` 5m (ADR-0010); no healthcheck | Reverse proxy with internal TLS (`https://localhost`) |
 | `web` | `apps/web` → `maulwurf-web:local` | edge | 3000, internal only | `USER node` | `node dist/server/index.js` (Express serving the Vite build, ADR-0007) |
 | `api` | `apps/api` → `maulwurf-api:local` | edge, data | 8000, internal only | UID 10001 in the Dockerfile; compose adds no `read_only` nor `cap_drop` | Alembic migration and Uvicorn |
 | `ingest` | `apps/ingest`, target `runtime` | edge, data | 8000, internal only | UID 10001, `read_only` rootfs, 256 MiB tmpfs at `/work/tmp` (`noexec,nosuid,nodev`), `cap_drop: ALL`, `no-new-privileges`, 1 GiB of RAM without swap, 2 CPU, 128 PIDs | Uvicorn `maulwurf_ingest.main:app` |
@@ -146,6 +146,16 @@ image is J1.2, Caddy J1.3, the ARQ processes J1.5, and the Redis policy J1.6.
 | `/audios/*/progress` | `api:8000` with `flush_interval -1` | Progress SSE: the route exists in Caddy, but not in the API routers |
 | `/auth/*`, `/me`, `/me/*`, `/subjects`, `/subjects/*`, `/integrations/*`, `/audios`, `/audios/*`, `/ingestion/*`, `/search`, `/chat/*`, `/readyz` | `api:8000` | Implemented routers; the `PUT` still answers `503` with the default ingest sink |
 | Anything else | `web:3000` | Fallback |
+
+**Ingress and edge limits (J2.10).** Caddy is the only HTTP ingress
+([ADR-0010](adr/ADR-0010-ingress.md)): there is no Cloudflare Tunnel, CDN or HTTP proxy in
+front of it. The upload route caps the body at 220,000,000 bytes and the JSON routes at
+10,000,000 bytes; `read_body` is 20m, `read_header` 30s, `write` is 0 because
+`/audios/*/progress` is SSE, and `idle` is 5m. The 220 MB ceiling is deliberately above the
+provisional 200 MiB API limit so the API answers with its structured `413` envelope; the
+published contract limit is still `null` until D4 closes. The synthetic-byte measurement and
+the repeated no-buffering check are recorded in
+[J2.10-ingress-limits.md](spike/J2.10-ingress-limits.md) (C-S2-JF-13).
 
 **What is not connected yet**
 
@@ -406,7 +416,7 @@ flowchart LR
 | Indexing, hybrid search and chat | Implemented API-side | L2.1–L2.6, A2.11; no browser end-to-end flow |
 | Analysis, review, Calendar, Gmail and account deletion | Not implemented | S3 and S4 remain closed |
 | Web | Partial | Vite SPA with login, base routes, subject CRUD and upload-form work (`D2.1` in progress) |
-| Upload limits (200 MiB and 3 h target) | Not approved | `capabilities` publishes `null`; the Caddyfile sets no body limits or timeouts |
+| Upload limits (200 MiB and 3 h target) | Not approved; edge limits set | `capabilities` publishes `null`; Caddy upload ceiling 220 MB, 10 MB on every other proxying route, 20m `read_body` and no-buffering measured (J2.10, ADR-0010) |
 
 ## 7. Open Decisions That Constrain the Architecture
 
@@ -420,7 +430,7 @@ flowchart LR
 | D8 Retention and backups | The spec lists it as pending; `plan/S4.md` treats it as approved | Text and chat retention, and backup policy | ESPECIFICACION §12, `plan/S4.md` |
 | `PUT` route (C2) | Decided ([ADR-0008](adr/ADR-0008-api-ingest-reception.md)); transport implemented, disabled by default | `api` terminates the `PUT` and streams to `ingest` in two phases (receive and hold, then admit or discard) with a per-attempt internal credential. The client landed with A2.13/S2.11; the default sink still responds 503 until `MAULWURF_INGEST_URL` and the credential are configured | `infra/Caddyfile`, `services/uploads.py`, `services/ingest_sink.py`; tickets A2.13, S2.11, J2.8 |
 | Web framework | Closed 2026-10-11 | Vite + React SPA served by Express, decided by the lead | [ADR-0007](adr/ADR-0007-web-stack.md); PR #42; ticket L2.10 |
-| Ingress and upload limit | Not defined | Cloudflare Tunnel is no longer planned and the documents do not say what replaces it. Any ingress in front of Caddy has its own request-body limit and timeouts and may buffer, so the effective limit against the 200 MiB target is unknown; ticket J2.10 | `infra/Caddyfile` (no body limit nor timeouts), [PROPUESTA_PROYECTO_FINAL.md](PROPUESTA_PROYECTO_FINAL.md) |
+| Ingress and upload limit | Decided 2026-10-31 | Caddy is the only HTTP ingress: no Cloudflare Tunnel, CDN or HTTP proxy in front. The upload ceiling is 220 MB, above the provisional 200 MiB API limit, and the timeouts and no-buffering behavior are measured; the published limit is still `null` until D4. Adding an HTTP ingress later requires a new decision and a new measurement | [ADR-0010](adr/ADR-0010-ingress.md); `infra/Caddyfile`; [J2.10-ingress-limits.md](spike/J2.10-ingress-limits.md) |
 
 ## 8. Maintenance
 
