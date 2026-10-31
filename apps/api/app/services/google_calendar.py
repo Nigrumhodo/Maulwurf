@@ -8,6 +8,9 @@ Design decisions:
 - **Bounded budget.** At most `max_retries + 1` attempts. Only transient failures are
   retried: 408, 429, 5xx, network errors and the 403 quota reasons Google uses. A 401, a
   plain 403, 404, 409 or any other 4xx is terminal.
+- **Writes are not retried at transport level.** `POST /calendars` is not idempotent: a
+  retry after a lost response could create a second calendar. `create_calendar` opts out of
+  the transport retry and lets its caller reconcile by identity before trying again.
 - **`Retry-After` wins.** When the header is present (numeric seconds or an HTTP date) it
   replaces the exponential backoff and is capped by `max_retry_after_seconds`; otherwise a
   bounded exponential backoff with multiplicative jitter is used.
@@ -250,10 +253,18 @@ class GoogleCalendarService:
         *,
         params: Mapping[str, Any] | None = None,
         json: Mapping[str, Any] | None = None,
+        retry_transient: bool = True,
     ) -> dict[str, Any]:
-        """Run one Calendar request in a worker thread and return its JSON object."""
+        """Run one Calendar request in a worker thread and return its JSON object.
+
+        `retry_transient=False` makes the call single-attempt. It is required for
+        non-idempotent writes such as `POST /calendars`: a retry after a lost response can
+        create a second remote object, so only the caller may reconcile and decide.
+        """
         try:
-            return await asyncio.to_thread(self._request, method, path, params, json)
+            return await asyncio.to_thread(
+                self._request, method, path, params, json, retry_transient
+            )
         except GoogleCalendarInvalidGrant:
             if self._on_invalid_grant is not None:
                 await self._on_invalid_grant()
@@ -265,6 +276,7 @@ class GoogleCalendarService:
         path: str,
         params: Mapping[str, Any] | None,
         json_body: Mapping[str, Any] | None,
+        retry_transient: bool = True,
     ) -> dict[str, Any]:
         url = f"{self._base_url}/{path.lstrip('/')}"
         headers = {
@@ -272,6 +284,7 @@ class GoogleCalendarService:
             "Accept": "application/json",
         }
         attempt = 0
+        max_attempts = self._max_attempts if retry_transient else 1
         with httpx.Client(transport=self._transport, timeout=self._timeout) as client:
             while True:
                 attempt += 1
@@ -280,7 +293,7 @@ class GoogleCalendarService:
                         method, url, params=params, json=json_body, headers=headers
                     )
                 except httpx.HTTPError as exc:
-                    if attempt >= self._max_attempts:
+                    if attempt >= max_attempts:
                         raise GoogleCalendarTransientError(
                             "Google Calendar no respondió.",
                             details={"attempts": attempt, "error": type(exc).__name__},
@@ -290,7 +303,7 @@ class GoogleCalendarService:
                 if response.status_code in _RETRYABLE_STATUS or _is_transient_forbidden(
                     response
                 ):
-                    if attempt >= self._max_attempts:
+                    if attempt >= max_attempts:
                         raise self._exhausted(response, attempt)
                     retry_after = _retry_after_seconds(
                         response, cap=self._max_retry_after
@@ -321,7 +334,13 @@ class GoogleCalendarService:
                 return items
             page_token = next_token
         logger.warning("google_calendar.list_truncated pages=%d", CALENDAR_LIST_MAX_PAGES)
-        return items
+        # Why: a silently partial list could hide the existing "Maulwurf" calendar and make
+        # reconciliation create a duplicate. Fail closed so the caller surfaces a retryable
+        # error instead of breaking the single-calendar invariant.
+        raise GoogleCalendarTransientError(
+            "Google Calendar devolvió más páginas de calendarios de las permitidas.",
+            details={"pages": CALENDAR_LIST_MAX_PAGES},
+        )
 
     async def get_calendar(self, calendar_id: str) -> dict[str, Any]:
         """One calendar by ID; a deleted or unknown ID raises `GoogleCalendarNotFound`."""
@@ -336,12 +355,16 @@ class GoogleCalendarService:
             "POST",
             "calendars",
             json={"summary": summary, "description": description, "timeZone": timezone},
+            # Why: Calendar does not make writes idempotent. A transport-level retry after a
+            # lost response would create a second calendar; `binding_from_google` re-lists
+            # by identity instead and only creates again if the first attempt really failed.
+            retry_transient=False,
         )
         calendar_id = payload.get("id")
         if not isinstance(calendar_id, str) or not calendar_id:
             raise GoogleCalendarResponseError(
                 "Google Calendar creó un calendario sin identificador.",
-                details={"status": httpx.codes.OK},
+                details={"reason": "missing_calendar_id"},
             )
         return payload
 

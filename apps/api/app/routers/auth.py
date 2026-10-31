@@ -118,24 +118,27 @@ async def _calendar_callback(
     state: str | None,
 ) -> RedirectResponse:
     """Complete an incremental Calendar grant started by `POST /integrations/google/*`."""
-    if error is not None:
-        return _calendar_result("error", reason="access_denied")
-    if code is None or state is None:
-        return _calendar_result("error", reason="missing_params")
     expected_state = payload.get("state")
     nonce = payload.get("nonce")
     code_verifier = payload.get("code_verifier")
     bound_user = payload.get("user_id")
     mode = payload.get("mode")
+    # Validate the signed state before honoring even an error callback: an unsigned bounce
+    # must not drive the Calendar redirect or the displayed reason.
     if (
         not isinstance(expected_state, str)
         or not isinstance(nonce, str)
         or not isinstance(code_verifier, str)
         or not isinstance(bound_user, str)
+        or not isinstance(state, str)
         or mode not in CALENDAR_MODES
         or not _constant_eq(state, expected_state)
     ):
         return _calendar_result("error", reason="invalid_state")
+    if error is not None:
+        return _calendar_result("error", reason="access_denied")
+    if code is None:
+        return _calendar_result("error", reason="missing_params")
 
     session = await sessions.resolve_session(db, request.cookies.get(COOKIE_NAME))
     if session is None:

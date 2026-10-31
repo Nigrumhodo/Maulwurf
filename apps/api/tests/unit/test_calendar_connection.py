@@ -215,8 +215,29 @@ async def test_ambiguous_create_is_reconciled_by_identity_before_failing() -> No
 
     assert binding.calendar_id == "mw@group.calendar.google.com"
     assert binding.reconciled is True
-    # The retries happened, but they all converged on the same remote calendar.
-    assert posts >= 1
+    # Exactly one POST: a transport retry after a lost response could create a duplicate.
+    assert posts == 1
+
+
+async def test_lost_create_response_does_not_post_twice() -> None:
+    """Why: a second POST after a lost response would create a duplicate calendar."""
+    calendar_exists = False
+    posts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calendar_exists, posts
+        if request.method == "POST":
+            posts += 1
+            calendar_exists = True  # created server-side, response lost
+            return httpx.Response(503, json={"error": {"reason": "backendError"}})
+        if "/calendarList" in request.url.path:
+            return _calendar_list(*([_marked()] if calendar_exists else []))
+        return httpx.Response(404)
+
+    binding = await binding_from_google(_service(handler), stored_calendar_id=None, timezone="UTC")
+
+    assert posts == 1
+    assert binding.reconciled is True
 
 
 async def test_ambiguous_create_without_a_matching_calendar_surfaces_the_error() -> None:
@@ -279,6 +300,23 @@ async def test_calendar_list_pagination_is_followed() -> None:
     assert binding.calendar_id == "mw@group.calendar.google.com"
     assert len(requests) == 2  # no create after the second page
     assert requests[1].url.params["pageToken"] == "page-2"
+
+
+async def test_truncated_calendar_list_fails_closed_instead_of_creating_a_duplicate() -> None:
+    """A partial list could hide the existing calendar: never create from one."""
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "POST":
+            raise AssertionError("no calendar may be created after a truncated list")
+        return _calendar_list(next_page="never-ends")
+
+    with pytest.raises(GoogleCalendarTransientError):
+        await binding_from_google(_service(handler), stored_calendar_id=None, timezone="UTC")
+
+    assert requests
+    assert all(request.method == "GET" for request in requests)
 
 
 async def test_a_calendar_without_id_is_a_response_error() -> None:

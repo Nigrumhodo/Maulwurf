@@ -420,6 +420,29 @@ async def test_callback_rejects_a_grant_without_calendar_scopes_and_keeps_the_ap
     assert (await client.get("/audios", cookies=actor.cookies)).status_code == 200
 
 
+async def test_callback_error_is_honored_only_with_the_signed_state(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await make_actor(db_session)
+    _, state, cookie = await _start(client, actor)
+
+    denied = await client.get(
+        "/auth/google/callback",
+        params={"error": "access_denied", "state": state},
+        cookies={OAUTH_COOKIE_NAME: cookie, **actor.cookies},
+        follow_redirects=False,
+    )
+    assert denied.headers["location"] == "/settings?calendar=error&reason=access_denied"
+
+    forged = await client.get(
+        "/auth/google/callback",
+        params={"error": "access_denied", "state": "forged"},
+        cookies={OAUTH_COOKIE_NAME: cookie, **actor.cookies},
+        follow_redirects=False,
+    )
+    assert forged.headers["location"] == "/settings?calendar=error&reason=invalid_state"
+
+
 async def test_connect_creates_one_calendar_and_stores_its_id(
     client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -509,6 +532,8 @@ async def test_ambiguous_create_is_reconciled_over_http(
 
     assert response.headers["location"] == "/settings?calendar=connected"
     assert await _settings_calendar_id(db_session, actor) == MAULWURF_ID
+    # One POST only: a transport retry after the lost response would duplicate the calendar.
+    assert len(calendar["created"]) == 1
 
 
 async def test_callback_for_another_google_account_is_rejected(
