@@ -1039,7 +1039,8 @@ Typed codes (no PII or sensitive content):
 | `auth_required` | 401 | No session or expired |
 | `csrf_invalid` | 403 | Missing/invalid `X-CSRF-Token` or Origin |
 | `forbidden` | 403 | Another tenant's resource |
-| `not_found` | 404 | Nonexistent or tombstoned |
+| `not_found` | 404 | Nonexistent, tombstoned, or unknown route |
+| `method_not_allowed` | 405 | HTTP method not allowed on an existing route |
 | `validation_failed` | 422 | Invalid fields (per-field detail) |
 | `language_not_allowed` | 422 | Code outside the tested allowlist |
 | `consent_required` | 422 | Missing cloud-processing acceptance |
@@ -1063,6 +1064,12 @@ Typed codes (no PII or sensitive content):
 | `date_unresolved` | 422 | Confirming requires a valid date |
 | `provider_unavailable` | 503 | LLM/embeddings/Google down |
 | `internal_error` | 500 | No sensitive details |
+
+Errors raised by the framework before a router runs use the same envelope: an unknown
+route is `404 not_found`, a wrong method is `405 method_not_allowed`, and any unhandled
+exception is `500 internal_error`. The framework `detail` is never forwarded (it can echo
+request input) and the 500 body never carries exception text; the request id is logged with
+the failure.
 
 Ingest persists a smaller set (S2.13, `maulwurf_ingest/outcomes.py`). The public `PUT`
 uses the row below; the stored `error_code` can be more specific than the public code.
