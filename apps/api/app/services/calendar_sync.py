@@ -17,9 +17,12 @@ per-user transaction advisory lock. Rows of the republished calendars that ended
 window are pruned (Google is queried from `window.start`, so it will never return them), the
 window rows the fresh read no longer carries are deleted, and the fetched events are upserted
 on `(user_id, calendar_id, event_id)`: an event rescheduled into the window from an earlier
-publication updates in place instead of colliding with the unique key. It then records the
-covered window and `last_synced_at` in `settings`. Any failure rolls the savepoint back,
-leaving both the previous mirror and the previous coverage untouched.
+publication updates in place instead of colliding with the unique key. Rows linked to a task
+(`task_id` set) are excluded from both deletes: the read mirror never deletes nor unlinks
+them, even when Google stops returning the event or moves it out of the window, because the
+link belongs to the write path (J3.4/A3.8). It then records the covered window and
+`last_synced_at` in `settings`. Any failure rolls the savepoint back, leaving both the
+previous mirror and the previous coverage untouched.
 """
 
 import uuid
@@ -497,10 +500,18 @@ class SqlCalendarMirror:
                     _before_window_filter(window),
                 )
             )
+            # The same rule protects linked rows inside the window. Deleting one here would
+            # be followed by the upsert below, which re-inserts the row without `task_id`
+            # (the inserted values never carry it) and silently frees the partial unique
+            # index `calendar_events_one_link`. If a linked event disappears from Google or
+            # moves out of the window, its row is deliberately kept: the read mirror never
+            # deletes nor unlinks those rows, and reconciling them is the job of the write
+            # path (J3.4/A3.8). A stale linked row is safer than a lost task link.
             removed = await self._db.execute(
                 delete(CalendarEvent).where(
                     CalendarEvent.user_id == user_id,
                     CalendarEvent.calendar_id.in_(list(calendars)),
+                    CalendarEvent.task_id.is_(None),
                     _overlap_filter(window),
                 )
             )

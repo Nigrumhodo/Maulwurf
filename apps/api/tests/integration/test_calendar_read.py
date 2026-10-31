@@ -352,6 +352,71 @@ async def test_rows_before_the_window_are_pruned_only_for_the_republished_calend
     ]
 
 
+async def test_a_task_linked_row_inside_the_window_keeps_its_link_across_refreshes(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    await _settings(db_session, actor)
+    now = datetime.now(UTC)
+    start = now + timedelta(days=2)
+    task_id = uuid.uuid4()
+    db_session.add(
+        CalendarEvent(
+            user_id=actor.user_id,
+            calendar_id=CALENDAR,
+            event_id="linked",
+            title="linked",
+            start_at=start,
+            end_at=start + timedelta(hours=1),
+            last_synced_at=now,
+            task_id=task_id,
+        )
+    )
+    await db_session.flush()
+
+    # Google still returns the event inside the window: the refresh updates the mirrored
+    # values in place and must leave the task link of the write path untouched.
+    source = FakeSource([_timed("linked", start, title="renamed")])
+    await _sync(db_session, actor, source=source, now=now)
+    await _sync(db_session, actor, source=source, now=now)
+
+    rows = await _mirror(db_session, actor)
+    assert [(row.event_id, row.task_id) for row in rows] == [("linked", task_id)]
+    assert rows[0].title == "renamed"
+
+
+async def test_a_task_linked_row_inside_the_window_survives_a_refresh_without_it(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    await _settings(db_session, actor)
+    now = datetime.now(UTC)
+    start = now + timedelta(days=2)
+    task_id = uuid.uuid4()
+    db_session.add(
+        CalendarEvent(
+            user_id=actor.user_id,
+            calendar_id=CALENDAR,
+            event_id="linked",
+            title="linked",
+            start_at=start,
+            end_at=start + timedelta(hours=1),
+            last_synced_at=now,
+            task_id=task_id,
+        )
+    )
+    await db_session.flush()
+
+    # Contract (J3.7): the read mirror never deletes or unlinks a task-linked row, even
+    # when the remote event vanished or was moved out of the window. Those rows belong to
+    # the write path (J3.4/A3.8); a stale row is better than a silently lost link.
+    await _sync(db_session, actor, source=FakeSource([]), now=now)
+    await _sync(db_session, actor, source=FakeSource([]), now=now)
+
+    rows = await _mirror(db_session, actor)
+    assert [(row.event_id, row.task_id) for row in rows] == [("linked", task_id)]
+
+
 async def test_a_failed_read_publishes_nothing(
     db_session: AsyncSession,
 ) -> None:
