@@ -164,8 +164,12 @@ because this plan exists.
 
 ### F1.2 Retrieval and chat
 
-- [ ] Token-based chunking with traceable spans; versioned embeddings, HNSW cosine, and
-  per-language FTS with RRF. Tenant/version/tombstone filters in both branches.
+- [ ] Token-based chunking with traceable spans; the §M6 `Chunk` maps field by field to
+  `chunks`/`chunk_segments` (`content`, `transcript_id`, `index_version`, `char_start`,
+  `char_end`, `token_count`) and each link carries the validated `overlap_span` JSON
+  (`segment_ordinal`, segment-local `inicio_char`/`fin_char`, optional overlap region).
+  Versioned embeddings, HNSW cosine, and per-language FTS with RRF. Tenant/version/tombstone
+  filters in both branches.
 - [ ] `GET /search` exposes the shared `SearchService` with plain-text snippets, nullable
   segment times only when reliable, and an opaque `next_cursor` over the bounded 60-hit RRF
   window (`limit` 1..50, default 8; no deep pagination). A per-user Redis quota is checked
