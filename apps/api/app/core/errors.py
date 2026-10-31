@@ -224,6 +224,28 @@ def google_not_connected() -> ApiError:
     )
 
 
+def calendar_sync_unavailable(reason: str) -> ApiError:
+    # J3.8: a manual refresh needs a connected grant, every Calendar scope and at least one
+    # selected read calendar. The reason is a closed set so the UI can tell "connect",
+    # "reconnect" and "select calendars" apart without parsing messages.
+    return ApiError(
+        409,
+        "calendar_sync_unavailable",
+        "El calendario no se puede sincronizar en el estado actual.",
+        {"reason": reason},
+    )
+
+
+def calendar_sync_temporarily_unavailable() -> ApiError:
+    # Google Calendar (or the token endpoint) failed after its bounded retries. The mirror
+    # is untouched, so the client can retry later instead of treating it as a state error.
+    return ApiError(
+        503,
+        "calendar_sync_temporarily_unavailable",
+        "Google Calendar no está disponible; inténtalo más tarde.",
+    )
+
+
 async def _handle_validation(_: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, RequestValidationError)  # noqa: S101 - registrado solo para ella
     # Solo ubicación y mensaje por campo: nunca el valor recibido (puede traer PII).

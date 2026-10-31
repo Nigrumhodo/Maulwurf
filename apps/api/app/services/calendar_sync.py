@@ -49,8 +49,19 @@ from sqlalchemy import CursorResult, Table, and_, delete, func, or_, select, tup
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import CalendarEvent, CalendarSettings, User
-from app.services.google_calendar import GoogleCalendarService
+from app.models import CalendarEvent, CalendarSettings, GoogleCredential, User
+from app.services.google_calendar import (
+    GoogleCalendarInvalidGrant,
+    GoogleCalendarService,
+    GoogleCalendarUnauthorized,
+    disconnect_google_credential,
+)
+from app.services.google_tokens import (
+    GoogleTokenRejected,
+    GoogleTokenUnavailable,
+    fresh_access_token,
+)
+from app.services.oauth_google import missing_calendar_scopes
 
 DAYS_BACK = 7
 DAYS_FORWARD = 60
@@ -113,6 +124,14 @@ class CalendarEventInvalid(CalendarSyncError):
 
 class CalendarPaginationExhausted(CalendarSyncError):
     code = "calendar_pagination_exhausted"
+
+
+class CalendarSyncUnavailable(CalendarSyncError):
+    """A manual refresh cannot start in the current state (HTTP 409).
+
+    `code` is the closed reason: `google_not_connected`, `missing_calendar_scopes`,
+    `no_read_calendars`, `google_invalid_grant` or `calendar_read_failed`.
+    """
 
 
 def _zone(name: str) -> ZoneInfo:
@@ -268,6 +287,7 @@ class CalendarPage:
     events: list[CalendarEventView]
     date_from: date
     date_to: date
+    timezone: str
     last_synced_at: datetime | None
     coverage_ok: bool
     coverage_notice: CoverageNotice | None
@@ -743,6 +763,109 @@ async def sync_calendar_window(
     )
 
 
+def google_event_source(access_token: str) -> CalendarEventSource:
+    """Build the Google reader; tests replace this factory to inject a deterministic read."""
+    return GoogleCalendarEventSource(GoogleCalendarService(access_token=access_token))
+
+
+async def refresh_calendar_mirror(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    now: datetime | None = None,
+    source: CalendarEventSource | None = None,
+) -> CalendarSyncResult:
+    """Force one full-window refresh for the authenticated user (J3.8).
+
+    This is the manual `POST /calendar/sync` path. It validates the integration *before*
+    any provider call, renews the access token under a row lock when needed, reads every
+    selected calendar and then calls `sync_calendar_window`, so the mirror is replaced
+    atomically exactly like the J3.7 read. The caller owns the transaction and must commit
+    when this returns.
+
+    `CalendarSyncUnavailable` carries a closed reason for the 409 response. A revoked grant
+    also marks the credential `disconnected` here; the router commits that state before
+    answering, so the user is told to reconnect instead of retrying forever.
+    """
+    reference = (now or datetime.now(UTC)).astimezone(UTC)
+    settings_row = await db.get(CalendarSettings, user_id)
+    read_calendars = _normalize_calendars(
+        settings_row.calendar_read_calendar_ids if settings_row is not None else []
+    )
+    if not read_calendars:
+        raise CalendarSyncUnavailable("no_read_calendars")
+
+    credential = (
+        await db.execute(
+            select(GoogleCredential)
+            .where(GoogleCredential.user_id == user_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if credential is None or credential.status != "connected":
+        raise CalendarSyncUnavailable("google_not_connected")
+    if missing_calendar_scopes(credential.scopes or []):
+        raise CalendarSyncUnavailable("missing_calendar_scopes")
+
+    try:
+        access_token = await fresh_access_token(db, credential, now=reference)
+    except GoogleTokenRejected as exc:
+        # `fresh_access_token` already marked the credential disconnected and flushed it;
+        # the router commits that state before answering 409.
+        raise CalendarSyncUnavailable("google_invalid_grant") from exc
+    except GoogleTokenUnavailable as exc:
+        if exc.code == "refresh_token_missing":
+            raise CalendarSyncUnavailable("google_not_connected") from exc
+        raise
+
+    user = await db.get(User, user_id)
+    timezone = user.timezone if user is not None and user.timezone else "UTC"
+    window = CalendarWindow.default(now=reference, timezone=timezone)
+    reader = source or google_event_source(access_token)
+    try:
+        return await sync_calendar_window(
+            db,
+            user_id=user_id,
+            window=window,
+            calendars=read_calendars,
+            source=reader,
+            now=reference,
+        )
+    except GoogleCalendarUnauthorized:
+        # Google can invalidate an access token before its advertised expiry. Retry once
+        # with a forced renewal; a test-injected reader owns its own auth and is not
+        # rebuilt behind its back.
+        if source is not None:
+            raise
+        try:
+            access_token = await fresh_access_token(
+                db, credential, now=reference, force=True
+            )
+        except GoogleTokenRejected as exc:
+            raise CalendarSyncUnavailable("google_invalid_grant") from exc
+        except GoogleTokenUnavailable as exc:
+            if exc.code == "refresh_token_missing":
+                raise CalendarSyncUnavailable("google_not_connected") from exc
+            raise
+        try:
+            return await sync_calendar_window(
+                db,
+                user_id=user_id,
+                window=window,
+                calendars=read_calendars,
+                source=google_event_source(access_token),
+                now=reference,
+            )
+        except GoogleCalendarInvalidGrant as exc:
+            await disconnect_google_credential(db, user_id)
+            raise CalendarSyncUnavailable("google_invalid_grant") from exc
+    except GoogleCalendarInvalidGrant as exc:
+        # The Calendar call itself rejected the grant. Keep the disconnect even though the
+        # refresh is lost: the next attempt must start from J3.3's reconnect.
+        await disconnect_google_credential(db, user_id)
+        raise CalendarSyncUnavailable("google_invalid_grant") from exc
+
+
 def coverage_status(
     *,
     read_calendars: Iterable[str],
@@ -866,6 +989,7 @@ class CalendarService:
             events=views,
             date_from=window.start_date,
             date_to=window.end_date,
+            timezone=timezone,
             last_synced_at=last_synced_at,
             coverage_ok=coverage_ok,
             coverage_notice=notice,
