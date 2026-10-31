@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 def job_args(event: OutboxEvent, job: str) -> tuple[object, ...]:
     # Only IDs and version: never payload, audio, tokens or text.
-    if job == "index":
+    if job in {"index", "sync_task_event"}:
         return (str(event.resource_id), event.resource_version)
     return (str(event.resource_id),)
 

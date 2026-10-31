@@ -44,19 +44,31 @@ def test_gated_event_blocked_while_flagged_even_if_cleanup_verified(
 
 @pytest.mark.parametrize(
     "event_type",
-    ["sync_task_event", "task_cancelled", "notify", "send_digest", "delete_event",
-     "account_deleted"],
+    ["task_cancelled", "notify", "send_digest", "delete_event", "account_deleted"],
 )
 @pytest.mark.parametrize("cleanup_status", ["pending", "failed", None])
 def test_non_ingest_events_never_wait_for_audio_cleanup(
     event_type: str, cleanup_status: str | None
 ) -> None:
-    # Calendar, notificaciones y borrados no dependen del cleanup; en S1 no hay consumidor.
+    # Notificaciones y borrados no dependen del cleanup; aún no tienen consumidor.
     decision = decide(
         event_type, enabled=True, blocked_reason=None, cleanup_status=cleanup_status
     )
 
     assert decision.outcome is Outcome.NO_CONSUMER
+
+
+@pytest.mark.parametrize("cleanup_status", ["pending", "failed", "verified", None])
+def test_task_event_has_a_consumer_and_never_waits_for_cleanup(
+    cleanup_status: str | None,
+) -> None:
+    # J3.4: Calendar no depende del cleanup del audio y ya tiene job.
+    decision = decide(
+        "sync_task_event", enabled=True, blocked_reason=None, cleanup_status=cleanup_status
+    )
+
+    assert decision.publish
+    assert decision.job == "sync_task_event"
 
 
 def test_unknown_type_fails_closed() -> None:
