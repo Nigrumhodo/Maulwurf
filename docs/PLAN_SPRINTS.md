@@ -263,6 +263,7 @@ were open S1 tickets when this backlog was written; both are now `done` (see
 | A2.17 | *(gap, P1)* PostgreSQL RLS with `SET LOCAL app.user_id` (ADR-0006 second barrier) | A2.1; A1.9 | I-S2-AN-16 |
 | A2.18 | *(gap, P1)* Schema integrity follow-up (migration `0003`): FK indexes, version invariants, drift test | A2.1 | I-S2-AN-17 |
 | A2.19 | *(gap, P1)* Contract conformance of A1.8/A2.3/A2.4: TTL, language, token codes, `/me`, single limit source | A2.4 | U-S2-AN-18 |
+| A2.20 | *(gap, P1)* `processing_runs` fencing: a stale worker cannot finish a run or activate a generation after the reconciler reclaimed it | A2.1, J2.2, J2.4 | I-S2-JF-15 |
 
 ### S2 backlog — Ingestion/ASR (`S2.x`)
 
@@ -296,6 +297,7 @@ were open S1 tickets when this backlog was written; both are now `done` (see
 | J2.8 | *(gap, P0)* Compose/env wiring for `ingest` (Riva credentials, `INGEST_*`, origin override, `INGEST_SLOTS`) | A2.13 | I-S2-JF-11 |
 | J2.9 | *(gap, P2)* CI hygiene: no empty-suite tolerance, Redis `maxmemory`, secret and license scan | J1.4 | C-S2-JF-12 |
 | J2.10 | *(gap, P1)* Ingress decision (Cloudflare Tunnel dropped), its upload limit and timeouts, and Caddy body/timeout limits | Ingress decision | C-S2-JF-13 |
+| J2.11 | *(gap, P1)* Reconciler: keep Redis I/O outside database row locks so a degraded Redis cannot hold up to 200 rows or trigger idle-in-transaction | J2.4 | I-S2-JF-14 |
 
 ### S2 backlog — Web/UX (`D2.x`)
 
