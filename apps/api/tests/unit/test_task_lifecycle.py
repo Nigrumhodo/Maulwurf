@@ -77,6 +77,7 @@ class Store:
             )
         ensure_task_transition(self.status, target)
         self.status = target
+        self.version += 1
         return LifecycleTransition(
             outcome=LifecycleOutcome.UPDATED,
             status=target,
@@ -136,10 +137,26 @@ async def test_completing_a_confirmed_task_cancels_reminders_and_keeps_the_event
     result = await _service(store).complete(store.user_id, store.task_id, expected_version=1)
 
     assert result.status == "completed"
+    assert result.version == 2
     assert result.cancelled_reminders == 3
     assert result.calendar_event_kept is True
     assert result.notice == CALENDAR_EVENT_KEPT_NOTICE
     assert store.calls == [(store.user_id, store.task_id, 1, "completed", NOW)]
+
+
+async def test_completing_bumps_the_version_and_rejects_the_old_token() -> None:
+    """Regression fix1: the bump invalidates queued jobs and stale client commands."""
+    store = Store()
+    service = _service(store)
+    await service.complete(store.user_id, store.task_id, expected_version=1)
+
+    with pytest.raises(ApiError) as failure:
+        await service.complete(store.user_id, store.task_id, expected_version=1)
+
+    assert failure.value.status_code == 409
+    assert failure.value.code == "version_conflict"
+    assert failure.value.details["current_version"] == 2
+    assert store.version == 2
 
 
 async def test_dismissing_a_pending_task_without_an_event_has_no_notice() -> None:
@@ -158,6 +175,7 @@ async def test_repeating_complete_is_idempotent_and_still_cancels_leftovers() ->
     result = await _service(store).complete(store.user_id, store.task_id, expected_version=1)
 
     assert result.status == "completed"
+    assert result.version == 1  # ALREADY keeps the stored version
     assert result.cancelled_reminders == 1
     assert result.calendar_event_kept is True
 

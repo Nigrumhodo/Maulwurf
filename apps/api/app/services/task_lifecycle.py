@@ -11,9 +11,12 @@ user completes or dismisses a task:
 
 The pure transition table is the single authority for `complete`/`dismiss`; the store
 adapter locks the task row (scoped to the authenticated user) and performs both writes in
-the same transaction. `version` is the optimistic-locking token of the task contract: a
-stale `expected_version` is a `409 version_conflict`, while repeating the same command is an
-accepted no-op. A task of another tenant is a `404`, indistinguishable from a missing one.
+the same transaction. `version` is the optimistic-locking token of the task contract:
+every effective transition increments it, so a job enqueued for the previous version
+becomes stale and can no longer write to Calendar, and a client must send the new value
+next. A stale `expected_version` is a `409 version_conflict`; repeating the command with
+the current version is an accepted no-op (the stored version does not change). A task of
+another tenant is a `404`, indistinguishable from a missing one.
 """
 
 import uuid
@@ -63,6 +66,7 @@ class LifecycleTransition:
 class TaskLifecycleResult:
     task_id: uuid.UUID
     status: str
+    version: int
     cancelled_reminders: int
     calendar_event_kept: bool
     notice: str | None
@@ -149,9 +153,14 @@ class TaskLifecycle:
                 },
             )
         event_kept = transition.calendar_event_id is not None
+        version = transition.current_version
+        if version is None:
+            # Both outcomes that reach this point must report the stored version.
+            raise RuntimeError("lifecycle store did not report the task version")
         return TaskLifecycleResult(
             task_id=task_id,
             status=transition.status or target,
+            version=version,
             cancelled_reminders=transition.cancelled_reminders,
             calendar_event_kept=event_kept,
             notice=CALENDAR_EVENT_KEPT_NOTICE if event_kept else None,

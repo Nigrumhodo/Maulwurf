@@ -464,6 +464,7 @@ async def test_completing_cancels_pending_reminders_and_keeps_the_event(
     result = await lifecycle.complete(actor.user_id, row["id"], expected_version=row["version"])
 
     assert result.status == "completed"
+    assert result.version == row["version"] + 1
     assert result.cancelled_reminders == 2
     assert result.calendar_event_kept is True
     assert result.notice == CALENDAR_EVENT_KEPT_NOTICE
@@ -473,12 +474,16 @@ async def test_completing_cancels_pending_reminders_and_keeps_the_event(
     assert await _notification_status(db_session, foreign) == "pending"
     stored = (
         await db_session.execute(
-            select(TASKS.c.status, TASKS.c.completed_at, TASKS.c.dismissed_at).where(
-                TASKS.c.id == row["id"]
-            )
+            select(
+                TASKS.c.status,
+                TASKS.c.version,
+                TASKS.c.completed_at,
+                TASKS.c.dismissed_at,
+            ).where(TASKS.c.id == row["id"])
         )
     ).one()
     assert stored.status == "completed"
+    assert stored.version == row["version"] + 1
     assert stored.completed_at is not None
     assert stored.dismissed_at is None
     status, sync_status, calendar_event_id = await _task_status(db_session, row["id"])
@@ -511,13 +516,14 @@ async def test_dismissing_cancels_reminders_and_keeps_the_event(
     result = await lifecycle.dismiss(actor.user_id, row["id"], expected_version=row["version"])
 
     assert result.status == "dismissed"
+    assert result.version == row["version"] + 1
     assert result.cancelled_reminders == 1
     assert result.calendar_event_kept is False
     assert result.notice is None
     assert await _notification_status(db_session, pending) == "cancelled"
     stored = (
         await db_session.execute(
-            select(TASKS.c.status, TASKS.c.completed_at, TASKS.c.dismissed_at).where(
+            select(TASKS.c.status, TASKS.c.dismissed_at, TASKS.c.completed_at).where(
                 TASKS.c.id == row["id"]
             )
         )
@@ -549,6 +555,54 @@ async def test_a_stale_version_changes_nothing(db_session: AsyncSession) -> None
     assert await _notification_status(db_session, pending) == "pending"
     status, sync_status, _ = await _task_status(db_session, row["id"])
     assert (status, sync_status) == ("confirmed", "pending")
+
+
+async def test_the_version_bumped_by_completion_rejects_the_old_token(
+    db_session: AsyncSession,
+) -> None:
+    """fix1: the client must use the new version; the old token is a `version_conflict`."""
+    actor = await make_actor(db_session)
+    row = await _insert_task(db_session, actor, version=2)
+    lifecycle = TaskLifecycle(SqlTaskLifecycleStore(_scoped_session_factory(db_session)))
+
+    first = await lifecycle.complete(actor.user_id, row["id"], expected_version=2)
+    assert first.version == 3
+
+    with pytest.raises(ApiError) as failure:
+        await lifecycle.complete(actor.user_id, row["id"], expected_version=2)
+
+    assert failure.value.status_code == 409
+    assert failure.value.code == "version_conflict"
+    assert failure.value.details["current_version"] == 3
+
+    again = await lifecycle.complete(actor.user_id, row["id"], expected_version=3)
+    assert again.status == "completed"
+    assert again.version == 3  # ALREADY keeps the stored version
+
+
+async def test_completing_a_task_invalidates_a_queued_calendar_job(
+    db_session: AsyncSession,
+) -> None:
+    """fix1: a job enqueued for version N never reaches Google after the completion."""
+    fake = FakeGoogle()
+    actor = await make_actor(db_session)
+    row = await _insert_task(db_session, actor, version=1)
+    event_id = deterministic_event_id(row["id"])
+    await sync_task_event(_ctx(db_session, fake), str(row["id"]), 1)
+    assert fake.insert_requests == 1
+    lifecycle = TaskLifecycle(SqlTaskLifecycleStore(_scoped_session_factory(db_session)))
+
+    result = await lifecycle.complete(actor.user_id, row["id"], expected_version=1)
+
+    assert result.version == 2
+    # The delivery was queued with version 1 before the completion.
+    await sync_task_event(_ctx(db_session, fake), str(row["id"]), 1)
+
+    assert fake.insert_requests == 1
+    assert fake.patch_requests == 0
+    assert len(fake.requests) == 1
+    status, sync_status, calendar_event_id = await _task_status(db_session, row["id"])
+    assert (status, sync_status, calendar_event_id) == ("completed", "synced", event_id)
 
 
 async def test_another_users_task_is_not_found_and_changes_nothing(

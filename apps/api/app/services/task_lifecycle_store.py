@@ -1,11 +1,14 @@
 """PostgreSQL adapter for the J3.6 task lifecycle (complete/dismiss).
 
-The adapter owns the transaction: it locks the task row **scoped to the caller's tenant**,
-validates the transition, writes the new status/timestamp and cancels the task's not-yet-sent
-reminders, so a completed task can never receive a stale Gmail reminder. A task of another
-user is indistinguishable from a missing one (`NOT_FOUND`). Google Calendar is not touched
-here: the linked event is kept, and removing it requires the explicit remote-operation flow
-(S4).
+The adapter owns the row-level work but **not** the transaction: the injected
+`SessionFactory` must yield a session that commits when the context exits successfully and
+rolls back when an exception escapes (production uses `app.core.db.session_scope`). It locks
+the task row **scoped to the caller's tenant**, validates the transition, bumps `version`,
+writes the new status/timestamp and cancels the task's not-yet-sent reminders, so a
+completed task can never receive a stale Gmail reminder and a Calendar job queued for the
+previous version can no longer win its compare-and-set. A task of another user is
+indistinguishable from a missing one (`NOT_FOUND`). Google Calendar is not touched here:
+the linked event is kept, and removing it requires the explicit remote-operation flow (S4).
 
 A3.1 owns the real ``tasks`` table and S4 owns ``notifications``. Until their migrations
 land, `TASKS` comes from `task_event_store` and `NOTIFICATIONS` mirrors the frozen §2.9
@@ -57,7 +60,11 @@ NOTIFICATIONS = Table(
 
 
 class SqlTaskLifecycleStore:
-    """One locked transaction per command, mirroring `services.task_lifecycle`."""
+    """One locked transaction per command, mirroring `services.task_lifecycle`.
+
+    `sessions` must be a factory whose context manager commits on a clean exit and rolls
+    back on error; the adapter never calls `commit()` itself.
+    """
 
     def __init__(self, sessions: SessionFactory) -> None:
         self._sessions = sessions
@@ -88,8 +95,16 @@ class SqlTaskLifecycleStore:
             ).mappings().one_or_none()
             if row is None:
                 return LifecycleTransition(outcome=LifecycleOutcome.NOT_FOUND)
+            if row["version"] != expected_version:
+                return LifecycleTransition(
+                    outcome=LifecycleOutcome.VERSION_CONFLICT,
+                    status=row["status"],
+                    current_version=row["version"],
+                    calendar_event_id=row["calendar_event_id"],
+                )
             if row["status"] == target:
-                # A double click is a no-op for the task, but leftovers are still cancelled.
+                # Repeating the command with the current version is a no-op for the task, but
+                # leftovers are still cancelled; the stored version does not change.
                 cancelled = await self._cancel_pending(
                     db, user_id=row["user_id"], task_id=task_id
                 )
@@ -100,16 +115,11 @@ class SqlTaskLifecycleStore:
                     calendar_event_id=row["calendar_event_id"],
                     cancelled_reminders=cancelled,
                 )
-            if row["version"] != expected_version:
-                return LifecycleTransition(
-                    outcome=LifecycleOutcome.VERSION_CONFLICT,
-                    status=row["status"],
-                    current_version=row["version"],
-                    calendar_event_id=row["calendar_event_id"],
-                )
             ensure_task_transition(row["status"], target)
             values: dict[str, Any] = {
                 "status": target,
+                # Bump the token so queued Calendar jobs and stale client commands lose.
+                "version": TASKS.c.version + 1,
                 "updated_at": func.now(),
                 f"{target}_at": now,
             }
@@ -124,7 +134,7 @@ class SqlTaskLifecycleStore:
             return LifecycleTransition(
                 outcome=LifecycleOutcome.UPDATED,
                 status=target,
-                current_version=expected_version,
+                current_version=expected_version + 1,
                 calendar_event_id=row["calendar_event_id"],
                 cancelled_reminders=cancelled,
             )
@@ -137,7 +147,7 @@ class SqlTaskLifecycleStore:
 
         `pending` is the only cancellable state: `sending` may already be leaving through
         Gmail (`delivery_unknown` when the lease expires), and `sent`/`failed` are history.
-        A occurrence that is already due but was never dispatched is cancelled too: a
+        An occurrence that is already due but was never dispatched is cancelled too: a
         completed task must not notify later. The `user_id` filter keeps the write inside
         the tenant even when the caller already scoped the task.
         """
