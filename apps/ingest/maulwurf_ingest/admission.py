@@ -13,6 +13,8 @@ from dataclasses import dataclass
 
 import asyncpg
 
+from maulwurf_ingest import rls
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,7 +59,7 @@ async def restore_from_database(pool: asyncpg.Pool) -> None:
     so a process that already halted does not reopen itself.
     """
     try:
-        row = await pool.fetchrow(
+        row = await rls.fetchrow(pool, None,
             """
             SELECT id FROM ingestion_attempts
              WHERE cleanup_status = 'failed'

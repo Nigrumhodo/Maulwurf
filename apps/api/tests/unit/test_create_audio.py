@@ -107,6 +107,10 @@ class StubSession:
 
     async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> _Rows:
         sql = str(statement)
+        # A2.17: session resolution binds the bootstrap token hash and then the tenant.
+        if "set_config" in sql:
+            self.events.append("sql:set_config")
+            return _Rows(None)
         # A2.14: the capacity counter runs under a transaction advisory lock.
         if "pg_advisory_xact_lock" in sql:
             self.events.append("sql:capacity_lock")
@@ -119,6 +123,9 @@ class StubSession:
         if "FROM sessions" in sql:
             self.events.append("sql:resolve_session")
             return _Rows(self.session_row)
+        if "FROM users" in sql:
+            self.events.append("sql:owner_status")
+            return _Rows("active")
         if "FROM subjects" in sql:
             self.events.append("sql:subject")
             return _Rows(self.subject)

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.db import bind_user
 from app.models import Chunk, ChunkSegment, Segment
 from app.services.embeddings import EmbeddingProvider
 from app.services.search import SearchService
@@ -69,6 +70,9 @@ async def run_retrieval(
     skip_item_ids: Collection[str] = (),
 ) -> tuple[RetrievalOutcome, ...]:
     """Retrieve the top 8 chunks for every item of one partition."""
+    # A2.17: the harness opens sessions outside an HTTP request; bind the eval tenant so
+    # the engine listener can set app.user_id on each one.
+    bind_user(index.user_id)
     outcomes: list[RetrievalOutcome] = []
     skipped = set(skip_item_ids)
     async with session_factory() as db:

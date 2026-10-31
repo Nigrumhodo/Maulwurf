@@ -120,7 +120,7 @@ the same time, an advisory lock serializes them; the one waiting more than 120 s
 of hanging.
 
 ```bash
-docker compose exec api alembic current            # applied revision (head; 0001–0004)
+docker compose exec api alembic current            # applied revision (head; 0001–0005)
 docker compose exec api alembic upgrade head       # apply manually, e.g. after a pull
 docker compose exec api alembic downgrade -1       # rollback to the previous revision
 docker compose exec api alembic history            # revision chain
@@ -131,6 +131,87 @@ it only in development. A schema change is always a new revision
 (`uv run alembic revision --autogenerate -m "..."` from `apps/api`, reviewed by hand);
 an already-applied revision is never edited. `uv run alembic check` must answer "No new
 upgrade operations detected" before opening the PR.
+
+### 5.1 Row-level security roles (A2.17)
+
+Revision `0005` creates three cluster-wide `NOLOGIN` roles without `BYPASSRLS`:
+`maulwurf_app` (API), `maulwurf_jobs` (worker/scheduler) and `maulwurf_ingest` (ingest).
+The DSN user keeps the table ownership and migration privileges; each runtime transaction
+starts with `SET LOCAL ROLE` and binds `app.user_id` (or, for the jobs role, the explicit
+`app.cross_tenant` switch). `SET LOCAL` ends with the transaction, so pooled connections do
+not carry a tenant. `MAULWURF_DATABASE_ROLE` selects the API role; compose overrides it to
+`maulwurf_jobs` for the two ARQ processes and ingest uses `maulwurf_ingest` unconditionally.
+
+**Data migrations under `FORCE ROW LEVEL SECURITY` (staging and production):** `FORCE` makes
+the table owner subject to the RLS policies too, so an owner connection without `BYPASSRLS`
+does not see tenant rows (and a policy that reads `app.user_id` can raise instead of
+returning zero rows). `alembic upgrade head` runs as the DSN owner. In local compose that
+user is a superuser, which bypasses RLS. Staging and production follow this procedure:
+
+1. Classify the revision. DDL-only revisions (new columns, indexes, policies, grants) run
+   as the owner and need no bypass. A revision that reads or rewrites tenant rows in
+   `upgrade()` or `downgrade()` needs the bypass window below.
+2. Preflight the account:
+
+   ```sql
+   SELECT current_user, rolsuper, rolbypassrls
+   FROM pg_roles WHERE rolname = current_user;
+   ```
+
+   The migration account needs `CREATEROLE`, or the three runtime roles must be pre-created.
+   The API, worker and ingest accounts must never hold `BYPASSRLS`.
+3. If the revision touches tenant rows, open the window as a superuser:
+
+   ```sql
+   ALTER ROLE "<migration_account>" BYPASSRLS;
+   ```
+
+4. Apply the revision and keep the migration log as evidence:
+
+   ```bash
+   alembic upgrade head
+   ```
+
+5. Close the window in a `finally`/same change window, even if the revision fails:
+
+   ```sql
+   ALTER ROLE "<migration_account>" NOBYPASSRLS;
+   ```
+
+6. Verify before declaring the deployment done:
+
+   ```sql
+   SELECT rolname, rolsuper, rolbypassrls FROM pg_roles
+   WHERE rolname IN ('<migration_account>', 'maulwurf_app', 'maulwurf_jobs', 'maulwurf_ingest');
+   ```
+
+   ```bash
+   alembic current   # expected: head
+   ```
+
+   A tenant-bound read as the app role (`SET LOCAL ROLE maulwurf_app` plus
+   `set_config('app.user_id', '<uuid>', true)`) must still return only that tenant's rows.
+   Never leave `BYPASSRLS` granted after the window closes, and never grant it to a runtime
+   role. The runtime grants also exclude write access to `alembic_version` (SELECT only).
+
+The dedicated production deployment runbook is still pending (J4.x); until it lands, this
+section is the canonical staging/production procedure for RLS and data migrations.
+
+The migration account also needs `CREATEROLE` (or the three roles must be pre-created), and
+the DSN user of each runtime must be a member of its role: the migration grants membership
+to the migration user, so a deployment that authenticates `api`, `worker` and `ingest` with
+different users must grant `maulwurf_app`/`maulwurf_jobs`/`maulwurf_ingest` to each one.
+The API user also needs `maulwurf_jobs` because `/internal/metrics` performs its read-only
+aggregate under that role. When running the ARQ worker or scheduler outside compose, set
+`MAULWURF_DATABASE_ROLE=maulwurf_jobs`; the default is `maulwurf_app`.
+
+**Never reuse the migration owner DSN for a runtime outside local development.** The local
+compose stack does (its PostgreSQL image makes that user a superuser), which is why RLS is
+defense in depth there rather than a boundary. In staging/production, create one `LOGIN` role
+per runtime, grant it only its own runtime role, and keep ownership, `CREATEROLE`,
+`BYPASSRLS` and superuser off it. A runtime DSN that is the table owner or a superuser
+silently bypasses `FORCE ROW LEVEL SECURITY` outside the `SET LOCAL ROLE` block.
+
 
 ## 6. Tests and lint
 

@@ -103,6 +103,17 @@ Same `FOR ALL` template on `subjects`, `audios`, `transcripts`, `segments`, `chu
 (transactional, hence pool-compatible); workers set it the same way, covered by
 I-S1-AN-05 and G3.
 
+Implementation (A2.17, revision `0005`): the runtime roles are `maulwurf_app` (API),
+`maulwurf_jobs` (worker/scheduler) and `maulwurf_ingest`; all are `NOLOGIN`, not table
+owners and have no `BYPASSRLS`. The DSN owner runs migrations and each transaction
+downgrades itself with `SET LOCAL ROLE`. `users` and `sessions` add the only bootstrap
+policies (verified Google `sub` and presented session-token hash) because login and session
+resolution run before `app.user_id` exists. The dispatcher, reconciler and index claim use
+a `jobs_cross_tenant` policy gated by `app.cross_tenant='on'`; the ingest attempt queue has
+its own documented policy, recorded in ADR-0006 as an explicit accepted cross-tenant risk.
+Runtime grants cover the tenant tables but revoke write access to `alembic_version` (SELECT
+stays for diagnostics). S3/S4 tables add their policies and grants in their migrations.
+
 ### 2.1.1 Extensions
 
 ```sql

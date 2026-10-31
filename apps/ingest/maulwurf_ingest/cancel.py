@@ -13,6 +13,7 @@ import json
 
 import asyncpg
 
+from maulwurf_ingest import rls
 from maulwurf_ingest.lease import Lease
 
 
@@ -26,7 +27,7 @@ async def invalidate_reception(pool: asyncpg.Pool, lease: Lease) -> bool:
     Only ``receiving`` matches. A commit that already moved the attempt on is
     left untouched, so a late disconnect cannot destroy a transcript.
     """
-    status = await pool.execute(
+    status = await rls.execute(pool, lease.user_id,
         """
         UPDATE ingestion_attempts
            SET status = 'cancelled', fencing_token = fencing_token + 1,
@@ -40,7 +41,7 @@ async def invalidate_reception(pool: asyncpg.Pool, lease: Lease) -> bool:
 
 
 async def is_cancelled(pool: asyncpg.Pool, lease: Lease) -> bool:
-    status = await pool.fetchval(
+    status = await rls.fetchval(pool, lease.user_id,
         "SELECT status FROM ingestion_attempts WHERE id = $1 AND user_id = $2",
         lease.attempt_id, lease.user_id,
     )
@@ -55,7 +56,7 @@ async def record_cancelled_cleanup(
     The owner instance must still be this lease. A newer owner, or an attempt
     that is not ``cancelled``, is not credited.
     """
-    status = await pool.execute(
+    status = await rls.execute(pool, lease.user_id,
         """
         UPDATE ingestion_attempts
            SET cleanup_status = $4::text, cleanup_evidence = $5::jsonb,

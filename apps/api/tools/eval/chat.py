@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.db import bind_user
 from app.models import Audio, Chunk, ChunkSegment, Conversation, Message, Segment, Transcript
 from app.services.llm import LLMProvider
 from app.services.rag import RAGService
@@ -130,6 +131,8 @@ async def run_answers(
     ``skip_item_ids`` implements resume: successful items are never re-answered, while a failed
     item can be retried with a new ``client_message_id`` suffix in a fresh conversation.
     """
+    # A2.17: bind the eval tenant for every short session opened by the service.
+    bind_user(index.user_id)
     service = RAGService(
         session_factory=session_factory,
         embedding_provider=embedding_provider,
