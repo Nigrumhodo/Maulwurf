@@ -298,3 +298,14 @@ One semantic reconciliation after the merge: J3.3's `settings` model comment sai
 means only the app calendar". J3.7's read contract is the opposite (hoplite fix3: an empty
 selection returns no rows and `coverage_notice=no_read_calendars`), so the comment was
 corrected: the app-created calendar is a write target, never an implicit read source.
+
+Quality CI (final fix3 head)
+----------------------------
+Run `41233915921` on head `6effb92` (merge of `develop` at `75084eb` + fix3) is green in
+all 17 checks: the 16 `quality` jobs (python-static api/ingest, python-unit api/ingest,
+integration api/ingest, docs, web, build-images, secret-scan, license-report api/ingest/web,
+caddy-limits, compose-ingest-env and e2e-smoke) plus the external `Trigger Hoplite QA`
+webhook. CI counts: `python-unit (api)` 1215 passed and `integration (api)` 489 passed
+(the job runs against the CI pgvector image, so the local 0.6 failures do not appear). The
+PR is MERGEABLE/CLEAN at `6effb92`; any later commit that only records this run does not
+change the code under test.
