@@ -207,6 +207,9 @@ async def test_start_does_not_request_offline_access(client: AsyncClient) -> Non
     assert "prompt" not in query
     assert query["scope"] == ["openid email profile"]
     assert query["code_challenge_method"] == ["S256"]
+    # Initial consent includes the previously granted scopes in the token response only;
+    # J3.3 relies on it so a login never returns an access token stripped of Calendar.
+    assert query["include_granted_scopes"] == ["true"]
 
 
 async def test_relogin_without_refresh_token_keeps_the_previous_one(
@@ -229,6 +232,44 @@ async def test_relogin_without_refresh_token_keeps_the_previous_one(
     assert before is not None
     assert after.refresh_token_enc == before
     assert b"access-c2" not in after.access_token_enc
+
+
+async def test_relogin_keeps_an_incremental_calendar_grant(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """J3.3: a later login must not erase the Calendar scopes of the incremental grant."""
+    _fake_google(monkeypatch, sub="sub-calendar", refresh_token="first-refresh")
+    assert (await _login(client, "c1")).headers["location"] == "/"
+    await db_session.execute(
+        text(
+            "UPDATE google_credentials SET scopes = :scopes WHERE user_id = "
+            "(SELECT id FROM users WHERE google_sub = 'sub-calendar')"
+        ),
+        {
+            "scopes": [
+                "openid",
+                "email",
+                "profile",
+                "https://www.googleapis.com/auth/calendar.app.created",
+            ]
+        },
+    )
+    await db_session.commit()
+
+    # The token response omits `scope`: the previous grant is kept (OAuth 2.0 §5.1 only
+    # requires `scope` when it differs from the request), never silently reset.
+    _fake_google(monkeypatch, sub="sub-calendar", refresh_token=None)
+    assert (await _login(client, "c2")).headers["location"] == "/"
+
+    scopes = (
+        await db_session.execute(
+            text(
+                "SELECT scopes FROM google_credentials WHERE user_id = "
+                "(SELECT id FROM users WHERE google_sub = 'sub-calendar')"
+            )
+        )
+    ).scalar_one()
+    assert "https://www.googleapis.com/auth/calendar.app.created" in scopes
 
 
 async def test_account_being_deleted_gets_no_session(

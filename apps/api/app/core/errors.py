@@ -204,6 +204,26 @@ def srt_unavailable() -> ApiError:
     )
 
 
+def google_integration_unavailable() -> ApiError:
+    # J3.3: without a configured OAuth client there is no consent URL to send the user to.
+    # Fail with a typed 503 instead of a 500 or a redirect to an unconfigured Google app.
+    return ApiError(
+        503,
+        "google_integration_unavailable",
+        "La integración con Google Calendar no está configurada.",
+    )
+
+
+def google_not_connected() -> ApiError:
+    # J3.3: reconnecting requires a previous grant to repair; a user with no credential row
+    # must use `connect` (the UI derives both buttons from GET /integrations/status).
+    return ApiError(
+        409,
+        "google_not_connected",
+        "No hay una integración de Google que reconectar.",
+    )
+
+
 async def _handle_validation(_: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, RequestValidationError)  # noqa: S101 - registrado solo para ella
     # Solo ubicación y mensaje por campo: nunca el valor recibido (puede traer PII).
