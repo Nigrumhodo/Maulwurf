@@ -90,7 +90,7 @@ services:
     pids_limit: 64
     mem_limit: 128m
     volumes:
-      - ../scripts/e2e:/e2e:ro
+      - ../scripts/e2e/e2e_stubs:/e2e:ro
     expose: ["8080"]
     healthcheck:
       test:
@@ -128,7 +128,7 @@ services:
     pids_limit: 64
     mem_limit: 256m
     volumes:
-      - ../scripts/e2e:/e2e:ro
+      - ../scripts/e2e/e2e_stubs:/e2e:ro
       - ${E2E_TLS_DIR:-../.e2e-tls}:/e2e-tls:ro
     expose: ["50051"]
     healthcheck:
