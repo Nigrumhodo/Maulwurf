@@ -1,5 +1,6 @@
 # J1.4 — Pipeline de calidad (GitHub Actions).
 # Sin secretos de proveedores: las suites `P-*`/`load` nunca corren en MR.
+# J2.6: el smoke E2E usa dobles locales deterministas (Riva y proveedor), nunca claves reales.
 # El workflow trigger-hoplite-qa.yml es QA externo y no sustituye este pipeline.
 name: quality
 
@@ -225,6 +226,51 @@ jobs:
       - run: docker build -t maulwurf-api:ci apps/api
       - run: docker build --target runtime -t maulwurf-ingest:ci apps/ingest
       - run: docker build -t maulwurf-web:ci apps/web
+
+  # E-S2-JF-06 (J2.6): upload -> transcript -> cleanup -> index -> question with citation
+  # against the real compose stack. Deterministic provider/Riva doubles replace the paid
+  # providers; the audio is synthetic and generated in RAM by the driver.
+  e2e-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      E2E_TLS_DIR: ${{ runner.temp }}/e2e-tls
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+      # Standard library only: a broken fixture fails in seconds, before compose starts.
+      - name: Verify the smoke helpers
+        working-directory: ${{ github.workspace }}
+        run: python3 -m unittest discover -s scripts/e2e/tests -v
+      # The real GrpcRivaTransport requires TLS; this is an ephemeral local CA, never a
+      # committed key, and the directory lives outside the checkout.
+      - name: Generate the ephemeral Riva double TLS material
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/e2e/gen_riva_tls.sh "$E2E_TLS_DIR"
+      - name: Start compose with the deterministic doubles
+        run: >-
+          docker compose -f docker-compose.yml -f docker-compose.e2e.yml
+          up -d --build --wait --wait-timeout 300
+          postgres redis e2e-provider e2e-asr ingest worker scheduler api
+      - name: Run E-S2-JF-06
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml exec -T api
+          python - < ../scripts/e2e/smoke_pipeline.py
+      # G1: the upload is ephemeral; verified cleanup is also asserted in the driver.
+      - name: Assert the ingest tmpfs is empty after cleanup
+        run: >-
+          docker compose -f docker-compose.yml -f docker-compose.e2e.yml exec -T ingest
+          python -c 'import os,sys; sys.exit(1 if os.listdir("/work/tmp") else 0)'
+      - name: Diagnostics
+        if: failure()
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.e2e.yml ps
+          docker compose -f docker-compose.yml -f docker-compose.e2e.yml logs \
+            --no-color --tail=200 api ingest worker scheduler e2e-asr e2e-provider
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v --remove-orphans
 
   # I-S2-JF-11: el entorno que Compose renderiza para ingest (J2.8). Solo necesita docker.
   compose-ingest-env:
