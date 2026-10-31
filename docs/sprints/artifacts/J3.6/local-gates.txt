@@ -241,3 +241,12 @@ untouched (no fix3 change outside apps/api and docs).
 Tests: 5 new unit cases (42 in test_task_event_sync.py). ruff/mypy clean (233 files),
 1260 API unit passed, targeted integration 23 passed, full integration 468/32 (same
 untouched pgvector 0.6 modules), docs refs OK. `apps/web` untouched; no secret.
+
+== GitHub Actions Quality CI (PR #132, run 41241402192, head 7f28975)
+17/17 checks green on the head that carries the fix3 code and evidence, created
+2026-10-31T20:58:52Z after `origin/develop@06beb01` was merged into the branch:
+python-static (api/ingest), python-unit (api) **1260 passed**, python-unit (ingest),
+integration (api) **499 passed**, integration (ingest), web, build-images, e2e-smoke,
+docs, caddy-limits, compose-ingest-env, secret-scan, the three license reports and
+send-webhook. PR state: MERGEABLE / CLEAN. A later documentation-only commit may follow;
+it does not change the code under test.
