@@ -90,7 +90,7 @@ paginated; width <= 366 days; no silent LIMIT that would hide rows), the event `
 is validated before storing, and the `_dedupe` docstring states the real rule (last
 occurrence in read order wins).
 
-Commands and results (fix1 code commit 52774c6)
+Commands and results (fix1 code commits 52774c6 and 24a93c4, the latter comment-only)
 -----------------------------------------------
 $ cd apps/api
 $ uv run ruff check .
