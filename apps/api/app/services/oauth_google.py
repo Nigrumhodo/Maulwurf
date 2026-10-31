@@ -22,12 +22,13 @@ from typing import Any
 import httpx
 import jwt
 from jwt import PyJWKSet
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.crypto import encrypt
+from app.core.db import set_current_user
 from app.models import GoogleCredential, User
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/auth"
@@ -213,6 +214,11 @@ async def upsert_google_identity(
     if claims.get("email_verified") is not True:
         raise OAuthError("email_unverified")
 
+    # The bootstrap policy on `users` exposes exactly the row whose Google `sub` was
+    # verified for this transaction (A2.17); the value is not trusted for anything else.
+    await db.execute(
+        text("SELECT set_config('app.google_sub', :sub, true)"), {"sub": sub}
+    )
     user = await db.scalar(select(User).where(User.google_sub == sub))
     if user is None:
         user = User(google_sub=sub, email=email)
@@ -225,6 +231,9 @@ async def upsert_google_identity(
     elif user.status != "active":
         # Account being deleted: no new session. The reason never reaches the browser.
         raise OAuthError("account_unavailable")
+    # From here the row is the tenant of the request: the update, the credential and the
+    # session below are bound by RLS to this user_id.
+    await set_current_user(db, user.id)
     user.email = email
     user.email_verified = True
     name = claims.get("name")

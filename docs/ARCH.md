@@ -254,7 +254,7 @@ flowchart TB
 | workers | `arq_app`, `dispatcher`, `index_job`, `reconciler` | `worker` and `scheduler` processes; outbox dispatch with retry/backoff, idempotent index job, periodic reconciliation | Implemented; `analyze` is still a no-op until S3 |
 | core | `config`, `deps`, `db`, `errors`, `logging`, `validation` | `MAULWURF_*` settings with fail-fast validation, session, CSRF and Origin, async SQLAlchemy, error envelope, JSON logs and validators | Implemented |
 | | `crypto` | AES-GCM with key version | Used by Google credentials |
-| models | `core`, `ingestion`, `transcript`, `chunk`, `chat` | S1 and S2 tables (migrations `0001`–`0004`) | Schema implemented; services use ingestion, search and chat |
+| models | `core`, `ingestion`, `transcript`, `chunk`, `chat` | S1 and S2 tables (migrations `0001`–`0005`) | Schema implemented; services use ingestion, search and chat |
 | schemas | `ingestion` | Capabilities contract | Implemented |
 | | `analysis`, `chunk` | Pydantic contracts for extraction and chunks | Draft, unused at runtime |
 

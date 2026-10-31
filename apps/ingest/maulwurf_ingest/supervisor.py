@@ -34,7 +34,7 @@ from pathlib import Path
 
 import asyncpg
 
-from maulwurf_ingest import admission, cancel, cleanup, metrics, persistence
+from maulwurf_ingest import admission, cancel, cleanup, metrics, persistence, rls
 from maulwurf_ingest import lease as leases
 from maulwurf_ingest.asr_job import ORIGINAL, SCRIPTED_NAME, STUB_TRANSCRIPT_NAME
 from maulwurf_ingest.audio.validate import probe_file
@@ -199,7 +199,7 @@ def _signal_group(pid: int, sig: int) -> None:
 
 
 async def _attempt_language(pool: asyncpg.Pool, lease: leases.Lease) -> str | None:
-    value = await pool.fetchval(
+    value = await rls.fetchval(pool, lease.user_id,
         """
         SELECT a.language_code
           FROM ingestion_attempts ia

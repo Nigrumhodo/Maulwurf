@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.prometheus import Sample
@@ -20,10 +20,22 @@ from app.workers.dispatcher import LATEST_CLEANUP
 
 GATED_TYPES = tuple(sorted(CLEANUP_GATED_TYPES))
 WITHOUT_CONSUMER = tuple(sorted(KNOWN_WITHOUT_CONSUMER))
+# A2.17: role created by the RLS migration; NOLOGIN and without BYPASSRLS.
+JOBS_ROLE = "maulwurf_jobs"
 
 
-async def collect_outbox_samples(db: AsyncSession, *, now: datetime | None = None) -> list[Sample]:
-    """Outbox samples read in one session; no rows are changed."""
+async def collect_outbox_samples(
+    db: AsyncSession, *, now: datetime | None = None, cross_tenant: bool = False
+) -> list[Sample]:
+    """Outbox samples read in one session; no rows are changed.
+
+    ``cross_tenant`` is the internal metrics aggregate: it switches the transaction to
+    the jobs role and its explicit cross-tenant policy before reading. The API request
+    path keeps the default and stays tenant-bound.
+    """
+    if cross_tenant:
+        await db.execute(text(f'SET LOCAL ROLE "{JOBS_ROLE}"'))
+        await db.execute(text("SELECT set_config('app.cross_tenant', 'on', true)"))
     instant = now or datetime.now(UTC)
     gated = OutboxEvent.type.in_(GATED_TYPES)
     can_advance = or_(

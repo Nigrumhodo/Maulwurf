@@ -21,6 +21,7 @@ from enum import StrEnum
 
 import asyncpg
 
+from maulwurf_ingest import rls
 from maulwurf_ingest.audio.reconcile import parse_confidence
 from maulwurf_ingest.lease import Lease
 
@@ -236,6 +237,7 @@ async def commit_transcript(
     flags = json.dumps(list(prepared.warnings))
     try:
         async with pool.acquire() as conn, conn.transaction():
+            await rls.bind_transaction(conn, lease.user_id)
             row = await conn.fetchrow(
                 """
                 SELECT ia.audio_id, a.language_code, a.required_stages
@@ -346,6 +348,7 @@ async def enable_text_outbox(
     """
     try:
         async with pool.acquire() as conn, conn.transaction():
+            await rls.bind_transaction(conn, lease.user_id)
             await conn.execute(
                 """
                 UPDATE outbox_events

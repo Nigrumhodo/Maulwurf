@@ -27,7 +27,13 @@ from typing import Any, Final
 from arq.worker import Retry
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db import session_scope
+from app.core.db import (
+    bind_cross_tenant,
+    bind_user,
+    clear_user,
+    reset_cross_tenant,
+    session_scope,
+)
 from app.services import indexing
 from app.services.embeddings import EmbeddingProvider, HttpEmbeddingProvider
 from app.services.index_job import (
@@ -98,6 +104,10 @@ async def index(ctx: dict[str, Any], audio_id: str, transcript_version: int) -> 
             "index.failed audio_id=%s transcript_version=%s attempt=%d error=%s",
             audio_id, transcript_version, job_try, type(exc).__name__,
         )
+    finally:
+        # The ARQ worker may reuse the task context for the next delivery: never leave a
+        # tenant (or the cross-tenant switch) behind.
+        clear_user()
 
 
 async def run_index(
@@ -114,11 +124,14 @@ async def run_index(
     except indexing.IndexTextNotAllowed:
         logger.info("index.noop reason=%s audio_id=%s", indexing.IndexTextNotAllowed.code, audio_id)
         return
-    claim = await _claim(sessions, audio_id, transcript_version)
+    claim = await _claim_cross_tenant(sessions, audio_id, transcript_version)
     if isinstance(claim, IndexSkip):
         logger.info("index.noop reason=%s audio_id=%s transcript_version=%s",
                     claim, audio_id, transcript_version)
         return
+    # The claim is the last cross-tenant read: the owner is known now, so the build,
+    # activation and finish transactions are bound to that user_id by RLS.
+    bind_user(claim.user_id)
     version = index_version_for(audio_id, transcript_version)
     try:
         skip = await _index_generation(sessions, providers, claim, version)
@@ -137,6 +150,22 @@ async def run_index(
     logger.info("index.noop reason=%s audio_id=%s transcript_version=%s",
                 skip, audio_id, transcript_version)
     await _record(sessions, claim.run, "cancelled", SUPERSEDED_CODE)
+
+
+async def _claim_cross_tenant(
+    sessions: SessionFactory, audio_id: uuid.UUID, transcript_version: int
+) -> _Claim | IndexSkip:
+    """Read the audio/run without a known owner, then release the cross-tenant switch.
+
+    The job receives IDs only, so the claim is the one step that must run under the
+    explicit `maulwurf_jobs` policy (A2.17). `run_index` binds the returned user_id for
+    everything after it.
+    """
+    token = bind_cross_tenant()
+    try:
+        return await _claim(sessions, audio_id, transcript_version)
+    finally:
+        reset_cross_tenant(token)
 
 
 async def _claim(

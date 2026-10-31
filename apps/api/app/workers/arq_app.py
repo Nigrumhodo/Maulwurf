@@ -15,7 +15,7 @@ from arq.cron import CronJob, cron
 from arq.worker import Function, func
 
 from app.core.config import settings
-from app.core.db import session_scope
+from app.core.db import bind_cross_tenant, reset_cross_tenant, session_scope
 from app.core.logging import configure_logging
 from app.workers.dispatcher import dispatch_pending
 from app.workers.index_job import JOB_TIMEOUT_S, MAX_TRIES, index
@@ -41,20 +41,30 @@ async def analyze(ctx: dict[str, Any], audio_id: str) -> None:
 
 async def dispatch_outbox(ctx: dict[str, Any]) -> None:
     """Cron del scheduler: publica en la cola del worker los eventos de outbox listos."""
+    # The dispatcher is cross-tenant by design; the jobs role policy requires this
+    # explicit switch (A2.17) and the API role can never use it.
+    token = bind_cross_tenant()
     try:
-        async with session_scope() as db:
-            report = await dispatch_pending(db, ctx["redis"], queue_name=WORKER_QUEUE)
-    except Exception as exc:  # p. ej. BD aún sin migrar: el siguiente ciclo reintenta
-        # Solo el tipo: el mensaje puede incluir el DSN.
-        logger.warning("dispatch_outbox.failed error=%s", type(exc).__name__)
-        return
+        try:
+            async with session_scope() as db:
+                report = await dispatch_pending(db, ctx["redis"], queue_name=WORKER_QUEUE)
+        except Exception as exc:  # p. ej. BD aún sin migrar: el siguiente ciclo reintenta
+            # Solo el tipo: el mensaje puede incluir el DSN.
+            logger.warning("dispatch_outbox.failed error=%s", type(exc).__name__)
+            return
+    finally:
+        reset_cross_tenant(token)
     if report:
         logger.info("dispatch_outbox %s", dict(report))
 
 
 async def reconcile(ctx: dict[str, Any]) -> None:
     """Scheduler cron (J2.4): repairs lost dispatches, dead index runs and orphan generations."""
-    await reconcile_once(session_scope, ctx["redis"], queue_name=WORKER_QUEUE)
+    token = bind_cross_tenant()
+    try:
+        await reconcile_once(session_scope, ctx["redis"], queue_name=WORKER_QUEUE)
+    finally:
+        reset_cross_tenant(token)
 
 
 async def startup(ctx: dict[str, Any]) -> None:

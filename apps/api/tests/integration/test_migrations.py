@@ -123,6 +123,60 @@ def _state(url: str) -> tuple[set[str], list[str]]:
     return asyncio.run(read())
 
 
+def _rls_state(url: str) -> dict[str, tuple[bool, bool]]:
+    """(ENABLE, FORCE) for two representative tables, from the catalog."""
+
+    async def read() -> dict[str, tuple[bool, bool]]:
+        engine = create_async_engine(url)
+        async with engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    text(
+                        "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity "
+                        "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                        "WHERE n.nspname = 'public' AND c.relkind = 'r' "
+                        "AND c.relname IN ('subjects', 'users')"
+                    )
+                )
+            ).all()
+        await engine.dispose()
+        return {
+            str(row[0]): (bool(row[1]), bool(row[2]))
+            for row in rows
+        }
+
+    return asyncio.run(read())
+
+
+def _alembic_version_privileges(url: str, role: str) -> dict[str, bool]:
+    """Privileges of a runtime role on `alembic_version`, from the real catalog."""
+
+    async def read() -> dict[str, bool]:
+        engine = create_async_engine(url)
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT "
+                        "has_table_privilege(:role, 'public.alembic_version', 'SELECT'), "
+                        "has_table_privilege(:role, 'public.alembic_version', 'INSERT'), "
+                        "has_table_privilege(:role, 'public.alembic_version', 'UPDATE'), "
+                        "has_table_privilege(:role, 'public.alembic_version', 'DELETE')"
+                    ),
+                    {"role": role},
+                )
+            ).one()
+        await engine.dispose()
+        return {
+            privilege: bool(granted)
+            for privilege, granted in zip(
+                ("select", "insert", "update", "delete"), row, strict=True
+            )
+        }
+
+    return asyncio.run(read())
+
+
 def _processing_run_fencing_token(url: str) -> tuple[str, str, str] | None:
     """Tipo, nulabilidad y default de `processing_runs.fencing_token` (None si no existe)."""
 
@@ -204,11 +258,17 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     revision = ScriptDirectory.from_config(cfg).get_revision(_head(empty_schema))
     assert revision is not None
     parent = revision.down_revision
-    assert parent == "0003"  # this chain is linear
+    assert parent == "0004"  # this chain is linear
     command.upgrade(cfg, "head")
 
-    # `0003` only backfills `chunks.tsv` (data, not schema) and `0004` only adds the run
-    # fencing token, so the two steps back stay on the S2 schema and only drop that column.
+    # `0005` only changes roles, policies and RLS flags; `0003` only backfills
+    # `chunks.tsv` (data, not schema) and `0004` only adds the run fencing token, so the
+    # steps back stay on the S2 schema and only remove those additions.
+    command.downgrade(cfg, "-1")
+    assert _state(empty_schema) == (S2_TABLES, ["0004"])
+    assert _processing_run_fencing_token(empty_schema) == ("bigint", "NO", "0")
+    assert _rls_state(empty_schema) == {"subjects": (False, False), "users": (False, False)}
+
     command.downgrade(cfg, "-1")
     assert _state(empty_schema) == (S2_TABLES, ["0003"])
     assert _processing_run_fencing_token(empty_schema) is None
@@ -221,6 +281,41 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
 
     command.upgrade(cfg, "head")
     assert _state(empty_schema)[0] == S2_TABLES
+
+
+def test_rls_revision_round_trips(empty_schema: str) -> None:
+    cfg = alembic_config(empty_schema)
+    command.upgrade(cfg, "0004")
+    assert _rls_state(empty_schema) == {"subjects": (False, False), "users": (False, False)}
+
+    command.upgrade(cfg, "head")
+    assert _rls_state(empty_schema) == {"subjects": (True, True), "users": (True, True)}
+    # 0005 grants the runtime roles the data tables, not Alembic's bookkeeping table:
+    # SELECT stays for diagnostics, every write is revoked.
+    assert _alembic_version_privileges(empty_schema, "maulwurf_app") == {
+        "select": True,
+        "insert": False,
+        "update": False,
+        "delete": False,
+    }
+
+    command.downgrade(cfg, "0004")
+    assert _rls_state(empty_schema) == {"subjects": (False, False), "users": (False, False)}
+    # The downgrade revokes every grant (the roles themselves stay cluster-wide).
+    assert _alembic_version_privileges(empty_schema, "maulwurf_app") == {
+        "select": False,
+        "insert": False,
+        "update": False,
+        "delete": False,
+    }
+
+    command.upgrade(cfg, "head")
+    assert _alembic_version_privileges(empty_schema, "maulwurf_app") == {
+        "select": True,
+        "insert": False,
+        "update": False,
+        "delete": False,
+    }
 
 
 def test_run_fencing_revision_round_trips(empty_schema: str) -> None:
