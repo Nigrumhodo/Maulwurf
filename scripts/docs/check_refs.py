@@ -115,7 +115,6 @@ EXPECTED_FILES: dict[str, str] = {
     "docs/reviews/consistency-checklist.md": "planned by S4/L4.3",
     "docs/reviews/g1-client.md": "planned by S4/D4.8",
     "docs/reviews/security-cross-review.md": "planned by S4/L4.2",
-    "docs/runbooks/cleanup.md": "planned by S4/S4.1/J4.8",
     "docs/runbooks/deploy.md": "planned by S4/J4.7",
     "docs/runbooks/restore.md": "planned by S4/A4.5",
     "infra/deploy/": "planned by S4/J4.7",
@@ -124,7 +123,6 @@ EXPECTED_FILES: dict[str, str] = {
     "scripts/load/ttl_benchmark.py": "planned by S4/S4.4",
     "scripts/maintenance/sweep_orphans.py": "planned by S4/A4.7",
     "scripts/ops/backup_restore.sh": "planned by S4/A4.5",
-    "scripts/ops/cleanup_recover.py": "planned by S4/S4.1",
     "scripts/provider/gmail_send_test.py": "planned by S4/J4.10",
     # Documented paths that are intentionally not tracked.
     "docs/sprints/artifacts/D1.7/": "D1.7 review screenshots are deferred; see D1.7-review.md",
