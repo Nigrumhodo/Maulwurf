@@ -67,3 +67,68 @@ all 16 jobs: `python-unit (ingest)` 213 passed/6 skipped and `integration (inges
 `e2e-smoke`, `integration (api)` and `build-images`.
 
 No provider or Riva call.
+
+## Fix2 review (head `4d93399`, 2026-10-31T22:25:41Z)
+
+Findings left open by Hoplite and their corrections:
+
+1. The sweeper did not start when the service pool failed at startup.
+   - `main.start_sweeper` now always starts `main.run_sweeper_when_pool_ready`.
+     The new loop retries `open_service_pool` every `INGEST_SWEEP_INTERVAL_S`
+     until `app.state.pool` is a pool, then calls `run_sweeper`; a pool-open
+     exception is logged by type and retried too. The startup pass may still close
+     admission, but the first successful pass re-reads the latch and reopens the
+     transient close.
+   - Tests: `tests/test_sweeper.py::test_start_sweeper_retries_the_pool_until_it_opens`
+     (unit) and `test_the_sweeper_starts_after_a_failed_pool_open_at_startup`
+     (integration: the first open fails, the second sets the real pool, and a
+     stranded attempt is ended by the real sweeper).
+
+2. An unverified cleanup that could not persist `failed` (token moved by
+   `sweep_stranded`/reclaim) only logged.
+   - Chosen option: explicit alert + metric, not "pending + lost lease blocks
+     admission". The row stays `pending` because there is no durable `failed` row
+     to reopen admission from; `admission.flag_unrecorded_cleanup` appends
+     `Alert("cleanup_unrecorded", attempt_id)`, logs
+     `ingest.alert code=cleanup_unrecorded`, and the supervisor increments
+     `maulwurf_ingest_failures_total{stage="cleanup",error_code="cleanup_unrecorded"}`.
+     Admission stays open. The decision is documented in `docs/plan/S4.md` (S4.2)
+     and `docs/RUNBOOK-dev.md` §8.
+   - Tests: `tests/test_cleanup_admission.py::test_unrecorded_unverified_evidence_alerts_without_closing_admission`,
+     `test_unrecorded_cleanup_exception_alerts_without_closing_admission` (unit) and
+     `test_unrecorded_cleanup_on_a_moved_token_stays_pending_and_alerts`
+     (integration: `sweep_stranded` moves the token, the old lease's unverified
+     evidence writes no row, admission stays open and the alert is recorded).
+
+3. A raising `leases.record_cleanup` inside the cleanup-error branch aborted the
+   whole recovery pass, including `sweep_stranded`.
+   - `reconciler._record_cleanup` wraps both evidence writes (the exception branch
+     and the normal branch), logs `reconciler.cleanup_record_failed` with the
+     exception type only and returns `None`; the pass continues with the next
+     attempt. The docs only reach the log, never the DSN.
+   - Tests: `tests/test_reconciler.py::test_a_raising_record_cleanup_does_not_skip_the_stranded_sweep`
+     and `test_a_raising_record_after_verified_evidence_also_continues`
+     (integration: the stranded attempt is still ended).
+
+No `apps/web` change and no provider/Riva call.
+
+## Fix2 local gates (apps/ingest)
+
+environment: Linux, Python 3.12.3; no PostgreSQL/Redis/Docker in this sandbox;
+`espeak-ng` not on PATH.
+
+```text
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 78 source files
+
+$ uv run pytest -m "not integration and not provider and not load" -q
+8 failed, 213 passed, 82 deselected
+```
+
+The 8 failures are the pre-existing `test_synthetic_audio.py` cases that need
+`espeak-ng` (installed by CI); the baseline before fix2 was 8 failed / 211 passed.
+The new integration cases are collected but skipped locally (`MAULWURF_DATABASE_URL`
+is unset); Quality CI runs them in `integration (ingest)`.
