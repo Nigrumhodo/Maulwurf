@@ -1449,6 +1449,20 @@ answer a misleading inverted-range error.
 }
 ```
 
+`time_conflicts` pairs only timed events whose half-open intervals overlap; touching
+edges (`a.end == b.start`) do not overlap, and all-day, `cancelled` and `missing` rows are
+never time conflicts. `deadline_clashes` groups two or more active deadlines/exams
+(`pending`, `needs_review`, `confirmed`) by the user-local day: `due_date` is already a
+day, `due_at` is converted to the user's IANA zone first, and a lone deadline is not a
+clash. A3.1 owns `tasks`; while that migration is absent the endpoint returns an empty
+`deadline_clashes` instead of failing. Both lists use the same `from`/`to` window,
+selection and freshness envelope as `GET /calendar/events`. `POST /calendar/sync` answers
+`202` with the covered window and publication counts; `409 calendar_sync_unavailable`
+carries a closed `details.reason` (`no_read_calendars`, `google_not_connected`,
+`missing_calendar_scopes`, `google_invalid_grant`, `calendar_read_failed`), and a
+transient provider failure answers `503 calendar_sync_temporarily_unavailable` without
+touching the mirror.
+
 The same contract feeds the dashboard and `get_calendar_events(range)`. When
 `/integrations/google/reconnect` completes, the backend looks only for `blocked` tasks of
 the current version, atomically moves them to `pending`, and creates/reuses their outbox.
