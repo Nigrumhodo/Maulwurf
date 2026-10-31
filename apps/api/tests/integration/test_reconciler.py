@@ -1,19 +1,30 @@
-"""I-S2-JF-04: reconciler against PostgreSQL and Redis (J2.4).
+"""I-S2-JF-04 and I-S2-JF-14: reconciler against PostgreSQL and Redis (J2.4, J2.11).
 
 Lost dispatches, dead index runs, orphan and surplus generations, and duplicate executions. The
 reconciler runs on the test's own transaction (`db_session` is rolled back after each test) and
 on an isolated ARQ queue (`redis` fixture), so no worker from compose consumes these jobs.
+
+J2.11 tests use real commits and separate connections: they prove a slow Redis leaves no row
+lock (or idle transaction) open, and that two overlapping cycles apply each change once.
 """
 
-from collections.abc import AsyncIterator
+import asyncio
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from arq.connections import ArqRedis
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete, func, select
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from app.core.config import settings
 from app.models import (
@@ -28,6 +39,7 @@ from app.models import (
     ProcessingRun,
     Segment,
     Transcript,
+    User,
 )
 from app.services.index_job import index_version_for
 from app.services.outbox import Outcome
@@ -41,6 +53,7 @@ from tests.unit.test_indexing import FakeProvider
 pytestmark = pytest.mark.integration
 
 QUEUE_CHECKS = ("lost_dispatches", "expired_runs", "orphan_builds", "retired_generations")
+LOCK_PROBE_TIMEOUT_S = 10
 
 
 @asynccontextmanager
@@ -117,6 +130,112 @@ def _run(
         attempt_count=attempt_count,
         error_code=error_code,
     )
+
+
+@pytest.fixture
+async def committed_db(
+    migrated_database_url: str,
+) -> AsyncIterator[tuple[AsyncEngine, async_sessionmaker[AsyncSession]]]:
+    """Real sessions with real commits, unlike the rollback-only `db_session` fixture."""
+    engine = create_async_engine(migrated_database_url)
+    try:
+        yield engine, async_sessionmaker(engine, expire_on_commit=False)
+    finally:
+        await engine.dispose()
+
+
+async def _remove_actor(
+    factory: async_sessionmaker[AsyncSession], actor: Actor
+) -> None:
+    """Deletes the tenant; every tenant-owned table cascades from `users`."""
+    async with factory() as db:
+        await db.execute(delete(User).where(User.id == actor.user_id))
+        await db.commit()
+
+
+class _LockProbe:
+    """Checks, from a separate connection, that neither candidate row holds a row lock."""
+
+    def __init__(
+        self, engine: AsyncEngine, event_id: uuid.UUID | None, run_id: uuid.UUID | None
+    ) -> None:
+        self._engine = engine
+        self._event_id = event_id
+        self._run_id = run_id
+        self.checks = 0
+        self.failures: list[str] = []
+
+    async def __call__(self) -> None:
+        statements = []
+        if self._event_id is not None:
+            statements.append(
+                select(OutboxEvent.id)
+                .where(OutboxEvent.id == self._event_id)
+                .with_for_update(nowait=True)
+            )
+        if self._run_id is not None:
+            statements.append(
+                select(ProcessingRun.id)
+                .where(ProcessingRun.id == self._run_id)
+                .with_for_update(nowait=True)
+            )
+        for statement in statements:
+            self.checks += 1
+            # `FOR UPDATE NOWAIT` failing is the evidence: the reconciler still holds the row.
+            try:
+                async with self._engine.connect() as conn:
+                    async with conn.begin():
+                        await conn.execute(statement)
+            except DBAPIError as exc:
+                self.failures.append(type(exc.orig).__name__)
+
+
+class _SlowProbingRedis:
+    """`ArqRedis` proxy with a slow call that probes row locks before and after it."""
+
+    def __init__(self, pool: ArqRedis, probe: Callable[[], Awaitable[None]]) -> None:
+        self._pool = pool
+        self._probe = probe
+
+    async def exists(self, *keys: str) -> int:
+        await self._probe()
+        await asyncio.sleep(0.02)
+        await self._probe()
+        return int(await self._pool.exists(*keys))
+
+    async def enqueue_job(self, function: str, *args: Any, **kwargs: Any) -> Any:
+        await self._probe()
+        await asyncio.sleep(0.02)
+        await self._probe()
+        return await self._pool.enqueue_job(function, *args, **kwargs)
+
+
+class _GatedRedis:
+    """`ArqRedis` proxy that holds the first call to one method until the test releases it."""
+
+    def __init__(self, pool: ArqRedis, method: str) -> None:
+        self._pool = pool
+        self._method = method
+        self.entered = asyncio.Event()
+        self.released = asyncio.Event()
+        self.calls = 0
+
+    async def exists(self, *keys: str) -> int:
+        await self._pause("exists")
+        return int(await self._pool.exists(*keys))
+
+    async def enqueue_job(self, function: str, *args: Any, **kwargs: Any) -> Any:
+        await self._pause("enqueue_job")
+        return await self._pool.enqueue_job(function, *args, **kwargs)
+
+    async def _pause(self, method: str) -> None:
+        if method != self._method:
+            return
+        self.calls += 1
+        if self.calls > 1:
+            return
+        self.entered.set()
+        await self.released.wait()
 
 
 async def _queued_index_jobs(pool: ArqRedis, queue: str) -> list[Any]:
@@ -552,3 +671,129 @@ async def test_retired_generation_with_a_cited_chunk_is_kept(
     assert await _count(db_session, Chunk, index_version="gen-surplus") == 0
     assert await _count(db_session, IndexGeneration, version="gen-surplus") == 0
     assert await _count(db_session, Chunk, index_version="gen-rollback") == 1
+
+
+async def test_redis_io_runs_without_holding_row_locks(
+    committed_db: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+    redis: tuple[ArqRedis, str],
+) -> None:
+    """I-S2-JF-14: a slow Redis never sees the selected rows locked."""
+    engine, factory = committed_db
+    pool, queue = redis
+    now = datetime.now(UTC)
+    async with factory() as db:
+        actor = await make_actor(db)
+        audio, _attempt, _transcript = await make_class_with_transcript(db, actor)
+        event = _event(actor, audio, status="dispatched", published_at=now - timedelta(hours=2))
+        run = _run(actor, audio, status="running", started_at=now - timedelta(hours=1))
+        db.add_all([event, run])
+        await db.commit()
+        event_id, run_id, audio_id = event.id, run.id, audio.id
+
+    probe = _LockProbe(engine, event_id=event_id, run_id=run_id)
+    slow = _SlowProbingRedis(pool, probe)
+    try:
+        report = await reconcile_once(factory, cast(ArqRedis, slow), queue_name=queue, now=now)
+
+        assert probe.checks >= 4
+        assert probe.failures == []
+        assert (report["lost_dispatches"], report["expired_runs"]) == (1, 1)
+        async with factory() as db:
+            stored_event = await db.get(OutboxEvent, event_id)
+            stored_run = await db.get(ProcessingRun, run_id)
+            assert stored_event is not None
+            assert stored_event.status == "pending" and stored_event.published_at is None
+            assert stored_run is not None
+            assert (stored_run.status, stored_run.error_code) == ("failed", "lease_expired")
+        jobs = await _queued_index_jobs(pool, queue)
+        assert [job.args for job in jobs] == [(str(audio_id), 1)]
+        assert jobs[0].job_id == f"reconcile-index:{run_id}:1"
+    finally:
+        await _remove_actor(factory, actor)
+
+
+async def test_overlapping_cycles_reset_a_lost_dispatch_once(
+    committed_db: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+    redis: tuple[ArqRedis, str],
+) -> None:
+    """I-S2-JF-14: two cycles that saw the same lost dispatch apply its reset only once."""
+    _engine, factory = committed_db
+    pool, queue = redis
+    now = datetime.now(UTC)
+    async with factory() as db:
+        actor = await make_actor(db)
+        audio, _attempt, _transcript = await make_class_with_transcript(db, actor)
+        event = _event(actor, audio, status="dispatched", published_at=now - timedelta(hours=2))
+        db.add(event)
+        await db.commit()
+        event_id = event.id
+
+    gated = _GatedRedis(pool, "exists")
+    first_task: asyncio.Task[Any] | None = None
+    try:
+        first_task = asyncio.create_task(
+            reconcile_once(factory, cast(ArqRedis, gated), queue_name=queue, now=now)
+        )
+        # The first cycle has selected and committed; it is now blocked inside Redis.
+        await asyncio.wait_for(gated.entered.wait(), timeout=LOCK_PROBE_TIMEOUT_S)
+        second = await reconcile_once(factory, pool, queue_name=queue, now=now)
+        gated.released.set()
+        first = await asyncio.wait_for(first_task, timeout=LOCK_PROBE_TIMEOUT_S)
+
+        assert second["lost_dispatches"] == 1
+        assert first["lost_dispatches"] == 0
+        async with factory() as db:
+            dispatched = await dispatch_pending(db, pool, queue_name=queue, clock=lambda: now)
+            await db.commit()
+        assert dispatched[Outcome.PUBLISH] == 1
+        jobs = await _queued_index_jobs(pool, queue)
+        assert [job.job_id for job in jobs] == [f"outbox:{event_id}"]
+    finally:
+        gated.released.set()
+        if first_task is not None:
+            await asyncio.gather(first_task, return_exceptions=True)
+        await _remove_actor(factory, actor)
+
+
+async def test_overlapping_cycles_recover_an_expired_run_once(
+    committed_db: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+    redis: tuple[ArqRedis, str],
+) -> None:
+    """I-S2-JF-14: two cycles that saw the same expired run close it once and queue one job."""
+    _engine, factory = committed_db
+    pool, queue = redis
+    now = datetime.now(UTC)
+    async with factory() as db:
+        actor = await make_actor(db)
+        audio, _attempt, _transcript = await make_class_with_transcript(db, actor)
+        run = _run(actor, audio, status="running", started_at=now - timedelta(hours=1))
+        db.add(run)
+        await db.commit()
+        run_id = run.id
+
+    gated = _GatedRedis(pool, "enqueue_job")
+    first_task: asyncio.Task[Any] | None = None
+    try:
+        first_task = asyncio.create_task(
+            reconcile_once(factory, cast(ArqRedis, gated), queue_name=queue, now=now)
+        )
+        # The first cycle has selected and committed; it is now blocked inside Redis.
+        await asyncio.wait_for(gated.entered.wait(), timeout=LOCK_PROBE_TIMEOUT_S)
+        second = await reconcile_once(factory, pool, queue_name=queue, now=now)
+        gated.released.set()
+        first = await asyncio.wait_for(first_task, timeout=LOCK_PROBE_TIMEOUT_S)
+
+        assert second["expired_runs"] == 1
+        assert first["expired_runs"] == 0
+        async with factory() as db:
+            stored_run = await db.get(ProcessingRun, run_id)
+            assert stored_run is not None
+            assert (stored_run.status, stored_run.error_code) == ("failed", "lease_expired")
+        jobs = await _queued_index_jobs(pool, queue)
+        assert len(jobs) == 1
+        assert jobs[0].job_id == f"reconcile-index:{run_id}:1"
+    finally:
+        gated.released.set()
+        if first_task is not None:
+            await asyncio.gather(first_task, return_exceptions=True)
+        await _remove_actor(factory, actor)

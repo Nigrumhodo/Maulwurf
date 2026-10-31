@@ -7,10 +7,17 @@ Two failures leave work stranded without an error anywhere:
 - An `index` run is `running` after its worker died. `claim_run` takes over an expired lease
   only when another delivery arrives, and nothing else enqueues one.
 
-Both selections lock the rows they return (`FOR UPDATE SKIP LOCKED`), so two reconciler cycles
-never act on the same row at once. Redis state is checked by the caller (`workers/reconciler.py`).
+J2.11 keeps Redis I/O out of the row-lock window: callers select candidates in one short
+transaction, commit, inspect/enqueue in Redis without holding any lock, and then apply the
+change in a second short transaction. Each state change is a compare-and-set against the
+snapshot read during selection (`status`, `published_at`, `attempts` for outbox events and
+`status`, `started_at`, `attempt_count` for runs), so overlapping cycles cannot apply the same
+change twice. The selections still use `FOR UPDATE SKIP LOCKED` so concurrent cycles prefer
+disjoint batches; the CAS is what makes the post-commit window safe.
 """
 
+import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -28,13 +35,36 @@ DISPATCH_GRACE: Final = LEASE + timedelta(minutes=15)
 LEASE_EXPIRED_CODE: Final = "lease_expired"
 
 
+@dataclass(frozen=True)
+class LostDispatch:
+    """Snapshot of a lost outbox event, safe to carry across transactions and Redis calls."""
+
+    id: uuid.UUID
+    status: str
+    published_at: datetime | None
+    attempts: int
+
+
+@dataclass(frozen=True)
+class ExpiredRun:
+    """Snapshot of an expired index run, safe to carry across transactions and Redis calls."""
+
+    id: uuid.UUID
+    audio_id: uuid.UUID
+    transcript_version: int
+    status: str
+    started_at: datetime | None
+    attempt_count: int
+
+
 async def select_lost_dispatches(
     db: AsyncSession, *, now: datetime, limit: int
-) -> list[OutboxEvent]:
+) -> list[LostDispatch]:
     """Index events dispatched before the grace margin with no terminal run for their version.
 
     A `failed` run with `lease_expired` is recoverable: its recovery job can itself be lost
     when Redis restarts. The retry budget and `OutboxEvent.max_attempts` bound the loop.
+    Returns ids plus the fields the later compare-and-set needs; no ORM state is kept.
     """
     terminal_run = exists().where(
         ProcessingRun.user_id == OutboxEvent.user_id,
@@ -51,7 +81,12 @@ async def select_lost_dispatches(
         ),
     )
     statement = (
-        select(OutboxEvent)
+        select(
+            OutboxEvent.id,
+            OutboxEvent.status,
+            OutboxEvent.published_at,
+            OutboxEvent.attempts,
+        )
         .where(
             OutboxEvent.type == "index_requested",
             OutboxEvent.status == "dispatched",
@@ -66,7 +101,16 @@ async def select_lost_dispatches(
         .limit(limit)
         .with_for_update(skip_locked=True, of=OutboxEvent)
     )
-    return list((await db.execute(statement)).scalars().all())
+    rows = (await db.execute(statement)).all()
+    return [
+        LostDispatch(
+            id=row.id,
+            status=row.status,
+            published_at=row.published_at,
+            attempts=row.attempts,
+        )
+        for row in rows
+    ]
 
 
 def reset_to_pending(event: OutboxEvent) -> None:
@@ -75,12 +119,42 @@ def reset_to_pending(event: OutboxEvent) -> None:
     event.published_at = None
 
 
+async def reset_to_pending_if_unchanged(db: AsyncSession, candidate: LostDispatch) -> bool:
+    """Applies the reset only while the row still matches the selected snapshot (J2.11)."""
+    event = await db.scalar(
+        select(OutboxEvent)
+        .where(OutboxEvent.id == candidate.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if event is None:
+        return False
+    if (
+        event.status != candidate.status
+        or event.published_at != candidate.published_at
+        or event.attempts != candidate.attempts
+    ):
+        return False
+    reset_to_pending(event)
+    return True
+
+
 async def select_expired_index_runs(
     db: AsyncSession, *, now: datetime, limit: int
-) -> list[ProcessingRun]:
-    """Index runs still `running` after their lease: the worker that claimed them is gone."""
+) -> list[ExpiredRun]:
+    """Index runs still `running` after their lease: the worker that claimed them is gone.
+
+    Returns ids plus the fields the later compare-and-set needs; no ORM state is kept.
+    """
     statement = (
-        select(ProcessingRun)
+        select(
+            ProcessingRun.id,
+            ProcessingRun.audio_id,
+            ProcessingRun.transcript_version,
+            ProcessingRun.status,
+            ProcessingRun.started_at,
+            ProcessingRun.attempt_count,
+        )
         .where(
             ProcessingRun.stage == STAGE_INDEX,
             ProcessingRun.config_version == RUN_CONFIG_VERSION,
@@ -91,7 +165,18 @@ async def select_expired_index_runs(
         .limit(limit)
         .with_for_update(skip_locked=True)
     )
-    return list((await db.execute(statement)).scalars().all())
+    rows = (await db.execute(statement)).all()
+    return [
+        ExpiredRun(
+            id=row.id,
+            audio_id=row.audio_id,
+            transcript_version=row.transcript_version,
+            status=row.status,
+            started_at=row.started_at,
+            attempt_count=row.attempt_count,
+        )
+        for row in rows
+    ]
 
 
 def mark_lease_expired(run: ProcessingRun, *, now: datetime) -> None:
@@ -99,3 +184,25 @@ def mark_lease_expired(run: ProcessingRun, *, now: datetime) -> None:
     run.status = "failed"
     run.error_code = LEASE_EXPIRED_CODE
     run.finished_at = now
+
+
+async def mark_lease_expired_if_unchanged(
+    db: AsyncSession, candidate: ExpiredRun, *, now: datetime
+) -> bool:
+    """Closes the run only while it still matches the selected snapshot (J2.11)."""
+    run = await db.scalar(
+        select(ProcessingRun)
+        .where(ProcessingRun.id == candidate.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if run is None:
+        return False
+    if (
+        run.status != candidate.status
+        or run.started_at != candidate.started_at
+        or run.attempt_count != candidate.attempt_count
+    ):
+        return False
+    mark_lease_expired(run, now=now)
+    return True
