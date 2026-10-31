@@ -10,7 +10,9 @@ pase con el hijo (éxito, error, timeout, SIGKILL, lease perdido). Mata el grupo
 borra el directorio y verifica en `/proc` descriptores, procesos y mounts; solo con esa
 evidencia registra `cleanup_status = verified`. Si la evidencia falla y este run
 persistió `failed`, cierra la admisión de la instancia y dispara la alerta (S1.B6).
-Un lease vencido que no llega a escribir esa fila deja `pending` y no cierra la admisión.
+Un lease vencido que no llega a escribir esa fila deja `pending` y no cierra la
+admisión, pero emite la alerta explícita `cleanup_unrecorded` y su métrica (S4.2): un
+cleanup no verificado en un proceso zombi no puede quedar solo en un log.
 
 Si el supervisor muere entero (SIGKILL al contenedor), el tmpfs desaparece con el
 contenedor (S1.B1) y el intento queda con lease vencido y `cleanup_status = pending`: la
@@ -389,13 +391,27 @@ async def _run_asr(
     return None, _job_payload(stdout), None
 
 
+def _note_unrecorded_cleanup(attempt_id: uuid.UUID) -> None:
+    """Make an unverified cleanup that could not be persisted explicitly visible.
+
+    The fencing token moved before this run wrote ``failed`` (the stranded sweep or
+    a reclaim), so the row stays ``pending`` and admission stays open. The alert and
+    the metric are the observable record of that case; no row exists to reopen
+    admission from later.
+    """
+    admission.flag_unrecorded_cleanup(attempt_id)
+    metrics.record_failure("cleanup", "cleanup_unrecorded")
+
+
 async def _note_cleanup_failure(
     pool: asyncpg.Pool, lease: leases.Lease, attempt_id: uuid.UUID, *,
     owned_audio: bool, exc: Exception, result: RunResult,
 ) -> None:
     """A cleanup exception is not verified deletion.
 
-    Admission closes only when this run still owns the row.
+    Admission closes only when this run still owns the row. A run that lost the
+    token (and with it the ability to persist ``failed``) raises the explicit
+    ``cleanup_unrecorded`` alert instead of leaving only a log line.
     """
     logger.error(
         "supervisor.cleanup_error attempt_id=%s error=%s", attempt_id, type(exc).__name__,
@@ -410,6 +426,8 @@ async def _note_cleanup_failure(
         )
     if recorded:
         admission.halt(attempt_id)
+    elif owned_audio:
+        _note_unrecorded_cleanup(attempt_id)
     if result.outcome is Outcome.SUCCEEDED:
         result.outcome = Outcome.CLEANUP_FAILED
 
@@ -434,9 +452,12 @@ async def _note_cleanup_evidence(
         cleanup.log_cleanup_failed(str(attempt_id), evidence)
         metrics.record_failure("cleanup", "verification_failed")
         # Solo un `failed` persistido con el token de este run. Si el lease
-        # ya no es nuestro, la fila sigue `pending` y la admisión no se cierra.
+        # ya no es nuestro, la fila sigue `pending`, la admisión no se cierra y
+        # la alerta `cleanup_unrecorded` deja el caso observable.
         if recorded:
             admission.halt(attempt_id)
+        elif owned_audio:
+            _note_unrecorded_cleanup(attempt_id)
         if result.outcome is Outcome.SUCCEEDED:
             result.outcome = Outcome.CLEANUP_FAILED
         return

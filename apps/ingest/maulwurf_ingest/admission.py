@@ -2,8 +2,11 @@
 
 `cleanup_status=failed` cierra la admisión de uploads nuevos y deja una alerta.
 Un lease vencido que deja el intento en `pending` no cierra la admisión: solo
-bloquea la outbox de índice y análisis. S2 consultará `uploads_admitted()`; el
-`PUT` de S1 sigue respondiendo `503 capacity_unavailable` por A1.8.
+bloquea la outbox de índice y análisis. Si ese cleanup no verificado tampoco pudo
+persistirse porque otro propietario movió el token (`cleanup_unrecorded`), la
+alerta explícita y su métrica dejan rastro sin latch durable: no hay fila `failed`
+que justifique cerrar la instancia. S2 consultará `uploads_admitted()`; el `PUT` de
+S1 sigue respondiendo `503 capacity_unavailable` por A1.8.
 
 Since S4.2 there are two separate states:
 
@@ -56,15 +59,37 @@ def alerts() -> tuple[Alert, ...]:
 def halt(attempt_id: uuid.UUID) -> None:
     """Cierra la admisión de forma durable y registra la alerta. Sin rutas ni audio.
 
-    Idempotente por intento: el sweeper vuelve a leer la misma fila `failed` en cada
-    pase y no debe duplicar la alerta ni el log.
+    Idempotente por intento y código: el sweeper vuelve a leer la misma fila `failed`
+    en cada pase y no debe duplicar la alerta ni el log.
     """
     global _halted
     _halted = True
-    if any(alert.attempt_id == attempt_id for alert in _alerts):
+    if any(
+        alert.code == "cleanup_failed" and alert.attempt_id == attempt_id
+        for alert in _alerts
+    ):
         return
     _alerts.append(Alert("cleanup_failed", attempt_id))
     logger.error("ingest.alert code=cleanup_failed attempt_id=%s", attempt_id)
+
+
+def flag_unrecorded_cleanup(attempt_id: uuid.UUID) -> None:
+    """Raise an explicit alert for an unverified cleanup this run could not persist.
+
+    The row stays ``pending`` because a newer owner moved the fencing token (the
+    stranded sweep or a reclaim), so there is no durable ``failed`` latch and
+    admission stays open. The occurrence must still be observable: the alert is
+    returned by ``admission.alerts()`` and logged, and the supervisor increments a
+    failure counter exposed by ``/internal/metrics``; the case no longer leaves only
+    a warning. Idempotent per attempt and code.
+    """
+    if any(
+        alert.code == "cleanup_unrecorded" and alert.attempt_id == attempt_id
+        for alert in _alerts
+    ):
+        return
+    _alerts.append(Alert("cleanup_unrecorded", attempt_id))
+    logger.error("ingest.alert code=cleanup_unrecorded attempt_id=%s", attempt_id)
 
 
 def close() -> None:

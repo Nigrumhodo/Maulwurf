@@ -26,9 +26,11 @@ from test_supervisor import (  # noqa: E402
     tmpfs_dir,
 )
 
-from maulwurf_ingest import admission, lease, rls
+from maulwurf_ingest import admission, cleanup, lease, metrics, rls, supervisor
 from maulwurf_ingest.asr_job import ORIGINAL
+from maulwurf_ingest.prometheus_text import Sample
 from maulwurf_ingest.receiver import iter_bytes
+from maulwurf_ingest.reconciler import sweep_stranded
 from maulwurf_ingest.supervisor import Outcome, run_attempt
 
 _ = (audio, tmpfs_dir)
@@ -97,6 +99,72 @@ async def test_durable_halt_survives_a_clean_latch_read(
 
     assert admission.uploads_admitted() is False
     assert admission.alerts() == (admission.Alert("cleanup_failed", attempt_id),)
+
+
+def _unverified_evidence() -> cleanup.CleanupEvidence:
+    return cleanup.CleanupEvidence(
+        workdir_absent=True, tmp_is_tmpfs=True, live_processes=0,
+        open_descriptors=1, mounts_under_workdir=0, unreadable_processes=0,
+    )
+
+
+def _cleanup_metric(samples: list[Sample]) -> float:
+    for sample in samples:
+        if (
+            sample.labels.get("stage") == "cleanup"
+            and sample.labels.get("error_code") == "cleanup_unrecorded"
+        ):
+            return float(sample.value)
+    return 0.0
+
+
+async def test_unrecorded_unverified_evidence_alerts_without_closing_admission(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Hoplite fix2 2: a zombie cleanup that cannot persist ``failed`` stays observable."""
+    attempt_id = uuid.uuid4()
+    owned = lease.Lease(attempt_id, uuid.uuid4(), "ingest:test", 3, timedelta(seconds=30))
+
+    async def lost_token(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    monkeypatch.setattr(lease, "record_cleanup", lost_token)
+    metrics.reset()
+    result = supervisor.RunResult(Outcome.SUCCEEDED)
+    await supervisor._note_cleanup_evidence(
+        _unused_pool(), owned, attempt_id, _unverified_evidence(), owned_audio=True,
+        committed=True, result=result, audio_id=uuid.uuid4(), version=1,
+    )
+    samples = metrics.collect_samples(
+        tmp_dir=str(tmp_path), slots_in_use=0, slots_total=1, admission_open=True,
+    )
+
+    assert result.outcome is Outcome.CLEANUP_FAILED
+    assert admission.uploads_admitted() is True
+    assert admission.alerts() == (admission.Alert("cleanup_unrecorded", attempt_id),)
+    assert _cleanup_metric(list(samples)) == 1.0
+
+
+async def test_unrecorded_cleanup_exception_alerts_without_closing_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hoplite fix2 2: the exception path has the same explicit alert."""
+    attempt_id = uuid.uuid4()
+    owned = lease.Lease(attempt_id, uuid.uuid4(), "ingest:test", 3, timedelta(seconds=30))
+
+    async def lost_token(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    monkeypatch.setattr(lease, "record_cleanup", lost_token)
+    metrics.reset()
+    result = supervisor.RunResult(Outcome.LEASE_LOST)
+    await supervisor._note_cleanup_failure(
+        _unused_pool(), owned, attempt_id, owned_audio=True, exc=OSError("rmtree"),
+        result=result,
+    )
+
+    assert admission.uploads_admitted() is True
+    assert admission.alerts() == (admission.Alert("cleanup_unrecorded", attempt_id),)
 
 
 @pytest.mark.integration
@@ -249,3 +317,44 @@ async def test_failed_cleanup_blocks_a_new_owner(pool: asyncpg.Pool) -> None:
         pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, instance="ingest:b",
         ttl=timedelta(seconds=30),
     ) is None
+
+
+@pytest.mark.integration
+async def test_unrecorded_cleanup_on_a_moved_token_stays_pending_and_alerts(
+    pool: asyncpg.Pool,
+) -> None:
+    """Hoplite fix2 2: a live run whose token moved cannot persist ``failed``.
+
+    ``sweep_stranded`` is the owner that claims the row after the lease expires.
+    The zombie's unverified evidence matches no row, so ``cleanup_status`` stays
+    ``pending`` and admission is not closed; the explicit alert and metric are the
+    observable record of the unverified cleanup.
+    """
+    attempt = await _seed(pool)
+    owned = await lease.acquire(
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id,
+        instance="ingest:zombie", ttl=timedelta(seconds=30),
+    )
+    assert owned is not None
+    await pool.execute(
+        """UPDATE ingestion_attempts
+              SET status = 'transcribing', lease_expires_at = now() - interval '1 second'
+            WHERE id = $1""",
+        attempt.attempt_id,
+    )
+    assert attempt.attempt_id in await sweep_stranded(pool)
+
+    metrics.reset()
+    result = supervisor.RunResult(Outcome.LEASE_LOST)
+    await supervisor._note_cleanup_evidence(
+        pool, owned, attempt.attempt_id, _unverified_evidence(), owned_audio=True,
+        committed=False, result=result, audio_id=None, version=None,
+    )
+    row = await _row(pool, attempt)
+
+    assert row["cleanup_status"] == "pending"
+    assert row["cleanup_verified_at"] is None and row["audio_deleted_at"] is None
+    assert admission.uploads_admitted() is True
+    assert admission.alerts() == (
+        admission.Alert("cleanup_unrecorded", attempt.attempt_id),
+    )
