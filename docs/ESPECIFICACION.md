@@ -575,6 +575,15 @@ week?").
   boundaries. If a sentence exceeds the maximum, split it with preserved character offsets.
   Store `segment_ids`, spans, transcript version, and nullable derived times; a chunk is not
   the minimum evidence unit.
+- **Persisted `Chunk` contract:** `audio_id`, `transcript_id`, `transcript_version`,
+  `index_version`, `ordinal`, `content`, `char_start`, `char_end`, `token_count`, nullable
+  `t_start`/`t_end`, and at least one `segment_id` link. Every field maps to a column of
+  `chunks`/`chunk_segments`; `user_id` comes from the authenticated tenant and `tsv` is
+  derived at write time, so neither is part of the contract. Each link stores its
+  `chunk_segments.overlap_span` payload: segment-local `segment_ordinal`, `inicio_char`,
+  `fin_char` and an optional `overlap` region `{inicio_char, fin_char, tokens}` shared with
+  the previous chunk. Offsets are Unicode code points (`[start, end)`), never UTF-16 units
+  or bytes; `content` is exactly the transcript slice of `[char_start, char_end)`.
 - Batch embeddings in the `index(audio_id)` job; unique key per chunk and embedding version.
   Create a new index generation and activate it atomically when complete; do not mix
   versions/dimensions or expose a partial index.
@@ -927,6 +936,11 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   offsets; `t_inicio/t_fin` nullable, with `0 ≤ start < end ≤ duration` when present. Do not
   duplicate a mutable segments JSON and rows as two sources of truth.
 - `chunk_segments` links chunks to segments/spans and keeps evidence even with overlap.
+  `overlap_span` is a validated JSON object with the segment-local `segment_ordinal`,
+  `inicio_char`, `fin_char` and an optional `overlap` `{inicio_char, fin_char, tokens}`
+  sub-range shared with the previous chunk; it is omitted when there is no overlap. A
+  chunk's coverage of a segment is therefore self-describing, and the derived chunk times
+  never publish a zero-length range (`t_start < t_end` when both are present).
   `embeddings`: chunk, model, dimension, version, and fixed-dimension vector; HNSW per
   compatible generation. `processing_runs` unique per
   `(audio_id, stage, transcript_version, config_version)` with status and error. Active

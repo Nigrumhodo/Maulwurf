@@ -308,7 +308,11 @@ async def _indexed_class(
             user_id=actor.user_id,
             chunk_id=chunk.id,
             segment_id=segment.id,
-            overlap_span={"char_start": 0, "char_end": len(content)},
+            overlap_span={
+                "segment_ordinal": ordinal,
+                "inicio_char": 0,
+                "fin_char": len(content),
+            },
         )
     )
     db.add(
