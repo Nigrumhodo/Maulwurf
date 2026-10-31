@@ -221,9 +221,11 @@ async def test_new_content_is_202_and_persists_identity(
     }
     attempt = await db_session.get(IngestionAttempt, uuid.UUID(reserved["attempt_id"]))
     assert attempt is not None
-    # La API no transiciona estados: el estado lo devuelve el sink (C12).
+    # A2.14: the API claims `awaiting_upload -> receiving` before the first byte. The fake
+    # sink does not model ingest's next write, so the row stays claimed here; the real
+    # ingest moves it to `transcribing` on admit.
     assert (attempt.status, attempt.received_bytes, attempt.expected_bytes) == (
-        "awaiting_upload",
+        "receiving",
         len(CONTENT),
         len(CONTENT),
     )
@@ -283,7 +285,7 @@ async def test_duplicate_exact_cleans_before_reserving(
     canonical = await db_session.get(Audio, uuid.UUID(first["audio_id"]))
     assert canonical is not None and canonical.sha256 == DIGEST
     first_attempt = await db_session.get(IngestionAttempt, uuid.UUID(first["attempt_id"]))
-    assert first_attempt is not None and first_attempt.status == "awaiting_upload"
+    assert first_attempt is not None and first_attempt.status == "receiving"
     _assert_clean(response, sink)
 
 
@@ -436,8 +438,10 @@ async def test_second_put_with_different_hash_is_422(
     assert response.json()["error"]["code"] == "variant_hash_mismatch"
     attempt = await db_session.get(IngestionAttempt, uuid.UUID(confirmed["attempt_id"]))
     assert attempt is not None
-    # ADR-0008 §5: `ingest` writes the `rejected` status from the discard reason, not `api`.
-    assert attempt.status == "awaiting_upload"
+    # The fake sink does not bump the fencing token, so the API's release still owns the
+    # claimed row and cancels it. With the real ingest the token moves on acquire and
+    # `ingest` writes `rejected` / `variant_hash_mismatch` from the discard reason.
+    assert attempt.status == "cancelled"
     audio = await db_session.get(Audio, uuid.UUID(confirmed["audio_id"]))
     assert audio is not None and audio.sha256 is None  # sin identidad, sin ASR
     assert sink.events == ["begin", "write", "finish", "discard:variant_hash_mismatch"]
@@ -666,7 +670,9 @@ async def test_stream_over_limit_is_cut_hot(
     assert sink.written == 48 and sink.retained == b""
     attempt = await db_session.get(IngestionAttempt, uuid.UUID(reserved["attempt_id"]))
     assert attempt is not None
-    assert attempt.status == "awaiting_upload" and attempt.received_bytes == 0
+    # A2.14: a failed PUT frees the reservation immediately (the fake keeps the API as the
+    # owner because it does not bump the token).
+    assert attempt.status == "cancelled" and attempt.received_bytes == 0
     audio = await db_session.get(Audio, uuid.UUID(reserved["audio_id"]))
     assert audio is not None and audio.sha256 is None
 
@@ -718,18 +724,25 @@ async def test_commit_failure_after_receive_compensates(
     actor = await make_actor(db_session)
     reserved = await _reserve(client, actor, _raw_body(await _subject_id(db_session, actor)))
 
-    async def boom(self: AsyncSession) -> None:
-        raise RuntimeError("bd caída")
+    real_commit = AsyncSession.commit
+    commits = 0
 
-    monkeypatch.setattr(AsyncSession, "commit", boom)
+    async def flaky(self: AsyncSession) -> None:
+        nonlocal commits
+        commits += 1
+        if commits == 2:  # the claim commits first; the identity write is the failing one
+            raise RuntimeError("bd caída")
+        await real_commit(self)
+
+    monkeypatch.setattr(AsyncSession, "commit", flaky)
     response = await _put(client, actor, reserved["upload_url"])
 
     assert response.status_code == 500
     assert response.json()["error"]["code"] == "internal_error"
-    # Compensación: rollback + temporales descartados, la reserva queda como estaba.
+    # Compensación: rollback + temporales descartados; A2.14 releases the failed claim.
     attempt = await db_session.get(IngestionAttempt, uuid.UUID(reserved["attempt_id"]))
     assert attempt is not None
-    assert attempt.status == "awaiting_upload" and attempt.received_bytes == 0
+    assert attempt.status == "cancelled" and attempt.received_bytes == 0
     audio = await db_session.get(Audio, uuid.UUID(reserved["audio_id"]))
     assert audio is not None and audio.sha256 is None
     assert sink.events == ["begin", "write", "finish", "discard:api_error"]
@@ -751,8 +764,9 @@ async def test_admit_failure_restores_identity_and_is_503(
     # Transacción compensadora: la identidad ya confirmada vuelve a estar limpia (§8.1).
     attempt = await db_session.get(IngestionAttempt, uuid.UUID(reserved["attempt_id"]))
     assert attempt is not None
+    # A2.14: the failed PUT released the claim (the fake sink did not take the lease).
     assert (attempt.status, attempt.received_bytes, attempt.expected_bytes) == (
-        "awaiting_upload",
+        "cancelled",
         0,
         None,
     )
@@ -777,6 +791,8 @@ async def test_default_sink_is_503_before_reading(
     assert response.headers.get("Retry-After")
     attempt = await db_session.get(IngestionAttempt, uuid.UUID(reserved["attempt_id"]))
     assert attempt is not None and attempt.received_bytes == 0  # ni un byte llego a la BD
+    # The API claimed the row before `begin`; the 503 released it again (A2.14).
+    assert attempt.status == "cancelled"
     assert sink.events == []  # el doble del fixture jamás se usó
 
 
@@ -797,7 +813,10 @@ async def test_failed_discard_never_answers_duplicate(
     assert response.status_code == 500
     assert response.json()["error"]["code"] == "internal_error"
     attempt = await db_session.get(IngestionAttempt, uuid.UUID(loser["attempt_id"]))
-    assert attempt is not None and attempt.status == "awaiting_upload"
+    # The fake sink does not bump the token, so the API's release still owns the claim and
+    # cancels it; with the real ingest the failed discard stays under the ingest lease for
+    # S2.7 reconciliation.
+    assert attempt is not None and attempt.status == "cancelled"
     audio = await db_session.get(Audio, uuid.UUID(loser["audio_id"]))
     assert audio is not None and audio.sha256 is None
     assert "admit" not in sink.events
@@ -851,7 +870,8 @@ async def test_empty_body_is_415_never_202(
     assert response.json()["error"]["code"] == "unsupported_format"
     assert 202 != response.status_code
     attempt = await db_session.get(IngestionAttempt, uuid.UUID(reserved["attempt_id"]))
-    assert attempt is not None and attempt.status == "awaiting_upload"
+    # A2.14: the failed PUT releases the claim; uploading again needs a new POST.
+    assert attempt is not None and attempt.status == "cancelled"
     assert sink.events == ["begin", "abort"]
 
 

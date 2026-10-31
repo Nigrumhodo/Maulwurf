@@ -334,6 +334,36 @@ async def test_only_one_supervisor_acquires_the_lease(pool: asyncpg.Pool) -> Non
     assert winners[0].fencing_token == 2
 
 
+async def test_api_preclaim_receiving_is_adopted_by_the_receive_acquire(
+    pool: asyncpg.Pool,
+) -> None:
+    # A2.14: `api` claims awaiting_upload -> receiving before the first byte; ingest adopts
+    # the claim with the same fencing token and increments it, so a replay still loses.
+    attempt = await _seed(pool)
+    audio_id = await pool.fetchval(
+        "SELECT audio_id FROM ingestion_attempts WHERE id = $1", attempt.attempt_id,
+    )
+    await pool.execute(
+        "UPDATE ingestion_attempts SET status = 'receiving' WHERE id = $1",
+        attempt.attempt_id,
+    )
+
+    taken = await lease.acquire_bound(
+        pool, user_id=attempt.user_id, audio_id=audio_id, attempt_id=attempt.attempt_id,
+        expected_token=1, instance="ingest:a", ttl=timedelta(seconds=30),
+    )
+    replay = await lease.acquire_bound(
+        pool, user_id=attempt.user_id, audio_id=audio_id, attempt_id=attempt.attempt_id,
+        expected_token=1, instance="ingest:b", ttl=timedelta(seconds=30),
+    )
+
+    assert taken is not None and taken.fencing_token == 2
+    assert replay is None
+    row = await _row(pool, attempt)
+    assert row["status"] == "receiving"
+    assert row["owner_instance"] == "ingest:a"
+
+
 async def _audio_id(pool: asyncpg.Pool, attempt: Attempt) -> uuid.UUID:
     value = await pool.fetchval(
         "SELECT audio_id FROM ingestion_attempts WHERE id = $1", attempt.attempt_id,

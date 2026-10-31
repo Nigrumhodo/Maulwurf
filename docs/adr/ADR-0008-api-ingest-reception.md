@@ -152,8 +152,11 @@ minted by `api` per operation and never leaves the backend.
 2. Admission gate before the first byte: `admission.uploads_admitted()` is true, a slot is
    free (the published `active_slots`; while D4 is blocked, the single slot S1.B2 measured),
    and the tmpfs check of `/readyz` passes. Otherwise `503 capacity_unavailable`.
-3. Acquire the lease with the bound `ft` and move `awaiting_upload → receiving` in the same
-   guarded statement. If no row matches: `409 attempt_not_active`.
+3. Acquire the lease with the bound `ft` and move the row to `receiving` in the same guarded
+   statement. `api` has already claimed `awaiting_upload → receiving` before the first byte
+   (A2.14) without touching the token, so the statement accepts both the claimed `receiving`
+   row and the legacy `awaiting_upload` one; it still increments the token. If no row
+   matches: `409 attempt_not_active`.
 4. Stream `request.stream()` into the attempt workdir through `receiver.receive` (O_EXCL,
    `0600`, incremental SHA-256, cut at `INGEST_MAX_UPLOAD_BYTES`). Memory is bounded by the
    read block; nothing is buffered beyond it.
@@ -245,8 +248,9 @@ sequenceDiagram
     B->>C: PUT /audios/{id}/content (cookie, CSRF, Origin)
     C->>A: stream, no buffering
     A->>P: session, ownership, window, status awaiting_upload, fencing_token N
+    A->>P: lock row; awaiting_upload → receiving (claim, token unchanged) — one PUT wins
     A->>I: PUT /internal/v1/receptions/{att} (credential op=receive, ft=N), chunked
-    I->>P: acquire lease if token = N; token N+1; awaiting_upload → receiving
+    I->>P: acquire lease if status awaiting_upload|receiving and token = N; token N+1
     loop each chunk, bounded queue
         A->>I: chunk (A hashes as it forwards)
         I->>I: write tmpfs, hash
@@ -272,18 +276,23 @@ sequenceDiagram
 
 ### 5. State ownership
 
-- From a successful acquire on, **only `ingest` writes `ingestion_attempts.status`,
-  `error_code` and `cleanup_*`**, always through the fenced statements of
-  `maulwurf_ingest/lease.py`. `api` stops writing `cancelled` on disconnect and `rejected`
-  on `variant_hash_mismatch`; it asks for the matching `discard` reason instead.
+- `api` writes exactly one ingestion status before a successful acquire: the claim
+  `awaiting_upload → receiving`, under a row lock and in its own commit, before the first
+  byte (A2.14). It does not touch the fencing token; `ingest` still owns the acquire and
+  increments it. From a successful acquire on, **only `ingest` writes
+  `ingestion_attempts.status`, `error_code` and `cleanup_*`**, always through the fenced
+  statements of `maulwurf_ingest/lease.py`. `api` stops writing `cancelled` on disconnect and
+  `rejected` on `variant_hash_mismatch`; it asks for the matching `discard` reason instead.
 - `api` keeps writing what is not ingestion state: the audio identity (`sha256`,
   `original_bytes`, `received_bytes`, `expected_bytes`) in `admit_identity`, its
   compensation, variant tokens, and `absorb_reservation`, which deletes the provisional rows
   only **after** a verified `discard` (the row must exist while `ingest` records cleanup).
-- The double-`PUT` race of A2.14 is closed by the fenced acquire: the second `receive`
-  finds no row with status `awaiting_upload` and token `N` and gets `409
-  attempt_not_active`. A2.14 keeps the quota/slot locks and the expiry of stale
-  reservations.
+- The double-`PUT` race of A2.14 is closed twice: at the API, the second PUT finds
+  `receiving` under the row lock and gets `409 attempt_not_active` without opening a
+  reception; at `ingest`, a concurrent `receive` that still arrives matches no row with
+  token `N` and gets the same `409`. A2.14 also makes the quota/slot checks atomic, releases
+  a reservation whose PUT fails before the acquire (the fencing token makes that release a
+  no-op afterwards), and expires stale reservations in the J2.4 reconciler.
 - If `ingest` is unreachable after it acquired, the attempt stays with an expiring lease and
   `cleanup_status = pending`; reconciliation is S2.7, as for any lost supervisor.
 
