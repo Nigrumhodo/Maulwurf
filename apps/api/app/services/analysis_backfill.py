@@ -152,21 +152,26 @@ def analysis_backfill_available(
     cleanup_status: str | None,
     analyze_state: str,
     has_current_run: bool,
+    analysis_already_required: bool,
+    has_previous_run: bool,
 ) -> bool:
     """Whether the class page may offer «backfill/re-analysis» right now.
 
-    F1 classes read ``not_requested`` and terminal analysis failures/cancellations may be
-    retried. An active or successful analysis of the CURRENT transcript/config versions is
-    not offered again. A class with no run for those versions (a version changed, S3.4) is
-    offered even when its stage list already owes analysis. Without verified cleanup there
-    is nothing safe to queue (fail closed).
+    The answer mirrors `classify_existing_run`, so the advertised action and the endpoint
+    that performs it never disagree. F1 classes read ``not_requested`` and terminal analysis
+    failures/cancellations may be retried. An active or successful analysis of the CURRENT
+    transcript/config versions is not offered again. With no run for those versions the
+    class is offered when it is still F1 (the backfill is its upgrade path) or when a
+    previous analysis run exists under another version (reanalysis, S3.4); an F2 class with
+    no analysis run at all keeps ``POST /audios/{id}/retry`` as its entry point. Without
+    verified cleanup there is nothing safe to queue (fail closed).
     """
     if not has_usable_transcript:
         return False
     if attempt_status != "succeeded" or cleanup_status != "verified":
         return False
     if not has_current_run:
-        return True
+        return has_previous_run or not analysis_already_required
     return analyze_state == "not_requested" or analyze_state in REQUEUEABLE_RUN_STATES
 
 

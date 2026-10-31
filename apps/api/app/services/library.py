@@ -339,6 +339,13 @@ async def get_audio_detail(
                 stage=runs_service.ANALYSIS_STAGE,
                 usable_version=usable,
             ),
+            analysis_already_required=analysis_backfill.analysis_required(
+                audio.required_stages
+            ),
+            has_previous_run=any(
+                run.stage == runs_service.ANALYSIS_STAGE
+                for run in runs.get(audio.id, [])
+            ),
         ),
     )
 

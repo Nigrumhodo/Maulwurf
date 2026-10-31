@@ -477,6 +477,39 @@ async def test_detail_shows_the_explicit_queue_state(
     assert body["aggregate_status"] == "processing"
 
 
+async def test_detail_does_not_offer_backfill_for_f2_class_without_run(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The detail flag and the service agree: an F2 class with no run uses `retry`."""
+    actor = await actors.make_actor(db_session)
+    audio, _attempt, _transcript = await actors.make_class_with_transcript(
+        db_session, actor, required_stages=["index", "analyze"]
+    )
+    audio_id = audio.id
+
+    detail = await client.get(f"/audios/{audio_id}", cookies=actor.cookies)
+
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["stages"]["analyze"] == "pending"
+    assert body["analysis_backfill_available"] is False
+
+    report = await backfill_classes(db_session, user_id=actor.user_id, apply=True)
+    assert report.counts[BackfillStatus.ALREADY_F2_NO_RUN] == 1
+    assert await _analysis_runs(
+        db_session, user_id=actor.user_id, audio_id=audio_id
+    ) == []
+
+    # The action the page must advertise instead: the retry endpoint over persisted text.
+    retried = await client.post(
+        f"/audios/{audio_id}/retry",
+        json={"stages": ["analyze"], "transcript_version": 1},
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+    assert retried.status_code == 202
+
+
 async def test_dispatcher_publishes_only_the_audio_id(
     db_session: AsyncSession, redis: tuple[ArqRedis, str]
 ) -> None:
