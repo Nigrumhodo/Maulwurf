@@ -34,7 +34,9 @@ class CalendarSettings(Base):
     # Remote Google calendar ID of the single app-created calendar. NULL until the first
     # successful connect; it is never a user-selected calendar (the primary is untouched).
     calendar_write_calendar_id: Mapped[str | None] = mapped_column(Text)
-    # Reading calendars selected by the user. Empty means "only the app calendar".
+    # Reading calendars selected by the user. Empty means no calendar is read: J3.7
+    # returns no events and reports `no_read_calendars`. The app-created calendar is a
+    # write target, never an implicit read source.
     calendar_read_calendar_ids: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, server_default=text("'{}'")
     )

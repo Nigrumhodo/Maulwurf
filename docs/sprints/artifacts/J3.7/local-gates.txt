@@ -293,3 +293,8 @@ this diff.
 
 $ python3 scripts/docs/check_refs.py
 OK: 777 documented repository paths exist or are expected.
+
+One semantic reconciliation after the merge: J3.3's `settings` model comment said "empty
+means only the app calendar". J3.7's read contract is the opposite (hoplite fix3: an empty
+selection returns no rows and `coverage_notice=no_read_calendars`), so the comment was
+corrected: the app-created calendar is a write target, never an implicit read source.
