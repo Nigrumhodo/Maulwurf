@@ -38,6 +38,9 @@ renamed**. Responsibility comes only from the ticket claim, recorded in
 - Python: `apps/api/tests/unit/`, `apps/api/tests/integration/`, `apps/ingest/tests/` —
   pytest, markers `@pytest.mark.integration` / `provider` / `load`.
 - Web: `apps/web/tests/unit/`, `apps/web/tests/e2e/` — Vitest (+ Playwright once E2E exists).
+- Compose E2E smoke (`E-S2-JF-06`): `scripts/e2e/smoke_pipeline.py`, run inside the `api`
+  container by the `e2e-smoke` CI job. It is API-level (no browser) until D2.2/D2.6 provide
+  the `apps/web/tests/e2e/` browser leg; it does not replace a `P-*` provider test.
 - Load and provider scripts: `scripts/load/`, `scripts/provider/` (no embedded secrets).
 
 ### 0.4 Fixture rules (non-negotiable, from AGENTS.md and the spec)

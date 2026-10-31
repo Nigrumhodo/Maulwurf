@@ -29,8 +29,8 @@ explicit Definition of Done. See "Sprint Model" below.
 - `.github/workflows/quality.yml` — Quality CI (J1.4): ruff+mypy, unit tests, web
   lint/typecheck/test/build, integration tests with service containers, image builds,
   secret/license scans, the compose ingest environment check (J2.8), the Caddy edge-limit
-  check (J2.10) and the documentation reference check (L2.11); runs on PRs and pushes to
-  `develop`.
+  check (J2.10), the compose E2E smoke with deterministic doubles (J2.6) and the
+  documentation reference check (L2.11); runs on PRs and pushes to `develop`.
 - `.github/workflows/trigger-hoplite-qa.yml` — External QA webhook trigger on PRs (not a
   build/test pipeline; does not replace `quality.yml`).
 - `apps/api/` — FastAPI service (area `A-`): routers (health, auth including Google OAuth,
@@ -84,7 +84,8 @@ explicit Definition of Done. See "Sprint Model" below.
 - `scripts/scaffold_monorepo.sh` — Generated the original skeleton (historical; see
   `README.scaffold.md`); `scripts/ci/` holds the CI guards, `scripts/docs/` the
   documentation checks and diagram export, `scripts/provider/` the Riva spike scripts
-  (protected `P-*` provider runs), `scripts/e2e/` the synthetic class helper and
+  (protected `P-*` provider runs), `scripts/e2e/` the synthetic class helper, the J2.6
+  pipeline smoke and its deterministic provider/Riva doubles, and
   `scripts/load/` the proxy no-buffering and load helpers.
 - `.env.example` — Template for `MAULWURF_*`, Google OAuth, NVIDIA, and provisional ingest
   limit variables; copy to `.env` (never commit `.env`).
