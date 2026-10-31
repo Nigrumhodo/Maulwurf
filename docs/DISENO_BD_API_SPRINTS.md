@@ -1426,6 +1426,15 @@ visible/editable before confirming and the LLM never invents a duration.
 | `POST` | `/calendar/sync` | Forces a full refresh of the window with atomic publication (without mixing `syncToken` with filters) | `202` · `409` |
 | `GET` | `/calendar/conflicts` | Conflicts: time overlap (events with time) vs concentration of deadlines/exams on the same day | `200` shape below |
 
+J3.7 response shape: `from`/`to` are inclusive local dates; `events` carries each mirror row
+with its instant pair or the exclusive all-day pair, plus `from`, `to`, `last_synced_at`,
+`coverage_ok`, `stale` and a closed-set `coverage_notice` (`never_synced`,
+`no_read_calendars`, `calendar_set_changed`, `outside_coverage`, `stale`). A notice never
+hides the rows already mirrored; an inverted or oversized range answers `422
+validation_failed`. When only one bound is sent, the other is derived from it (`from` →
+`from+60`, `to` → `to-7`) instead of from today's default window, so a future `from` cannot
+answer a misleading inverted-range error.
+
 ```json
 {
   "time_conflicts": [

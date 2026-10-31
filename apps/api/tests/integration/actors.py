@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.deps import COOKIE_NAME, CSRF_HEADER
 from app.models import (
     Audio,
+    CalendarEvent,
     Chunk,
     Conversation,
     Embedding,
@@ -492,6 +493,23 @@ async def make_google_credential(db: AsyncSession, actor: Actor) -> GoogleCreden
     return credential
 
 
+async def make_calendar_event(db: AsyncSession, actor: Actor) -> CalendarEvent:
+    """Timed mirror event of the actor (J3.7)."""
+    start = datetime.now(UTC) + timedelta(days=1)
+    event = CalendarEvent(
+        user_id=actor.user_id,
+        calendar_id="primary",
+        event_id=f"event-{uuid.uuid4().hex}",
+        title="Evento de prueba",
+        start_at=start,
+        end_at=start + timedelta(hours=1),
+        last_synced_at=datetime.now(UTC),
+    )
+    db.add(event)
+    await db.flush()
+    return event
+
+
 Factory = Callable[[AsyncSession, Actor], Awaitable[Any]]
 
 FACTORIES: dict[type[TenantOwned], Factory] = {
@@ -509,4 +527,5 @@ FACTORIES: dict[type[TenantOwned], Factory] = {
     IngestionAttempt: make_attempt,
     VariantConfirmationToken: make_variant_confirmation_token,
     OutboxEvent: make_outbox_event,
+    CalendarEvent: make_calendar_event,
 }

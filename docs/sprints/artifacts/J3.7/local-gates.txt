@@ -1,0 +1,315 @@
+J3.7 — local gates (MAULW-120)
+===============================
+
+Date: 2026-10-31 (UTC)
+Host: isolated development sandbox, PostgreSQL 16.15 + Redis 7 available.
+Repo: /home/hatch/workspace/repos/mwt-120, branch task/MAULW-120.
+No real Google call, credential or secret was used.
+
+Environment note
+----------------
+The sandbox exports a NO_PROXY value containing bracketed IPv6 literals (`[::1]`).
+httpx parses that list incorrectly, which breaks two pre-existing unit tests
+(`test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured` and
+`test_llm.py::test_shared_http_client_is_bounded_reused_and_closed`). They pass with a
+syntactically valid NO_PROXY, which is how the counts below were produced. This is an
+environment issue outside this diff, already recorded by J3.4/J3.5.
+
+Commands and results
+--------------------
+$ cd apps/api
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 224 source files
+
+$ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
+    uv run pytest tests/unit -q
+1182 passed, 35 warnings in 10.67s
+
+$ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
+    uv run pytest tests/integration/test_calendar_read.py \
+      tests/integration/test_migrations.py \
+      tests/integration/test_rls.py \
+      tests/integration/test_isolation.py -q
+77 passed, 72 warnings in 25.94s
+
+$ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
+    uv run pytest tests/integration -q
+32 failed, 429 passed, 431 warnings in 109.05s
+
+Known pre-existing integration failures
+---------------------------------------
+All 32 failures are in test_search.py, test_chat_sse.py and test_g4_eval.py. They depend on
+`SET LOCAL hnsw.iterative_scan`, which requires pgvector >= 0.8; this sandbox has pgvector
+0.6.0, so the API answers the documented `500 search_hnsw_unsupported`. They are outside
+this diff; the 12 new I-S3-JF-05 cases pass, as do the migration, RLS and isolation suites.
+
+$ psql -h localhost -U maulwurf -d maulwurf \
+    -c "select extversion from pg_extension where extname='vector';"
+ 0.6.0
+
+Docs
+----
+$ python3 scripts/docs/check_refs.py
+OK: 766 documented repository paths exist or are expected.
+
+Quality CI
+----------
+Workflow run 41225714988 on head 23d6ad7 (2026-10-31): all 17 checks green.
+  python-unit (api): 1182 passed
+  integration (api): 460 passed (including the 12 I-S3-JF-05 cases)
+  python-unit (ingest): 192 passed, 6 skipped
+  integration (ingest), e2e-smoke, docs, web, build-images, secret-scan,
+  license-report (api/ingest/web), python-static (api/ingest), caddy-limits
+  and compose-ingest-env: green.
+
+Review fix1 (hoplite findings, 2026-10-31)
+------------------------------------------
+Reproduced on the pre-fix code (head 0c2626c) with the new tests: 9 cases failed. The key
+one, `test_an_event_reprogrammed_from_outside_the_window_updates_in_place`, raised
+`sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
+"uq_calendar_events_user_id_calendar_id_event_id"`; the same test passes with the fix.
+
+Corrections:
+1. [ALTA] `SqlCalendarMirror.replace_window` now upserts on `(user_id, calendar_id,
+   event_id)` (`ON CONFLICT DO UPDATE`) and prunes rows of the republished calendars that
+   ended before the window. `source` and `task_id` are preserved on conflict and
+   task-linked rows are never pruned (the write path owns them).
+2. [MEDIA] `_resolve_window` completes a lone bound from the bound actually sent
+   (`from` -> `from+60`, `to` -> `to-7`), so `GET /calendar/events?from=<today+90>` answers
+   200 with that window instead of a misleading inverted-range 422.
+3. [BAJA-MEDIA] The per-user advisory lock uses the two-int form with namespace `0x4D57`,
+   the same value as `services/audios.py` (A2.14), instead of a bare bigint key.
+4. [ROBUSTEZ] `GoogleCalendarEventSource` rejects a non-object Google payload with
+   `CalendarEventInvalid("events_payload_invalid")` instead of an `AttributeError` -> 500.
+
+Secondary, low risk: `CalendarService.page` documents the expected read bound (not
+paginated; width <= 366 days; no silent LIMIT that would hide rows), the event `timeZone`
+is validated before storing, and the `_dedupe` docstring states the real rule (last
+occurrence in read order wins).
+
+Commands and results (fix1 code commits 52774c6 and 24a93c4, the latter comment-only)
+-----------------------------------------------
+$ cd apps/api
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 224 source files
+
+$ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
+    uv run pytest tests/unit -q
+1188 passed, 35 warnings in 11.91s
+
+$ ... uv run pytest tests/integration/test_calendar_read.py -q
+15 passed
+
+$ ... uv run pytest tests/integration/test_migrations.py tests/integration/test_rls.py -q
+19 passed
+
+$ ... uv run pytest tests/integration -q
+32 failed, 432 passed, 434 warnings in 103.47s
+
+The 32 failures are the same pre-existing pgvector 0.6 search/chat/G4 set listed above; no
+new failure was introduced. `python3 scripts/docs/check_refs.py` -> OK (770 paths).
+
+Quality CI: not observable from the development sandbox (the GitHub credentials in this
+environment are invalid), so the fix1 commit was pushed to update PR #131 and trigger a
+fresh workflow. The prior run 41225714988 on 23d6ad7 was green in all 17 checks.
+
+Review fix2 (hoplite finding on head b8f7c0b, 2026-10-31)
+--------------------------------------------------------
+Finding: `SqlCalendarMirror.replace_window` deleted every window row without excluding the
+task-linked ones. The upsert that followed re-inserted the row without `task_id` (the
+inserted values never carry it), so every refresh silently unlinked the task and freed the
+partial unique index `calendar_events_one_link` (one linked event per task).
+
+Reproduction on the pre-fix head b8f7c0b (only the fix stashed, new tests applied):
+$ ... uv run pytest tests/integration/test_calendar_read.py -q -k "task_linked"
+2 failed, 15 deselected
+  test_a_task_linked_row_inside_the_window_keeps_its_link_across_refreshes
+  test_a_task_linked_row_inside_the_window_survives_a_refresh_without_it
+
+Decision (recorded in the `replace_window` comment and the module docstring): the read
+mirror never deletes nor unlinks a task-linked row. If the linked event disappears from
+Google or moves out of the window, the row is deliberately kept inside the mirror; the
+write path (J3.4/A3.8) owns those rows and is the only place allowed to reconcile or unlink
+them.
+
+Fix: the window delete adds `CalendarEvent.task_id.is_(None)`, the same rule the pre-window
+prune already used. The `ON CONFLICT DO UPDATE` SET list still omits `task_id` (and
+`source`), so an upsert over an existing linked row only refreshes the remote values.
+
+Commands and results (fix2 code commit 2e1753c)
+----------------------------------------------
+$ cd apps/api
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 224 source files
+
+$ ... uv run pytest tests/unit -q
+1188 passed, 35 warnings in 15.89s
+
+$ ... uv run pytest tests/integration/test_calendar_read.py -q
+17 passed (15 previous + 2 fix2 regressions)
+
+$ ... uv run pytest tests/integration -q
+32 failed, 434 passed, 434 warnings in 118.37s
+
+The 32 failures are the same pre-existing pgvector 0.6 search/chat/G4 set listed above; no
+new failure appeared. Without the sanitized `no_proxy`, the same two pre-existing HTTP-client
+unit tests fail as recorded in the environment note; the unit count above was produced with
+the sanitized variable. `python3 scripts/docs/check_refs.py` -> OK: 770 documented repository
+paths exist or are expected.
+
+Quality CI: run 41228819918 on head 644c109 (fix2 code commit 2e1753c + this evidence
+update) is green in all 17 checks, including `python-unit (api)`, `integration (api)`,
+`docs`, `e2e-smoke` and `build-images`. Any later commit that only records this run does not
+change the code under test.
+
+
+Review fix3 (hoplite findings on heads 3faa571/644c109/2e1753c, 2026-10-31)
+----------------------------------------------------------------------------
+1. [media-alta] A calendar removed from the read selection kept its rows forever and
+   `GET /calendar/events` still returned them: `replace_window` only pruned the calendars
+   being republished, and `page` filtered by user and window only.
+   Fix: `CalendarService.page` now filters by the current `calendar_read_calendar_ids`
+   (an empty selection returns no rows), so a deselection is effective immediately; and
+   `SqlCalendarMirror.replace_window` reads the previous coverage inside the same
+   savepoint and deletes the unlinked rows of every calendar that was in it and is no
+   longer selected. Task-linked rows are still never deleted or unlinked.
+   New case: `test_a_deselected_calendar_stops_being_returned_and_is_pruned_on_refresh`
+   (GET hides the deselected calendar before the refresh; the refresh prunes its unlinked
+   row, keeps the linked one, records the new coverage and answers coverage_ok=true).
+   Updated case: `test_get_reports_never_synced_and_changed_coverage` now expects no
+   events after the selection changes instead of returning the old mirror.
+2. [media-alta] A task-linked row inside the window that Google no longer returns kept
+   `remote_status='confirmed'`, so GET presented it as a current event.
+   Fix: before the upsert, linked rows of the republished calendars that overlap the
+   window are marked `remote_status='missing'` (task_id untouched); every event that did
+   arrive is rewritten by the upsert, so only the really absent ones stay `missing`.
+   Rows outside the window are not touched (the read never observed them).
+   Updated case: `test_a_task_linked_row_inside_the_window_survives_a_refresh_without_it`
+   asserts the row survives with task_id, is returned as `missing`, and returns to
+   `confirmed` when Google returns the event again.
+3. [medio] A cancelled linked event kept `confirmed` because `parse_remote_event` dropped
+   cancelled instances with `None`.
+   Fix: a cancelled item is returned as `RemoteCancelledEvent` (a key, no block parsed);
+   `CalendarRead` carries both active events and cancelled keys; `replace_window` marks
+   the matching rows `remote_status='cancelled'` keeping task_id (deleting them would free
+   `calendar_events_one_link`). A known cancellation is not downgraded to `missing` by a
+   later read that simply does not return the event; a read that returns it rewrites the
+   status from Google.
+   New case: `test_a_cancelled_task_linked_event_is_marked_cancelled_and_keeps_the_link`
+   (mirror and GET show `cancelled` with task_id, stays cancelled on an absent refresh,
+   returns to `confirmed` when Google returns it).
+   New unit cases: cancelled keys are exposed by the adapter and deduplicated/forwarded to
+   the mirror.
+
+Low risk, same revision:
+- `_parse_instant`/`_parse_date` now name the failing side: a broken `end` raises
+  `event_end_invalid`/`event_end_naive`/`event_end_date_invalid` instead of blaming the
+  start. Three parametrized unit cases cover it.
+- Evidence counts: the first capture in this file (1182 passed) belongs to head `23d6ad7`,
+  before the fix1 regression cases; the later blocks (1188 for fix1/fix2 and 1192 for
+  fix3) supersede it. No recorded run was rewritten.
+- `docs/sprints/jose-leonardo.md`: the J3.7 row was checked and kept. It is the logbook of
+  the claim owner (`NigrumH0do`, same author as the canonical `CLAIMS.md` row and the
+  previous S3/J3 rows in that file), so it is not another member's logbook.
+
+Commands and results (fix3 code commits cc61cad, 6c61ab0 and 81c62e7)
+---------------------------------------------------------------------
+$ cd apps/api
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 224 source files
+
+$ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
+    uv run pytest tests/unit -q
+1192 passed, 35 warnings in 12.13s
+
+$ ... uv run pytest tests/integration/test_calendar_read.py -q
+19 passed (17 previous + deselection + cancellation; the missing-status assertions were
+added to an existing case)
+
+$ ... uv run pytest tests/integration -q
+32 failed, 436 passed, 438 warnings in 96.49s
+The 32 failures are the same pre-existing set (test_search.py 11, test_chat_sse.py 17,
+test_g4_eval.py 4) caused by pgvector 0.6 < 0.8 (`search_hnsw_unsupported`), outside this
+diff; no new failure appeared.
+
+$ python3 scripts/docs/check_refs.py
+OK: 770 documented repository paths exist or are expected.
+
+Merge with develop (75084eb, 2026-10-31)
+----------------------------------------
+`develop` gained J3.3 (`0006_s3_calendar_settings`) while this branch carried its own
+`0006` mirror migration, so the PR became conflicting and GitHub stopped scheduling the
+`pull_request` workflow. The branch merged `75084eb` and resolved the overlap:
+
+- The migration chain is now linear: `0006_s3_calendar_settings` (J3.3) creates the
+  per-user `settings` row; `0007_s3_calendar_mirror` (J3.7) adds the coverage columns to
+  that row and creates `calendar_events` with forced RLS. The settings model keeps both
+  J3.3's columns and the J3.7 coverage columns.
+- `test_migrations.py` expects the 0007 head and the two-step downgrade (0007 -> 0006 ->
+  0005); `test_rls_migration.py` imports both migrations and requires the union of their
+  tenant tables to match the models; `test_rls.py` keeps `settings` in the RLS set.
+- `CLAIMS.md` keeps both directed claims and lists J3.3 and J3.7.
+- `apps/web` was not touched.
+
+Commands and results (merge commit, on top of `81c62e7` + `0dcc230`)
+--------------------------------------------------------------------
+$ cd apps/api
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 229 source files
+
+$ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
+    uv run pytest tests/unit -q
+1215 passed, 35 warnings in 18.35s
+
+$ ... uv run pytest tests/integration/test_calendar_read.py -q
+19 passed
+
+$ ... uv run pytest tests/integration/test_migrations.py \
+      tests/integration/test_rls.py tests/unit/test_rls_migration.py -q
+21 passed
+
+$ ... uv run pytest tests/integration -q
+32 failed, 458 passed, 481 warnings in 99.41s
+Same pre-existing pgvector 0.6 failures (test_search.py 11, test_chat_sse.py 17,
+test_g4_eval.py 4). A prior local run counted 33 because the shared Redis still held
+`search:quota:*` keys from the earlier suite and `test_redis_policy` scans every key;
+after clearing those keys the count returned to the known 32. No new failure belongs to
+this diff.
+
+$ python3 scripts/docs/check_refs.py
+OK: 777 documented repository paths exist or are expected.
+
+One semantic reconciliation after the merge: J3.3's `settings` model comment said "empty
+means only the app calendar". J3.7's read contract is the opposite (hoplite fix3: an empty
+selection returns no rows and `coverage_notice=no_read_calendars`), so the comment was
+corrected: the app-created calendar is a write target, never an implicit read source.
+
+Quality CI (final fix3 head)
+----------------------------
+Run `41233915921` on head `6effb92` (merge of `develop` at `75084eb` + fix3) is green in
+all 17 checks: the 16 `quality` jobs (python-static api/ingest, python-unit api/ingest,
+integration api/ingest, docs, web, build-images, secret-scan, license-report api/ingest/web,
+caddy-limits, compose-ingest-env and e2e-smoke) plus the external `Trigger Hoplite QA`
+webhook. CI counts: `python-unit (api)` 1215 passed and `integration (api)` 489 passed
+(the job runs against the CI pgvector image, so the local 0.6 failures do not appear). The
+PR is MERGEABLE/CLEAN at `6effb92`; any later commit that only records this run does not
+change the code under test.
+
+The documentation-only head `3ad8de7` repeats the same result: run `41234390117` is green
+in the 16 `quality` jobs plus the Hoplite webhook, and the PR stays MERGEABLE/CLEAN. No
+code changed after `6effb92`.
