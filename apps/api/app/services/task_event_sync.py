@@ -25,6 +25,9 @@ response is lost, or a retry follows a timeout. The protocol is:
   an event that already holds the exact body this delivery wanted (another delivery wrote
   the same content), which is adopted without a second write. A confirmed revision reaches
   this path through the same deterministic event ID (insert → 409 → conditional PATCH).
+  A read that carries no ETag is never PATCHed: the write has no precondition, so it takes
+  the same conflict path. The newer-version repair likewise skips its write and logs
+  ``calendar_sync.repair_conflict`` when Google returns no fresh ETag.
 - **Blocked vs failed.** A missing calendar, a disconnected Google integration or an
   ``invalid_grant`` leaves the task ``blocked`` (J3.3 reconnects it); other terminal failures
   leave it ``failed``. Transient exhaustion raises so ARQ schedules a bounded retry.
@@ -137,7 +140,7 @@ class CalendarGateway(Protocol):
         event_id: str,
         body: Mapping[str, Any],
         *,
-        if_match: str | None = None,
+        if_match: str,
     ) -> Mapping[str, Any]: ...
 
 
@@ -377,11 +380,19 @@ class TaskEventSync:
                     task.version,
                 )
                 return SyncOutcome.STALE_VERSION
+            etag = _event_etag(existing)
+            if etag is None:
+                # No precondition means the PATCH could overwrite whatever changed after the
+                # read, so a missing ETag takes the same fail-closed path as a `412`.
+                logger.warning("calendar_sync.missing_etag task_id=%s", task.task_id)
+                return await self._external_conflict(
+                    task, body, event_id, gateway, calendar_id
+                )
             try:
                 # `If-Match` makes the write conditional: if the event was edited after the
                 # read above, Google answers 412 instead of letting us overwrite that edit.
                 await gateway.update_event(
-                    calendar_id, event_id, body, if_match=_event_etag(existing)
+                    calendar_id, event_id, body, if_match=etag
                 )
             except GoogleCalendarPreconditionFailed:
                 return await self._external_conflict(
@@ -455,16 +466,25 @@ class TaskEventSync:
             # the newer delivery's responsibility, not a reason to leave stale text here.
             event = await gateway.get_event(calendar_id, event_id)
             if event is not None and not event_content_matches(event, latest):
-                try:
-                    await gateway.update_event(
-                        calendar_id, event_id, latest, if_match=_event_etag(event)
-                    )
-                except GoogleCalendarPreconditionFailed:
+                etag = _event_etag(event)
+                if etag is None:
+                    # Without a fresh ETag the repair write cannot be made safe.
                     logger.warning(
                         "calendar_sync.repair_conflict task_id=%s", task.task_id
                     )
                 else:
-                    logger.info("calendar_sync.event_repaired task_id=%s", task.task_id)
+                    try:
+                        await gateway.update_event(
+                            calendar_id, event_id, latest, if_match=etag
+                        )
+                    except GoogleCalendarPreconditionFailed:
+                        logger.warning(
+                            "calendar_sync.repair_conflict task_id=%s", task.task_id
+                        )
+                    else:
+                        logger.info(
+                            "calendar_sync.event_repaired task_id=%s", task.task_id
+                        )
         return True
 
     async def _settle(

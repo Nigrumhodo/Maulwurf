@@ -177,6 +177,18 @@ class Gateway:
 
 
 
+class EtaglessRepairGateway(Gateway):
+    """Google omits the ETag on a later read; the delivery must then skip the write."""
+
+    async def get_event(
+        self, calendar_id: str, event_id: str
+    ) -> dict[str, Any] | None:
+        event = await super().get_event(calendar_id, event_id)
+        if event is not None and self.update_calls:
+            event.pop("etag", None)
+        return event
+
+
 class Sleeper:
     def __init__(self) -> None:
         self.delays: list[float] = []
@@ -452,7 +464,7 @@ async def test_a_version_bump_during_the_patch_repairs_the_event_to_the_newest_b
     # Pre-PATCH reload still sees v1; the post-PATCH reload sees the winning v2.
     store = SequencedStore(second, [first, second])
     gateway = Gateway()
-    gateway.events[_key(first)] = _existing(first)
+    gateway.events[_key(first)] = {**_existing(first), "etag": '"etag-v1"'}
 
     outcome = await _engine(store, gateway).sync(first, expected_version=1)
 
@@ -473,6 +485,7 @@ async def test_a_changed_detail_is_patched_into_the_event() -> None:
     gateway = Gateway()
     gateway.events[_key(task)] = {
         "id": deterministic_event_id(task.task_id),
+        "etag": '"etag-old"',
         **build_event_body(_task(task_id=task.task_id, detail="detalle anterior")),
     }
 
@@ -745,21 +758,57 @@ async def test_a_precondition_failure_with_matching_content_is_reconciled() -> N
 
 
 async def test_the_repair_patch_is_conditional_on_the_fresh_etag() -> None:
-    """The post-PATCH repair re-reads the event instead of writing an unconditional body."""
+    """Both the reconcile write and the repair carry the ETag they just read."""
     first = _task(version=1, title="Entregar informe")
     second = _revision(first)
     store = SequencedStore(second, [first, second])
     gateway = Gateway()
     key = _key(first)
-    gateway.events[key] = _existing(first)
+    gateway.events[key] = {**_existing(first), "etag": '"etag-v1"'}
 
     outcome = await _engine(store, gateway).sync(first, expected_version=1)
 
     assert outcome is SyncOutcome.STALE_VERSION
     assert len(gateway.update_calls) == 2
-    assert gateway.update_calls[0][3] is None
-    assert gateway.update_calls[1][3] is not None
+    assert gateway.update_calls[0][3] == '"etag-v1"'
+    assert all(call[3] is not None for call in gateway.update_calls)
     assert gateway.events[key]["summary"] == "Entregar informe corregido"
+
+
+async def test_a_reconcile_without_an_etag_never_patches() -> None:
+    """Fail closed: no ETag means no precondition, so no write may be sent."""
+    task = _task()
+    store = Store(task)
+    gateway = Gateway()
+    original = _existing(task)  # Google omitted `etag`
+    gateway.events[_key(task)] = original
+
+    outcome = await _engine(store, gateway).run(task.task_id, 1)
+
+    assert outcome is SyncOutcome.EXTERNAL_CONFLICT
+    assert gateway.update_calls == []
+    assert gateway.events[_key(task)] == original
+    assert store.failed == [(task.task_id, 1)]
+    assert store.synced == []
+
+
+async def test_a_repair_without_an_etag_skips_the_write(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The post-PATCH repair also fails closed when the fresh read has no ETag."""
+    first = _task(version=1, title="Entregar informe")
+    second = _revision(first)
+    store = SequencedStore(second, [first, second])
+    gateway = EtaglessRepairGateway()
+    key = _key(first)
+    gateway.events[key] = {**_existing(first), "etag": '"etag-v1"'}
+
+    outcome = await _engine(store, gateway).sync(first, expected_version=1)
+
+    assert outcome is SyncOutcome.STALE_VERSION
+    assert len(gateway.update_calls) == 1  # only the reconcile PATCH, no repair write
+    assert gateway.events[key]["summary"] == "Entregar informe"
+    assert "calendar_sync.repair_conflict" in caplog.text
 
 
 async def test_a_repair_that_hits_a_precondition_does_not_overwrite_either() -> None:
@@ -768,7 +817,7 @@ async def test_a_repair_that_hits_a_precondition_does_not_overwrite_either() -> 
     store = SequencedStore(second, [first, second])
     gateway = Gateway()
     key = _key(first)
-    gateway.events[key] = _existing(first)
+    gateway.events[key] = {**_existing(first), "etag": '"etag-v1"'}
     gateway.reject_update_at = 2
     gateway.on_reject_body = {"summary": "Editado durante la reparación"}
 

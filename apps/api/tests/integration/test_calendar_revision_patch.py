@@ -100,6 +100,7 @@ class FakeGoogle:
         self.patch_requests = 0
         self.patch_if_match: list[str | None] = []
         self.external_edit_on_patch: dict[str, Any] | None = None
+        self.omit_etag_on_get = False
         self._etag_sequence = 0
 
     def _next_etag(self) -> str:
@@ -150,6 +151,8 @@ class FakeGoogle:
         event = self.events.get(key)
         if event is None:
             return httpx.Response(404, json={"error": {"code": 404}})
+        if self.omit_etag_on_get:
+            event = {field: value for field, value in event.items() if field != "etag"}
         return httpx.Response(200, json=event)
 
 
@@ -342,6 +345,35 @@ async def test_an_external_edit_is_not_overwritten_and_needs_review(
     status, sync_status, _ = await _task_status(db_session, row["id"])
     assert status == "confirmed"  # the task lifecycle is untouched
     assert sync_status == "failed"  # D3.7 surfaces it for review and explicit retry
+
+
+async def test_a_missing_etag_never_patches_the_linked_event(
+    db_session: AsyncSession,
+) -> None:
+    """I-S3-JF-04 fix1: without an ETag the conditional write is refused, not sent."""
+    fake = FakeGoogle()
+    fake.omit_etag_on_get = True
+    actor = await make_actor(db_session)
+    row = await _insert_task(
+        db_session,
+        actor,
+        version=1,
+        titulo="Entregar informe",
+        detalle="Informe anterior",
+        event_start_at=START,
+        event_end_at=START + timedelta(hours=1),
+    )
+    previous = await _snapshot(db_session, row["id"])
+    key = (CALENDAR_ID, deterministic_event_id(row["id"]))
+    fake._store(key, _synced_event(previous))
+    await _advance_revision(db_session, row["id"])
+
+    await sync_task_event(_ctx(db_session, fake), str(row["id"]), 2)
+
+    assert fake.patch_requests == 0  # no unconditional PATCH was attempted
+    assert fake.events[key]["summary"] == "Entregar informe"
+    status, sync_status, _ = await _task_status(db_session, row["id"])
+    assert (status, sync_status) == ("confirmed", "failed")
 
 
 async def _insert_notification(

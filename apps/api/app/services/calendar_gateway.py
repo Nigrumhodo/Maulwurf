@@ -2,8 +2,9 @@
 
 Wraps `GoogleCalendarService` so the orchestrator sees "event or None" instead of the
 service's typed `NotFound` error, and never lists or deletes events. A 401 triggers one
-token refresh through the injected callback before the operation is retried. PATCHes can
-carry `If-Match` (J3.6), so an event edited in Google is never overwritten by a stale write.
+token refresh through the injected callback before the operation is retried. Every PATCH
+requires an `If-Match` ETag (J3.6), so an event edited in Google is never overwritten by a
+stale write; an unconditional call is rejected instead of sent.
 """
 
 from collections.abc import Awaitable, Callable, Mapping
@@ -61,20 +62,22 @@ class GoogleCalendarGateway:
         event_id: str,
         body: Mapping[str, Any],
         *,
-        if_match: str | None = None,
+        if_match: str,
     ) -> Mapping[str, Any]:
-        """Patch an event; with `if_match` Google answers 412 if it changed since the read."""
+        """Patch an event; `if_match` is mandatory so an external edit is never overwritten."""
+        if not if_match.strip():
+            # Fail closed: the gateway never issues an unconditional PATCH.
+            raise ValueError("update_event requires a non-empty If-Match ETag")
         payload = dict(body)
         if "description" not in payload:
             # PATCH keeps what is not sent; an empty string clears a removed detail.
             payload["description"] = ""
-        headers = {"If-Match": if_match} if if_match else None
         return await self._request(
             "PATCH",
             f"/calendars/{_calendar(calendar_id)}/events/{quote(event_id, safe='')}",
             params={"sendUpdates": "none"},
             json=payload,
-            headers=headers,
+            headers={"If-Match": if_match},
         )
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:

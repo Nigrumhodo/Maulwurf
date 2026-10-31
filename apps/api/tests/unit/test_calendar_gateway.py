@@ -62,7 +62,9 @@ def calendar() -> Calendar:
 
 
 async def test_update_event_patches_without_notifications(calendar: Calendar) -> None:
-    await _gateway(calendar).update_event(CALENDAR, EVENT_ID, BODY)
+    await _gateway(calendar).update_event(
+        CALENDAR, EVENT_ID, BODY, if_match='"etag-1"'
+    )
 
     request = calendar.requests[0]
     assert request.method == "PATCH"
@@ -75,7 +77,9 @@ async def test_update_event_clears_a_detail_the_new_version_removed(
 ) -> None:
     body = {k: v for k, v in BODY.items() if k != "description"}
 
-    await _gateway(calendar).update_event(CALENDAR, EVENT_ID, body)
+    await _gateway(calendar).update_event(
+        CALENDAR, EVENT_ID, body, if_match='"etag-1"'
+    )
 
     # PATCH keeps the fields it does not receive, so the adapter must send an empty string.
     assert json.loads(calendar.requests[0].content)["description"] == ""
@@ -90,12 +94,17 @@ async def test_update_event_sends_the_expected_etag(calendar: Calendar) -> None:
     assert calendar.requests[0].headers["if-match"] == '"etag-1"'
 
 
-async def test_update_event_without_an_etag_sends_no_precondition(
-    calendar: Calendar,
+@pytest.mark.parametrize("if_match", ["", "   "])
+async def test_update_event_refuses_a_write_without_a_precondition(
+    calendar: Calendar, if_match: str
 ) -> None:
-    await _gateway(calendar).update_event(CALENDAR, EVENT_ID, BODY)
+    """Fail closed: an unconditional PATCH could overwrite an external edit."""
+    with pytest.raises(ValueError, match="If-Match"):
+        await _gateway(calendar).update_event(
+            CALENDAR, EVENT_ID, BODY, if_match=if_match
+        )
 
-    assert calendar.requests[0].headers.get("if-match") is None
+    assert calendar.requests == []
 
 
 async def test_a_precondition_failure_is_typed_and_not_retried() -> None:
