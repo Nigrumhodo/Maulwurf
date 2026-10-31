@@ -23,6 +23,7 @@ from app.workers.jobs.calendar_sync import JOB_TIMEOUT_S as CALENDAR_SYNC_TIMEOU
 from app.workers.jobs.calendar_sync import MAX_TRIES as CALENDAR_SYNC_MAX_TRIES
 from app.workers.jobs.calendar_sync import sync_task_event
 from app.workers.reconciler import reconcile_once
+from app.workers.retry import MAX_TRIES as ANALYSIS_MAX_TRIES
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ _REDIS = RedisSettings.from_dsn(str(settings.redis_url))
 
 
 async def analyze(ctx: dict[str, Any], audio_id: str) -> None:
+    """S2 no-op until L3.6. Its retry budget is already the S3.6 policy (1 + 3)."""
     logger.info("analyze.noop audio_id=%s", audio_id)
 
 
@@ -74,10 +76,10 @@ async def startup(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    # `index` has its own retry budget (J2.2); `analyze` still has none.
+    # `index`, `analyze` and Calendar sync have their own retry budgets (J2.2/S3.6/J3.4).
     functions: ClassVar[list[Function | Callable[..., Awaitable[None]]]] = [
         func(index, max_tries=MAX_TRIES, timeout=JOB_TIMEOUT_S),
-        analyze,
+        func(analyze, max_tries=ANALYSIS_MAX_TRIES),
         func(
             sync_task_event,
             max_tries=CALENDAR_SYNC_MAX_TRIES,

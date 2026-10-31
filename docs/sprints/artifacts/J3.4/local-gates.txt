@@ -1,26 +1,26 @@
-J3.4 (MAULW-117) local gates — 2026-10-31 UTC
+J3.4 (MAULW-117) local gates — 2026-10-31 UTC (after merging develop #125)
 Host: Linux sandbox, Python 3.12.3, uv 0.13.1
 
 $ cd apps/api && uv run ruff check .
 All checks passed!
 
 $ cd apps/api && uv run mypy .
-Success: no issues found in 206 source files
+Success: no issues found in 210 source files
 
 $ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 uv run pytest tests/unit -q
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-1014 passed, 35 warnings in 9.31s
+1096 passed, 35 warnings in 9.57s
 
 $ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 uv run pytest tests/unit/test_task_event_sync.py -q
 ...................                                                      [100%]
-19 passed in 0.64s
+19 passed in 0.91s
 
 Integration executed before the sandbox reset (PostgreSQL 16.15 + Redis local):
 $ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 uv run pytest tests/integration/test_calendar_sync_job.py -q
 7 passed, 1 warning in 2.66s
 
-After the sandbox reset this host no longer provides PostgreSQL/Redis binaries, so
+After the reset this host no longer provides PostgreSQL/Redis binaries, so
 tests/integration/test_dispatcher.py and tests/integration/test_transcript_commit_gate.py
 (edited for the new consumer) were not rerun locally. Quality CI 'integration (api)'
 runs them with service containers.

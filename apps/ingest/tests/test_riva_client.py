@@ -215,6 +215,7 @@ def test_transcript_separates_result_blocks() -> None:
         word = "hoy"
         start_time = 0
         end_time = 100
+        confidence = 0.42
 
     class _Alt:
         def __init__(self, text: str, words: list[object]) -> None:
@@ -232,6 +233,52 @@ def test_transcript_separates_result_blocks() -> None:
     assert transcript.text == "hoy clase"
     assert transcript.precision == "word"
     assert transcript.words[0].text == "hoy"
+    assert transcript.words[0].confidence == 0.42
+
+
+def test_transcript_ignores_malformed_word_confidence() -> None:
+    class _Word:
+        word = "hoy"
+        start_time = 0
+        end_time = 100
+        confidence = "alta"
+
+    class _Alt:
+        transcript = "hoy"
+        words = [_Word()]
+
+    class _Result:
+        alternatives = [_Alt()]
+
+    class _Response:
+        results = [_Result()]
+
+    transcript = _transcript_from(_Response())
+
+    assert transcript.words[0].confidence is None
+
+
+def test_transcript_treats_the_protobuf_default_confidence_as_unknown() -> None:
+    class _Word:
+        word = "hoy"
+        start_time = 0
+        end_time = 100
+        # Proto3 scalars default to 0.0: the provider did not report a confidence.
+        confidence = 0.0
+
+    class _Alt:
+        transcript = "hoy"
+        words = [_Word()]
+
+    class _Result:
+        alternatives = [_Alt()]
+
+    class _Response:
+        results = [_Result()]
+
+    transcript = _transcript_from(_Response())
+
+    assert transcript.words[0].confidence is None
 
 
 async def test_cancelling_the_task_cancels_the_inflight_call() -> None:

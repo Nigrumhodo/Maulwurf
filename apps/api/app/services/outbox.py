@@ -6,10 +6,10 @@ Reglas (S1.md §1.3, DISENO §3.1):
   `cleanup_status = verified`. Un lease vencido o un intento sin evidencia no cuentan; sin
   intento conocido tampoco (fail closed). La doble condición es defensa en profundidad: el
   CHECK de la tabla ya impide un index/analyze habilitado con `blocked_reason`.
-- Calendar, notificaciones y borrados NO dependen del cleanup de audio. `sync_task_event`
-  ya tiene consumidor (J3.4); el resto se queda pendiente sin error hasta que su ticket lo
-  conecte.
-- Un tipo desconocido nunca se publica (fail closed) y se reporta.
+- Calendar, notifications and deletions never wait for audio cleanup. `sync_task_event`
+  already has a consumer (J3.4); the rest stays pending without error until its ticket
+  connects it.
+- An unknown type is never published (fail closed) and is reported.
 """
 from dataclasses import dataclass
 from enum import StrEnum

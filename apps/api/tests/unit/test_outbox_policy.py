@@ -50,7 +50,7 @@ def test_gated_event_blocked_while_flagged_even_if_cleanup_verified(
 def test_non_ingest_events_never_wait_for_audio_cleanup(
     event_type: str, cleanup_status: str | None
 ) -> None:
-    # Notificaciones y borrados no dependen del cleanup; aún no tienen consumidor.
+    # Notifications and deletions do not depend on cleanup; they have no consumer yet.
     decision = decide(
         event_type, enabled=True, blocked_reason=None, cleanup_status=cleanup_status
     )
@@ -62,7 +62,7 @@ def test_non_ingest_events_never_wait_for_audio_cleanup(
 def test_task_event_has_a_consumer_and_never_waits_for_cleanup(
     cleanup_status: str | None,
 ) -> None:
-    # J3.4: Calendar no depende del cleanup del audio y ya tiene job.
+    # J3.4: Calendar does not depend on audio cleanup and already has a job.
     decision = decide(
         "sync_task_event", enabled=True, blocked_reason=None, cleanup_status=cleanup_status
     )

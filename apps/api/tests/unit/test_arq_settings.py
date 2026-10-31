@@ -19,6 +19,7 @@ from app.workers.index_job import MAX_TRIES, index
 from app.workers.jobs.calendar_sync import JOB_TIMEOUT_S as CALENDAR_SYNC_TIMEOUT_S
 from app.workers.jobs.calendar_sync import MAX_TRIES as CALENDAR_SYNC_MAX_TRIES
 from app.workers.jobs.calendar_sync import sync_task_event
+from app.workers.retry import MAX_TRIES as ANALYSIS_MAX_TRIES
 
 
 def test_worker_and_scheduler_use_separate_queues() -> None:
@@ -34,12 +35,14 @@ def test_health_key_expires_fast_enough_to_detect_a_dead_process() -> None:
     assert HEALTH_CHECK_INTERVAL_S <= 60
 
 
-def test_worker_registers_index_and_calendar_sync_with_their_budgets() -> None:
+def test_worker_registers_index_analyze_and_calendar_sync_with_their_budgets() -> None:
     index_function, analyze_function, calendar_function = WorkerSettings.functions
     assert isinstance(index_function, Function)
     assert index_function.coroutine is index
     assert index_function.max_tries == MAX_TRIES
-    assert analyze_function is analyze
+    assert isinstance(analyze_function, Function)
+    assert analyze_function.coroutine is analyze
+    assert analyze_function.max_tries == ANALYSIS_MAX_TRIES
     assert isinstance(calendar_function, Function)
     assert calendar_function.coroutine is sync_task_event
     assert calendar_function.max_tries == CALENDAR_SYNC_MAX_TRIES
@@ -52,7 +55,7 @@ def test_scheduler_runs_only_the_outbox_and_reconciler_crons() -> None:
 
 
 def test_functions_without_their_own_budget_do_not_retry() -> None:
-    # Only `index` has a retry budget (J2.2); the default stays one try.
+    # Only `index` (J2.2) and `analyze` (S3.6) have a retry budget; the default stays one try.
     assert WorkerSettings.max_tries == 1
     assert SchedulerSettings.max_tries == 1
 

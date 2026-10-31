@@ -140,8 +140,8 @@ async def make_variant_confirmation_token(
 
 
 async def make_outbox_event(db: AsyncSession, actor: Actor) -> OutboxEvent:
-    # Tipo fuera de CLEANUP_GATED_EVENT_TYPES: el CHECK `cleanup_gate` exige enabled sin
-    # motivo de bloqueo. `task_cancelled` todavía no tiene consumidor.
+    # Outside CLEANUP_GATED_EVENT_TYPES, so the `cleanup_gate` CHECK requires enabled
+    # without a blocked reason. `task_cancelled` has no consumer yet.
     event = OutboxEvent(
         user_id=actor.user.id,
         type="task_cancelled",
