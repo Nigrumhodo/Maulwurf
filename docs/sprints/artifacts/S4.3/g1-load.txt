@@ -1,0 +1,277 @@
+S4.3 — G1 re-verification under load (L-S4-SG-01)
+Date (UTC): 2026-10-31T22:08:51Z
+Host: Linux 7.0.0-39-generic x86_64 GNU/Linux
+Command (default): cd apps/ingest && uv run python ../../scripts/load/g1_load.py
+
+S4.3 G1 re-verification under load (L-S4-SG-01)
+Environment: python=3.12.3, system=Linux 7.0.0-39-generic, ffmpeg=ffmpeg version 8.1.2, tmpfs_mounts=available, tmpfs_full_mode=real, worker_isolation=pid_namespace, riva_call=none
+Load: 4 attempt(s), 2 concurrent slot(s), 2 wave(s), 6.0 s synthetic tone, fragment cap 30 s, ASR deadline 1.00 s
+ att wave scenario        outcome     upload      tmpfs   slot_ram fs_clean verified orph injection
+   0    0  success        success  187.5 KiB  375.2 KiB 118.39 MiB      yes      yes    0 none
+   1    0     kill         killed  187.5 KiB  187.7 KiB 118.16 MiB      yes      yes    0 sigkill_asr_group (asr_failed)
+   2    1  timeout        timeout  187.5 KiB  187.7 KiB 118.16 MiB      yes      yes    0 asr_timeout
+   3    1     full         enospc  187.5 KiB   64.0 KiB  40.91 MiB      yes      yes    0 tmpfs_enospc_real (ENOSPC)
+Checks: zero audio persistence=yes; zero orphan temporaries=yes; RAM within per-slot reservation=yes
+RAM: 512.00 MiB per slot (provisional 1024.00 MiB / 2 slots) and 814.6 KiB tmpfs summed <= provisional 256.00 MiB: yes
+Injections: kill=yes; timeout=yes; tmpfs full=real
+Scoped absence (harness trees + logs): audio_files=0 magic_matches=0 log_markers=0 clear=yes
+Host absence (context only): audio_files=16 magic_matches=10 scan_complete=no clear=no
+Harness root: empty after attempts=yes; removed=yes
+G1 re-verified (strict, real full tmpfs): yes
+G1 checks pass (injected fallback labelled): yes
+Limits: 200 MiB and 3 h are not approved; D4 is blocked. No Riva call, no key and no audio kept.
+table_exit=0
+
+=== Structured evidence (JSON excerpt) ===
+Command: cd apps/ingest && uv run python ../../scripts/load/g1_load.py --no-host-sweep --format json
+
+{
+  "ticket": "S4.3",
+  "test_basis": "L-S4-SG-01",
+  "environment": {
+    "python": "3.12.3",
+    "system": "Linux 7.0.0-39-generic",
+    "ffmpeg": "ffmpeg version 8.1.2",
+    "tmpfs_mounts": "available",
+    "tmpfs_full_mode": "real",
+    "worker_isolation": "pid_namespace",
+    "riva_call": "none"
+  },
+  "load": {
+    "attempts": 4,
+    "slots": 2,
+    "waves": 2,
+    "concurrent": true,
+    "clip_seconds": 6.0,
+    "fragment_cap_seconds": 30,
+    "timeout_s": 1.0,
+    "worker_timeout_s": 120.0,
+    "synthetic_audio": "tone 16 kHz mono PCM s16, generated in RAM",
+    "riva_call": "none",
+    "database": "not used",
+    "redis": "only scanned when MAULWURF_REDIS_URL is set",
+    "worker_isolation": "pid_namespace"
+  },
+  "injections": {
+    "kill": true,
+    "timeout": true,
+    "tmpfs_full": true,
+    "tmpfs_full_evidence": "real",
+    "mode": "real",
+    "bounded_tmpfs_kib": 96
+  },
+  "aggregate": {
+    "tmpfs_peak_sum_of_slot_maxima_bytes": 834112,
+    "tmpfs_within_provisional": true,
+    "per_slot_reservation_bytes": 536870912,
+    "harness_root_empty": true,
+    "harness_root_cleaned": true
+  },
+  "absence": {
+    "scoped": {
+      "audio_files": 0,
+      "magic_matches": 0,
+      "unreadable_directories": 0,
+      "mounts_scanned": 0,
+      "cache_audio_files": 0,
+      "redis_audio_markers": 0,
+      "redis_checked": false,
+      "log_audio_markers": 0,
+      "trace_audio_markers": 0,
+      "traces_configured": false,
+      "scan_complete": true,
+      "redis_ok": true,
+      "infra_pruned": 0,
+      "clear": true
+    }
+  },
+  "checks": {
+    "zero_audio_persistence": true,
+    "zero_orphan_temporaries": true,
+    "ram_within_per_slot_reservation": true,
+    "injections_covered": true,
+    "checks_pass": true,
+    "g1_verified": true,
+    "g1_verified_with_injected_fallback": true
+  },
+  "limits": {
+    "provisional_slots": 2,
+    "provisional_mem_limit_bytes": 1073741824,
+    "provisional_tmpfs_bytes": 268435456,
+    "approved_200_mib": false,
+    "approved_3h": false,
+    "limits_validated": false
+  },
+  "notes": [
+    "The user-facing API, PostgreSQL lease/outbox state and the transcript commit are not exercised by this harness; I-S1-SG-06/07/08 and I-S2-SG-06/07 already cover them. The load leg covers the audio path, the ASR process group and cleanup.",
+    "No Riva channel is opened and no provider key is read. ASR latency, provider RAM and provider retention are out of scope.",
+    "The audio is a synthetic tone. Silence detection, transcription quality and real class content are not measured.",
+    "The per-slot reservation is derived from the provisional instance memory limit and the provisional slot count, not from an approved capacity decision.",
+    "The host absence sweep scans the shared machine. On a host that already contains unrelated audio artifacts it is context, not a G1 verdict; the scoped sweep of the harness trees and logs is the load-leg evidence. A clean container is the reference environment for the global sweep.",
+    "A full tmpfs is real only when the harness could mount a bounded private tmpfs. Without CAP_SYS_ADMIN the ENOSPC is injected at the write boundary and labelled as such; that run does not claim a real full disk.",
+    "200 MiB and 3 h remain unapproved. The provisional tmpfs and memory limits are context, not an approval."
+  ],
+  "attempts": [
+    {
+      "attempt": 0,
+      "wave": 0,
+      "slot": 0,
+      "scenario": "success",
+      "outcome": "success",
+      "injection": "none",
+      "injection_confirmed": true,
+      "upload_bytes": 192044,
+      "received_bytes": 192044,
+      "fragments": 1,
+      "wall_seconds": 1.216568,
+      "tmpfs_peak_bytes": 384244,
+      "tmpfs_after_bytes": 0,
+      "slot_ram_peak_bytes": 125124262,
+      "worker_rss_peak_bytes": 43266048,
+      "asr_group_rss_peak_bytes": 81670144,
+      "cleanup_verified": true,
+      "workdir_absent": true,
+      "live_processes": 0,
+      "open_descriptors": 0,
+      "unreadable_processes": 0,
+      "tmp_is_tmpfs": true,
+      "cleanup_seconds": 0.003501,
+      "slot_dir_orphans": 0,
+      "error": null,
+      "error_number": null,
+      "cleanup_error": null
+    },
+    {
+      "attempt": 1,
+      "wave": 0,
+      "slot": 1,
+      "scenario": "kill",
+      "outcome": "killed",
+      "injection": "sigkill_asr_group",
+      "injection_confirmed": true,
+      "upload_bytes": 192044,
+      "received_bytes": 192044,
+      "fragments": 0,
+      "wall_seconds": 1.140151,
+      "tmpfs_peak_bytes": 192166,
+      "tmpfs_after_bytes": 0,
+      "slot_ram_peak_bytes": 123563686,
+      "worker_rss_peak_bytes": 43110400,
+      "asr_group_rss_peak_bytes": 80261120,
+      "cleanup_verified": true,
+      "workdir_absent": true,
+      "live_processes": 0,
+      "open_descriptors": 0,
+      "unreadable_processes": 0,
+      "tmp_is_tmpfs": true,
+      "cleanup_seconds": 0.003637,
+      "slot_dir_orphans": 0,
+      "error": "asr_failed",
+      "error_number": null,
+      "cleanup_error": null
+    },
+    {
+      "attempt": 2,
+      "wave": 1,
+      "slot": 0,
+      "scenario": "timeout",
+      "outcome": "timeout",
+      "injection": "asr_timeout",
+      "injection_confirmed": true,
+      "upload_bytes": 192044,
+      "received_bytes": 192044,
+      "fragments": 0,
+      "wall_seconds": 1.149226,
+      "tmpfs_peak_bytes": 192166,
+      "tmpfs_after_bytes": 0,
+      "slot_ram_peak_bytes": 123858598,
+      "worker_rss_peak_bytes": 43048960,
+      "asr_group_rss_peak_bytes": 80642048,
+      "cleanup_verified": true,
+      "workdir_absent": true,
+      "live_processes": 0,
+      "open_descriptors": 0,
+      "unreadable_processes": 0,
+      "tmp_is_tmpfs": true,
+      "cleanup_seconds": 0.004294,
+      "slot_dir_orphans": 0,
+      "error": null,
+      "error_number": null,
+      "cleanup_error": null
+    },
+    {
+      "attempt": 3,
+      "wave": 1,
+      "slot": 1,
+      "scenario": "full",
+      "outcome": "enospc",
+      "injection": "tmpfs_enospc_real",
+      "injection_confirmed": true,
+      "upload_bytes": 192044,
+      "received_bytes": 65536,
+      "fragments": 0,
+      "wall_seconds": 0.031046,
+      "tmpfs_peak_bytes": 65536,
+      "tmpfs_after_bytes": 0,
+      "slot_ram_peak_bytes": 42917888,
+      "worker_rss_peak_bytes": 42917888,
+      "asr_group_rss_peak_bytes": 0,
+      "cleanup_verified": true,
+      "workdir_absent": true,
+      "live_processes": 0,
+      "open_descriptors": 0,
+      "unreadable_processes": 0,
+      "tmp_is_tmpfs": true,
+      "cleanup_seconds": 0.00221,
+      "slot_dir_orphans": 0,
+      "error": "ENOSPC",
+      "error_number": 28,
+      "cleanup_error": null
+    }
+  ]
+}
+=== Pre-fix reproduction of the cleanup-evidence defect ===
+Date (UTC): 2026-10-31T22:10:46Z (one of eight identical runs; the race is intermittent)
+Command: cd apps/ingest && uv run python ../../scripts/load/g1_load.py --attempts 4 --slots 2 --clip-seconds 6 --full-tmpfs-kib 96 --timeout-s 1 --no-host-sweep
+Result before the fix: the kill row is fs_clean=yes but verified=no because a killed ffmpeg is still a zombie when /proc is inspected; a zombie releases every descriptor, so the fix skips state Z/X in cleanup.open_descriptors_under (regression test in tests/test_cleanup.py).
+
+S4.3 G1 re-verification under load (L-S4-SG-01)
+Environment: python=3.12.3, system=Linux 7.0.0-39-generic, ffmpeg=ffmpeg version 8.1.2, tmpfs_mounts=available, tmpfs_full_mode=real, worker_isolation=pid_namespace, riva_call=none
+Load: 4 attempt(s), 2 concurrent slot(s), 2 wave(s), 6.0 s synthetic tone, fragment cap 30 s, ASR deadline 1.00 s
+ att wave scenario        outcome     upload      tmpfs   slot_ram fs_clean verified orph injection
+   0    0  success        success  187.5 KiB  375.2 KiB 116.94 MiB      yes      yes    0 none
+   1    0     kill         killed  187.5 KiB  187.7 KiB 116.40 MiB      yes       no    0 sigkill_asr_group (asr_failed)
+   2    1  timeout        timeout  187.5 KiB  187.7 KiB 116.85 MiB      yes      yes    0 asr_timeout
+   3    1     full         enospc  187.5 KiB   64.0 KiB  41.07 MiB      yes      yes    0 tmpfs_enospc_real (ENOSPC)
+Checks: zero audio persistence=yes; zero orphan temporaries=yes; RAM within per-slot reservation=yes
+RAM: 512.00 MiB per slot (provisional 1024.00 MiB / 2 slots) and 814.6 KiB tmpfs summed <= provisional 256.00 MiB: yes
+Injections: kill=yes; timeout=yes; tmpfs full=real
+Scoped absence (harness trees + logs): audio_files=0 magic_matches=0 log_markers=0 clear=yes
+Host absence: not run
+Harness root: empty after attempts=yes; removed=yes
+G1 re-verified (strict, real full tmpfs): yes
+G1 checks pass (injected fallback labelled): yes
+Limits: 200 MiB and 3 h are not approved; D4 is blocked. No Riva call, no key and no audio kept.
+
+
+=== Injected-ENOSPC fallback (sandbox demonstration: labelled, not a real full disk) ===
+Command: cd apps/ingest && uv run python ../../scripts/load/g1_load.py --attempts 4 --slots 2 --clip-seconds 4 --full-tmpfs-kib 16 --full-injection write_error --timeout-s 0.5 --no-host-sweep
+
+S4.3 G1 re-verification under load (L-S4-SG-01)
+Environment: python=3.12.3, system=Linux 7.0.0-39-generic, ffmpeg=ffmpeg version 8.1.2, tmpfs_mounts=available, tmpfs_full_mode=write_error, worker_isolation=pid_namespace, riva_call=none
+Load: 4 attempt(s), 2 concurrent slot(s), 2 wave(s), 4.0 s synthetic tone, fragment cap 30 s, ASR deadline 0.50 s
+ att wave scenario        outcome     upload      tmpfs   slot_ram fs_clean verified orph injection
+   0    0  success        success  125.0 KiB  250.2 KiB 115.61 MiB      yes      yes    0 none
+   1    0     kill         killed  125.0 KiB  125.2 KiB 117.22 MiB      yes      yes    0 sigkill_asr_group (asr_failed)
+   2    1  timeout        timeout  125.0 KiB  125.2 KiB 121.59 MiB      yes      yes    0 asr_timeout
+   3    1     full         enospc  125.0 KiB   48.0 KiB  40.86 MiB      yes      yes    0 tmpfs_enospc_injected (ENOSPC)
+Checks: zero audio persistence=yes; zero orphan temporaries=yes; RAM within per-slot reservation=yes
+RAM: 512.00 MiB per slot (provisional 1024.00 MiB / 2 slots) and 548.6 KiB tmpfs summed <= provisional 256.00 MiB: yes
+Injections: kill=yes; timeout=yes; tmpfs full=injected
+Scoped absence (harness trees + logs): audio_files=0 magic_matches=0 log_markers=0 clear=yes
+Host absence: not run
+Harness root: empty after attempts=yes; removed=yes
+G1 re-verified (strict, real full tmpfs): no
+G1 checks pass (injected fallback labelled): yes
+Limits: 200 MiB and 3 h are not approved; D4 is blocked. No Riva call, no key and no audio kept.
+fallback_exit=0
