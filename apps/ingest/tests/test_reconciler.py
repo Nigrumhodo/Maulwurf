@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import uuid
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
@@ -12,7 +13,7 @@ import pytest
 from test_commit import _commit, _draft, _ready  # noqa: E402
 from test_supervisor import PROVEN_CLEANUP, _seed, tmpfs_dir  # noqa: E402
 
-from maulwurf_ingest import cleanup, persistence
+from maulwurf_ingest import admission, cleanup, persistence
 from maulwurf_ingest import lease as leases
 from maulwurf_ingest.lease import reclaim_committed
 from maulwurf_ingest.persistence import CommitOutcome, enable_text_outbox
@@ -30,6 +31,13 @@ _ = (tmpfs_dir,)
 pytestmark = pytest.mark.integration
 
 _INSTANCE = "ingest:reconcile"
+
+
+@pytest.fixture(autouse=True)
+def _reset_admission() -> Iterator[None]:
+    admission.reset()
+    yield
+    admission.reset()
 
 
 async def _expire(pool: asyncpg.Pool, attempt_id: uuid.UUID) -> None:
@@ -404,3 +412,34 @@ async def test_sweep_once_composes_post_commit_and_stranded_recovery(
     assert stranded.attempt_id in result.stranded
     assert not workdir.exists()
     assert (await _attempt_row(pool, stranded.attempt_id))["status"] == "requires_reupload"
+
+
+async def test_cleanup_exception_is_recorded_failed_and_halts_admission(
+    pool: asyncpg.Pool, tmpfs_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S4.2: an exception during recovery cleanup is not a silent retry."""
+    if cleanup.open_descriptors_under(tmpfs_dir)[1]:
+        pytest.skip("multi-UID /proc: cleanup is fail-closed; run the ingest suite as root")
+    attempt, owned, _audio_id = await _ready(pool)
+    assert (await _commit(pool, owned, _draft())).outcome is CommitOutcome.COMMITTED
+    workdir = cleanup.create_workdir(str(attempt.attempt_id), str(tmpfs_dir))
+    cleanup.write_private(workdir / "original", b"RIFF" + b"\x00" * 8)
+    await _expire(pool, attempt.attempt_id)
+
+    def boom(*_args: object, **_kwargs: object) -> cleanup.CleanupEvidence:
+        raise OSError("rmtree")
+
+    monkeypatch.setattr(cleanup, "destroy_and_verify", boom)
+    try:
+        results = await reconcile_committed(pool, instance=_INSTANCE, tmp_dir=str(tmpfs_dir))
+
+        mine = [item for item in results if item.attempt_id == attempt.attempt_id]
+        assert mine == [ReconcileResult(attempt.attempt_id, ReconcileAction.CLEANUP_FAILED)]
+        row = await _attempt_row(pool, attempt.attempt_id)
+        assert row["cleanup_status"] == "failed"
+        assert admission.uploads_admitted() is False
+        assert admission.alerts() == (
+            admission.Alert("cleanup_failed", attempt.attempt_id),
+        )
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)

@@ -146,7 +146,26 @@ async def reconcile_committed(
             results.append(ReconcileResult(attempt_id, ReconcileAction.LOST))
             continue
         if workdirs:
-            evidence = await _destroy(workdirs)
+            try:
+                evidence = await _destroy(workdirs)
+            except Exception as exc:  # noqa: BLE001 — an exception is not proof of absence
+                # The periodic sweeper must not turn an unverified cleanup into a silent
+                # retry: record it as failed (durable across restarts) and stop admission.
+                logger.error(
+                    "reconciler.cleanup_error attempt_id=%s error=%s",
+                    attempt_id, type(exc).__name__,
+                )
+                cleanup.log_cleanup_failed(
+                    str(attempt_id), None, error_type=type(exc).__name__,
+                )
+                recorded = await leases.record_cleanup(
+                    pool, lease, verified=False,
+                    evidence={"verified": False, "error": type(exc).__name__},
+                )
+                if recorded:
+                    admission.halt(attempt_id)
+                results.append(ReconcileResult(attempt_id, ReconcileAction.CLEANUP_FAILED))
+                continue
             recorded = await leases.record_cleanup(
                 pool, lease, verified=evidence.verified, evidence=evidence.as_json(),
             )
