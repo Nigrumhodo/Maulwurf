@@ -272,6 +272,7 @@ class AudioDetailOut(BaseModel):
     stages: dict[str, str]
     aggregate_status: str
     audio_retained: bool = False
+    analysis_backfill_available: bool = False
     transcript: TranscriptOut | None
     exports: ExportsOut
 
@@ -323,6 +324,7 @@ def _detail_out(detail: library.AudioDetail) -> AudioDetailOut:
         attempt=_attempt_out(row.attempt),
         stages=dict(row.stages),
         aggregate_status=row.aggregate_status,
+        analysis_backfill_available=detail.analysis_backfill_available,
         transcript=(
             TranscriptOut(
                 version=detail.transcript.version,

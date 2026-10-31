@@ -1254,6 +1254,7 @@ across tenants).
   "stages": { "index": "pending", "analyze": "not_requested" },
   "aggregate_status": "processing",
   "audio_retained": false,
+  "analysis_backfill_available": true,
   "transcript": { "version": 2, "timestamp_precision": "segment", "char_count": 18422 },
   "exports": { "txt": true, "srt": true }
 }
@@ -1262,6 +1263,15 @@ across tenants).
 `transcript` is `null` without a usable transcript; `exports.srt` is `true` only when a
 truthful SRT exists (real precision and ordered times inside `duration_seconds`), so the
 client can enable the download without probing the `409`.
+
+`analysis_backfill_available` is the explicit S3.1/D3.5 action: it is `true` only for a live
+class with a persisted transcript, a latest attempt with `cleanup_status='verified'`, and an
+`analyze` stage that is `not_requested` (F1), `failed` or `cancelled`. While the analysis run
+is `pending`/`running` the stage itself is the visible queue and the flag is `false`, so a
+second click cannot duplicate work. Queueing never uploads audio or retranscribes: the
+operator script (`scripts/backfill_analysis.py`, dry-run by default) upgrades
+`required_stages` to `['index','analyze']` and creates the `analyze` run plus its
+cleanup-gated event.
 
 `aggregate_status`: `processing` while required stages are pending/running; `ready` if all
 succeeded; `partial` if there is a usable transcript but some required stage failed/was

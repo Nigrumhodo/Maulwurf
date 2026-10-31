@@ -278,7 +278,7 @@ async def _emit_stage_event(
     )
 
 
-async def _ensure_stage_run(
+async def ensure_stage_run(
     db: AsyncSession,
     *,
     user_id: uuid.UUID,
@@ -408,7 +408,7 @@ async def request_retry(
     # runs in the caller's order, which the client already knows.
     by_stage: dict[str, StageRunOutcome] = {}
     for stage in sorted(stages):
-        by_stage[stage] = await _ensure_stage_run(
+        by_stage[stage] = await ensure_stage_run(
             db,
             user_id=user_id,
             audio_id=audio.id,
