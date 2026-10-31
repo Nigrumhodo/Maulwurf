@@ -1,0 +1,25 @@
+{
+  "version": "s3-window-cost-v1",
+  "kind": "authored-redacted",
+  "provenance": "Authored classroom text for U-S3-SG-02 in the languages of the F0.1 spike (es, en, fr). It is a redacted textual stand-in for the spike scenario: no audio, voice, student data, real class transcript or provider output is stored. Spoken duration is an authored estimate at roughly 140 words per minute; the measurement projects tokens per class hour linearly from it.",
+  "classes": [
+    {
+      "class_ref": "spike-derived-es",
+      "language": "es",
+      "file": "es-class.txt",
+      "spoken_seconds": 440
+    },
+    {
+      "class_ref": "spike-derived-en",
+      "language": "en",
+      "file": "en-class.txt",
+      "spoken_seconds": 420
+    },
+    {
+      "class_ref": "spike-derived-fr",
+      "language": "fr",
+      "file": "fr-class.txt",
+      "spoken_seconds": 400
+    }
+  ]
+}
