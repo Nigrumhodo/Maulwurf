@@ -1271,7 +1271,10 @@ is `pending`/`running` the stage itself is the visible queue and the flag is `fa
 second click cannot duplicate work. Queueing never uploads audio or retranscribes: the
 operator script (`scripts/backfill_analysis.py`, dry-run by default) upgrades
 `required_stages` to `['index','analyze']` and creates the `analyze` run plus its
-cleanup-gated event.
+cleanup-gated event. The upgrade is persisted only on the branch that actually queues a
+run: `already_analyzed`, `already_queued` and `unknown_run_state` leave the stage list
+untouched, and a class that is already F2 without an `analyze` run is reported as
+`already_f2_no_run` (its entry point is `POST /audios/{id}/retry`, not the backfill).
 
 `aggregate_status`: `processing` while required stages are pending/running; `ready` if all
 succeeded; `partial` if there is a usable transcript but some required stage failed/was
