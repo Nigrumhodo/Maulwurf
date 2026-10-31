@@ -136,7 +136,8 @@ the DSN user of each runtime must be a member of its role: the migration grants 
 to the migration user, so a deployment that authenticates `api`, `worker` and `ingest` with
 different users must grant `maulwurf_app`/`maulwurf_jobs`/`maulwurf_ingest` to each one.
 The API user also needs `maulwurf_jobs` because `/internal/metrics` performs its read-only
-aggregate under that role.
+aggregate under that role. When running the ARQ worker or scheduler outside compose, set
+`MAULWURF_DATABASE_ROLE=maulwurf_jobs`; the default is `maulwurf_app`.
 
 
 ## 6. Tests and lint
