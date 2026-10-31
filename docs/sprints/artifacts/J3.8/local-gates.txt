@@ -6,6 +6,24 @@ Host: isolated development sandbox, PostgreSQL 16.15 (pgvector 0.6.0) + Redis 7.
 Repo: /home/hatch/workspace/repos/mwt-121, branch task/MAULW-121 (from develop 06beb01).
 No real Google call, credential or secret was used; `apps/web` is untouched.
 
+Review fix1 scope
+-----------------
+- `refresh_calendar_mirror` split the credential row lock from the Google reads: a short
+  `settings` transaction enforces/stamps the manual cooldown, a second short
+  `google_credentials` transaction decides and renews the token, and both commit before
+  `sync_calendar_window` reads any page. Publication reopens its own transaction.
+- Both lock waits are bounded (`SET LOCAL lock_timeout = 2s`); PostgreSQL SQLSTATE 55P03
+  maps to `503 calendar_sync_temporarily_unavailable` with `Retry-After`.
+- `settings.calendar_last_manual_sync_at` (migration `0008_s3_calendar_manual_sync`)
+  anchors a 60-second per-user cooldown. A second manual call inside it answers
+  `429 rate_limited` with `Retry-After` and `details.reason=calendar_sync_cooldown`
+  before any provider call.
+- A second 401 after the forced token renewal is classified as `google_invalid_grant`
+  (credential disconnected + 409) instead of `calendar_read_failed`.
+- The cooldown counts accepted attempts: the stamp is written before the provider call, so
+  a failed refresh still waits out the window. `calendar_last_synced_at` keeps its J3.7
+  meaning (last complete publication) and is not used for the limit.
+
 Commands and results
 --------------------
 $ cd apps/api
@@ -13,23 +31,44 @@ $ uv run ruff check .
 All checks passed!
 
 $ uv run mypy .
-Success: no issues found in 232 source files
+Success: no issues found in 233 source files
 
 $ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
     uv run pytest tests/unit -q
-1233 passed, 35 warnings in 9.27s
+1240 passed, 35 warnings in 8.93s
 
 $ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
     uv run pytest tests/integration/test_calendar_conflicts.py \
       tests/integration/test_calendar_read.py \
+      tests/integration/test_calendar_connect.py \
+      tests/integration/test_calendar_sync_job.py \
       tests/integration/test_migrations.py \
       tests/integration/test_rls.py \
       tests/integration/test_isolation.py -q
-103 passed, 101 warnings in 18.25s
+142 passed, 147 warnings in 25.82s
 
 $ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
-    uv run pytest tests/integration -q
-32 failed, 477 passed, 502 warnings in 85.20s
+    uv run pytest tests/integration -q --tb=no
+32 failed, 482 passed, 508 warnings in 89.61s
+
+New regression coverage
+-----------------------
+`tests/unit/test_calendar_conflicts.py` (25 cases, 7 new): first manual sync has no
+cooldown; remaining seconds reported; exact boundary expires; a fractional second rounds up
+so `Retry-After` is never zero; a naive timestamp is read as UTC; a past stamp never yields
+a negative remainder; a future stamp is capped at the cooldown window.
+
+`tests/integration/test_calendar_conflicts.py` (24 cases, 5 new):
+- a second manual call inside the cooldown answers `429 rate_limited` with `Retry-After`
+  and `details.reason=calendar_sync_cooldown`, and Google is read once;
+- the cooldown expires and the next call answers 202;
+- a credential row locked by another connection makes the route answer 503 (bounded wait)
+  with `Retry-After`, using a production-like session factory with real commits;
+- a second 401 after the forced renewal disconnects the credential and answers 409
+  `google_invalid_grant`;
+- an independent connection probes `SELECT … FOR UPDATE` on `google_credentials` from
+  inside the `list_events` callback: it locks the row, proving the credential lock is
+  released before the Google read (the pre-fix code held it through every page).
 
 Known pre-existing integration failures
 ---------------------------------------
@@ -37,32 +76,31 @@ All 32 failures are in test_search.py (11), test_chat_sse.py (17) and test_g4_ev
 (4). They require `SET LOCAL hnsw.iterative_scan`, which needs pgvector >= 0.8; this
 sandbox has pgvector 0.6.0, so the API answers the documented
 `500 search_hnsw_unsupported`. They are outside this diff and match the J3.7 baseline.
-The new I-S3-JF-07 module (19 cases) and the 84 J3.7/migration/RLS/isolation cases pass.
 
 Environment note
 ----------------
 The local Redis 7 was started with the distribution defaults (`save` enabled), which made
 `test_redis_policy.py` fail on the first full run. Applying ADR-0005 (`CONFIG SET save ""`)
-and flushing the leftover search quota keys made both cases pass; the second full run above
-used that configuration. This is environment setup, not an application change.
+and flushing the leftover search quota keys made both cases pass; the full run above used
+that configuration. This is environment setup, not an application change.
 
 Docs
 ----
 $ python3 scripts/docs/check_refs.py
-OK: 782 documented repository paths exist or are expected.
+OK: 785 documented repository paths exist or are expected.
 
 Coverage of the ticket
 ----------------------
 - `GET /calendar/conflicts`: half-open timed overlap; all-day, cancelled and missing rows
   excluded; two or more deadlines/exams per user-local day; A3.1's absent `tasks` table
   returns an empty list instead of failing.
-- `POST /calendar/sync`: validates selection/grant/scopes, renews the token under the row
-  lock, calls the J3.7 atomic window publication, answers 202 with the covered window and
-  counts, 409 with a closed reason and 503 only for a transient provider failure.
+- `POST /calendar/sync`: validates selection/grant/scopes, enforces the per-user cooldown,
+  renews the token under a short row lock, releases it before the Google reads, calls the
+  J3.7 atomic window publication, answers 202 with the covered window and counts, 409 with
+  a closed reason, 429 with `Retry-After` inside the cooldown and 503 only for a transient
+  provider/lock failure.
 
 Quality CI
 ----------
-Workflow run 41237622749 on head 4f392bd (2026-10-31): all 17 checks green, including
-python-unit (api), python-unit (ingest), python-static (api/ingest), integration (api),
-integration (ingest), e2e-smoke, docs, web, build-images, secret-scan, license-report and
-caddy-limits. PR #133 stays open for review; it is not merged.
+Run 41237622749 on head 4f392bd (pre-fix) was green in all 17 checks. The Quality CI run
+for the fix1 head is recorded in the PR; PR #133 stays open for review and is not merged.

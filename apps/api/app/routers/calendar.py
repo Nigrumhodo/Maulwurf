@@ -13,9 +13,11 @@ conflicts.
 `POST /calendar/sync` forces a complete refresh of the same window. It validates the
 Google connection, the Calendar scopes and the read selection first (409 with a closed
 reason otherwise), then reads every calendar and replaces the mirror atomically through
-`services.calendar_sync.refresh_calendar_mirror`. The frozen contract answers `202`; the
-body carries the covered window and the publication counts, and the client re-reads the
-mirror through `GET /calendar/events`.
+`services.calendar_sync.refresh_calendar_mirror`. A per-user cooldown answers `429
+rate_limited` with `Retry-After` before any provider call, the credential row lock is
+released before the Google reads, and a bounded lock wait answers a transient `503`. The
+frozen contract answers `202`; the body carries the covered window and the publication
+counts, and the client re-reads the mirror through `GET /calendar/events`.
 """
 
 from datetime import date
@@ -25,6 +27,7 @@ from fastapi import APIRouter, Query, Response
 
 from app.core.deps import CurrentSession, DbSession, MutationSession
 from app.core.errors import (
+    calendar_sync_cooldown,
     calendar_sync_temporarily_unavailable,
     calendar_sync_unavailable,
     google_integration_unavailable,
@@ -41,7 +44,10 @@ from app.schemas.calendar import (
     TimeConflictOut,
 )
 from app.services.calendar_sync import (
+    LOCK_RETRY_AFTER_SECONDS,
     CalendarService,
+    CalendarSyncBusy,
+    CalendarSyncCooldown,
     CalendarSyncError,
     CalendarSyncUnavailable,
     CalendarWindowInvalid,
@@ -216,6 +222,12 @@ async def calendar_conflicts(
                 "grant that must be renewed"
             )
         },
+        429: {
+            "description": (
+                "rate_limited: manual refresh requested inside the per-user cooldown, "
+                "with Retry-After"
+            )
+        },
         503: {"description": "calendar_sync_temporarily_unavailable"},
     },
 )
@@ -231,6 +243,15 @@ async def calendar_sync(
     response.headers["Cache-Control"] = "no-store"
     try:
         result = await refresh_calendar_mirror(db, user_id=session.user_id)
+    except CalendarSyncCooldown as exc:
+        # The cooldown is decided before any provider call; nothing was written past the
+        # attempt stamp, which the service already committed.
+        raise calendar_sync_cooldown(exc.retry_after_seconds) from exc
+    except CalendarSyncBusy as exc:
+        # The bounded row-lock wait expired: transient contention, not a state error.
+        raise calendar_sync_temporarily_unavailable(
+            retry_after_seconds=LOCK_RETRY_AFTER_SECONDS
+        ) from exc
     except CalendarSyncUnavailable as exc:
         if exc.code == "google_invalid_grant":
             # `refresh_calendar_mirror` already disconnected the credential; commit that

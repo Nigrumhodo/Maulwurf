@@ -1423,7 +1423,7 @@ visible/editable before confirming and the LLM never invents a duration.
 | Method | Route | Description | Responses |
 |---|---|---|---|
 | `GET` | `/calendar/events?from=&to=` | Reads the local mirror (`calendar_events`), proposed window -7/+60 days; reports freshness/coverage | `200` with `last_synced_at` and a coverage notice |
-| `POST` | `/calendar/sync` | Forces a full refresh of the window with atomic publication (without mixing `syncToken` with filters) | `202` · `409` |
+| `POST` | `/calendar/sync` | Forces a full refresh of the window with atomic publication (without mixing `syncToken` with filters); bounded by a per-user cooldown | `202` · `409` · `429` (`Retry-After`) · `503` |
 | `GET` | `/calendar/conflicts` | Conflicts: time overlap (events with time) vs concentration of deadlines/exams on the same day | `200` shape below |
 
 J3.7 response shape: `from`/`to` are inclusive local dates; `events` carries each mirror row
@@ -1461,7 +1461,12 @@ selection and freshness envelope as `GET /calendar/events`. `POST /calendar/sync
 carries a closed `details.reason` (`no_read_calendars`, `google_not_connected`,
 `missing_calendar_scopes`, `google_invalid_grant`, `calendar_read_failed`), and a
 transient provider failure answers `503 calendar_sync_temporarily_unavailable` without
-touching the mirror.
+touching the mirror. Since `0008_s3_calendar_manual_sync`, `settings` records
+`calendar_last_manual_sync_at`: a manual attempt inside the 60-second per-user cooldown
+answers `429 rate_limited` with `Retry-After` and
+`details.reason=calendar_sync_cooldown` before any Google call. Row locks cover only the
+cooldown decision and the token renewal; the Google reads run after those transactions
+commit, and a bounded lock wait answers the same transient `503`.
 
 The same contract feeds the dashboard and `get_calendar_events(range)`. When
 `/integrations/google/reconnect` completes, the backend looks only for `blocked` tasks of

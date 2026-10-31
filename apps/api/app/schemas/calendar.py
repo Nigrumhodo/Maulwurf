@@ -13,7 +13,8 @@ row linked to a task that the last read did not return or reported cancelled.
 timed events whose intervals overlap, while `deadline_clashes` groups two or more active
 task deadlines on the same user-local day. An all-day event and a deadline are never time
 conflicts. `POST /calendar/sync` answers `202` with the covered window and the publication
-counts; the client re-reads the mirror through `GET /calendar/events`.
+counts; the client re-reads the mirror through `GET /calendar/events`. A manual call inside
+the per-user cooldown answers `429` with `Retry-After` before any Google request.
 """
 
 from datetime import date, datetime

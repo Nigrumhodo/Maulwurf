@@ -567,7 +567,9 @@ week?").
   not draw the task and its linked event twice.
 
 **Endpoints:** `GET /calendar/events?from&to`, `POST /calendar/sync` (force),
-`GET /calendar/conflicts`.
+`GET /calendar/conflicts`. A manual refresh has a per-user cooldown (`429 rate_limited`
+with `Retry-After`) and never holds a database row lock across the Google reads; a bounded
+lock wait answers a transient `503`.
 
 ---
 

@@ -12,7 +12,11 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.calendar_sync import CalendarEventView
+from app.services.calendar_sync import (
+    MANUAL_SYNC_COOLDOWN_SECONDS,
+    CalendarEventView,
+    manual_sync_cooldown_remaining,
+)
 from app.services.conflicts import (
     DEADLINE_TIPOS,
     MIN_DEADLINES_PER_DAY,
@@ -342,3 +346,40 @@ async def test_deadline_source_returns_empty_until_the_tasks_table_exists() -> N
     )
 
     assert deadlines == []
+
+
+# --- Manual sync cooldown (J3.8 review) ------------------------------------------------
+
+
+def test_a_first_manual_sync_is_never_in_cooldown() -> None:
+    assert manual_sync_cooldown_remaining(None, now=NOW) == 0
+
+
+def test_cooldown_reports_the_seconds_left_in_the_window() -> None:
+    last = NOW - timedelta(seconds=10)
+    assert manual_sync_cooldown_remaining(last, now=NOW) == MANUAL_SYNC_COOLDOWN_SECONDS - 10
+
+
+def test_cooldown_expires_exactly_at_the_window_boundary() -> None:
+    last = NOW - timedelta(seconds=MANUAL_SYNC_COOLDOWN_SECONDS)
+    assert manual_sync_cooldown_remaining(last, now=NOW) == 0
+
+
+def test_cooldown_rounds_a_fraction_up_so_retry_after_is_never_zero() -> None:
+    last = NOW - timedelta(seconds=MANUAL_SYNC_COOLDOWN_SECONDS - 0.5)
+    assert manual_sync_cooldown_remaining(last, now=NOW) == 1
+
+
+def test_cooldown_accepts_a_naive_timestamp_as_utc() -> None:
+    last = (NOW - timedelta(seconds=5)).replace(tzinfo=None)
+    assert manual_sync_cooldown_remaining(last, now=NOW) == MANUAL_SYNC_COOLDOWN_SECONDS - 5
+
+
+def test_cooldown_never_reports_a_negative_remainder() -> None:
+    last = NOW - timedelta(days=1)
+    assert manual_sync_cooldown_remaining(last, now=NOW) == 0
+
+
+def test_cooldown_is_capped_when_the_stamp_is_in_the_future() -> None:
+    last = NOW + timedelta(days=1)
+    assert manual_sync_cooldown_remaining(last, now=NOW) == MANUAL_SYNC_COOLDOWN_SECONDS

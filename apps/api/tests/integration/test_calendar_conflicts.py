@@ -13,6 +13,7 @@ behind for the migration-catalog tests.
 import asyncio
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -28,27 +29,42 @@ from sqlalchemy import (
     MetaData,
     Table,
     Text,
+    event,
     func,
     inspect,
     select,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.pool import NullPool
 
 from app.core import crypto
+from app.core import db as core_db
 from app.core.config import settings
 from app.core.db import get_session
 from app.main import app
 from app.models import CalendarEvent, CalendarSettings, GoogleCredential, User
 from app.services import calendar_sync as calendar_sync_service
+from app.services import sessions
 from app.services.calendar_sync import (
+    MANUAL_SYNC_COOLDOWN_SECONDS,
     CalendarEventInvalid,
     CalendarRead,
     CalendarWindow,
     RemoteCalendarEvent,
+    refresh_calendar_mirror,
 )
-from app.services.google_calendar import GoogleCalendarInvalidGrant, GoogleCalendarTransientError
+from app.services.google_calendar import (
+    GoogleCalendarInvalidGrant,
+    GoogleCalendarTransientError,
+    GoogleCalendarUnauthorized,
+)
 from app.services.oauth_google import CALENDAR_SCOPES
 from tests.integration.actors import Actor, make_actor
 
@@ -126,6 +142,38 @@ async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     ) as http:
         yield http
     app.dependency_overrides.clear()
+
+
+@asynccontextmanager
+async def _production_client(migrated_database_url: str) -> AsyncIterator[AsyncClient]:
+    """HTTP client backed by a role-bound factory with real commits.
+
+    The standard `db_session` fixture joins an outer transaction through savepoints, so a
+    service `commit()` only releases a savepoint and row locks survive until teardown. Some
+    lock/concurrency cases must observe the production semantics (a commit really releases
+    the lock), so this client opens one session per request like `get_session` does.
+    """
+    engine = create_async_engine(migrated_database_url, poolclass=NullPool)
+    event.listen(engine.sync_engine, "begin", core_db._apply_tenant_settings)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def override() -> AsyncIterator[AsyncSession]:
+        async with factory() as session:
+            try:
+                yield session
+            except Exception:
+                await session.rollback()
+                raise
+
+    app.dependency_overrides[get_session] = override
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url=settings.allowed_origin
+        ) as http:
+            yield http
+    finally:
+        app.dependency_overrides.clear()
+        await engine.dispose()
 
 
 class FakeSource:
@@ -228,6 +276,64 @@ async def _credential(
     db.add(row)
     await db.flush()
     return row
+
+
+async def _seed_committed_actor(migrated_database_url: str) -> Actor:
+    """Create an actor whose rows are committed on their own connection.
+
+    A second connection can only see (and lock) the credential row once it is committed,
+    which is what the row-lock probes need. The standard `db_session` fixture keeps its
+    writes inside an open transaction, so it cannot be used for those cases.
+    """
+    engine = create_async_engine(migrated_database_url, poolclass=NullPool)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as db:
+            user = User(
+                google_sub=f"sub-{uuid.uuid4()}",
+                email=f"{uuid.uuid4().hex[:8]}@example.test",
+            )
+            db.add(user)
+            await db.flush()
+            access, version = crypto.encrypt(
+                "ya29.committed-access",
+                user_id=user.id,
+                field="google_credentials.access_token",
+            )
+            db.add(
+                CalendarSettings(
+                    user_id=user.id,
+                    calendar_read_calendar_ids=[CALENDAR],
+                )
+            )
+            db.add(
+                GoogleCredential(
+                    user_id=user.id,
+                    access_token_enc=access,
+                    key_version=version,
+                    scopes=list(CALENDAR_SCOPES),
+                    token_expires_at=datetime.now(UTC) + timedelta(hours=1),
+                    status="connected",
+                )
+            )
+            issued = await sessions.create_session(db, user.id)
+            await db.commit()
+        core_db.clear_user()
+        return Actor(user, issued)
+    finally:
+        await engine.dispose()
+
+
+async def _delete_committed_user(
+    migrated_database_url: str, user_id: uuid.UUID
+) -> None:
+    engine = create_async_engine(migrated_database_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("DELETE FROM users WHERE id = :user_id"), {"user_id": user_id}
+            )
+    finally:
+        await engine.dispose()
 
 
 async def _insert_event(
@@ -335,7 +441,7 @@ async def test_openapi_exposes_the_conflicts_and_sync_contract(
     conflicts = paths["/calendar/conflicts"]["get"]
     assert {"200", "401", "422"} <= set(conflicts["responses"])
     sync = paths["/calendar/sync"]["post"]
-    assert {"202", "401", "403", "409", "503"} <= set(sync["responses"])
+    assert {"202", "401", "403", "409", "429", "503"} <= set(sync["responses"])
 
 
 async def test_overlap_is_a_time_conflict_and_same_day_events_are_not(
@@ -688,6 +794,10 @@ async def test_sync_does_not_touch_the_mirror_when_google_fails(
     assert first.status_code == 202
     await db_session.refresh(settings_row)
     synced_at = settings_row.calendar_last_synced_at
+    # This case exercises the provider failure, not the cooldown: let the next manual
+    # attempt through without waiting for the real window.
+    settings_row.calendar_last_manual_sync_at = None
+    await db_session.flush()
 
     _patch_source(
         monkeypatch,
@@ -741,3 +851,193 @@ async def test_sync_with_a_malformed_provider_read_answers_409(
 
     assert response.status_code == 409
     assert response.json()["error"]["details"]["reason"] == "calendar_read_failed"
+
+
+async def test_sync_rejects_a_second_call_inside_the_per_user_cooldown(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = await make_actor(db_session)
+    settings_row = await _settings(db_session, actor)
+    await _credential(db_session, actor)
+    source = FakeSource()
+    _patch_source(monkeypatch, source)
+
+    first = await _post_sync(client, actor)
+    second = await _post_sync(client, actor)
+
+    assert first.status_code == 202
+    assert second.status_code == 429
+    error = second.json()["error"]
+    assert error["code"] == "rate_limited"
+    assert error["details"]["reason"] == "calendar_sync_cooldown"
+    retry_after = int(second.headers["Retry-After"])
+    assert 1 <= retry_after <= MANUAL_SYNC_COOLDOWN_SECONDS
+    # The cooldown is checked before the provider: one manual call means one Google read.
+    assert len(source.calls) == 1
+    await db_session.refresh(settings_row)
+    assert settings_row.calendar_last_manual_sync_at is not None
+
+
+async def test_sync_is_allowed_again_after_the_cooldown_expires(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = await make_actor(db_session)
+    settings_row = await _settings(db_session, actor)
+    await _credential(db_session, actor)
+    settings_row.calendar_last_manual_sync_at = datetime.now(UTC) - timedelta(
+        seconds=MANUAL_SYNC_COOLDOWN_SECONDS + 1
+    )
+    await db_session.flush()
+    source = FakeSource()
+    _patch_source(monkeypatch, source)
+
+    response = await _post_sync(client, actor)
+
+    assert response.status_code == 202
+    assert len(source.calls) == 1
+
+
+async def test_sync_reports_a_busy_credential_lock_as_transient(
+    migrated_database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A concurrent holder of the credential row must not make the route wait forever."""
+    actor = await _seed_committed_actor(migrated_database_url)
+    monkeypatch.setattr(calendar_sync_service, "LOCK_TIMEOUT_MS", 250)
+    holder = create_async_engine(migrated_database_url, poolclass=NullPool)
+    try:
+        async with holder.connect() as conn:
+            transaction = await conn.begin()
+            try:
+                await conn.execute(
+                    text(
+                        "SELECT user_id FROM google_credentials "
+                        "WHERE user_id = :user_id FOR UPDATE"
+                    ),
+                    {"user_id": actor.user_id},
+                )
+                # Real commits: the cooldown stamp transaction must release its settings
+                # lock so this case can finish and clean up its committed rows.
+                async with _production_client(migrated_database_url) as http:
+                    response = await _post_sync(http, actor)
+            finally:
+                await transaction.rollback()
+    finally:
+        await holder.dispose()
+        await _delete_committed_user(migrated_database_url, actor.user_id)
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "calendar_sync_temporarily_unavailable"
+    assert int(response.headers["Retry-After"]) >= 1
+
+
+async def test_a_second_401_after_the_forced_renewal_is_an_invalid_grant(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = await make_actor(db_session)
+    await _settings(db_session, actor)
+    credential = await _credential(db_session, actor)
+
+    async def _fake_fresh(
+        db: AsyncSession,
+        stored: GoogleCredential,
+        *,
+        now: datetime | None = None,
+        transport: Any = None,
+        force: bool = False,
+    ) -> str:
+        del db, stored, now, transport
+        return "forced-token" if force else "initial-token"
+
+    sources = iter(
+        [
+            FakeSource(error=GoogleCalendarUnauthorized("expired")),
+            FakeSource(error=GoogleCalendarUnauthorized("still rejected")),
+        ]
+    )
+    monkeypatch.setattr(calendar_sync_service, "fresh_access_token", _fake_fresh)
+    monkeypatch.setattr(
+        calendar_sync_service, "google_event_source", lambda _token: next(sources)
+    )
+
+    response = await _post_sync(client, actor)
+
+    assert response.status_code == 409
+    assert response.json()["error"]["details"]["reason"] == "google_invalid_grant"
+    await db_session.refresh(credential)
+    assert credential.status == "disconnected"
+
+
+async def test_the_credential_lock_is_released_before_google_reads(
+    migrated_database_url: str,
+) -> None:
+    """The Google read must not run while the credential row is still locked.
+
+    The source probes the row from an independent connection with a short `lock_timeout`.
+    While the old code held `FOR UPDATE` through every page, the probe timed out; after
+    splitting the lock transaction, the probe locks the row and releases it at once.
+    """
+    actor = await _seed_committed_actor(migrated_database_url)
+    probe = create_async_engine(migrated_database_url, poolclass=NullPool)
+    lock_states: list[str] = []
+
+    class _LockProbeSource:
+        async def list_events(
+            self, calendar_id: str, *, time_min: datetime, time_max: datetime
+        ) -> CalendarRead:
+            del time_min, time_max
+            async with probe.connect() as conn:
+                await conn.execute(text('SET LOCAL ROLE "maulwurf_app"'))
+                await conn.execute(
+                    text("SELECT set_config('app.user_id', :user_id, true)"),
+                    {"user_id": str(actor.user_id)},
+                )
+                await conn.execute(text("SET LOCAL lock_timeout = '250ms'"))
+                try:
+                    await conn.execute(
+                        text(
+                            "SELECT user_id FROM google_credentials "
+                            "WHERE user_id = :user_id FOR UPDATE"
+                        ),
+                        {"user_id": actor.user_id},
+                    )
+                except DBAPIError:
+                    lock_states.append("locked")
+                    raise
+                lock_states.append("free")
+            return CalendarRead(
+                events=(
+                    _timed(
+                        "during-read",
+                        datetime.now(UTC) + timedelta(days=1),
+                        calendar_id=calendar_id,
+                    ),
+                )
+            )
+
+    session_engine = create_async_engine(migrated_database_url, poolclass=NullPool)
+    event.listen(session_engine.sync_engine, "begin", core_db._apply_tenant_settings)
+    factory = async_sessionmaker(session_engine, expire_on_commit=False)
+    token = core_db.bind_user(actor.user_id)
+    try:
+        async with factory() as db:
+            result = await refresh_calendar_mirror(
+                db, user_id=actor.user_id, source=_LockProbeSource()
+            )
+            await db.commit()
+    finally:
+        core_db.reset_user(token)
+        core_db.clear_user()
+        await session_engine.dispose()
+        await probe.dispose()
+        await _delete_committed_user(migrated_database_url, actor.user_id)
+
+    assert lock_states == ["free"]
+    assert result.calendars == (CALENDAR,)
+    assert result.inserted == 1

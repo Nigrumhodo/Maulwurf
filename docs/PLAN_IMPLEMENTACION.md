@@ -221,6 +221,8 @@ a test gRPC server.
 - [ ] Complete paginated reading of the -7/+60 day window, recurrences/deletions, atomic
   publication, and visible coverage/freshness. Do not combine filters incompatible with
   syncToken.
+- [ ] Bound the manual refresh: per-user cooldown (`429` with `Retry-After`), no row lock
+  held across the Google reads, and a bounded lock wait answered as a transient `503`.
 - [ ] Task/agenda dashboard without duplicating the linked event; reading tools and
   `propose_task`, never direct writing. Time conflict distinct from per-day deadline
   concentration.
