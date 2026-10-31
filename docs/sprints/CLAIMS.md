@@ -149,8 +149,10 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | claim | A2.15 | jpinillaz | done | 2026-10-31 | not applicable | — / area A | Merged in #99 (7206df0), follow-up #103 (15e62a1): 404/405/500 envelope, `bad_request` for unmapped 4xx, uvicorn traceback redaction and no exception text in the body (U-S2-AN-14) |
 | claim | A2.16 | jpinillaz | done | 2026-10-31 | not applicable | — / area A, security | Merged in #98 (25060fd), follow-up #102 (cc0e8d7): `MAULWURF_ENV` required; 32-byte floor only for boundary secrets; boundary/provider alias checks; fail-closed outside `local` (U-S2-AN-15) |
 | claim | L2.11 | jpinillaz | done | 2026-10-31 | not applicable | — / lead, area L | Merged in #100 (e97a86d): status/path reconciliation and `scripts/docs/check_refs.py` in the CI `docs` job; 652 paths checked. `CLAIMS.md` discrepancies were reported, not rewritten (C-S2-JL-13) |
-| claim | J2.11 | jpinillaz | pending | 2026-10-31 | not applicable | — / area J | Hoplite C3: keep Redis I/O outside `FOR UPDATE` row locks in the reconciler (I-S2-JF-14). Claimed but not started; no branch or code yet |
-| claim | A2.20 | jpinillaz | pending | 2026-10-31 | not applicable | — / area A, area J | Hoplite C4: `processing_runs` fencing so a stale worker cannot finish a reclaimed run (I-S2-JF-15). Claimed but not started; no branch or code yet |
+| claim | J2.11 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area J | Hoplite C3: keep Redis I/O outside `FOR UPDATE` row locks in the reconciler (I-S2-JF-14); branch `feature/J2.11-reconciler-lock-scope` |
+| claim | A2.20 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area A, area J | Hoplite C4: `processing_runs` fencing so a stale worker cannot finish a reclaimed run (I-S2-JF-15); branch `feature/A2.20-run-fencing`, migration after `0003` |
+| claim | A2.18 | jpinillaz | pending | 2026-10-31 | not applicable | — / area A | Schema integrity follow-up: FK indexes, version invariants and drift test (I-S2-AN-17). Claimed but not started; migration must follow A2.20's revision |
+| claim | A2.19 | jpinillaz | pending | 2026-10-31 | not applicable | — / area A | Contract conformance of A1.8/A2.3/A2.4: TTL, language, token codes, `/me`, single limit source (U-S2-AN-18). Claimed but not started |
 
 ## 4. Change history
 
@@ -200,3 +202,4 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | 2026-10-31 | A2.14 (#101, 53ab840), A2.15 (#99 7206df0 + follow-up #103 15e62a1), A2.16 (#98 25060fd + follow-up #102 cc0e8d7) and L2.11 (#100 e97a86d) move to `done`. J2.4's follow-up #104 (875fba6) bounds lost-dispatch retries. Hoplite C3/C4 are split into J2.11 (reconciler Redis I/O outside row locks) and A2.20 (processing_runs fencing); both remain unclaimed. C5 stays with S4.2. | This PR |
 | 2026-10-31 | J2.5 moves to `done` after the C-S2-JF-10 failed-cleanup injection in compose: alert, metrics and absence of sensitive payload are captured in `docs/sprints/artifacts/J2.5/cleanup-failed.txt`. The alert destination and scrape config stay deployment configuration. | This PR |
 | 2026-10-31 | J2.11 (Hoplite C3) and A2.20 (Hoplite C4) are claimed by jpinillaz as `pending`; no branch or code exists yet. They close the two critical J2.4 follow-ups while C5 stays with S4.2. | This PR |
+| 2026-10-31 | J2.11 and A2.20 move to `in progress` on `feature/J2.11-reconciler-lock-scope` and `feature/A2.20-run-fencing`. A2.18 and A2.19 are claimed `pending`; A2.18's migration must follow A2.20's new revision. | This PR |
