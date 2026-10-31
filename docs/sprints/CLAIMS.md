@@ -1,6 +1,7 @@
 # Canonical claims registry — Maulwurf
 
-> Status: **S2 open**. Review: 2026-10-09.
+> Status: **S2 open**. Review: 2026-10-09. S3.1 is recorded under a directed claim for
+> MAULW-108; the rest of S3 remains closed.
 >
 > This file is the single source of truth for ticket ownership. Personal logbooks keep
 > evidence, blockers, and notes, but a row there does not assign a ticket by itself. Rows
@@ -42,8 +43,8 @@ These six values are **all** the status vocabulary: there are no `claimed`, `in_
 ## 3. Active sprint
 
 **S2 is open.** S1 has every implementation ticket `done`; only L1.7 (coordination and the
-formal S1 close) is unclaimed. S3 and S4 remain closed. D2 and D6
-remain `pending`; D3-Audio and D4 remain `blocked`.
+formal S1 close) is unclaimed. S3 and S4 remain closed except the directed S3.1 claim under
+MAULW-108 recorded below. D2 and D6 remain `pending`; D3-Audio and D4 remain `blocked`.
 
 ### S1 — Foundation + F0 spike
 
@@ -157,6 +158,15 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | claim | L2.9 | angalindog | in progress | 2026-10-31 | not applicable | — / lead | §M6 `Chunk` contract aligned with `chunks`/`chunk_segments`: `content`/`transcript_id`/`index_version`/`char_start`/`char_end`/`token_count` and a validated `overlap_span` JSON shape; `U-S2-JL-11` green (`test_chunk_contract.py`), chunker emits the contract and the indexer persists it without remapping. `ruff`/`mypy` clean, 854 API unit passed; local integration not run (sandbox without Docker/PostgreSQL/Redis) but Quality CI `integration (api)`/`integration (ingest)` passed and every PR #115 check is green. Branch `task/MAULW-170`; `done` waits for review and merge |
 | claim | J2.10 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area J, lead | C-S2-JF-13: ADR-0010 (Caddy is the only HTTP ingress; Cloudflare Tunnel dropped), Caddy 220 MB upload / 10 MB JSON ceilings and read/header/write/idle timeouts, and the native Caddy 2.8.4 measurement in `docs/sprints/artifacts/J2.10/ingress-limits.txt`. Branch `task/MAULW-186` |
 
+### S3 — Action (extraction and Calendar)
+
+> Only S3.1 is recorded: it was directed by MAULW-108. The remaining S3 backlog stays
+> unclaimable until the lead opens the sprint and updates the status above.
+
+| Action | Ticket | Owner | Status | Claimed at (UTC) | Cloud eligibility | Contributors / reviewers | Reason, evidence, or PR |
+|---|---|---|---|---|---|---|---|
+| claim | S3.1 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area S, area A | MAULW-108: explicit analysis backfill for F1 classes over persisted text only (no reupload/retranscription), `app/services/analysis_backfill.py` + `scripts/backfill_analysis.py`, `analysis_backfill_available` on `GET /audios/{id}`, I-S3-SG-01. L3.6/A3.1 are not in `develop`; the queue reaches the S2 `analyze` no-op, so extraction output is not claimed. PR #119: Quality CI green, `integration (api)` 404 passed and `integration (ingest)` passed. Branch `task/MAULW-108` |
+
 ## 4. Change history
 
 | Date (UTC) | Decision | Reference |
@@ -211,3 +221,4 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | 2026-10-31 | Owner reconciliation by angalindog against merged PRs: A2.5–A2.8 (#64–#68), L2.1 (#70) and L2.2 (#71) get concrete evidence; the superseded `in progress` duplicates of L2.5, L2.6 and A2.10 are removed (their `done` rows stay); L2.7 records merge #113 (`1832eee`) and stays `in progress` with cloud `pending` because G4 is **`NOT EVALUATED`** until an authorized real run and human review publish it. | This PR |
 | 2026-10-31 | L2.9 is claimed by angalindog (`in progress`): align the §M6 `Chunk` contract with the `chunks`/`chunk_segments` tables of migration `0002`, with a validated `overlap_span` shape and U-S2-JL-11. No cloud provider. | This PR |
 | 2026-10-31 | J2.10 is claimed by jpinillaz (`in progress`): ADR-0010 records Caddy as the only HTTP ingress (Cloudflare Tunnel dropped) and the Caddyfile sets a 220 MB upload ceiling, a 10 MB JSON ceiling and `read_body`/`read_header`/`write`/`idle` timeouts. C-S2-JF-13 is recorded with a native Caddy 2.8.4 measurement; `scripts/ci/check_caddy_limits.py` guards the envelope in CI. Branch `task/MAULW-186`. | This PR |
+| 2026-10-31 | S3.1 is claimed by jpinillaz (`in progress`) for the directed MAULW-108 ticket: explicit analysis backfill for F1 classes only from persisted text, an operator script with dry-run by default and the `analysis_backfill_available` detail flag. L3.6/A3.1 are absent from `develop`, so the queue reaches the S2 `analyze` no-op and no extraction result is claimed. S3 is not declared open here; the remaining S3 tickets stay blocked. PR #119: all Quality CI checks green, `integration (api)` 404 passed. | This PR |

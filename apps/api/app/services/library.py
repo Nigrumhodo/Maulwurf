@@ -27,9 +27,9 @@ from app.models import (
     Subject,
     Transcript,
 )
+from app.services import analysis_backfill, state_machine
 from app.services import progress as progress_service
 from app.services import runs as runs_service
-from app.services import state_machine
 from app.services.exports import srt_exportable
 from app.services.progress import ProgressSnapshot
 from app.services.tenant import get_owned
@@ -79,6 +79,9 @@ class AudioDetail:
     summary: AudioSummary
     transcript: TranscriptInfo | None
     srt_exportable: bool
+    # D3.5 can show the explicit «backfill/re-analysis» action without re-deriving the
+    # cleanup gate or the current stage state in the browser.
+    analysis_backfill_available: bool
 
 
 def _attempt_summary(attempt: IngestionAttempt | None) -> AttemptSummary | None:
@@ -300,7 +303,17 @@ async def get_audio_detail(
         stages=stages,
         aggregate_status=_aggregate(audio, attempt, stages, usable_version=usable),
     )
-    return AudioDetail(summary=summary, transcript=transcript_info, srt_exportable=exportable)
+    return AudioDetail(
+        summary=summary,
+        transcript=transcript_info,
+        srt_exportable=exportable,
+        analysis_backfill_available=analysis_backfill.analysis_backfill_available(
+            has_usable_transcript=usable is not None,
+            attempt_status=attempt.status if attempt is not None else None,
+            cleanup_status=attempt.cleanup_status if attempt is not None else None,
+            analyze_state=stages[analysis_backfill.ANALYSIS_STAGE],
+        ),
+    )
 
 
 async def active_transcript(

@@ -333,7 +333,9 @@ optional `variant_confirmation_token` → `audio_id`, `attempt_id`, URL, and exp
 `POST /audios/{id}/reupload` (only without a usable transcript);
 `POST /audios/{id}/attempts/{attempt_id}/cancel`; `DELETE /audios/{id}`;
 `GET /audios/{id}/transcript.txt`; `GET /audios/{id}/transcript.srt` (only with valid
-timestamps).
+timestamps). The `GET /audios/{id}` detail reports the derived per-stage states and whether
+the explicit analysis backfill is available; the backfill queue is the `analyze` stage over
+the persisted transcript, never a reupload or retranscription.
 
 ---
 
