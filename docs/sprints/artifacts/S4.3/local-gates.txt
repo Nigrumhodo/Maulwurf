@@ -1,0 +1,70 @@
+S4.3 — local gates (apps/ingest), 2026-10-31T22:12:55Z
+Host: Linux 7.0.0-39-generic x86_64 GNU/Linux · Python 3.12.3
+
+$ cd apps/ingest && uv run ruff check .
+All checks passed!
+exit=0
+
+$ cd apps/ingest && uv run mypy .
+Success: no issues found in 78 source files
+exit=0
+
+$ cd apps/ingest && uv run pytest tests -q -m 'not integration and not provider and not load' --ignore=tests/test_synthetic_audio.py
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+209 passed, 72 deselected, 2 warnings in 4.58s
+
+$ cd apps/ingest && uv run pytest tests -q -m 'not integration and not provider and not load'
+# test_synthetic_audio.py needs espeak-ng on PATH (S1.A1); this sandbox does not have it: pre-existing, not caused by this branch.
+FAILED tests/test_synthetic_audio.py::test_same_seed_is_byte_identical - Runt...
+FAILED tests/test_synthetic_audio.py::test_different_seed_changes_bytes - Run...
+FAILED tests/test_synthetic_audio.py::test_wav_is_pcm_s16_mono - RuntimeError...
+FAILED tests/test_synthetic_audio.py::test_expected_text_is_the_requested_phrase
+FAILED tests/test_synthetic_audio.py::test_spectrum_is_not_a_pure_tone - Runt...
+FAILED tests/test_synthetic_audio.py::test_does_not_write_wav_to_disk - Runti...
+FAILED tests/test_synthetic_audio.py::test_leading_dash_is_spoken_not_espeak_flags
+FAILED tests/test_synthetic_audio.py::test_rejects_overlong_utterance - Asser...
+8 failed, 210 passed, 72 deselected, 2 warnings in 4.23s
+
+$ cd apps/ingest && uv run pytest tests/test_g1_load.py -q -m load
+.                                                                        [100%]
+1 passed, 19 deselected in 3.58s
+
+$ python3 scripts/docs/check_refs.py
+OK: 798 documented repository paths exist or are expected.
+
+# Review fix1 — hoplite finding 1 on head d3c8932 (2026-10-31)
+$ git log --oneline -3
+43c7a21 [MAULW-151] fix1: record the unmount regression and the local-evidence scope
+51f7bb7 [MAULW-151] fix1: a failed clean unmount is never masked by the lazy detach
+1aa025d [MAULW-151] wip: regression for a failed unmount masked by the lazy attempt
+
+# Red before the code fix: the fake umount exits 1 for the clean detach and 0 for -l,
+# and the old code still returned ok=True because the mount point was removed.
+$ cd apps/ingest && uv run pytest tests/test_g1_load.py -q -k unmount
+FAILED tests/test_g1_load.py::test_a_failed_unmount_is_not_masked_by_a_successful_lazy_attempt
+E       assert True is False
+1 failed, 1 passed, 20 deselected in 0.42s
+
+# Green after the fix (final head).
+$ cd apps/ingest && uv run ruff check .
+All checks passed!
+
+$ cd apps/ingest && uv run mypy .
+Success: no issues found in 78 source files
+
+$ cd apps/ingest && uv run pytest tests -q -m 'not integration and not provider and not load' --ignore=tests/test_synthetic_audio.py
+211 passed, 72 deselected, 2 warnings in 6.27s
+
+$ cd apps/ingest && uv run pytest tests/test_g1_load.py -q
+22 passed in 5.61s
+
+$ cd apps/ingest && uv run pytest tests/test_g1_load.py -q -m load
+1 passed, 21 deselected in 3.46s
+
+$ cd apps/ingest && uv run pytest tests -q -m 'not integration and not provider and not load'
+# Same 8 pre-existing tests/test_synthetic_audio.py failures (espeak-ng missing on PATH).
+8 failed, 212 passed, 72 deselected, 2 warnings in 4.90s
+
+$ python3 scripts/docs/check_refs.py
+OK: 798 documented repository paths exist or are expected.
