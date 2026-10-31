@@ -114,12 +114,12 @@ async def test_disabled_events_are_not_even_selected(
     assert await pool.queued_jobs(queue_name=queue) == []
 
 
-async def test_events_without_s1_consumer_stay_pending(
+async def test_events_without_consumer_stay_pending(
     db_session: AsyncSession, redis: tuple[ArqRedis, str]
 ) -> None:
     pool, queue = redis
     user, audio = await _audio(db_session, "pending")
-    event = _event(user, audio, "sync_task_event")
+    event = _event(user, audio, "notify")
     db_session.add(event)
     await db_session.flush()
 
@@ -128,6 +128,48 @@ async def test_events_without_s1_consumer_stay_pending(
     # Ni siquiera entran al lote: siguen pendientes hasta que exista su consumidor.
     assert sum(report.values()) == 0
     assert event.status == "pending"
+    assert await pool.queued_jobs(queue_name=queue) == []
+
+
+async def test_task_event_is_dispatched_with_task_id_and_version(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    """J3.4: Calendar rows carry (task_id, task_version) and are not audio-revalidated."""
+    pool, queue = redis
+    user, audio = await _audio(db_session, "pending")
+    event = _event(user, audio, "sync_task_event")
+    event.resource_type = "task"
+    event.resource_id = uuid.uuid4()
+    event.resource_version = 3
+    db_session.add(event)
+    await db_session.flush()
+
+    report = await dispatch_pending(db_session, pool, queue_name=queue)
+
+    assert report[Outcome.PUBLISH] == 1
+    jobs = await pool.queued_jobs(queue_name=queue)
+    assert len(jobs) == 1
+    assert jobs[0].function == "sync_task_event"
+    assert jobs[0].args == (str(event.resource_id), 3)
+    assert event.status == "dispatched"
+
+
+async def test_task_event_without_version_is_skipped(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    """J3.4 receives a version; a malformed row is skipped once, never enqueued."""
+    pool, queue = redis
+    user, audio = await _audio(db_session, "pending")
+    event = _event(user, audio, "sync_task_event")
+    event.resource_type = "task"
+    event.resource_version = None
+    db_session.add(event)
+    await db_session.flush()
+
+    report = await dispatch_pending(db_session, pool, queue_name=queue)
+
+    assert report[Outcome.UNKNOWN_TYPE] == 1
+    assert event.status == "skipped"
     assert await pool.queued_jobs(queue_name=queue) == []
 
 

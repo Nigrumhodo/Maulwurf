@@ -6,21 +6,25 @@ Reglas (S1.md §1.3, DISENO §3.1):
   `cleanup_status = verified`. Un lease vencido o un intento sin evidencia no cuentan; sin
   intento conocido tampoco (fail closed). La doble condición es defensa en profundidad: el
   CHECK de la tabla ya impide un index/analyze habilitado con `blocked_reason`.
-- Calendar, notificaciones y borrados NO dependen del cleanup de audio. En S1 no tienen
-  consumidor, así que se quedan pendientes sin error hasta que su ticket lo conecte.
-- Un tipo desconocido nunca se publica (fail closed) y se reporta.
+- Calendar, notifications and deletions never wait for audio cleanup. `sync_task_event`
+  already has a consumer (J3.4); the rest stays pending without error until its ticket
+  connects it.
+- An unknown type is never published (fail closed) and is reported.
 """
 from dataclasses import dataclass
 from enum import StrEnum
 
 CLEANUP_GATED_TYPES = frozenset({"index_requested", "analyze_requested"})
-# Catálogo de DISENO §3.1 sin consumidor en S1 (sus jobs llegan en S3/S4).
+# Catálogo de DISENO §3.1 sin consumidor todavía (sus jobs llegan en S3/S4).
 KNOWN_WITHOUT_CONSUMER = frozenset(
-    {"sync_task_event", "task_cancelled", "notify", "send_digest", "delete_event",
-     "account_deleted"}
+    {"task_cancelled", "notify", "send_digest", "delete_event", "account_deleted"}
 )
 # Tipo de evento -> función ARQ del worker.
-JOB_FOR_TYPE = {"index_requested": "index", "analyze_requested": "analyze"}
+JOB_FOR_TYPE = {
+    "index_requested": "index",
+    "analyze_requested": "analyze",
+    "sync_task_event": "sync_task_event",
+}
 
 
 class Outcome(StrEnum):
@@ -54,9 +58,13 @@ def decide(
     event_type: str, *, enabled: bool, blocked_reason: str | None, cleanup_status: str | None
 ) -> Decision:
     """Qué hacer con un evento pendiente. `cleanup_status` es el del último intento del audio."""
-    if event_type in CLEANUP_GATED_TYPES:
-        if not enabled or blocked_reason is not None or cleanup_status != "verified":
-            return Decision(Outcome.CLEANUP_PENDING)
+    if event_type in JOB_FOR_TYPE:
+        if event_type in CLEANUP_GATED_TYPES:
+            if not enabled or blocked_reason is not None or cleanup_status != "verified":
+                return Decision(Outcome.CLEANUP_PENDING)
+            return Decision(Outcome.PUBLISH, JOB_FOR_TYPE[event_type])
+        if not enabled or blocked_reason is not None:
+            return Decision(Outcome.DISABLED)
         return Decision(Outcome.PUBLISH, JOB_FOR_TYPE[event_type])
     if event_type in KNOWN_WITHOUT_CONSUMER:
         return Decision(Outcome.NO_CONSUMER if enabled else Outcome.DISABLED)

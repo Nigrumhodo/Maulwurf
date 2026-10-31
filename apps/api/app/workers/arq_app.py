@@ -19,6 +19,9 @@ from app.core.db import bind_cross_tenant, reset_cross_tenant, session_scope
 from app.core.logging import configure_logging
 from app.workers.dispatcher import dispatch_pending
 from app.workers.index_job import JOB_TIMEOUT_S, MAX_TRIES, index
+from app.workers.jobs.calendar_sync import JOB_TIMEOUT_S as CALENDAR_SYNC_TIMEOUT_S
+from app.workers.jobs.calendar_sync import MAX_TRIES as CALENDAR_SYNC_MAX_TRIES
+from app.workers.jobs.calendar_sync import sync_task_event
 from app.workers.reconciler import reconcile_once
 from app.workers.retry import MAX_TRIES as ANALYSIS_MAX_TRIES
 
@@ -73,10 +76,15 @@ async def startup(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    # `index` and `analyze` have their own retry budget (J2.2/S3.6).
+    # `index`, `analyze` and Calendar sync have their own retry budgets (J2.2/S3.6/J3.4).
     functions: ClassVar[list[Function | Callable[..., Awaitable[None]]]] = [
         func(index, max_tries=MAX_TRIES, timeout=JOB_TIMEOUT_S),
         func(analyze, max_tries=ANALYSIS_MAX_TRIES),
+        func(
+            sync_task_event,
+            max_tries=CALENDAR_SYNC_MAX_TRIES,
+            timeout=CALENDAR_SYNC_TIMEOUT_S,
+        ),
     ]
     queue_name = WORKER_QUEUE
     redis_settings = _REDIS

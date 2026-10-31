@@ -3,7 +3,7 @@
 The S2.5 transaction stores the transcript, its segments and the disabled
 ``index_requested``/``analyze_requested`` rows. This suite proves that the API
 dispatcher does not publish them before the cleanup gate opens, publishes them once
-after the reconciler enables them, and that Calendar, notification and deletion rows
+after the reconciler enables them, and that notification and deletion rows
 do not delay the gated events.
 
 Layering: the dispatcher has two redundant cleanup checks, the ``LATEST_CLEANUP``
@@ -193,7 +193,7 @@ async def test_verified_cleanup_enables_and_publishes_once(
 async def test_non_gated_events_do_not_block_text_events(
     db_session: AsyncSession, redis: tuple[ArqRedis, str]
 ) -> None:
-    """I-S2-AN-10: Calendar/notification/deletion rows never delay the gated events.
+    """I-S2-AN-10: notification/deletion rows never delay the gated events.
 
     Those types are in ``KNOWN_WITHOUT_CONSUMER``, so the dispatcher removes them from
     the batch before the gate is evaluated. This test proves non-interference and
@@ -206,15 +206,15 @@ async def test_non_gated_events_do_not_block_text_events(
             db_session, actor, required_stages=["index", "analyze"]
         )
     )
-    calendar = _non_gated_event(actor, events["index"].resource_id, "sync_task_event")
+    cancelled = _non_gated_event(actor, events["index"].resource_id, "task_cancelled")
     notification = _non_gated_event(actor, events["index"].resource_id, "notify")
     deletion = _non_gated_event(
         actor, events["index"].resource_id, "delete_event", status="failed"
     )
-    db_session.add_all([calendar, notification, deletion])
+    db_session.add_all([cancelled, notification, deletion])
     await db_session.flush()
 
-    for event_type in ("sync_task_event", "notify", "delete_event"):
+    for event_type in ("task_cancelled", "notify", "delete_event"):
         decision = decide(
             event_type, enabled=True, blocked_reason=None, cleanup_status="pending"
         )
@@ -222,10 +222,10 @@ async def test_non_gated_events_do_not_block_text_events(
 
     report = await dispatch_pending(db_session, pool, queue_name=queue)
 
-    tracked = [*events.values(), calendar, notification, deletion]
+    tracked = [*events.values(), cancelled, notification, deletion]
     assert report[Outcome.PUBLISH] == 0
     assert await _jobs_for(pool, queue, tracked) == {}
-    assert (calendar.status, notification.status, deletion.status) == (
+    assert (cancelled.status, notification.status, deletion.status) == (
         "pending",
         "pending",
         "failed",
@@ -245,7 +245,7 @@ async def test_non_gated_events_do_not_block_text_events(
     assert report[Outcome.PUBLISH] == len(events)
     jobs = await _jobs_for(pool, queue, tracked)
     assert set(jobs) == {_job_id(event) for event in events.values()}
-    assert (calendar.status, notification.status, deletion.status) == (
+    assert (cancelled.status, notification.status, deletion.status) == (
         "pending",
         "pending",
         "failed",
