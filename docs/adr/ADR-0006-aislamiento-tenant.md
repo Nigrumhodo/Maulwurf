@@ -40,3 +40,38 @@ ingestion/outbox shape exist.
 - Composite FKs prevent linking resources of two users even if a filter fails.
 - Moving to RLS in S2 does not change the API or A1.9's tests; it adds a second barrier.
 - Changing this decision requires updating this ADR and `docs/plan/S1.md` in the same PR.
+
+## S2 implementation (A2.17)
+
+Revision `0005_s2_row_level_security` implements the S2 column of the table above:
+
+- **Policies:** every tenant table that exists today gets `ENABLE` and
+  `FORCE ROW LEVEL SECURITY` plus a `FOR ALL ... USING ... WITH CHECK` policy. `users`
+  is keyed by `id`; the rest by `user_id`. Tenant tables use `current_setting('app.user_id')`
+  without `missing_ok`, so a query without the setting raises instead of returning rows.
+- **Roles:** `maulwurf_app` (API), `maulwurf_jobs` (worker/scheduler) and `maulwurf_ingest`
+  (ingest) are `NOLOGIN`, `NOSUPERUSER` and `NOBYPASSRLS`. The DSN user keeps ownership and
+  migration privileges; each runtime transaction downgrades itself with
+  `SET LOCAL ROLE` (API in `app/core/db.py`, ingest in `maulwurf_ingest/rls.py`), so the
+  constrained role is the effective user for RLS and grants.
+- **Tenant binding:** the API sets `SET LOCAL app.user_id` as soon as the opaque session
+  resolves and keeps it in a `ContextVar`, so every later transaction in the request (and
+  its SSE generators) re-applies it from the engine `begin` listener. `SET LOCAL` is
+  transactional and does not leak through the pool.
+- **Bootstrap exceptions:** login and session resolution run before the tenant is known.
+  `users` has a narrow `SELECT`/`INSERT` policy keyed by the verified Google `sub`
+  (`app.google_sub`) and `sessions` a `SELECT` policy keyed by the presented token hash
+  (`app.session_token_hash`). These are the only reads that do not need `app.user_id`;
+  every other table fails closed.
+- **Cross-tenant jobs:** the dispatcher, reconciler and index claim are cross-tenant by
+  design. They run as `maulwurf_jobs` with a `jobs_cross_tenant` policy gated by
+  `app.cross_tenant='on'`, set only by those processes. The tenant policies are scoped
+  `TO maulwurf_app, maulwurf_ingest`, so a jobs transaction never evaluates the strict
+  `app.user_id` expression. The internal `/internal/metrics` aggregate is the one API-side
+  read that switches to this role (read-only, internal-only, aggregate counts). The ingest
+  attempt queue has an explicit `ingest_attempt_queue` policy for `maulwurf_ingest`;
+  transcript commits and the cleanup gate still bind `app.user_id`.
+- **Migrations:** `alembic upgrade head` runs as the DSN owner. A data migration that reads
+  or rewrites tenant rows needs a superuser or `BYPASSRLS` migration account (documented in
+  [`../RUNBOOK-dev.md`](../RUNBOOK-dev.md) §5.1); the runtime roles never get it. S3/S4
+  tables add their own policies and grants in their own migrations.

@@ -8,7 +8,7 @@ and build connections between notes, a calendar, and reminders.
 
 > **Project status — S1 implementation complete (L1.7 pending); S2 in progress.** The
 > repository contains the monorepo with its S1 foundation and a growing S2 knowledge slice: a
-> local Docker Compose stack (8 services, S1/J1.1), four Alembic migrations (`0001`–`0004`),
+> local Docker Compose stack (8 services, S1/J1.1), five Alembic migrations (`0001`–`0005`),
 > opaque sessions with CSRF (A1.4), Google login (A1.3), subject CRUD (A1.6), streaming
 > upload with SHA-256 and dedupe (A2.3/A2.4), hybrid search (L2.3/L2.4/A2.11), chat SSE with
 > validated citations (L2.5/L2.6), a hardened ingestion package (S2.1–S2.13), ARQ dispatch,
@@ -268,7 +268,7 @@ See [docs/RUNBOOK-dev.md](docs/RUNBOOK-dev.md) for the reproducible commands. Su
 | Lint and formatting | Ruff (Python) and ESLint (web), configured |
 | Type checking | mypy strict (Python) and `tsc --noEmit` (web), configured |
 | Documentation references | `python3 scripts/docs/check_refs.py` (docs, README and AGENTS paths) |
-| Migrations | Four revisions (`0001`–`0004`); the `api` container runs `alembic upgrade head` on boot (runbook §5) |
+| Migrations | Five revisions (`0001`–`0005`); the `api` container runs `alembic upgrade head` on boot (runbook §5) |
 | Deployment | No deployment manifests exist yet (S4/J4.x) |
 
 CI is defined in `.github/workflows/quality.yml` (lint, types, unit and integration tests,

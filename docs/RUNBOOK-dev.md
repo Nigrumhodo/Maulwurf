@@ -102,7 +102,7 @@ the same time, an advisory lock serializes them; the one waiting more than 120 s
 of hanging.
 
 ```bash
-docker compose exec api alembic current            # applied revision (head; 0001–0004)
+docker compose exec api alembic current            # applied revision (head; 0001–0005)
 docker compose exec api alembic upgrade head       # apply manually, e.g. after a pull
 docker compose exec api alembic downgrade -1       # rollback to the previous revision
 docker compose exec api alembic history            # revision chain
@@ -113,6 +113,24 @@ it only in development. A schema change is always a new revision
 (`uv run alembic revision --autogenerate -m "..."` from `apps/api`, reviewed by hand);
 an already-applied revision is never edited. `uv run alembic check` must answer "No new
 upgrade operations detected" before opening the PR.
+
+### 5.1 Row-level security roles (A2.17)
+
+Revision `0005` creates three cluster-wide `NOLOGIN` roles without `BYPASSRLS`:
+`maulwurf_app` (API), `maulwurf_jobs` (worker/scheduler) and `maulwurf_ingest` (ingest).
+The DSN user keeps the table ownership and migration privileges; each runtime transaction
+starts with `SET LOCAL ROLE` and binds `app.user_id` (or, for the jobs role, the explicit
+`app.cross_tenant` switch). `SET LOCAL` ends with the transaction, so pooled connections do
+not carry a tenant. `MAULWURF_DATABASE_ROLE` selects the API role; compose overrides it to
+`maulwurf_jobs` for the two ARQ processes and ingest uses `maulwurf_ingest` unconditionally.
+
+**Data migrations:** run `alembic upgrade head` with the DSN owner. In local compose that
+user is a superuser, which bypasses `FORCE ROW LEVEL SECURITY`. In staging/production the
+migration role must be a superuser or hold `BYPASSRLS` (a migration account, never the API
+account); the app, jobs and ingest roles never receive it. A data migration that runs as a
+non-superuser owner sees only the rows its own policies allow, so grant the bypass to the
+migration role before applying a revision that reads or rewrites tenant rows.
+
 
 ## 6. Tests and lint
 

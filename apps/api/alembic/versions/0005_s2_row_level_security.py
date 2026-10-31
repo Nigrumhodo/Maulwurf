@@ -72,9 +72,9 @@ BOOTSTRAP_POLICIES = {
     "sessions": ("auth_session_lookup",),
     "users": ("auth_user_lookup", "auth_user_insert"),
 }
-# The worker/scheduler processes are cross-tenant by design; credentials and sessions
-# stay out of that policy because no job needs them.
-JOBS_TABLES = tuple(t for t in TENANT_TABLES if t not in ("sessions", "google_credentials"))
+# Ingest only needs the tenant-bound tables of the transcript commit and its cleanup
+# gate. The attempt queue is deliberately cross-tenant for this role, and credentials
+# stay API-only.
 INGEST_TABLES = (
     "users",
     "subjects",
@@ -85,6 +85,15 @@ INGEST_TABLES = (
     "chunks",
     "chunk_segments",
     "outbox_events",
+)
+# These tables only ever see the API's authenticated tenant. `ingestion_attempts` is
+# excluded from the ingest role because its queue policy below is intentionally
+# permissive; `sessions`/`google_credentials` are API-only.
+APP_ONLY_TABLES = frozenset({"sessions", "ingestion_attempts", "google_credentials"})
+# The worker/scheduler processes are cross-tenant by design; credentials and sessions
+# stay out of that policy because no job needs them.
+JOBS_TABLES = tuple(
+    t for t in (*TENANT_TABLES, "users") if t not in ("sessions", "google_credentials")
 )
 
 
@@ -123,12 +132,18 @@ def _tenant_policy(table: str, *, safe_user: bool) -> None:
         else "current_setting('app.user_id')::uuid"
     )
     column = "id" if table == "users" else "user_id"
+    # Policy role lists keep the evaluator from combining a strict setting with the
+    # cross-tenant jobs/metrics policies: a role with no applicable strict policy does
+    # not evaluate `current_setting('app.user_id')` at all.
+    roles = _quote(APP_ROLE) if table in APP_ONLY_TABLES else (
+        f"{_quote(APP_ROLE)}, {_quote(INGEST_ROLE)}"
+    )
     op.execute(f"ALTER TABLE {_quote(table)} ENABLE ROW LEVEL SECURITY")
     op.execute(f"ALTER TABLE {_quote(table)} FORCE ROW LEVEL SECURITY")
     op.execute(
         f"""
         CREATE POLICY tenant_isolation ON {_quote(table)}
-          FOR ALL
+          FOR ALL TO {roles}
           USING ({column} = {user_setting})
           WITH CHECK ({column} = {user_setting})
         """
@@ -161,6 +176,18 @@ def _bootstrap_policies() -> None:
 
 def _cross_tenant_policies() -> None:
     for table in JOBS_TABLES:
+        column = "id" if table == "users" else "user_id"
+        # The index job binds app.user_id after it claims the audio; the dispatcher and
+        # reconciler keep the explicit switch on. The safe setting keeps the OR from
+        # raising while the switch is the active branch.
+        op.execute(
+            f"""
+            CREATE POLICY jobs_tenant ON {_quote(table)}
+              FOR ALL TO {_quote(JOBS_ROLE)}
+              USING ({column} = current_setting('app.user_id', true)::uuid)
+              WITH CHECK ({column} = current_setting('app.user_id', true)::uuid)
+            """
+        )
         op.execute(
             f"""
             CREATE POLICY jobs_cross_tenant ON {_quote(table)}
@@ -198,7 +225,7 @@ def _drop_policies() -> None:
     for table in RLS_TABLES:
         names = ["tenant_isolation", *BOOTSTRAP_POLICIES.get(table, ())]
         if table in JOBS_TABLES:
-            names.append("jobs_cross_tenant")
+            names.extend(("jobs_cross_tenant", "jobs_tenant"))
         if table == "ingestion_attempts":
             names.append("ingest_attempt_queue")
         for name in names:
