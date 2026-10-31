@@ -110,7 +110,9 @@ downgrades itself with `SET LOCAL ROLE`. `users` and `sessions` add the only boo
 policies (verified Google `sub` and presented session-token hash) because login and session
 resolution run before `app.user_id` exists. The dispatcher, reconciler and index claim use
 a `jobs_cross_tenant` policy gated by `app.cross_tenant='on'`; the ingest attempt queue has
-its own documented policy. S3/S4 tables add their policies and grants in their migrations.
+its own documented policy, recorded in ADR-0006 as an explicit accepted cross-tenant risk.
+Runtime grants cover the tenant tables but revoke write access to `alembic_version` (SELECT
+stays for diagnostics). S3/S4 tables add their policies and grants in their migrations.
 
 ### 2.1.1 Extensions
 

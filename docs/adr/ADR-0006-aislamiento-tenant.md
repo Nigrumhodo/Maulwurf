@@ -75,3 +75,33 @@ Revision `0005_s2_row_level_security` implements the S2 column of the table abov
   or rewrites tenant rows needs a superuser or `BYPASSRLS` migration account (documented in
   [`../RUNBOOK-dev.md`](../RUNBOOK-dev.md) §5.1); the runtime roles never get it. S3/S4
   tables add their own policies and grants in their own migrations.
+
+### Accepted risk: cross-tenant ingest attempt queue
+
+`ingestion_attempts` carries a permissive policy for `maulwurf_ingest`
+(`ingest_attempt_queue`, `USING (true)` / `WITH CHECK (true)`), so that role can read and
+write every tenant's attempt row. This is an explicit accepted risk, not an oversight:
+
+- **Why it stays in A2.17:** the admission latch counts the in-flight attempts of the whole
+  instance (global capacity), and the post-commit reconciler, the stranded sweep and lease
+  recovery run without a request, before or after any `app.user_id` exists. A
+  `SECURITY DEFINER` function would move the same SQL behind a fixed interface, but it
+  would still execute with the owner's cross-tenant rights: it reduces the call surface,
+  not the capability. Doing it now would also move the lease/heartbeat/cancel/sweep state
+  machine out of `maulwurf_ingest` and require re-testing the J2.4/S2.x failure matrix,
+  outside this ticket's scope.
+- **Blast radius if `maulwurf_ingest` is compromised:** read/write of operational metadata
+  in `ingestion_attempts` for every tenant (ids, statuses, timings, byte counts, error
+  codes, `user_id`) and disruption of the ingest state machine. The role cannot read audio
+  (it is never persisted), transcripts, segments, chunks, embeddings, conversations,
+  sessions or Google credentials: those tables stay tenant-bound for this role, and
+  `audios`, `subjects` and `outbox_events` require `app.user_id`.
+- **Existing limits:** the role is `NOLOGIN`, `NOBYPASSRLS`, owns no table and is used only
+  by the ingest service DSN user; `ingest_attempt_queue` is scoped to that role alone, so
+  the API and jobs roles remain tenant-bound on `ingestion_attempts`.
+- **Review trigger:** revisit when S3 adds analysis, Calendar or Gmail work to the queue, if
+  another service needs more than queue metadata, or if the ingest network boundary stops
+  containing a compromise. The preferred direction is a `SECURITY DEFINER` queue API:
+  per-tenant operations for request-bound work and one narrow cross-tenant function for
+  the sweeps.
+

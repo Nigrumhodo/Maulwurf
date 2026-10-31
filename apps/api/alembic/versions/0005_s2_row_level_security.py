@@ -17,8 +17,9 @@ privileges needed for DDL and data migrations:
   dispatcher, reconciler, index job claims an audio before knowing its owner). Their
   policy is gated by ``app.cross_tenant='on'``, set only by those processes.
 - ``maulwurf_ingest``: the ingest service. It owns the attempt queue and sweeps it
-  across tenants, so ``ingestion_attempts`` has an explicit permissive policy for it;
-  the transcript commit and the cleanup gate set ``app.user_id`` and remain bound.
+  across tenants, so ``ingestion_attempts`` has an explicit permissive policy for it
+  (ADR-0006 records it as an accepted risk); the transcript commit and the cleanup gate
+  set ``app.user_id`` and remain bound.
 
 The roles are cluster-wide and are intentionally not dropped on ``downgrade``: other
 databases of the same cluster may reference them. Downgrading removes every policy,
@@ -211,6 +212,9 @@ def _cross_tenant_policies() -> None:
           WITH CHECK (true)
         """
     )
+    # Why: admission capacity, the reconciler and the stranded sweep are cross-tenant by
+    # design. ADR-0006 records this as an explicit accepted risk (blast radius: attempt
+    # metadata only); revisit it with a SECURITY DEFINER queue API when S3 grows the queue.
 
 
 def _grant_privileges() -> None:

@@ -7,7 +7,8 @@ returned to the pool never carries the previous attempt's tenant.
 
 The only explicit cross-tenant path is the attempt queue: ``ingestion_attempts`` has a
 permissive policy for this role because the admission latch, the post-commit reconciler
-and the stranded sweep operate across users by design. Everything else (audios,
+and the stranded sweep operate across users by design. That is an explicit accepted risk
+recorded in ADR-0006 (blast radius and review trigger); everything else (audios,
 transcripts, segments, chunks, the outbox) stays bound to the attempt's ``user_id``.
 """
 
