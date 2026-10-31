@@ -352,6 +352,81 @@ async def test_rows_before_the_window_are_pruned_only_for_the_republished_calend
     ]
 
 
+async def test_a_deselected_calendar_stops_being_returned_and_is_pruned_on_refresh(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await make_actor(db_session)
+    settings_row = await _settings(
+        db_session, actor, read_calendars=[CALENDAR, "archive"]
+    )
+    now = datetime.now(UTC)
+    start = now + timedelta(days=1)
+    window = await _sync(
+        db_session,
+        actor,
+        source=FakeSource(
+            [
+                _timed("kept", start),
+                _timed("deselected", start, calendar_id="archive"),
+            ]
+        ),
+        calendars=[CALENDAR, "archive"],
+        now=now,
+    )
+    await db_session.refresh(settings_row)
+    # A linked row of the deselected calendar belongs to the write path: it must survive.
+    task_id = uuid.uuid4()
+    db_session.add(
+        CalendarEvent(
+            user_id=actor.user_id,
+            calendar_id="archive",
+            event_id="linked",
+            title="linked",
+            start_at=start,
+            end_at=start + timedelta(hours=1),
+            last_synced_at=now,
+            task_id=task_id,
+        )
+    )
+    await db_session.flush()
+
+    settings_row.calendar_read_calendar_ids = [CALENDAR]
+    await db_session.flush()
+    changed = await _get(
+        client, actor, date_from=window.start_date, date_to=window.end_date
+    )
+    # The mirror is not refreshed yet, but a deselected calendar is no longer presented.
+    assert [item["event_id"] for item in changed.json()["events"]] == ["kept"]
+    assert changed.json()["coverage_notice"] == "calendar_set_changed"
+
+    await _sync(
+        db_session,
+        actor,
+        source=FakeSource([_timed("kept", start)]),
+        calendars=[CALENDAR],
+        now=now,
+    )
+
+    rows = await _mirror(db_session, actor)
+    # The unlinked row of the deselected calendar is pruned in the same publication; the
+    # task-linked row is kept (never deleted or unlinked by the read mirror).
+    assert [(row.calendar_id, row.event_id) for row in rows] == [
+        (CALENDAR, "kept"),
+        ("archive", "linked"),
+    ]
+    assert next(row for row in rows if row.event_id == "linked").task_id == task_id
+
+    refreshed = await db_session.get(CalendarSettings, actor.user_id)
+    assert refreshed is not None
+    await db_session.refresh(refreshed)
+    assert refreshed.calendar_coverage_calendar_ids == [CALENDAR]
+
+    after = await _get(client, actor, date_from=window.start_date, date_to=window.end_date)
+    assert [item["event_id"] for item in after.json()["events"]] == ["kept"]
+    assert after.json()["coverage_ok"] is True
+    assert after.json()["coverage_notice"] is None
+
+
 async def test_a_task_linked_row_inside_the_window_keeps_its_link_across_refreshes(
     db_session: AsyncSession,
 ) -> None:
@@ -543,8 +618,9 @@ async def test_get_reports_never_synced_and_changed_coverage(
     changed = await _get(client, actor, date_from=window.start_date, date_to=window.end_date)
     assert changed.json()["coverage_ok"] is False
     assert changed.json()["coverage_notice"] == "calendar_set_changed"
-    # The mirror is still returned: coverage is a notice, never a hard failure.
-    assert [item["event_id"] for item in changed.json()["events"]] == ["g1"]
+    # Rows of a calendar that is no longer read are not presented as part of the answer,
+    # even before the next refresh prunes them from the mirror.
+    assert changed.json()["events"] == []
 
 
 async def test_get_outside_the_recorded_window_reports_outside_coverage(

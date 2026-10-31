@@ -17,12 +17,16 @@ per-user transaction advisory lock. Rows of the republished calendars that ended
 window are pruned (Google is queried from `window.start`, so it will never return them), the
 window rows the fresh read no longer carries are deleted, and the fetched events are upserted
 on `(user_id, calendar_id, event_id)`: an event rescheduled into the window from an earlier
-publication updates in place instead of colliding with the unique key. Rows linked to a task
-(`task_id` set) are excluded from both deletes: the read mirror never deletes nor unlinks
-them, even when Google stops returning the event or moves it out of the window, because the
-link belongs to the write path (J3.4/A3.8). It then records the covered window and
-`last_synced_at` in `settings`. Any failure rolls the savepoint back, leaving both the
-previous mirror and the previous coverage untouched.
+publication updates in place instead of colliding with the unique key. Calendars that were
+part of the previous coverage but are no longer selected are pruned too, so deselecting a
+calendar does not leave its rows in the mirror forever. `CalendarService.page` additionally
+filters by the current read set, so a deselected calendar stops being presented as soon as
+the selection changes, even before the next refresh. Rows linked to a task (`task_id` set)
+are excluded from every delete: the read mirror never deletes nor unlinks them, even when
+Google stops returning the event or moves it out of the window, because the link belongs to
+the write path (J3.4/A3.8). It then records the covered window and `last_synced_at` in
+`settings`. Any failure rolls the savepoint back, leaving both the previous mirror and the
+previous coverage untouched.
 """
 
 import uuid
@@ -489,6 +493,27 @@ class SqlCalendarMirror:
                     )
                 )
             )
+            previous_coverage = await self._db.scalar(
+                select(CalendarSettings.calendar_coverage_calendar_ids).where(
+                    CalendarSettings.user_id == user_id
+                )
+            )
+            # A calendar removed from the selection is no longer read, so none of its rows
+            # can be refreshed or observed again by this mirror. Deleting them here (rather
+            # than waiting for the window rules, which only look at republished calendars)
+            # stops the mirror from growing forever after a deselection. Task-linked rows
+            # are spared: the write path owns that link (J3.4/A3.8).
+            deselected = sorted(set(previous_coverage or []) - set(calendars))
+            deselected_pruned = 0
+            if deselected:
+                result = await self._db.execute(
+                    delete(CalendarEvent).where(
+                        CalendarEvent.user_id == user_id,
+                        CalendarEvent.calendar_id.in_(deselected),
+                        CalendarEvent.task_id.is_(None),
+                    )
+                )
+                deselected_pruned = cast("CursorResult[Any]", result).rowcount or 0
             # Google is queried from `window.start`, so a row that ended before the window
             # will never come back: keeping it would grow the mirror without bound. Rows
             # linked to a task belong to the write path (J3.4/A3.8) and are never pruned.
@@ -563,6 +588,7 @@ class SqlCalendarMirror:
         removed_count = (
             (cast("CursorResult[Any]", pruned).rowcount or 0)
             + (cast("CursorResult[Any]", removed).rowcount or 0)
+            + deselected_pruned
         )
         return PublicationResult(inserted=len(rows), removed=removed_count)
 
@@ -682,6 +708,10 @@ class CalendarService:
     ) -> CalendarPage:
         """Return the whole requested window in one response.
 
+        Only rows of the calendars currently selected for reading are returned: a calendar
+        removed from the selection must stop being presented immediately, even before the
+        next refresh prunes its rows from the mirror. An empty selection returns no rows.
+
         The J3.7 contract is not paginated: the widest allowed window (366 local days) and
         the per-user mirror bound the result, and a silent `LIMIT` would report incomplete
         data as covered. Paging would have to be added to the API contract first.
@@ -692,13 +722,21 @@ class CalendarService:
             date_from=date_from, date_to=date_to, timezone=timezone, now=reference
         )
         settings = await self._db.get(CalendarSettings, user_id)
-        result = await self._db.execute(
-            select(CalendarEvent)
-            .where(CalendarEvent.user_id == user_id, _overlap_filter(window))
-            .order_by(CalendarEvent.calendar_id, CalendarEvent.event_id)
+        read_calendars = _normalize_calendars(
+            settings.calendar_read_calendar_ids if settings is not None else []
         )
-        rows = list(result.scalars())
-        read_calendars = settings.calendar_read_calendar_ids if settings is not None else []
+        rows: list[CalendarEvent] = []
+        if read_calendars:
+            result = await self._db.execute(
+                select(CalendarEvent)
+                .where(
+                    CalendarEvent.user_id == user_id,
+                    CalendarEvent.calendar_id.in_(list(read_calendars)),
+                    _overlap_filter(window),
+                )
+                .order_by(CalendarEvent.calendar_id, CalendarEvent.event_id)
+            )
+            rows = list(result.scalars())
         coverage_ok, notice = coverage_status(
             read_calendars=read_calendars,
             coverage_from=settings.calendar_coverage_from if settings else None,
