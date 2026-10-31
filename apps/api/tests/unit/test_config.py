@@ -138,7 +138,7 @@ def test_short_provider_secret_is_accepted_outside_local(
 
 
 def test_provider_key_aliasing_a_boundary_secret_is_rejected() -> None:
-    with pytest.raises(ValidationError, match="proveedor"):
+    with pytest.raises(ValidationError, match="reutiliza"):
         _prod(
             llm_base_url="https://api.openai.com/v1",
             llm_api_key=SECRETS["secret_key"],
@@ -159,9 +159,39 @@ def test_provider_keys_may_alias_each_other() -> None:
     assert settings.env == "prod"
 
 
+@pytest.mark.parametrize(
+    "context",
+    [
+        {"embedding_base_url": "https://api.openai.com/v1"},
+        {
+            "llm_base_url": "https://api.openai.com/v1",
+            "llm_model_window": 128_000,
+        },
+    ],
+)
+def test_google_client_secret_may_not_alias_a_gateway_key(
+    context: dict[str, Any],
+) -> None:
+    shared = "shared-oauth-and-gateway-0123456789"
+    field = "embedding_api_key" if "embedding_base_url" in context else "llm_api_key"
+
+    with pytest.raises(ValidationError, match="google_client_secret"):
+        _prod(
+            **context,
+            google_client_id="client-id",
+            google_client_secret=shared,
+            **{field: shared},
+        )
+
+
 def test_surrounding_whitespace_in_a_secret_is_rejected() -> None:
     with pytest.raises(ValidationError, match="espacios"):
         _prod(secret_key=" " + "k" * 32)
+
+
+def test_surrounding_whitespace_in_a_provider_secret_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="espacios"):
+        _prod(google_client_id="client-id", google_client_secret=" " + "g" * 32)
 
 
 def test_public_origin_requires_https_outside_local() -> None:
