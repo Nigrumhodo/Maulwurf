@@ -20,6 +20,7 @@ from app.core.logging import configure_logging
 from app.workers.dispatcher import dispatch_pending
 from app.workers.index_job import JOB_TIMEOUT_S, MAX_TRIES, index
 from app.workers.reconciler import reconcile_once
+from app.workers.retry import MAX_TRIES as ANALYSIS_MAX_TRIES
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ _REDIS = RedisSettings.from_dsn(str(settings.redis_url))
 
 
 async def analyze(ctx: dict[str, Any], audio_id: str) -> None:
+    """S2 no-op until L3.6. Its retry budget is already the S3.6 policy (1 + 3)."""
     logger.info("analyze.noop audio_id=%s", audio_id)
 
 
@@ -71,10 +73,10 @@ async def startup(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    # `index` has its own retry budget (J2.2); `analyze` still has none.
+    # `index` and `analyze` have their own retry budget (J2.2/S3.6).
     functions: ClassVar[list[Function | Callable[..., Awaitable[None]]]] = [
         func(index, max_tries=MAX_TRIES, timeout=JOB_TIMEOUT_S),
-        analyze,
+        func(analyze, max_tries=ANALYSIS_MAX_TRIES),
     ]
     queue_name = WORKER_QUEUE
     redis_settings = _REDIS
