@@ -56,8 +56,10 @@ TENANT_MODELS: list[type[TenantOwned]] = sorted(
     key=lambda model: model.__name__,
 )
 TENANT_TABLES = {str(cast(Any, model).__tablename__) for model in TENANT_MODELS}
-RLS_TABLES = TENANT_TABLES | {"users"}
-JOBS_TABLES = (TENANT_TABLES | {"users"}) - {"sessions", "google_credentials"}
+# J3.3's `settings` is keyed by `user_id` (primary key) like `google_credentials`, so it is
+# not a `TenantOwned` model and must be listed explicitly here.
+RLS_TABLES = TENANT_TABLES | {"users", "settings"}
+JOBS_TABLES = (TENANT_TABLES | {"users", "settings"}) - {"sessions", "google_credentials"}
 
 
 @pytest.fixture(autouse=True)
@@ -175,7 +177,7 @@ async def test_every_tenant_table_has_forced_rls_and_a_policy(
         assert "tenant_isolation" in by_table_policies.get(table, set()), table
     # The strict tenant expression is evaluated only for the bound roles; the jobs role
     # must not see it, or its cross-tenant OR would still raise on a missing app.user_id.
-    for table in ("sessions", "ingestion_attempts", "google_credentials"):
+    for table in ("sessions", "ingestion_attempts", "google_credentials", "settings"):
         assert tenant_roles[table] == {APP_ROLE}, table
     for table in ("subjects", "users"):
         assert tenant_roles[table] == {APP_ROLE, INGEST_ROLE}, table

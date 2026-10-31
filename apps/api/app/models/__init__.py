@@ -6,11 +6,13 @@ from app.models.chunk import Chunk, ChunkSegment, Embedding, IndexGeneration
 from app.models.core import GoogleCredential, Session, Subject, User
 from app.models.ingestion import Audio, IngestionAttempt, OutboxEvent, VariantConfirmationToken
 from app.models.processing_run import ProcessingRun
+from app.models.settings import CalendarSettings
 from app.models.transcript import Segment, Transcript
 
 __all__ = [
     "Audio",
     "Base",
+    "CalendarSettings",
     "Chunk",
     "ChunkSegment",
     "Conversation",

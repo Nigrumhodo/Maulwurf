@@ -416,7 +416,10 @@ async def test_integrations_status_without_and_with_google(
     after = await client.get("/integrations/status", cookies=actor.cookies)
 
     assert before.json()["google"] == {
-        "status": "disconnected", "scopes": [], "token_expires_at": None,
+        "status": "disconnected",
+        "scopes": [],
+        "calendar_id": None,
+        "token_expires_at": None,
         "last_refresh_at": None,
     }
     assert after.headers["cache-control"] == "no-store"

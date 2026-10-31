@@ -499,3 +499,19 @@ async def test_logs_do_not_leak_the_access_token(
     logged = "\n".join(record.getMessage() for record in caplog.records)
     assert caplog.records
     assert token not in logged
+
+
+async def test_calendar_list_entry_encodes_the_calendar_id_as_one_path_segment() -> None:
+    """Calendar IDs are usually e-mail addresses; the `@` must not split the path."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.raw_path.decode())
+        return httpx.Response(200, json={"id": "mw@group.calendar.google.com"})
+
+    entry = await _service(handler).get_calendar_list_entry(
+        "mw@group.calendar.google.com"
+    )
+
+    assert entry == {"id": "mw@group.calendar.google.com"}
+    assert seen == ["/v3/users/me/calendarList/mw%40group.calendar.google.com"]
