@@ -15,15 +15,20 @@ garantiza. `cas_transition` es el primitivo compare-and-swap que `uploads._abort
 y el endpoint de cancelación comparten; `cancel_attempt` cancela E invalida el fencing en UNA
 sentencia condicional (estilo `ingest/lease.py`), y `tombstone_audio` purga todos los
 derivados de la clase en una sola transacción.
+
+Reservation lifecycle (A2.14): `open_reception` claims the attempt under a row lock before
+the first byte, `cancel_reservation` releases a failed PUT while the API still owns the
+fencing token, and `expire_stale_reservations` reaps abandoned reservations for J2.4.
 """
 
 import hashlib
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, cast
+from typing import Any, Literal, cast
 
-from sqlalchemy import CursorResult, Result, delete, func, or_, select, update
+from sqlalchemy import CursorResult, Result, and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -47,6 +52,7 @@ from app.models import (
 from app.models.ingestion import ACTIVE_INGESTION_STATES
 from app.services import state_machine
 from app.services.state_machine import TOMBSTONE_EXIT
+from app.services.tenant import get_owned
 
 # Proveedores que el aviso de privacidad declara al usuario (se registran con el intento).
 DECLARED_PROVIDERS = {"asr": "nvidia-riva/whisper-large-v3"}
@@ -58,6 +64,17 @@ RETRY_AFTER_SECONDS = 60
 # Cuota por usuario: sin valor publicado no se limita (fail-open documentado, a la espera
 # de D4). El mecanismo existe y es testeable; publicar un valor activa el 429.
 per_user_active_limit: int | None = None
+
+# A2.14: PostgreSQL advisory-lock namespace. The two-int form keeps these keys apart from
+# other applications' locks. The global key serializes every reservation against
+# `active_slots`; the per-user key serializes one user's reservations against
+# `per_user_active_limit`. Both are transaction-scoped, so the lock ends at the commit that
+# makes the new attempt visible to the next counter.
+_CAPACITY_LOCK_NAMESPACE = 0x4D57  # "MW"
+_CAPACITY_GLOBAL_KEY = 0
+# Statuses the API may still release: before `ingest` acquires the reception, only the API
+# owns the row. From the successful acquire on, the fencing token moves and the CAS misses.
+ApiOwnedStatus = Literal["awaiting_upload", "receiving"]
 
 
 @dataclass(frozen=True)
@@ -95,10 +112,30 @@ def _rowcount(result: Result[Any]) -> int:
     return cast("CursorResult[Any]", result).rowcount
 
 
+def _users_capacity_key(user_id: uuid.UUID) -> int:
+    """Stable 31-bit advisory key for one user (fits the signed `int4` of the lock).
+
+    A collision only serializes two unrelated users for a moment; it can never admit more
+    reservations than the published limit.
+    """
+    return user_id.int & 0x7FFF_FFFF
+
+
+async def _lock_capacity(db: AsyncSession, key: int) -> None:
+    """Take the transaction-scoped advisory lock that guards one capacity counter."""
+    await db.execute(select(func.pg_advisory_xact_lock(_CAPACITY_LOCK_NAMESPACE, key)))
+
+
 async def check_quota(db: AsyncSession, user_id: uuid.UUID) -> None:
-    """`429 rate_limited` si el usuario ya ocupa su cuota; sin límite publicado no limita."""
+    """`429 rate_limited` if the user already fills the quota; no published limit = no limit.
+
+    The per-user advisory lock is taken before the count and released by the reservation's
+    commit, so two concurrent `POST /audios` of the same user cannot both pass the check
+    (A2.14). Without a published limit the function does not lock anything (D4).
+    """
     if per_user_active_limit is None:
         return
+    await _lock_capacity(db, _users_capacity_key(user_id))
     active = await db.scalar(
         select(func.count())
         .select_from(IngestionAttempt)
@@ -117,11 +154,17 @@ async def check_quota(db: AsyncSession, user_id: uuid.UUID) -> None:
 
 
 async def reserve_slot(db: AsyncSession) -> None:
-    """`503 capacity_unavailable` si no queda slot libre; sin `active_slots` no limita."""
+    """`503 capacity_unavailable` if no slot is free; no published `active_slots` = no limit.
+
+    The global advisory lock is taken before the count and released by the reservation's
+    commit, so concurrent `POST /audios` from different users cannot exceed `active_slots`
+    (A2.14). While D4 is blocked nothing locks: there is no published limit to enforce.
+    """
     limit = settings.ingestion_capabilities.active_slots
     if limit is None:
         # Sin capacidad publicada por el spike no hay cupo que respetar (D4 sigue blocked).
         return
+    await _lock_capacity(db, _CAPACITY_GLOBAL_KEY)
     active = await db.scalar(
         select(func.count())
         .select_from(IngestionAttempt)
@@ -535,3 +578,165 @@ async def tombstone_audio(
         segments_deleted=_rowcount(segments) or 0,
         transcripts_deleted=_rowcount(transcripts) or 0,
     )
+
+
+# --- A2.14: reservation lifecycle and PUT concurrency -----------------------------------
+
+
+@dataclass(frozen=True)
+class ReceptionClaim:
+    """Attempt claimed for reception: fresh rows plus the token the sink must present."""
+
+    audio: Audio
+    attempt: IngestionAttempt
+    fencing_token: int
+
+
+def _attempt_not_active() -> ApiError:
+    return ApiError(409, "attempt_not_active", "Este intento de subida ya no está activo.")
+
+
+def _upload_expired() -> ApiError:
+    return ApiError(410, "upload_expired", "La subida expiró; vuelve a crear la clase.")
+
+
+async def open_reception(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    audio_id: uuid.UUID,
+    attempt_id: uuid.UUID,
+    now: datetime | None = None,
+) -> ReceptionClaim:
+    """Lock the attempt and move ``awaiting_upload → receiving`` before the first byte.
+
+    The row lock spans the ownership check and the commit that publishes ``receiving``, so
+    two concurrent ``PUT`` requests cannot both pass: the loser waits and then reads the
+    claimed row, or reads it after the claim and gets ``409``; only one reaches the sink.
+    The fencing token is deliberately NOT bumped here: `ingest` still acquires it and
+    increments it (ADR-0008), so replay protection and lease ownership stay where they are.
+
+    Rows are re-read after the commit (a session may expire objects on commit, and a
+    concurrent tombstone must win before any byte is read). A row that already expired is
+    cancelled while the lock is still held, so the slot is freed immediately.
+    """
+    clock = now or datetime.now(UTC)
+    audio = await get_owned(db, Audio, user_id, audio_id)
+    if audio is None or audio.deleted_at is not None:
+        raise not_found()
+    attempt = await get_owned(db, IngestionAttempt, user_id, attempt_id, lock="update")
+    if attempt is None or attempt.audio_id != audio.id:
+        raise not_found()
+    if attempt.status != "awaiting_upload":
+        raise _attempt_not_active()
+    if attempt.upload_expires_at is None:
+        raise _attempt_not_active()
+    if attempt.upload_expires_at <= clock:
+        await cas_transition(
+            db, attempt=attempt, target=TOMBSTONE_EXIT, error_code="upload_expired"
+        )
+        await db.commit()
+        raise _upload_expired()
+    state_machine.transition(attempt, "receiving")
+    fencing_token = attempt.fencing_token
+    await db.commit()
+    audio = await get_owned(db, Audio, user_id, audio_id)
+    attempt = await get_owned(db, IngestionAttempt, user_id, attempt_id)
+    if audio is None or audio.deleted_at is not None or attempt is None:
+        raise not_found()
+    if attempt.status != "receiving" or attempt.fencing_token != fencing_token:
+        raise _attempt_not_active()
+    return ReceptionClaim(audio=audio, attempt=attempt, fencing_token=fencing_token)
+
+
+async def cancel_reservation(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    attempt_id: uuid.UUID,
+    fencing_token: int,
+    from_status: ApiOwnedStatus,
+) -> bool:
+    """Best-effort release of a reservation that the API still owns; never raises.
+
+    The fencing token is the ownership guard: once `ingest` acquires the reception it bumps
+    the token, the conditional update matches no row and the terminal state is written by
+    `ingest` under its lease (ADR-0008 §5). A failed release (for example, the database is
+    down) also matches no row; `expire_stale_reservations` reaps the reservation after its
+    window. `from_status` is explicit so a pre-claim rejection can never cancel a reception
+    that another concurrent PUT already claimed.
+    """
+    try:
+        # A failed reception may leave a poisoned transaction; the release needs a clean one.
+        await db.rollback()
+        result = await db.execute(
+            update(IngestionAttempt)
+            .where(
+                IngestionAttempt.id == attempt_id,
+                IngestionAttempt.user_id == user_id,
+                IngestionAttempt.status == from_status,
+                IngestionAttempt.fencing_token == fencing_token,
+            )
+            .execution_options(synchronize_session=False)
+            .values(
+                status=TOMBSTONE_EXIT,
+                fencing_token=IngestionAttempt.fencing_token + 1,
+                lease_expires_at=None,
+            )
+        )
+        released = _rowcount(result) == 1
+        await db.commit()
+        return released
+    except Exception:
+        with suppress(Exception):
+            await db.rollback()
+        return False
+
+
+def _stale_reservation_conditions(now: datetime) -> tuple[Any, ...]:
+    """Rows past `upload_expires_at` that no lease owner took: only the API can reap them."""
+    return (
+        IngestionAttempt.upload_expires_at.is_not(None),
+        IngestionAttempt.upload_expires_at <= now,
+        or_(
+            IngestionAttempt.status == "awaiting_upload",
+            and_(
+                IngestionAttempt.status == "receiving",
+                IngestionAttempt.lease_expires_at.is_(None),
+            ),
+        ),
+    )
+
+
+async def expire_stale_reservations(
+    db: AsyncSession, *, now: datetime, limit: int = 100
+) -> int:
+    """Cancel reservations past `upload_expires_at` that never reached an ingest lease.
+
+    Idempotent: every returned row was ``awaiting_upload``, or ``receiving`` without a
+    lease, so a second call with the same `now` counts zero. A ``receiving``/``transcribing``
+    row WITH a lease belongs to `ingest`; its expired lease is S2.7's reconciler, not this
+    function. The caller owns the transaction (the J2.4 reconciler's session commits it).
+    """
+    if limit < 1:
+        raise ValueError("limit must be positive")
+    due = (
+        select(IngestionAttempt.id)
+        .where(*_stale_reservation_conditions(now))
+        .order_by(IngestionAttempt.upload_expires_at, IngestionAttempt.id)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    result = await db.execute(
+        update(IngestionAttempt)
+        .where(IngestionAttempt.id.in_(due), *_stale_reservation_conditions(now))
+        .execution_options(synchronize_session=False)
+        .values(
+            status=TOMBSTONE_EXIT,
+            error_code="upload_expired",
+            fencing_token=IngestionAttempt.fencing_token + 1,
+            lease_expires_at=None,
+        )
+        .returning(IngestionAttempt.id)
+    )
+    return len(result.all())

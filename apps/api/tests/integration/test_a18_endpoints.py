@@ -211,7 +211,10 @@ async def test_put_with_valid_contract_is_503_without_reception_sink(
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "capacity_unavailable"
     attempt = await db_session.get(IngestionAttempt, uuid.UUID(reserved["attempt_id"]))
-    assert attempt is not None and attempt.status == "awaiting_upload"  # nada recibido
+    # A2.14: the API claimed the reservation before `begin`; the 503 released it again so
+    # the slot is free immediately.
+    assert attempt is not None and attempt.status == "cancelled"
+    assert attempt.received_bytes == 0
 
 
 async def test_put_requires_csrf_like_any_mutation(
@@ -239,6 +242,9 @@ async def test_put_declared_too_large_is_413_without_reading(
 
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "payload_too_large"
+    # A2.14: the pre-byte rejection frees the reservation immediately.
+    attempt = await db_session.get(IngestionAttempt, uuid.UUID(reserved["attempt_id"]))
+    assert attempt is not None and attempt.status == "cancelled"
 
 
 async def test_put_chunked_without_content_length_is_503_until_sink_available(
@@ -322,6 +328,10 @@ async def test_put_on_expired_attempt_is_410(
 
     assert response.status_code == 410
     assert response.json()["error"]["code"] == "upload_expired"
+    # A2.14: the expired reservation is cancelled while the row lock is still held.
+    attempt = await db_session.get(IngestionAttempt, uuid.UUID(reserved["attempt_id"]))
+    assert attempt is not None
+    assert (attempt.status, attempt.error_code) == ("cancelled", "upload_expired")
 
 
 async def test_put_on_inactive_attempt_is_409(

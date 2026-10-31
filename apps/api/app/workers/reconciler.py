@@ -8,6 +8,8 @@ exception type and the other steps still run.
   gate and revalidation.
 - Expired `index` runs are closed as `lease_expired`, and re-enqueued while the retry budget
   lasts. `claim_run` accepts the closed row, so a duplicate delivery is absorbed by the row.
+- Reservations past `upload_expires_at` that never reached an ingest lease are cancelled
+  (A2.14), freeing their quota and slot; `ingest` keeps owning rows that do have a lease.
 - Orphan `building` generations and surplus `retired` generations are deleted.
 
 The reconciler never reads audio and never retranscribes. Logs carry IDs and counts only.
@@ -25,6 +27,7 @@ from arq.connections import ArqRedis
 from arq.constants import in_progress_key_prefix, job_key_prefix, result_key_prefix
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.audios import expire_stale_reservations
 from app.services.generation_cleanup import (
     RETIRED_GENERATIONS_KEPT,
     discard_orphan_building,
@@ -75,6 +78,9 @@ async def reconcile_once(
     )
     report["expired_runs"] = await _guarded(
         "expired_runs", _recover_expired(sessions, redis, queue_name, clock)
+    )
+    report["expired_reservations"] = await _guarded(
+        "expired_reservations", _expire_reservations(sessions, clock)
     )
     report["orphan_builds"] = await _guarded(
         "orphan_builds", _discard_orphans(sessions, clock)
@@ -148,6 +154,14 @@ async def _reenqueue_index(
         _job_id=f"reconcile-index:{run_id}:{attempt_count}",
         _queue_name=queue_name,
     )
+
+
+async def _expire_reservations(sessions: SessionFactory, now: datetime) -> int:
+    async with sessions() as db:
+        expired = await expire_stale_reservations(db, now=now, limit=BATCH_SIZE)
+        if expired:
+            logger.info("reconciler.reservations_expired count=%s", expired)
+        return expired
 
 
 async def _discard_orphans(sessions: SessionFactory, now: datetime) -> int:
