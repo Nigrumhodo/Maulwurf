@@ -22,6 +22,8 @@ from datetime import timedelta
 
 import asyncpg
 
+from maulwurf_ingest import rls
+
 ACTIVE_STATES = (
     "awaiting_upload",
     "receiving",
@@ -43,7 +45,7 @@ async def acquire(
     pool: asyncpg.Pool, *, user_id: uuid.UUID, attempt_id: uuid.UUID, instance: str,
     ttl: timedelta,
 ) -> Lease | None:
-    row = await pool.fetchrow(
+    row = await rls.fetchrow(pool, user_id,
         """
         UPDATE ingestion_attempts
            SET owner_instance = $3, fencing_token = fencing_token + 1,
@@ -70,7 +72,7 @@ async def acquire_bound(
     ``awaiting_upload`` one. The credential is bound to ``expected_token``; a second receive
     finds the token already incremented and matches no row.
     """
-    row = await pool.fetchrow(
+    row = await rls.fetchrow(pool, user_id,
         """
         UPDATE ingestion_attempts
            SET owner_instance = $3, fencing_token = fencing_token + 1, status = 'receiving',
@@ -89,7 +91,8 @@ async def acquire_bound(
 
 
 async def heartbeat(pool: asyncpg.Pool, lease: Lease) -> bool:
-    status = await pool.execute(
+    status = await rls.execute(
+        pool, lease.user_id,
         """
         UPDATE ingestion_attempts
            SET lease_expires_at = now() + $4, heartbeat_at = now()
@@ -106,7 +109,8 @@ async def transition(
     fragments_total: int | None = None,
 ) -> bool:
     """Publica un cambio de estado; False si el lease no es de este propietario o venció."""
-    status = await pool.execute(
+    status = await rls.execute(
+        pool, lease.user_id,
         """
         UPDATE ingestion_attempts
            SET status = $5, error_code = COALESCE($6, error_code),
@@ -124,7 +128,8 @@ async def transition(
 async def record_cleanup(
     pool: asyncpg.Pool, lease: Lease, *, verified: bool, evidence: dict[str, object],
 ) -> bool:
-    status = await pool.execute(
+    status = await rls.execute(
+        pool, lease.user_id,
         """
         UPDATE ingestion_attempts
            SET cleanup_status = $4::text, cleanup_evidence = $5::jsonb,
@@ -150,7 +155,7 @@ async def reclaim_committed(
     rows, and it refuses ``cleanup_status=failed``: a failed cleanup stays failed.
     The token still increments, so the owner that died cannot publish afterwards.
     """
-    row = await pool.fetchrow(
+    row = await rls.fetchrow(pool, user_id,
         """
         UPDATE ingestion_attempts
            SET owner_instance = $3, fencing_token = fencing_token + 1,

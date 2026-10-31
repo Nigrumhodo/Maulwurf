@@ -4,8 +4,8 @@ Maulwurf is a documentation-first project for a study assistant that turns class
 searchable transcripts, cited RAG answers, reviewable task proposals, Google Calendar entries,
 and optional Gmail reminders. The repository contains the product and planning documentation
 plus the **S1 foundation** and a growing **S2 knowledge slice** (ownership and state in
-`docs/sprints/CLAIMS.md`): a Docker Compose stack of 8 services with healthchecks, four
-Alembic migrations (`0001`–`0004`), real API routers (health, session/CSRF, Google login,
+`docs/sprints/CLAIMS.md`): a Docker Compose stack of 8 services with healthchecks, five
+Alembic migrations (`0001`–`0005`), real API routers (health, session/CSRF, Google login,
 `GET/PATCH /me`, subject CRUD, `POST /audios`, streaming `PUT` with dedupe, search, chat
 SSE, integrations status), a hardened ingestion package with internal reception endpoints,
 leases and cleanup, ARQ worker/scheduler processes with outbox dispatch, indexing and
@@ -39,8 +39,8 @@ explicit Definition of Done. See "Sprint Model" below.
   (core, ingestion, transcript, chunk, chat), `services/` (sessions, tenant, audios,
   uploads, dedupe, search, chat/RAG, citations, outbox, indexing, reconciliation),
   `workers/` (ARQ worker/scheduler, outbox dispatcher, index job, reconciler), Alembic
-  migrations `0001_core_schema_s1`, `0002_s2_schema`, `0003_backfill_chunks_tsv` and
-  `0004_s2_run_fencing`,
+  migrations `0001_core_schema_s1`, `0002_s2_schema`, `0003_backfill_chunks_tsv`,
+  `0004_s2_run_fencing` and `0005_s2_row_level_security` (forced RLS and runtime roles),
   `prompts/v1/` (versioned chat prompt), and real `tests/{unit,integration}/` suites.
   Dependency and tool config in `pyproject.toml` (Ruff, mypy strict, pytest markers);
   lockfile `uv.lock`.

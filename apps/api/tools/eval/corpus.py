@@ -19,6 +19,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
+from app.core.db import bind_user
 from app.models import (
     Audio,
     Chunk,
@@ -185,6 +186,8 @@ async def _prepare_language(
     user_id = eval_user_id(dataset.version, language)
     expected_sub = eval_google_sub(dataset.version, language)
     version = _generation_version(dataset)
+    # A2.17: the eval tenant is the row's id; bind it before the first short session.
+    bind_user(user_id)
 
     async with session_factory() as db:
         existing = await db.get(User, user_id)
@@ -350,6 +353,7 @@ async def _load_language_index(
 ) -> LanguageIndex:
     user_id = eval_user_id(dataset.version, language)
     version = _generation_version(dataset)
+    bind_user(user_id)
     async with session_factory() as db:
         subject = await db.scalar(
             select(Subject).where(
@@ -406,6 +410,7 @@ async def verify_evidence(
     index: LanguageIndex,
 ) -> tuple[str, ...]:
     """Return item ids whose expected quote is absent from every chunk of its class."""
+    bind_user(index.user_id)
     async with session_factory() as db:
         rows = await db.execute(
             select(Chunk.audio_id, Chunk.content).where(

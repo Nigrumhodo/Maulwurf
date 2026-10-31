@@ -101,7 +101,7 @@ Hard rule: **no real ingestion before S1 closes the F0 gate** (D3 retention, D2/
 limits, D6 timestamps, G1, and an approved G2 variant).
 
 **Status (reconciled 2026-10-30):** S1 is complete except L1.7 (the formal close), and S2
-is open. The repository has a running 8-service compose stack, four Alembic migrations,
+is open. The repository has a running 8-service compose stack, five Alembic migrations,
 sessions/CSRF, Google login, subject CRUD, a hardened ingestion package, search and chat
 APIs, tests and quality CI. The web is a Vite + React SPA (ADR-0007), not the original
 Next.js scaffold. Exact ownership and state remain in [sprints/CLAIMS.md](sprints/CLAIMS.md).

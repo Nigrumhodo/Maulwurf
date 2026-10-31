@@ -20,7 +20,7 @@ from pathlib import Path
 
 import asyncpg
 
-from maulwurf_ingest import hardening
+from maulwurf_ingest import hardening, rls
 from maulwurf_ingest.asr import riva_client
 from maulwurf_ingest.audio.synthetic import DEFAULT_PHRASE_ES, generate_synthetic_utterance
 from maulwurf_ingest.audio_absence import report_from_tree
@@ -78,10 +78,12 @@ class HarnessReport:
 
 
 async def _seed(pool: asyncpg.Pool) -> tuple[uuid.UUID, uuid.UUID]:
+    user_id = uuid.uuid4()
     async with pool.acquire() as conn, conn.transaction():
-        user_id = await conn.fetchval(
-            "INSERT INTO users (google_sub, email) VALUES ($1, $2) RETURNING id",
-            f"sub-{uuid.uuid4().hex}", "harness@example.test",
+        await rls.bind_transaction(conn, user_id)
+        seeded = await conn.fetchval(
+            "INSERT INTO users (id, google_sub, email) VALUES ($1, $2, $3) RETURNING id",
+            user_id, f"sub-{uuid.uuid4().hex}", "harness@example.test",
         )
         subject_id = await conn.fetchval(
             "INSERT INTO subjects (user_id, name) VALUES ($1, 'Cálculo') RETURNING id",
@@ -102,7 +104,7 @@ async def _seed(pool: asyncpg.Pool) -> tuple[uuid.UUID, uuid.UUID]:
                RETURNING id""",
             user_id, audio_id,
         )
-    if not isinstance(user_id, uuid.UUID) or not isinstance(attempt_id, uuid.UUID):
+    if not isinstance(seeded, uuid.UUID) or not isinstance(attempt_id, uuid.UUID):
         raise RuntimeError("seed")
     return user_id, attempt_id
 
@@ -140,7 +142,7 @@ async def run_synthetic_class(pool: asyncpg.Pool, *, tmp_dir: str) -> HarnessRep
         riva_client.NvidiaRivaTranscriptionService.__init__ = original_init  # type: ignore[method-assign]
 
     root = Path(tmp_dir)
-    stored = await pool.fetchrow(
+    stored = await rls.fetchrow(pool, user_id,
         """
         SELECT t.text, t.timestamp_precision, a.sha256, a.original_bytes, t.id AS transcript_id,
                ia.cleanup_status
@@ -166,7 +168,8 @@ async def run_synthetic_class(pool: asyncpg.Pool, *, tmp_dir: str) -> HarnessRep
         verified = stored["cleanup_status"] == "verified"
         transcript_id = stored["transcript_id"]
         if isinstance(transcript_id, uuid.UUID):
-            segments = await pool.fetch(
+            segments = await rls.fetch(
+                pool, user_id,
                 "SELECT t_start, t_end FROM segments WHERE transcript_id = $1", transcript_id,
             )
             times_null = bool(segments) and all(
