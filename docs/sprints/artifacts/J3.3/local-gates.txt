@@ -19,7 +19,7 @@ Success: no issues found in 212 source files
 
 ```text
 $ cd apps/api && uv run pytest tests/unit -q
-1124 passed, 35 warnings in 13.31s
+1125 passed, 35 warnings in 10.30s
 ```
 
 The two `httpx` failures that the sandbox produces when `NO_PROXY` contains bracketed IPv6
@@ -32,7 +32,7 @@ environmental: both pass with the proxy variables cleared, and J3.2 recorded the
 
 ```text
 $ cd apps/api && uv run pytest tests/integration -q   # after merging origin/develop
-32 failed, 418 passed, 1125 deselected, 461 warnings in 86.53s
+32 failed, 418 passed, 1126 deselected, 461 warnings in 74.61s
 ```
 
 The 32 failures are exactly the same set that a pristine `develop` checkout (`44b576a`)
