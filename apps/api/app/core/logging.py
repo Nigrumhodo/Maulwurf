@@ -144,14 +144,35 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
 
 
+_UVICORN_LOGGERS: Final = ("uvicorn", "uvicorn.error", "uvicorn.access")
+
+
+def _install_uvicorn_redaction() -> None:
+    """Redact uvicorn's own loggers; they do not propagate through the root handler.
+
+    `ServerErrorMiddleware` re-raises an unhandled exception, so uvicorn logs the traceback
+    itself. Without this filter a message containing a DSN or transcript would bypass the
+    application logger (J2.5/A2.15).
+    """
+    for name in _UVICORN_LOGGERS:
+        logger = logging.getLogger(name)
+        if not any(isinstance(item, RedactionFilter) for item in logger.filters):
+            logger.addFilter(RedactionFilter())
+        for handler in logger.handlers:
+            if not any(isinstance(item, RedactionFilter) for item in handler.filters):
+                handler.addFilter(RedactionFilter())
+
+
 def configure_logging(level: int = logging.INFO) -> None:
     """Add one redacting JSON handler to the root logger, once per process.
 
     Existing handlers are kept: pytest (`caplog`) and others use them, and a repeated
-    startup must not duplicate the output.
+    startup must not duplicate the output. Uvicorn's own loggers are filtered separately
+    because they do not propagate through the root handler.
     """
     root = logging.getLogger()
     root.setLevel(level)
+    _install_uvicorn_redaction()
     if any(getattr(handler, _OWNED_MARK, False) for handler in root.handlers):
         return
     handler = logging.StreamHandler()

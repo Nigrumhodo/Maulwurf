@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from app.core.logging import (
     JsonFormatter,
     RedactionFilter,
+    configure_logging,
     correlation,
     current_ids,
     is_sensitive_key,
@@ -109,6 +110,31 @@ def test_redaction_masks_secrets_inside_exception_text() -> None:
     (line,) = _lines(stream)
     assert DSN_PASSWORD not in str(line["exc"])
     assert "RuntimeError" in str(line["exc"])
+
+
+def test_uvicorn_error_logger_scrubs_traceback_before_its_own_handler() -> None:
+    # ServerErrorMiddleware re-raises, so uvicorn logs the traceback outside the app logger.
+    configure_logging()
+    logger = logging.getLogger("uvicorn.error")
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(message)s\n%(exc_text)s"))
+    old_handlers = logger.handlers[:]
+    old_propagate = logger.propagate
+    logger.handlers = [handler]
+    logger.propagate = False
+    try:
+        try:
+            raise RuntimeError(f"connect failed db-password={PASSWORD}")
+        except RuntimeError:
+            logger.exception("Exception in ASGI application")
+    finally:
+        logger.handlers = old_handlers
+        logger.propagate = old_propagate
+
+    output = stream.getvalue()
+    assert PASSWORD not in output
+    assert "RuntimeError" in output
 
 
 @pytest.mark.parametrize(
