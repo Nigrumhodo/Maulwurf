@@ -12,6 +12,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path
 from typing import cast
 
@@ -65,6 +66,27 @@ def test_sweep_interval_must_be_positive(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("INGEST_SWEEP_INTERVAL_S", "0")
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_default_heartbeat_leaves_three_beats_before_lease_expiry() -> None:
+    """S4.2: one late heartbeat (or a short event-loop stall) must not fence a live run."""
+    config = supervisor.SupervisorConfig(instance="ingest:test")
+
+    assert config.heartbeat_interval_s == 10.0
+    assert config.lease_ttl == timedelta(seconds=30)
+    assert (
+        config.heartbeat_interval_s * supervisor.MIN_HEARTBEATS_PER_LEASE
+        <= config.lease_ttl.total_seconds()
+    )
+
+
+def test_a_heartbeat_without_margin_is_rejected() -> None:
+    with pytest.raises(ValueError, match="margin"):
+        supervisor.SupervisorConfig(
+            instance="ingest:test",
+            lease_ttl=timedelta(seconds=30),
+            heartbeat_interval_s=15.0,
+        )
 
 
 async def test_sweeper_repeats_the_pass_on_the_interval(

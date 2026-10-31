@@ -60,6 +60,17 @@ from maulwurf_ingest.reconciler import (
 logger = logging.getLogger(__name__)
 
 SWEEP_INTERVAL_S = 60.0
+# Defaults for the per-attempt lease (S4.2). The heartbeat interval must leave
+# several renewals inside one TTL: the asyncio loop can be busy (ffprobe thread
+# callbacks, GC, a slow event-loop task) and one late heartbeat must not expire a
+# live run. Three renewals per TTL means a single stall under two intervals
+# (20 s with the defaults) still finds the lease alive; a run whose loop is
+# blocked longer than the whole TTL is indistinguishable from a dead owner and
+# is ended as `technical_loss` by the sweeper.
+LEASE_TTL_S = 30
+HEARTBEAT_INTERVAL_S = 10.0
+MIN_HEARTBEATS_PER_LEASE = 3
+
 
 
 def _default_fragment_seconds() -> int:
@@ -81,8 +92,8 @@ class Outcome(StrEnum):
 @dataclass(frozen=True)
 class SupervisorConfig:
     instance: str
-    lease_ttl: timedelta = timedelta(seconds=30)
-    heartbeat_interval_s: float = 10.0
+    lease_ttl: timedelta = timedelta(seconds=LEASE_TTL_S)
+    heartbeat_interval_s: float = HEARTBEAT_INTERVAL_S
     asr_timeout_s: float = 600.0
     tmp_dir: str | None = None  # None = TMPDIR (el tmpfs del contenedor)
     realtime: bool = False  # solo pruebas: ffmpeg a velocidad real
@@ -92,6 +103,17 @@ class SupervisorConfig:
     stub_transcript: str | None = None
     # JSON for the in-tree transport double. The HTTP route never sets it.
     scripted_transport: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.heartbeat_interval_s <= 0:
+            raise ValueError("heartbeat interval must be positive")
+        if self.lease_ttl <= timedelta(0):
+            raise ValueError("lease ttl must be positive")
+        if self.heartbeat_interval_s * MIN_HEARTBEATS_PER_LEASE > self.lease_ttl.total_seconds():
+            raise ValueError(
+                "heartbeat interval leaves no margin before lease expiry: require "
+                f"{MIN_HEARTBEATS_PER_LEASE} heartbeats per lease"
+            )
 
 
 @dataclass
