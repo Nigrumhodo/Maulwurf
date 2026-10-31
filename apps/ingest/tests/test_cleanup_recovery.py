@@ -480,8 +480,11 @@ async def test_resolve_refuses_an_attempt_without_bytes_and_uncovered_evidence(
     assert refused.decisions[0].reason == "no_audio_received"
 
     failed = await _seed(pool)
+    # A cleanup failure happens after the attempt left awaiting_upload; use a terminal
+    # status so this case tests the evidence coverage, not the no-bytes refusal.
     await pool.execute(
-        "UPDATE ingestion_attempts SET cleanup_status = 'failed', heartbeat_at = now()"
+        "UPDATE ingestion_attempts"
+        " SET cleanup_status = 'failed', status = 'requires_reupload', heartbeat_at = now()"
         " WHERE id = $1",
         failed.attempt_id,
     )
