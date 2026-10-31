@@ -22,6 +22,14 @@ Non-negotiable rules implemented here:
   finds the pending run and does not duplicate it. Rows are only queued while the latest
   attempt has ``cleanup_status='verified'``.
 
+Outcomes are reported as ``BackfillStatus`` values. The decision is taken in two steps and
+every non-writing outcome is resolved **before** any row is mutated: ``already_analyzed``,
+``already_queued`` and ``unknown_run_state`` leave ``required_stages`` untouched, and
+``already_f2_no_run`` marks a class that already owes analysis but has no run row (its entry
+point is ``POST /audios/{id}/retry``). Only the branch that actually calls
+``ensure_stage_run`` promotes ``required_stages`` from F1 to F2, so a dry run or a no-op pass
+never persists the upgrade.
+
 The analyzer (L3.6) and the ``tasks``/``task_sources`` tables (A3.1) are not part of this
 module. Until they land, the existing ``analyze`` ARQ function is still the S2 no-op, so this
 ticket delivers the explicit queue and its evidence, not extraction output.
@@ -64,7 +72,9 @@ class BackfillStatus(StrEnum):
     WOULD_QUEUE = "would_queue"
     ALREADY_QUEUED = "already_queued"
     ALREADY_ANALYZED = "already_analyzed"
-    NOT_F1 = "not_f1"
+    # F2 class that already owes analysis but has no analyze run row: `retry` is its entry
+    # point, so the backfill neither queues it nor rewrites its stage list.
+    ALREADY_F2_NO_RUN = "already_f2_no_run"
     UNKNOWN_RUN_STATE = "unknown_run_state"
     NO_TRANSCRIPT = "no_transcript"
     CLEANUP_PENDING = "cleanup_pending"
@@ -107,6 +117,26 @@ def with_analysis_stage(required_stages: Sequence[str]) -> list[str]:
     if analysis_required(required_stages):
         return list(required_stages)
     return [*required_stages, ANALYSIS_STAGE]
+
+
+def classify_existing_run(
+    *, analysis_already_required: bool, existing_status: str | None
+) -> BackfillStatus | None:
+    """Terminal outcome for this pass, or ``None`` when analysis must be queued.
+
+    Called before the caller mutates anything: an already analyzed, already queued or
+    corrupt run must never promote an F1 class to F2. An F2 class without a run row already
+    owes analysis and keeps ``retry`` as its entry point.
+    """
+    if existing_status is None:
+        return BackfillStatus.ALREADY_F2_NO_RUN if analysis_already_required else None
+    if existing_status == "succeeded":
+        return BackfillStatus.ALREADY_ANALYZED
+    if existing_status in state_machine.ACTIVE_STAGE_STATES:
+        return BackfillStatus.ALREADY_QUEUED
+    if existing_status not in REQUEUEABLE_RUN_STATES:
+        return BackfillStatus.UNKNOWN_RUN_STATE
+    return None
 
 
 def analysis_backfill_available(
@@ -211,7 +241,7 @@ async def _existing_analysis_run(
 async def backfill_audio(
     db: AsyncSession, *, user_id: uuid.UUID, audio_id: uuid.UUID, apply: bool
 ) -> BackfillItem:
-    """Decide and, when ``apply`` is true, upgrade + queue one F1 class.
+    """Decide and, only when a run is actually queued, upgrade + queue one F1 class.
 
     No commit happens here: the request/script owns the transaction. The row lock makes the
     decision stable while ``ensure_stage_run`` serializes the run's unique key.
@@ -240,48 +270,29 @@ async def backfill_audio(
     existing = await _existing_analysis_run(
         db, user_id=user_id, audio_id=audio_id, transcript_version=version
     )
-    if existing is None and required:
-        # The class already owes analysis; `POST /audios/{id}/retry` is its entry point.
+    decision = classify_existing_run(
+        analysis_already_required=required,
+        existing_status=existing.status if existing is not None else None,
+    )
+    if decision is not None:
+        # Every non-writing outcome is resolved here, before any row is touched.
         return BackfillItem(
             audio_id=audio_id,
-            status=BackfillStatus.NOT_F1,
+            status=decision,
             transcript_version=version,
+            run_id=existing.id if existing is not None else None,
+            run_status=existing.status if existing is not None else None,
         )
-    if not required and apply:
-        # F1 → F2 is exactly the explicit upgrade the spec assigns to the backfill.
-        audio.required_stages = with_analysis_stage(audio.required_stages)
-    if existing is not None:
-        if existing.status == "succeeded":
-            return BackfillItem(
-                audio_id=audio_id,
-                status=BackfillStatus.ALREADY_ANALYZED,
-                transcript_version=version,
-                run_id=existing.id,
-                run_status=existing.status,
-            )
-        if existing.status in state_machine.ACTIVE_STAGE_STATES:
-            return BackfillItem(
-                audio_id=audio_id,
-                status=BackfillStatus.ALREADY_QUEUED,
-                transcript_version=version,
-                run_id=existing.id,
-                run_status=existing.status,
-            )
-        if existing.status not in REQUEUEABLE_RUN_STATES:
-            # Unknown run status: corrupt data, never widen the decision silently.
-            return BackfillItem(
-                audio_id=audio_id,
-                status=BackfillStatus.UNKNOWN_RUN_STATE,
-                transcript_version=version,
-                run_id=existing.id,
-                run_status=existing.status,
-            )
     if not apply:
         return BackfillItem(
             audio_id=audio_id,
             status=BackfillStatus.WOULD_QUEUE,
             transcript_version=version,
         )
+    # F1 → F2 is exactly the explicit upgrade the spec assigns to the backfill, and it only
+    # happens on the branch that really queues: a no-op apply pass changes no row.
+    if not required:
+        audio.required_stages = with_analysis_stage(audio.required_stages)
     outcome = await ensure_stage_run(
         db,
         user_id=user_id,

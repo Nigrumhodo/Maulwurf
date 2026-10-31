@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.db import get_session
 from app.main import app
-from app.models import IngestionAttempt, OutboxEvent, ProcessingRun, Transcript
+from app.models import Audio, IngestionAttempt, OutboxEvent, ProcessingRun, Transcript
 from app.services.analysis_backfill import (
     BackfillStatus,
     backfill_classes,
