@@ -87,6 +87,19 @@ async def set_current_user(db: AsyncSession, user_id: uuid.UUID) -> None:
     )
 
 
+async def bind_google_sub(db: AsyncSession, sub: str) -> None:
+    """Bind the verified Google `sub` for the `users` bootstrap policies (A2.17).
+
+    First login and the E2E seed create a user before any tenant exists. The narrow
+    `auth_user_lookup`/`auth_user_insert` policies admit exactly the row whose `sub` is
+    bound here; without it the insert fails closed, and inserting as the owner would
+    bypass the barrier the smoke is supposed to exercise.
+    """
+    await db.execute(
+        text("SELECT set_config('app.google_sub', :sub, true)"), {"sub": sub}
+    )
+
+
 @event.listens_for(engine.sync_engine, "begin")
 def _apply_tenant_settings(connection: Connection) -> None:
     # Role and UUID are validated (Settings pattern / uuid.UUID), so these literals cannot
