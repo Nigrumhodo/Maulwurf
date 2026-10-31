@@ -215,6 +215,30 @@ def test_budget_equal_to_the_floor_drops_all_overlap() -> None:
     assert limited.budget_limited is True
 
 
+def test_budget_above_the_natural_cost_keeps_the_overlap() -> None:
+    text, segments = _build(_sentences(40, 8))
+    full = plan_windows(
+        transcript_text=text,
+        segments=segments,
+        target_tokens=40,
+        overlap_tokens=10,
+        count_tokens=_word_count,
+    )
+
+    granted = plan_windows(
+        transcript_text=text,
+        segments=segments,
+        target_tokens=40,
+        overlap_tokens=10,
+        max_total_tokens=full.total_tokens,
+        count_tokens=_word_count,
+    )
+
+    assert granted.total_tokens == full.total_tokens
+    assert granted.effective_overlap_tokens == 10
+    assert granted.budget_limited is False
+
+
 def test_budget_that_cannot_cover_the_text_is_rejected() -> None:
     text, segments = _build(_sentences(40, 8))
     floor = plan_windows(
@@ -438,6 +462,16 @@ def test_dedupe_ignores_the_order_of_multiple_sources() -> None:
     second = _Item("second", (second_span, first_span))
 
     assert dedupe_by_evidence([first, second], evidence=_spans) == [first]
+
+
+def test_dedupe_does_not_merge_a_subset_of_sources() -> None:
+    segment_a, segment_b = uuid4(), uuid4()
+    first = _span(segment_id=segment_a, char_start=0, char_end=4, quote="hola")
+    second = _span(segment_id=segment_b, char_start=2, char_end=7, quote="mundo")
+    partial = _Item("partial", (first,))
+    complete = _Item("complete", (first, second))
+
+    assert dedupe_by_evidence([partial, complete], evidence=_spans) == [partial, complete]
 
 
 def test_dedupe_never_collapses_items_without_evidence() -> None:

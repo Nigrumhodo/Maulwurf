@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Thin shim for the S3.2 analysis-window cost harness.
 
-Run from the repository root::
+Run from the repository root with the API dependencies available::
 
-    python scripts/eval/window_cost.py --format table
-    python scripts/eval/window_cost.py --format json
+    cd apps/api && uv run python ../../scripts/eval/window_cost.py --format table
+    cd apps/api && uv run python ../../scripts/eval/window_cost.py --format json
 
-The harness lives in ``apps/api/tools/eval/window_cost.py`` and uses the API tokenizer; run
-it through the API environment for exact token counts::
+The harness lives in ``apps/api/tools/eval/window_cost.py``. Running it directly with the
+API environment is equivalent and is the documented form::
 
     cd apps/api && uv run python -m tools.eval.window_cost
 
