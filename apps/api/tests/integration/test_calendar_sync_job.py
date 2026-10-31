@@ -157,6 +157,29 @@ def _session_factory(db: AsyncSession) -> Callable[[], Any]:
     return factory
 
 
+def _scoped_session_factory(db: AsyncSession) -> Callable[[], Any]:
+    """Sessions with `session_scope`'s commit/rollback, on a real (savepoint) transaction.
+
+    The test's outer transaction keeps cases isolated; `create_savepoint` makes the nested
+    commit/rollback real SQL, so a rollback actually discards writes such as a disconnect.
+    """
+
+    @asynccontextmanager
+    async def factory() -> AsyncIterator[AsyncSession]:
+        assert db.bind is not None
+        nested = AsyncSession(bind=db.bind, join_transaction_mode="create_savepoint")
+        try:
+            yield nested
+            await nested.commit()
+        except BaseException:
+            await nested.rollback()
+            raise
+        finally:
+            await nested.close()
+
+    return factory
+
+
 def _gateway_factory(
     fake: FakeGoogle,
 ) -> Callable[[TaskSnapshot], Awaitable[CalendarGateway]]:
@@ -400,7 +423,23 @@ class TokenEndpoint:
         )
 
 
-def _google_transport(fake: FakeGoogle, tokens: TokenEndpoint) -> httpx.MockTransport:
+class RejectingTokenEndpoint:
+    """Token endpoint double that answers `invalid_grant` (revoked refresh token)."""
+
+    def __init__(self) -> None:
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        return httpx.Response(
+            400, json={"error": "invalid_grant", "error_description": "revoked"}
+        )
+
+
+TokenResponder = Callable[[httpx.Request], httpx.Response]
+
+
+def _google_transport(fake: FakeGoogle, tokens: TokenResponder) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "oauth2.googleapis.com":
             return tokens(request)
@@ -439,11 +478,24 @@ async def _connected_credential(
 
 
 def _real_google_ctx(
-    db_session: AsyncSession, fake: FakeGoogle, tokens: TokenEndpoint
+    db_session: AsyncSession, fake: FakeGoogle, tokens: TokenResponder
 ) -> dict[str, Any]:
     transport = _google_transport(fake, tokens)
     return {
         SESSIONS_KEY: _session_factory(db_session),
+        CALENDAR_TRANSPORT_KEY: transport,
+        TOKEN_TRANSPORT_KEY: transport,
+        "job_try": 1,
+    }
+
+
+def _scoped_google_ctx(
+    db_session: AsyncSession, fake: FakeGoogle, tokens: TokenResponder
+) -> dict[str, Any]:
+    """Real commit/rollback sessions, so a disconnect is rolled back or persisted for real."""
+    transport = _google_transport(fake, tokens)
+    return {
+        SESSIONS_KEY: _scoped_session_factory(db_session),
         CALENDAR_TRANSPORT_KEY: transport,
         TOKEN_TRANSPORT_KEY: transport,
         "job_try": 1,
@@ -517,3 +569,76 @@ async def test_a_401_refreshes_once_and_the_delivery_succeeds(
     assert fake.requests[1].headers["authorization"] == "Bearer fresh-access"
     assert len(fake.events) == 1
     assert (await _status(db_session, task_id))[0] == "synced"
+
+
+async def test_a_revoked_refresh_token_disconnects_through_the_real_scope(
+    db_session: AsyncSession, google_client: None
+) -> None:
+    """J3.4 fix: the disconnect survives `session_scope`'s commit instead of being rolled back."""
+    fake = FakeGoogle()
+    tokens = RejectingTokenEndpoint()
+    actor = await make_actor(db_session)
+    task_id, version = await _insert_task(db_session, actor)
+    credential = await _connected_credential(
+        db_session,
+        actor,
+        access_token="expired-access",
+        expires_at=datetime.now(UTC) - timedelta(minutes=5),
+    )
+
+    await sync_task_event(
+        _scoped_google_ctx(db_session, fake, tokens), str(task_id), version
+    )
+
+    assert len(tokens.requests) == 1
+    assert fake.insert_requests == 0
+    assert (await _status(db_session, task_id)) == ("blocked", None)
+    await db_session.refresh(credential)
+    assert credential.status == "disconnected"
+
+
+async def test_a_revoked_refresh_token_on_the_401_path_also_disconnects(
+    db_session: AsyncSession, google_client: None
+) -> None:
+    """J3.4 fix: the reactive refresh commits its disconnect too."""
+    fake = FakeGoogle()
+    fake.unauthorized_before_insert = 1
+    tokens = RejectingTokenEndpoint()
+    actor = await make_actor(db_session)
+    task_id, version = await _insert_task(db_session, actor)
+    credential = await _connected_credential(
+        db_session,
+        actor,
+        access_token="still-fresh",
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+    )
+
+    await sync_task_event(
+        _scoped_google_ctx(db_session, fake, tokens), str(task_id), version
+    )
+
+    assert len(tokens.requests) == 1
+    assert fake.insert_requests == 1
+    assert (await _status(db_session, task_id)) == ("blocked", None)
+    await db_session.refresh(credential)
+    assert credential.status == "disconnected"
+
+
+async def test_an_unexpected_failure_is_raised_for_the_arq_retry_budget(
+    db_session: AsyncSession,
+) -> None:
+    """J3.4 fix: a transient database/provider bug must reach ARQ instead of being swallowed."""
+    actor = await make_actor(db_session)
+    task_id, version = await _insert_task(db_session, actor)
+
+    async def broken(_snapshot: TaskSnapshot) -> CalendarGateway:
+        raise RuntimeError("database unavailable")
+
+    ctx = {
+        SESSIONS_KEY: _session_factory(db_session),
+        GATEWAYS_KEY: broken,
+        "job_try": 1,
+    }
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await sync_task_event(ctx, str(task_id), version)

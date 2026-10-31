@@ -120,10 +120,13 @@ async def sync_task_event(
             type(exc).__name__,
         )
     except Exception as exc:
-        # Only the type: messages can carry provider or database content.
+        # Only the type: messages can carry provider or database content. Re-raise so ARQ
+        # applies the function's bounded `max_tries`: a transient database failure must not
+        # drop the delivery silently, and a permanent one still consumes that budget.
         logger.warning(
-            "calendar_sync.failed task_id=%s error=%s", task_id, type(exc).__name__
+            "calendar_sync.unexpected task_id=%s error=%s", task_id, type(exc).__name__
         )
+        raise
     finally:
         # The ARQ worker may reuse the context: never leave a tenant behind.
         clear_user()
@@ -183,6 +186,9 @@ async def _google_gateway(
     sessions: SessionFactory,
     transports: Transports,
 ) -> CalendarGateway:
+    access_token: str | None = None
+    blocked_code: str | None = None
+    transient_code: str | None = None
     async with sessions() as db:
         credential = await _load_credential(db, snapshot.user_id)
         if credential is None or credential.status != "connected":
@@ -193,13 +199,21 @@ async def _google_gateway(
             )
         except GoogleTokenUnavailable as exc:
             # Missing refresh token or OAuth client: J3.3's reconnect is the way out.
-            raise TaskEventBlocked(exc.code) from exc
-        except GoogleTokenRejected as exc:
-            # The integration is already `disconnected` inside `fresh_access_token`.
-            raise TaskEventBlocked("google_invalid_grant") from exc
+            blocked_code = exc.code
+        except GoogleTokenRejected:
+            # `fresh_access_token` already marked the credential `disconnected`; swallow the
+            # error inside the scope so `session_scope` commits instead of rolling the
+            # disconnect back, then surface it after leaving the transaction.
+            blocked_code = "google_invalid_grant"
         except GoogleTokenTransient as exc:
             # Nothing was written yet, so ARQ can retry the job without a status change.
-            raise TaskEventTransientError(exc.code) from exc
+            transient_code = exc.code
+    if blocked_code is not None:
+        raise TaskEventBlocked(blocked_code)
+    if transient_code is not None:
+        raise TaskEventTransientError(transient_code)
+    if access_token is None:  # pragma: no cover - every path above returns or raises
+        raise TaskEventTransientError("google_token_missing")
 
     async def on_invalid_grant() -> None:
         async with sessions() as db:
@@ -207,26 +221,36 @@ async def _google_gateway(
 
     async def refresh_access_token() -> str:
         """Reactive path: Google rejected a token that still looked fresh."""
+        refreshed: str | None = None
+        rejected = False
+        unavailable = False
+        transient = False
         async with sessions() as db:
             current = await _load_credential(db, snapshot.user_id)
             if current is None or current.status != "connected":
                 raise GoogleCalendarUnauthorized("integration is not connected")
             try:
-                return await fresh_access_token(
+                refreshed = await fresh_access_token(
                     db, current, transport=transports.token, force=True
                 )
-            except GoogleTokenRejected as exc:
-                raise GoogleCalendarInvalidGrant(
-                    "Google revocó el acceso; la integración queda desconectada."
-                ) from exc
-            except GoogleTokenUnavailable as exc:
-                raise GoogleCalendarUnauthorized(
-                    "La integración necesita reconectarse."
-                ) from exc
-            except GoogleTokenTransient as exc:
-                raise GoogleCalendarTransientError(
-                    "No se pudo renovar el token de Google."
-                ) from exc
+            except GoogleTokenRejected:
+                # Same commit-vs-rollback rule as the initial refresh above.
+                rejected = True
+            except GoogleTokenUnavailable:
+                unavailable = True
+            except GoogleTokenTransient:
+                transient = True
+        if rejected:
+            raise GoogleCalendarInvalidGrant(
+                "Google revocó el acceso; la integración queda desconectada."
+            )
+        if unavailable:
+            raise GoogleCalendarUnauthorized(
+                "La integración necesita reconectarse."
+            )
+        if transient or refreshed is None:
+            raise GoogleCalendarTransientError("No se pudo renovar el token de Google.")
+        return refreshed
 
     service = GoogleCalendarService(
         access_token=access_token,
