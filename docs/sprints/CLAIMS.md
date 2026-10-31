@@ -43,8 +43,8 @@ These six values are **all** the status vocabulary: there are no `claimed`, `in_
 ## 3. Active sprint
 
 **S2 is open.** S1 has every implementation ticket `done`; only L1.7 (coordination and the
-formal S1 close) is unclaimed. S3 and S4 remain closed except the directed S3.1 claim under
-MAULW-108 recorded below. D2 and D6 remain `pending`; D3-Audio and D4 remain `blocked`.
+formal S1 close) is unclaimed. S3 and S4 remain closed except the directed S3.1, S3.2 and
+S3.4 claims recorded below. D2 and D6 remain `pending`; D3-Audio and D4 remain `blocked`.
 
 ### S1 — Foundation + F0 spike
 
@@ -161,14 +161,15 @@ MAULW-108 recorded below. D2 and D6 remain `pending`; D3-Audio and D4 remain `bl
 
 ### S3 — Action (extraction and Calendar)
 
-> Only S3.1 and S3.2 are recorded: they were directed by MAULW-108 and MAULW-109. The
-> remaining S3 backlog stays unclaimable until the lead opens the sprint and updates the
-> status above.
+> Only S3.1, S3.2 and S3.4 are recorded: they were directed by MAULW-108, MAULW-109 and
+> MAULW-111. The remaining S3 backlog stays unclaimable until the lead opens the sprint and
+> updates the status above.
 
 | Action | Ticket | Owner | Status | Claimed at (UTC) | Cloud eligibility | Contributors / reviewers | Reason, evidence, or PR |
 |---|---|---|---|---|---|---|---|
 | claim | S3.1 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area S, area A | MAULW-108: explicit analysis backfill for F1 classes over persisted text only (no reupload/retranscription), `app/services/analysis_backfill.py` + `scripts/backfill_analysis.py`, `analysis_backfill_available` on `GET /audios/{id}`, I-S3-SG-01. L3.6/A3.1 are not in `develop`; the queue reaches the S2 `analyze` no-op, so extraction output is not claimed. PR #119: Quality CI green, `integration (api)` 404 passed and `integration (ingest)` passed. Branch `task/MAULW-108` |
 | claim | S3.2 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area S, area A | MAULW-109: sentence-aligned analysis windows with a bounded overlap and a hard total-token budget, evidence-identity dedupe, `app/services/analysis_windows.py`, the offline `scripts/eval/window_cost.py` harness and U-S3-SG-02 (43 tests; 926 API unit passed). Default 800/100 measures 10,894–15,705 transcript tokens/class-hour with a 1.073–1.111 amplification; provider latency `NO VERIFICADO`. Token numbers come from authored/redacted spike-derived text; no real LLM call. Branch `task/MAULW-109`; PR #121 open with all Quality CI checks green (926 API unit, 408 API integration, e2e-smoke and web included). |
+| claim | S3.4 | NigrumH0do | in progress | 2026-10-31 | not applicable | — / area A, area S | MAULW-111: versioned `processing_runs` ledger. `RunSpec` records the transcript version and the stage configuration version, and `analyze` runs persist `prompt_version` (the analysis config key is derived from it, so a prompt bump creates a new run). Retry/backfill reuse a row only when all versions match; a version change creates a NEW row and never resets or overwrites the old one. Derived stage state and backfill availability ignore obsolete transcript/config rows, and the tenant-scoped `GET /audios/{id}/runs` exposes the durable history with a `current` flag. Model moved to `app/models/processing_run.py` per the S3 implementation map. I-S3-SG-04 (`tests/integration/test_processing_runs_versions.py`, 7 cases) plus `tests/unit/test_run_versions.py` and the updated S3.1 backfill unit matrix. Branch `task/MAULW-111`; local `ruff`/`mypy` clean and 943 API unit passed. Integration could not run in this sandbox (no PostgreSQL/Redis); CI `integration (api)` is the evidence. |
 
 ## 4. Change history
 
@@ -230,3 +231,4 @@ MAULW-108 recorded below. D2 and D6 remain `pending`; D3-Audio and D4 remain `bl
 | 2026-10-31 | J2.6 is `done`: Quality CI run `41200218783` (head `350c5c7`) passed all 16 checks, including `e2e-smoke` (`index: succeeded`, fixture match, citation index 1, empty ingest tmpfs, 25.1 s driver). Re-review fixes for the four PR findings are in the same head; PR #118 stays open for review and merge. | This PR |
 | 2026-10-31 | S3.1 is claimed by jpinillaz (`in progress`) for the directed MAULW-108 ticket: explicit analysis backfill for F1 classes only from persisted text, an operator script with dry-run by default and the `analysis_backfill_available` detail flag. L3.6/A3.1 are absent from `develop`, so the queue reaches the S2 `analyze` no-op and no extraction result is claimed. S3 is not declared open here; the remaining S3 tickets stay blocked. PR #119: all Quality CI checks green, `integration (api)` 404 passed. | This PR |
 | 2026-10-31 | S3.2 is claimed by jpinillaz (`in progress`) for the directed MAULW-109 ticket: bounded analysis windows, evidence-identity dedupe and the offline window-cost harness (U-S3-SG-02). The cost numbers use authored/redacted textual fixtures derived from the F0.1 spike scenario; no real provider call, no audio and no real class text are involved. S3 is not declared open; the rest of S3 stays blocked. PR #121. | This PR |
+| 2026-10-31 | S3.4 is claimed by NigrumH0do (`in progress`) for the directed MAULW-111 ticket: `processing_runs` identified by transcript + configuration version, with the analysis prompt version persisted and folded into the config key; retry/backfill create a new run only when a version changes, old runs stay queryable through `GET /audios/{id}/runs`, and derived stage state ignores obsolete versions. S3 is not declared open; the rest of S3 stays blocked. | This PR |
