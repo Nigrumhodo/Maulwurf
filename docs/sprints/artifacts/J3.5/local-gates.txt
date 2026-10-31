@@ -1,0 +1,19 @@
+J3.5 (MAULW-118) local gates
+Captured: 2026-10-31T15:45:25Z
+Host: Linux 7.0.0-39-generic x86_64
+Python: Python 3.12.3
+uv: uv 0.13.1 (x86_64-unknown-linux-gnu)
+
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ cd apps/api && uv run mypy .
+Success: no issues found in 206 source files
+
+$ cd apps/api && uv run pytest tests/unit/test_calendar_event.py -q
+.............................                                            [100%]
+29 passed in 0.07s
+
+$ cd apps/api && uv run pytest tests/unit/test_citations.py -q
+.........                                                                [100%]
+9 passed in 0.60s

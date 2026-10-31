@@ -28,11 +28,12 @@ from typing import Any
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.services.reader_links import class_reader_path
+
 EVENT_TITLE_PREFIX = "[Maulwurf]"
 # Google Calendar limits: summary 1024 characters, description 8192.
 TITLE_MAX_LENGTH = 1024
 DESCRIPTION_MAX_LENGTH = 8192
-READER_PATH = "/biblioteca/{audio_id}"
 
 _EVENT_BLOCK_MISSING = "event_block_missing"
 _EVENT_BLOCK_INVALID = "event_block_invalid"
@@ -178,11 +179,11 @@ def _reader_link(task: TaskEventContent, *, public_origin: str) -> str | None:
     if task.audio_id is None:
         return None
     origin = _origin(public_origin)
-    url = f"{origin}{READER_PATH.format(audio_id=task.audio_id)}"
+    segment_id = task.segment.segment_id if task.segment is not None else None
+    url = f"{origin}{class_reader_path(task.audio_id, segment_id)}"
     if task.segment is None:
         return f"Ver la clase en Maulwurf: {url}"
-    segment = f"{url}?segment={task.segment.segment_id}"
-    return f"Ver segmento {task.segment.ordinal} en Maulwurf: {segment}"
+    return f"Ver segmento {task.segment.ordinal} en Maulwurf: {url}"
 
 
 def _origin(public_origin: str) -> str:
