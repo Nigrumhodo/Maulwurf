@@ -9,9 +9,11 @@ response is lost, or a retry follows a timeout. The protocol is:
 - **Timeout → query before retrying.** A transient insert failure (timeout, 5xx, 429) never
   proves the write failed. The engine ``GET``s the deterministic ID first; a matching event
   is adopted, and only an absent event is retried.
-- **409 → identity check.** A conflict may be our own earlier insert or a foreign event that
-  happens to occupy the ID. Only an event whose private ``maulwurfTaskId`` matches this task
-  is reconciled; anything else is left untouched and the task is marked ``failed``.
+- **409 → identity check and refresh.** A conflict may be our own earlier insert or a foreign
+  event that happens to occupy the ID. Only an event whose private ``maulwurfTaskId`` matches
+  this task is reconciled; anything else is left untouched and the task is marked ``failed``.
+  When the identity matches but the stored body belongs to an older version, the reconcile
+  **patches** the event before settling, so a newer delivery never leaves stale content.
 - **Obsolete versions are discarded.** A job whose ``task_version`` is no longer the stored
   version makes no Google call, and the status update is a compare-and-set on the same
   version, so a concurrent edit can never be overwritten by an old delivery.
@@ -38,6 +40,7 @@ from app.services.google_calendar import (
     GoogleCalendarError,
     GoogleCalendarInvalidGrant,
     GoogleCalendarTransientError,
+    GoogleCalendarUnauthorized,
 )
 
 logger = logging.getLogger(__name__)
@@ -118,6 +121,10 @@ class CalendarGateway(Protocol):
         self, calendar_id: str, event_id: str
     ) -> Mapping[str, Any] | None: ...
 
+    async def update_event(
+        self, calendar_id: str, event_id: str, body: Mapping[str, Any]
+    ) -> Mapping[str, Any]: ...
+
 
 GatewayFactory = Callable[[TaskSnapshot], Awaitable[CalendarGateway]]
 BodyBuilder = Callable[[TaskSnapshot], Mapping[str, Any]]
@@ -144,6 +151,46 @@ def event_identity_matches(event: Mapping[str, Any], task_id: uuid.UUID) -> bool
     if not isinstance(private, Mapping):
         return False
     return private.get(TASK_ID_PROPERTY) == str(task_id)
+
+
+def _same_instant(left: Any, right: Any) -> bool:
+    if not isinstance(left, str) or not isinstance(right, str):
+        return False
+    try:
+        # Google answers with the event's own offset while the body is sent in UTC.
+        return datetime.fromisoformat(left) == datetime.fromisoformat(right)
+    except (TypeError, ValueError):
+        return left == right
+
+
+def _same_block(existing: Any, desired: Mapping[str, Any]) -> bool:
+    if not isinstance(existing, Mapping):
+        return False
+    if desired.get("date") is not None or existing.get("date") is not None:
+        return existing.get("date") == desired.get("date")
+    return _same_instant(existing.get("dateTime"), desired.get("dateTime")) and (
+        existing.get("timeZone") == desired.get("timeZone")
+    )
+
+
+def _description(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def event_content_matches(event: Mapping[str, Any], body: Mapping[str, Any]) -> bool:
+    """Whether the stored event already carries exactly the content we would send.
+
+    Used by the 409 reconcile: an event whose private identity matches but whose body belongs
+    to an older task version has to be repaired, otherwise the task would be `synced` while
+    Google still shows the previous title/date/description.
+    """
+    if event.get("summary") != body.get("summary"):
+        return False
+    if _description(event.get("description")) != _description(body.get("description")):
+        return False
+    return _same_block(event.get("start"), body.get("start") or {}) and _same_block(
+        event.get("end"), body.get("end") or {}
+    )
 
 
 def _rfc3339(value: datetime) -> str:
@@ -222,7 +269,8 @@ class TaskEventSync:
                 task.version,
             )
             return SyncOutcome.STALE_VERSION
-        if not task.calendar_id:
+        calendar_id = task.calendar_id
+        if not calendar_id:
             return await self._blocked(task, "calendar_missing")
         if not task.has_event_block():
             return await self._blocked(task, "event_block_missing")
@@ -237,22 +285,28 @@ class TaskEventSync:
         try:
             for attempt in range(1, self._insert_attempts + 1):
                 try:
-                    await gateway.insert_event(task.calendar_id, event_id, body)
+                    await gateway.insert_event(calendar_id, event_id, body)
                     return await self._settle(task, event_id, SyncOutcome.SYNCED)
                 except GoogleCalendarConflict:
-                    existing = await gateway.get_event(task.calendar_id, event_id)
-                    return await self._reconcile(task, existing, event_id)
+                    existing = await gateway.get_event(calendar_id, event_id)
+                    return await self._reconcile(task, existing, event_id, gateway, calendar_id)
                 except GoogleCalendarTransientError:
                     # A lost response is indistinguishable from a failed insert: look it up.
-                    existing = await gateway.get_event(task.calendar_id, event_id)
+                    existing = await gateway.get_event(calendar_id, event_id)
                     if existing is not None:
-                        return await self._reconcile(task, existing, event_id)
+                        return await self._reconcile(
+                            task, existing, event_id, gateway, calendar_id
+                        )
                     if attempt >= self._insert_attempts:
                         raise
                     await self._sleeper(RETRY_DELAY_SECONDS)
         except GoogleCalendarInvalidGrant:
             # GoogleCalendarService already invoked the disconnect callback (J3.2).
             return await self._blocked(task, "google_invalid_grant")
+        except GoogleCalendarUnauthorized:
+            # A 401 that survived the token refresh needs a reconnect (J3.3); `failed` would
+            # never return to `pending` after that reconnect.
+            return await self._blocked(task, "google_unauthorized")
         except GoogleCalendarTransientError as exc:
             await self._mark_failed(task)
             logger.warning(
@@ -272,7 +326,12 @@ class TaskEventSync:
         raise TaskEventTransientError("calendar_insert_transient")
 
     async def _reconcile(
-        self, task: TaskSnapshot, existing: Mapping[str, Any] | None, event_id: str
+        self,
+        task: TaskSnapshot,
+        existing: Mapping[str, Any] | None,
+        event_id: str,
+        gateway: CalendarGateway,
+        calendar_id: str,
     ) -> SyncOutcome:
         """Adopt an existing event only when its identity belongs to this task."""
         if existing is None:
@@ -283,6 +342,12 @@ class TaskEventSync:
             logger.warning("calendar_sync.identity_mismatch task_id=%s", task.task_id)
             await self._mark_failed(task)
             return SyncOutcome.FAILED
+        body = self._body_builder(task)
+        if not event_content_matches(existing, body):
+            # A newer version won the CAS while an older body was being inserted: repair the
+            # event before claiming the task as synced, or Google would keep stale content.
+            await gateway.update_event(calendar_id, event_id, body)
+            logger.info("calendar_sync.event_refreshed task_id=%s", task.task_id)
         return await self._settle(task, event_id, SyncOutcome.RECONCILED)
 
     async def _settle(

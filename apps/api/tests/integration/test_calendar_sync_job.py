@@ -20,22 +20,30 @@ from urllib.parse import unquote
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from app.core.config import settings
+from app.core.crypto import decrypt, encrypt
+from app.core.db import set_current_user
+from app.models import GoogleCredential
 from app.services.calendar_gateway import GoogleCalendarGateway
 from app.services.google_calendar import GoogleCalendarService
-from app.services.task_event_store import TASKS
+from app.services.task_event_store import TASKS, SqlTaskEventStore
 from app.services.task_event_sync import (
     TASK_ID_PROPERTY,
     USER_ID_PROPERTY,
     CalendarGateway,
     TaskSnapshot,
+    build_event_body,
     deterministic_event_id,
 )
 from app.workers.jobs.calendar_sync import (
+    CALENDAR_TRANSPORT_KEY,
     GATEWAYS_KEY,
     SESSIONS_KEY,
+    TOKEN_TRANSPORT_KEY,
     sync_task_event,
 )
 from tests.integration.actors import Actor, make_actor
@@ -90,10 +98,14 @@ class FakeGoogle:
         self.events: dict[tuple[str, str], dict[str, Any]] = {}
         self.insert_requests = 0
         self.get_requests = 0
+        self.patch_requests = 0
+        self.unauthorized_before_insert = 0
+        self.requests: list[httpx.Request] = []
         self.lose_next_response = False
         self.timeouts_before_insert = 0
 
     def handler(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
         parts = [unquote(part) for part in request.url.path.strip("/").split("/")]
         # The service base URL may carry a prefix (the test uses `/v3`).
         start = parts.index("calendars")
@@ -104,6 +116,9 @@ class FakeGoogle:
             self.insert_requests += 1
             body = json.loads(request.content)
             event_id = body["id"]
+            if self.unauthorized_before_insert:
+                self.unauthorized_before_insert -= 1
+                return httpx.Response(401, json={"error": {"code": 401}})
             if self.timeouts_before_insert:
                 self.timeouts_before_insert -= 1
                 raise httpx.ReadTimeout("insert timed out", request=request)
@@ -116,6 +131,13 @@ class FakeGoogle:
             self.events[(calendar_id, event_id)] = body
             return httpx.Response(200, json=body)
         event_id = parts[3]
+        if request.method == "PATCH":
+            self.patch_requests += 1
+            stored = self.events.get((calendar_id, event_id))
+            if stored is None:
+                return httpx.Response(404, json={"error": {"code": 404}})
+            stored.update(json.loads(request.content))
+            return httpx.Response(200, json=stored)
         self.get_requests += 1
         event = self.events.get((calendar_id, event_id))
         if event is None:
@@ -263,19 +285,50 @@ async def test_timeout_without_creation_retries_the_same_id(
     assert (await _status(db_session, task_id))[0] == "synced"
 
 
-async def test_conflict_with_matching_identity_is_reconciled(
+async def test_conflict_with_matching_identity_and_body_is_reconciled(
     db_session: AsyncSession,
 ) -> None:
-    """I-S3-JF-03: 409 from an earlier delivery does not duplicate or overwrite."""
+    """I-S3-JF-03: 409 from an identical earlier delivery does not duplicate or patch."""
     fake = FakeGoogle()
     actor = await make_actor(db_session)
     task_id, version = await _insert_task(db_session, actor)
-    original = _identity_event(task_id, actor.user_id)
+    snapshot = await _snapshot(db_session, task_id)
+    original = {"id": deterministic_event_id(task_id), **build_event_body(snapshot)}
     fake.events[(CALENDAR_ID, deterministic_event_id(task_id))] = original
 
     await sync_task_event(_ctx(db_session, fake), str(task_id), version)
 
     assert fake.events[(CALENDAR_ID, deterministic_event_id(task_id))] == original
+    assert fake.patch_requests == 0
+    assert (await _status(db_session, task_id)) == (
+        "synced",
+        deterministic_event_id(task_id),
+    )
+
+
+async def test_a_stale_event_body_is_patched_during_the_reconcile(
+    db_session: AsyncSession,
+) -> None:
+    """I-S3-JF-03 fix: the task must not stay `synced` while the event shows old content."""
+    fake = FakeGoogle()
+    actor = await make_actor(db_session)
+    task_id, version = await _insert_task(db_session, actor)
+    stale = _identity_event(task_id, actor.user_id)
+    fake.events[(CALENDAR_ID, deterministic_event_id(task_id))] = stale
+
+    await sync_task_event(_ctx(db_session, fake), str(task_id), version)
+
+    stored = fake.events[(CALENDAR_ID, deterministic_event_id(task_id))]
+    assert stored["summary"] == "Entregar informe"
+    assert stored["start"] == {
+        "dateTime": "2026-11-02T14:00:00Z",
+        "timeZone": "America/Bogota",
+    }
+    assert stored["end"] == {
+        "dateTime": "2026-11-02T15:00:00Z",
+        "timeZone": "America/Bogota",
+    }
+    assert fake.patch_requests == 1
     assert (await _status(db_session, task_id)) == (
         "synced",
         deterministic_event_id(task_id),
@@ -295,6 +348,7 @@ async def test_conflict_with_foreign_identity_is_not_adopted(
     await sync_task_event(_ctx(db_session, fake), str(task_id), version)
 
     assert fake.events[(CALENDAR_ID, deterministic_event_id(task_id))] == foreign
+    assert fake.patch_requests == 0
     assert (await _status(db_session, task_id)) == ("failed", None)
 
 
@@ -321,3 +375,145 @@ async def test_missing_google_integration_blocks_the_task(
     await sync_task_event(_ctx(db_session), str(task_id), version)
 
     assert (await _status(db_session, task_id)) == ("blocked", None)
+
+
+async def _snapshot(db_session: AsyncSession, task_id: uuid.UUID) -> TaskSnapshot:
+    def factory() -> Any:
+        return _same_session(db_session)
+
+    snapshot = await SqlTaskEventStore(factory).load(task_id)
+    assert snapshot is not None
+    return snapshot
+
+
+class TokenEndpoint:
+    """Deterministic Google token endpoint double (refresh_token grant only)."""
+
+    def __init__(self, *, access_token: str = "fresh-access") -> None:  # noqa: S107
+        self.access_token = access_token
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        return httpx.Response(
+            200, json={"access_token": self.access_token, "expires_in": 3599}
+        )
+
+
+def _google_transport(fake: FakeGoogle, tokens: TokenEndpoint) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "oauth2.googleapis.com":
+            return tokens(request)
+        return fake.handler(request)
+
+    return httpx.MockTransport(handler)
+
+
+async def _connected_credential(
+    db_session: AsyncSession,
+    actor: Actor,
+    *,
+    access_token: str,
+    expires_at: datetime,
+) -> GoogleCredential:
+    access_blob, key_version = encrypt(
+        access_token, user_id=actor.user_id, field="google_credentials.access_token"
+    )
+    refresh_blob, _ = encrypt(
+        "refresh-token", user_id=actor.user_id, field="google_credentials.refresh_token"
+    )
+    credential = GoogleCredential(
+        user_id=actor.user_id,
+        access_token_enc=access_blob,
+        refresh_token_enc=refresh_blob,
+        key_version=key_version,
+        status="connected",
+        scopes=["https://www.googleapis.com/auth/calendar.events"],
+        token_expires_at=expires_at,
+    )
+    db_session.add(credential)
+    await db_session.flush()
+    # The job binds the tenant itself; the fixture's open transaction needs the same GUC.
+    await set_current_user(db_session, actor.user_id)
+    return credential
+
+
+def _real_google_ctx(
+    db_session: AsyncSession, fake: FakeGoogle, tokens: TokenEndpoint
+) -> dict[str, Any]:
+    transport = _google_transport(fake, tokens)
+    return {
+        SESSIONS_KEY: _session_factory(db_session),
+        CALENDAR_TRANSPORT_KEY: transport,
+        TOKEN_TRANSPORT_KEY: transport,
+        "job_try": 1,
+    }
+
+
+@pytest.fixture
+def google_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "google_client_id", "test-client-id")
+    monkeypatch.setattr(settings, "google_client_secret", SecretStr("test-client-secret"))
+
+
+async def test_an_expired_access_token_is_refreshed_before_the_call(
+    db_session: AsyncSession, google_client: None
+) -> None:
+    """J3.4 fix: an expired token is renewed instead of failing the task."""
+    fake = FakeGoogle()
+    tokens = TokenEndpoint()
+    actor = await make_actor(db_session)
+    task_id, version = await _insert_task(db_session, actor)
+    credential = await _connected_credential(
+        db_session,
+        actor,
+        access_token="expired-access",
+        expires_at=datetime.now(UTC) - timedelta(minutes=5),
+    )
+
+    await sync_task_event(_real_google_ctx(db_session, fake, tokens), str(task_id), version)
+
+    assert len(tokens.requests) == 1
+    form = dict(httpx.QueryParams(tokens.requests[0].content.decode()))
+    assert form["grant_type"] == "refresh_token"
+    assert form["refresh_token"] == "refresh-token"
+    assert len(fake.events) == 1
+    request = fake.requests[0]
+    assert request.headers["authorization"] == "Bearer fresh-access"
+    assert (await _status(db_session, task_id))[0] == "synced"
+    refreshed = decrypt(
+        credential.access_token_enc,
+        key_version=credential.key_version,
+        user_id=actor.user_id,
+        field="google_credentials.access_token",
+    )
+    assert refreshed == "fresh-access"
+    assert credential.last_refresh_at is not None
+    assert credential.token_expires_at is not None
+    assert credential.token_expires_at > datetime.now(UTC)
+
+
+async def test_a_401_refreshes_once_and_the_delivery_succeeds(
+    db_session: AsyncSession, google_client: None
+) -> None:
+    """J3.4 fix: a token invalidated before its expiry is renewed on the 401."""
+    fake = FakeGoogle()
+    fake.unauthorized_before_insert = 1
+    tokens = TokenEndpoint()
+    actor = await make_actor(db_session)
+    task_id, version = await _insert_task(db_session, actor)
+    await _connected_credential(
+        db_session,
+        actor,
+        access_token="still-fresh",
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+    )
+
+    await sync_task_event(_real_google_ctx(db_session, fake, tokens), str(task_id), version)
+
+    assert len(tokens.requests) == 1
+    assert fake.insert_requests == 2
+    assert fake.requests[0].headers["authorization"] == "Bearer still-fresh"
+    assert fake.requests[1].headers["authorization"] == "Bearer fresh-access"
+    assert len(fake.events) == 1
+    assert (await _status(db_session, task_id))[0] == "synced"

@@ -33,3 +33,44 @@ $ MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@127.0.0.1:5432/ma
 The full API integration suite is not green in this sandbox because the distro pgvector
 is 0.6.0 (<0.8, search/G4 suites); those modules are outside this diff and Quality CI
 'integration (api)' runs the whole suite with pgvector/pg16.
+
+--- Review fix (hoplite findings 1-2), 2026-10-31 UTC, head of task/MAULW-117 after
+--- merging origin/develop (J3.5 #129). Same sandbox: PostgreSQL 16.15 (pgvector 0.6.0),
+--- Redis 7.0.15. No real Google call, credential or secret.
+
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ cd apps/api && uv run mypy .
+Success: no issues found in 216 source files
+
+$ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 uv run pytest tests/unit -q
+1152 passed, 35 warnings in 19.44s
+
+Without the workaround the same run reports 1150 passed and these two failures, both the
+pre-existing sandbox issue (httpx 0.28 parses the bracketed IPv6 entries of this host's
+NO_PROXY as host:port): tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured
+and tests/unit/test_llm.py::test_shared_http_client_is_bounded_reused_and_closed.
+
+$ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 uv run pytest \
+    tests/unit/test_task_event_sync.py tests/unit/test_google_tokens.py \
+    tests/unit/test_calendar_gateway.py -q
+44 passed
+
+$ uv run pytest tests/integration/test_calendar_sync_job.py \
+    tests/integration/test_dispatcher.py tests/integration/test_transcript_commit_gate.py -q
+46 passed, 1 warning in 13.22s
+
+New cases for the fix:
+- test_task_event_sync.py: test_a_newer_version_repairs_the_body_left_by_the_older_one
+  (v1 inserts, v2 wins the CAS, v2's delivery leaves v2's body), the identical-body
+  reconcile now asserts no PATCH, and the content comparison covers Google's offset
+  timestamps, the exclusive all-day date and a changed detail.
+- test_google_tokens.py: fresh token, 60 s window, expired refresh, missing refresh token,
+  invalid_grant disconnects, transient 503, invalid_client, rotated/kept refresh token,
+  missing OAuth client.
+- test_calendar_gateway.py: PATCH with sendUpdates=none, description clearing, one refresh
+  + retry on 401, and 401 without a refresher.
+- test_calendar_sync_job.py: the stale body is patched at the HTTP boundary and the task is
+  synced; an expired access token refreshes before the call; a 401 refreshes once and the
+  delivery succeeds.

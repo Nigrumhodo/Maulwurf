@@ -2,7 +2,10 @@
 
 The job receives only IDs (never task content), resolves the task under the explicit
 cross-tenant worker policy, binds its owner for the status write, then delegates to
-`TaskEventSync`. The Calendar access token is decrypted in-process and never logged.
+`TaskEventSync`. The Calendar access token is renewed in-process from the encrypted refresh
+token (`services.google_tokens`) when it is expired or Google answers 401, under a row lock;
+token material is never logged. A rejected refresh disconnects the integration (J3.2) and
+leaves the task `blocked`, because a reconnect (J3.3) only revisits `blocked` tasks.
 
 Retry budget: one delivery plus `MAX_TRIES - 1` transient retries, using the same bounded
 backoff as the outbox. `invalid_grant` disconnects the integration and leaves the task
@@ -13,12 +16,14 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
 from typing import Any, Final
 
+import httpx
 from arq.worker import Retry
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.crypto import decrypt
 from app.core.db import (
     bind_cross_tenant,
     bind_user,
@@ -29,8 +34,17 @@ from app.core.db import (
 from app.models import GoogleCredential
 from app.services.calendar_gateway import GoogleCalendarGateway
 from app.services.google_calendar import (
+    GoogleCalendarInvalidGrant,
     GoogleCalendarService,
+    GoogleCalendarTransientError,
+    GoogleCalendarUnauthorized,
     disconnect_google_credential,
+)
+from app.services.google_tokens import (
+    GoogleTokenRejected,
+    GoogleTokenTransient,
+    GoogleTokenUnavailable,
+    fresh_access_token,
 )
 from app.services.outbox_retry import DEFAULT_RETRY
 from app.services.task_event_store import SqlTaskEventStore
@@ -48,9 +62,13 @@ logger = logging.getLogger(__name__)
 SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 GatewayFactory = Callable[[TaskSnapshot], Awaitable[CalendarGateway]]
 
-# ctx keys for injecting a database or a Calendar gateway. Only tests set them.
+# ctx keys for injecting a database, a Calendar gateway or the Google HTTP transports. Only
+# tests set them. Calendar uses the blocking client; the token endpoint is called with httpx
+# async, so each side takes its own transport type.
 SESSIONS_KEY: Final = "calendar_sync_session_factory"
 GATEWAYS_KEY: Final = "calendar_sync_gateway_factory"
+CALENDAR_TRANSPORT_KEY: Final = "calendar_sync_calendar_transport"
+TOKEN_TRANSPORT_KEY: Final = "calendar_sync_token_transport"  # noqa: S105 - ctx key
 
 # One delivery plus three transient retries, aligned with the outbox/index budgets.
 MAX_TRIES: Final = 4
@@ -126,36 +144,93 @@ def _sessions(ctx: dict[str, Any]) -> SessionFactory:
     return factory
 
 
+@dataclass(frozen=True)
+class Transports:
+    calendar: httpx.BaseTransport | None = None
+    token: httpx.AsyncBaseTransport | None = None
+
+
 def _gateways(ctx: dict[str, Any], sessions: SessionFactory) -> GatewayFactory:
     injected: GatewayFactory | None = ctx.get(GATEWAYS_KEY)
     if injected is not None:
         return injected
 
+    transports = Transports(
+        calendar=ctx.get(CALENDAR_TRANSPORT_KEY),
+        token=ctx.get(TOKEN_TRANSPORT_KEY),
+    )
+
     async def factory(snapshot: TaskSnapshot) -> CalendarGateway:
-        return await _google_gateway(snapshot, sessions)
+        return await _google_gateway(snapshot, sessions, transports)
 
     return factory
 
 
+async def _load_credential(
+    db: AsyncSession, user_id: uuid.UUID
+) -> GoogleCredential | None:
+    """Read the credential with a row lock so two deliveries cannot refresh concurrently."""
+    result = await db.execute(
+        select(GoogleCredential)
+        .where(GoogleCredential.user_id == user_id)
+        .with_for_update()
+    )
+    return result.scalar_one_or_none()
+
+
 async def _google_gateway(
-    snapshot: TaskSnapshot, sessions: SessionFactory
+    snapshot: TaskSnapshot,
+    sessions: SessionFactory,
+    transports: Transports,
 ) -> CalendarGateway:
     async with sessions() as db:
-        credential = await db.get(GoogleCredential, snapshot.user_id)
+        credential = await _load_credential(db, snapshot.user_id)
         if credential is None or credential.status != "connected":
             raise TaskEventBlocked("google_not_connected")
-        access_token = decrypt(
-            credential.access_token_enc,
-            key_version=credential.key_version,
-            user_id=snapshot.user_id,
-            field="google_credentials.access_token",
-        )
+        try:
+            access_token = await fresh_access_token(
+                db, credential, transport=transports.token
+            )
+        except GoogleTokenUnavailable as exc:
+            # Missing refresh token or OAuth client: J3.3's reconnect is the way out.
+            raise TaskEventBlocked(exc.code) from exc
+        except GoogleTokenRejected as exc:
+            # The integration is already `disconnected` inside `fresh_access_token`.
+            raise TaskEventBlocked("google_invalid_grant") from exc
+        except GoogleTokenTransient as exc:
+            # Nothing was written yet, so ARQ can retry the job without a status change.
+            raise TaskEventTransientError(exc.code) from exc
 
     async def on_invalid_grant() -> None:
         async with sessions() as db:
             await disconnect_google_credential(db, snapshot.user_id)
 
+    async def refresh_access_token() -> str:
+        """Reactive path: Google rejected a token that still looked fresh."""
+        async with sessions() as db:
+            current = await _load_credential(db, snapshot.user_id)
+            if current is None or current.status != "connected":
+                raise GoogleCalendarUnauthorized("integration is not connected")
+            try:
+                return await fresh_access_token(
+                    db, current, transport=transports.token, force=True
+                )
+            except GoogleTokenRejected as exc:
+                raise GoogleCalendarInvalidGrant(
+                    "Google revocó el acceso; la integración queda desconectada."
+                ) from exc
+            except GoogleTokenUnavailable as exc:
+                raise GoogleCalendarUnauthorized(
+                    "La integración necesita reconectarse."
+                ) from exc
+            except GoogleTokenTransient as exc:
+                raise GoogleCalendarTransientError(
+                    "No se pudo renovar el token de Google."
+                ) from exc
+
     service = GoogleCalendarService(
-        access_token=access_token, on_invalid_grant=on_invalid_grant
+        access_token=access_token,
+        on_invalid_grant=on_invalid_grant,
+        transport=transports.calendar,
     )
-    return GoogleCalendarGateway(service)
+    return GoogleCalendarGateway(service, refresh_access_token=refresh_access_token)

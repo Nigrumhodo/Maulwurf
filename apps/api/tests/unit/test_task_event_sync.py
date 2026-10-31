@@ -31,6 +31,7 @@ from app.services.task_event_sync import (
     TaskSnapshot,
     build_event_body,
     deterministic_event_id,
+    event_content_matches,
     event_identity_matches,
 )
 
@@ -92,6 +93,7 @@ class Gateway:
         self.events: dict[tuple[str, str], dict[str, Any]] = {}
         self.insert_calls: list[tuple[str, str, dict[str, Any]]] = []
         self.get_calls: list[tuple[str, str]] = []
+        self.update_calls: list[tuple[str, str, dict[str, Any]]] = []
         self.errors: list[Exception] = []
         self.lose_next_response = False
 
@@ -116,6 +118,18 @@ class Gateway:
     ) -> dict[str, Any] | None:
         self.get_calls.append((calendar_id, event_id))
         return self.events.get((calendar_id, event_id))
+
+    async def update_event(
+        self, calendar_id: str, event_id: str, body: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        self.update_calls.append((calendar_id, event_id, dict(body)))
+        if self.errors:
+            raise self.errors.pop(0)
+        key = (calendar_id, event_id)
+        stored = dict(body)
+        stored["id"] = event_id
+        self.events[key] = stored
+        return stored
 
 
 class Sleeper:
@@ -289,19 +303,144 @@ async def test_timeout_without_an_event_retries_the_same_event_id() -> None:
     assert len(gateway.events) == 1
 
 
-async def test_conflict_with_matching_identity_reconciles_without_overwriting() -> None:
+async def test_conflict_with_matching_identity_and_body_does_not_rewrite() -> None:
     task = _task()
     store = Store(task)
     gateway = Gateway()
-    original = _existing(task)
+    original = {"id": deterministic_event_id(task.task_id), **build_event_body(task)}
     gateway.events[_key(task)] = original
 
     outcome = await _engine(store, gateway).run(task.task_id, 1)
 
     assert outcome is SyncOutcome.RECONCILED
-    stored = gateway.events[_key(task)]
-    assert stored == original
+    assert gateway.events[_key(task)] == original
+    assert gateway.update_calls == []
     assert store.synced == [(task.task_id, 1, deterministic_event_id(task.task_id))]
+
+
+async def test_a_newer_version_repairs_the_body_left_by_the_older_one() -> None:
+    """Regression: v1 inserts, v2 wins the CAS, v2's delivery must leave v2's body."""
+    first = _task(version=1, title="Entregar informe")
+    store = Store(first)
+    store.accept_updates = False  # v2 already won the version CAS while v1 inserted
+    gateway = Gateway()
+
+    stale = await _engine(store, gateway).run(first.task_id, 1)
+    assert stale is SyncOutcome.STALE_VERSION
+    assert gateway.events[_key(first)]["summary"] == "Entregar informe"
+    assert gateway.update_calls == []
+
+    start = datetime(2026, 11, 2, 16, 0, tzinfo=UTC)
+    second = _task(
+        task_id=first.task_id,
+        version=2,
+        title="Entregar informe corregido",
+        detail="Informe revisado y firmado",
+        event_start_at=start,
+        event_end_at=start + timedelta(hours=2),
+    )
+    store.task = second
+    store.accept_updates = True
+
+    repaired = await _engine(store, gateway).run(second.task_id, 2)
+
+    assert repaired is SyncOutcome.RECONCILED
+    stored = gateway.events[_key(second)]
+    assert stored["summary"] == "Entregar informe corregido"
+    assert stored["description"] == "Informe revisado y firmado"
+    assert stored["start"] == {
+        "dateTime": "2026-11-02T16:00:00Z",
+        "timeZone": "America/Bogota",
+    }
+    assert stored["end"] == {
+        "dateTime": "2026-11-02T18:00:00Z",
+        "timeZone": "America/Bogota",
+    }
+    assert len(gateway.update_calls) == 1
+    assert store.synced[-1] == (
+        second.task_id,
+        2,
+        deterministic_event_id(second.task_id),
+    )
+
+
+async def test_a_changed_detail_is_patched_into_the_event() -> None:
+    task = _task(detail="detalle nuevo")
+    store = Store(task)
+    gateway = Gateway()
+    gateway.events[_key(task)] = {
+        "id": deterministic_event_id(task.task_id),
+        **build_event_body(_task(task_id=task.task_id, detail="detalle anterior")),
+    }
+
+    outcome = await _engine(store, gateway).run(task.task_id, 1)
+
+    assert outcome is SyncOutcome.RECONCILED
+    assert gateway.update_calls[0][2]["description"] == "detalle nuevo"
+    assert gateway.events[_key(task)]["description"] == "detalle nuevo"
+
+
+def test_content_comparison_normalizes_google_timestamps() -> None:
+    task = _task()
+    body = build_event_body(task)
+
+    assert event_content_matches(body, body)
+    assert event_content_matches(
+        {
+            "summary": body["summary"],
+            "description": body["description"],
+            # Google answers with the event's offset and milliseconds for the same instant.
+            "start": {"dateTime": "2026-11-02T09:00:00.000-05:00", "timeZone": "America/Bogota"},
+            "end": {"dateTime": "2026-11-02T10:00:00.000-05:00", "timeZone": "America/Bogota"},
+        },
+        body,
+    )
+    shifted = build_event_body(
+        _task(
+            event_start_at=datetime(2026, 11, 2, 15, 0, tzinfo=UTC),
+            event_end_at=datetime(2026, 11, 2, 16, 0, tzinfo=UTC),
+        )
+    )
+    assert not event_content_matches(
+        {
+            "summary": body["summary"],
+            "description": body["description"],
+            "start": {"dateTime": "2026-11-02T09:00:00-05:00", "timeZone": "America/Bogota"},
+            "end": {"dateTime": "2026-11-02T10:00:00-05:00", "timeZone": "America/Bogota"},
+        },
+        # A one-hour shift must be detected even though both sides are valid RFC 3339.
+        shifted,
+    )
+
+
+def test_all_day_comparison_uses_the_exclusive_date() -> None:
+    task = _task(
+        all_day=True,
+        event_start_at=None,
+        event_end_at=None,
+        event_start_date=date(2026, 11, 2),
+        event_end_date_exclusive=date(2026, 11, 3),
+    )
+    body = build_event_body(task)
+
+    assert event_content_matches(
+        {
+            "summary": body["summary"],
+            "description": body["description"],
+            "start": {"date": "2026-11-02"},
+            "end": {"date": "2026-11-03"},
+        },
+        body,
+    )
+    assert not event_content_matches(
+        {
+            "summary": body["summary"],
+            "description": body["description"],
+            "start": {"date": "2026-11-02"},
+            "end": {"date": "2026-11-02"},
+        },
+        body,
+    )
 
 
 async def test_conflict_with_foreign_identity_is_not_adopted_or_overwritten() -> None:
@@ -315,6 +454,7 @@ async def test_conflict_with_foreign_identity_is_not_adopted_or_overwritten() ->
 
     assert outcome is SyncOutcome.FAILED
     assert gateway.events[_key(task)] == foreign
+    assert gateway.update_calls == []
     assert store.synced == []
     assert store.failed == [(task.task_id, 1)]
 
