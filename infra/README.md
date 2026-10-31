@@ -22,7 +22,7 @@ ownership is recorded in [docs/sprints/CLAIMS.md](../docs/sprints/CLAIMS.md); fu
 | `worker` / `scheduler` | `maulwurf-api:local` | Real ARQ processes (J1.5) with `arq --check` healthcheck; outbox dispatch, index job and reconciliation (J2.1–J2.4); `analyze` is still a no-op |
 | `postgres` | `pgvector/pgvector:pg16` by digest | The only durable one: `pgdata` volume |
 | `redis` | `redis:7.4-alpine` by digest | No persistence, `noeviction` ([ADR-0005](../docs/adr/ADR-0005-redis.md)) |
-| `caddy` | `caddy:2.8-alpine` by digest | `admin off`; JSON access log without bodies; 220 MB upload / 10 MB JSON body ceilings and server timeouts (ADR-0010) |
+| `caddy` | `caddy:2.8-alpine` by digest | `admin off`; JSON access log without bodies; 220 MB upload / 10 MB other-route body ceilings and server timeouts (ADR-0010) |
 
 ## Local environment guarantees
 

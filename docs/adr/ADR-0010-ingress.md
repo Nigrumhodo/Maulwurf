@@ -66,6 +66,8 @@ contract.
 |---|---|---|---|
 | Upload `PUT /audios/*/content` | `request_body { max_size 220MB }` | 220,000,000 bytes | Strictly above the provisional API limit (200 MiB = 209,715,200 bytes) so the API returns its structured `payload_too_large` envelope. Bodies above the ceiling are stopped at the edge. |
 | JSON API routes | `request_body { max_size 10MB }` | 10,000,000 bytes | Abuse guard for JSON endpoints; not a contract limit. |
+| SSE progress route | `request_body { max_size 10MB }` | 10,000,000 bytes | The matcher is path-only, so a POST to the same URL must not carry an unbounded body; the limit does not affect event streaming. |
+| Web fallback (unmatched routes) | `request_body { max_size 10MB }` | 10,000,000 bytes | Every unmatched route, including unknown PUT/POST paths, is proxied to the web app; without this ceiling `read_body` would bound time but not size. |
 | All HTTPS requests | `servers.timeouts.read_body` | 20m | Covers the provisional 15-minute upload window with margin at a realistic slow link. |
 | All HTTPS requests | `servers.timeouts.read_header` | 30s | Header read bound; below Caddy's 1m default. |
 | All HTTPS requests | `servers.timeouts.write` | 0 (no total deadline) | `/audios/*/progress` is SSE with `flush_interval -1`; a finite total write deadline would cut long classes. |
@@ -85,9 +87,10 @@ RAM:
    received byte for byte;
 2. one byte over the ceiling returns `413` and the sink receives nothing;
 3. one byte over the `@api` 10 MB ceiling returns `413`;
-4. a copy of the Caddyfile with `read_body 2s` cuts a 5-second upload and the sink receives
+4. one byte over the web fallback 10 MB ceiling returns `413`;
+5. a copy of the Caddyfile with `read_body 2s` cuts a 5-second upload and the sink receives
    nothing;
-5. the J1.3 checks repeat: no new proxy files, no deleted file descriptors (spool) and no
+6. the J1.3 checks repeat: no new proxy files, no deleted file descriptors (spool) and no
    request bodies in the access log; the native mode also prints Caddy's peak RSS to show
    the body is not held whole in memory.
 
@@ -112,7 +115,10 @@ regression check `scripts/ci/check_caddy_limits.py` runs in CI.
   `ingest`) is unchanged; the A2.13 D-5 bounded risk (httpx sends the body before reading
   an early rejection) is not made worse by an ingress that buffers, because there is none.
 - `/internal/*` remains a Caddy `404`; `ingest` is never exposed from the edge
-  (ADR-0008).
+  (ADR-0008). The static check requires the complete `handle @internal { respond 404 }`
+  block before the catch-all handler, not just a matcher or comment.
+- Every proxying `handle` declares `request_body.max_size`; unmatched routes cannot bypass
+  the abuse guard through the web fallback.
 - A chunked or resumable upload protocol is a contract change: it goes through
   ESPECIFICACION/PLAN_IMPLEMENTACION first, as a new ticket.
 
@@ -120,8 +126,8 @@ regression check `scripts/ci/check_caddy_limits.py` runs in CI.
 
 - [x] Ingress decided and recorded in this ADR; Cloudflare assumptions removed from the
   proposal and the S4/DB design deployment rows.
-- [x] Caddy sets upload and JSON body limits and server read/write/idle timeouts in
-  `infra/Caddyfile`.
+- [x] Caddy sets upload, JSON, SSE-progress and web-fallback body limits and server
+  read/write/idle timeouts in `infra/Caddyfile`.
 - [x] Body limit, timeouts and no buffering measured with synthetic bytes; date,
   environment and status codes in `docs/spike/J2.10-ingress-limits.md`.
 - [x] Static assertions run without Docker (`python3 scripts/ci/check_caddy_limits.py`).

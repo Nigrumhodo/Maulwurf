@@ -125,7 +125,7 @@ flowchart TB
 
 | Service | Image or build | Networks | Exposed | Limits and hardening | Runs |
 |---|---|---|---|---|---|
-| `caddy` | `caddy:2.8-alpine` (pinned digest) | edge | 80 and 443 on the host (configurable) | Read-only Caddyfile, admin API disabled; upload `request_body` 220 MB and JSON 10 MB; `read_body` 20m, `read_header` 30s, `write` 0 (SSE), `idle` 5m (ADR-0010); no healthcheck | Reverse proxy with internal TLS (`https://localhost`) |
+| `caddy` | `caddy:2.8-alpine` (pinned digest) | edge | 80 and 443 on the host (configurable) | Read-only Caddyfile, admin API disabled; upload `request_body` 220 MB and 10 MB on every other proxying route (JSON, SSE progress, web fallback); `read_body` 20m, `read_header` 30s, `write` 0 (SSE), `idle` 5m (ADR-0010); no healthcheck | Reverse proxy with internal TLS (`https://localhost`) |
 | `web` | `apps/web` → `maulwurf-web:local` | edge | 3000, internal only | `USER node` | `node dist/server/index.js` (Express serving the Vite build, ADR-0007) |
 | `api` | `apps/api` → `maulwurf-api:local` | edge, data | 8000, internal only | UID 10001 in the Dockerfile; compose adds no `read_only` nor `cap_drop` | Alembic migration and Uvicorn |
 | `ingest` | `apps/ingest`, target `runtime` | edge, data | 8000, internal only | UID 10001, `read_only` rootfs, 256 MiB tmpfs at `/work/tmp` (`noexec,nosuid,nodev`), `cap_drop: ALL`, `no-new-privileges`, 1 GiB of RAM without swap, 2 CPU, 128 PIDs | Uvicorn `maulwurf_ingest.main:app` |
@@ -416,7 +416,7 @@ flowchart LR
 | Indexing, hybrid search and chat | Implemented API-side | L2.1–L2.6, A2.11; no browser end-to-end flow |
 | Analysis, review, Calendar, Gmail and account deletion | Not implemented | S3 and S4 remain closed |
 | Web | Partial | Vite SPA with login, base routes, subject CRUD and upload-form work (`D2.1` in progress) |
-| Upload limits (200 MiB and 3 h target) | Not approved; edge limits set | `capabilities` publishes `null`; Caddy upload ceiling 220 MB, JSON 10 MB, 20m `read_body` and no-buffering measured (J2.10, ADR-0010) |
+| Upload limits (200 MiB and 3 h target) | Not approved; edge limits set | `capabilities` publishes `null`; Caddy upload ceiling 220 MB, 10 MB on every other proxying route, 20m `read_body` and no-buffering measured (J2.10, ADR-0010) |
 
 ## 7. Open Decisions That Constrain the Architecture
 
