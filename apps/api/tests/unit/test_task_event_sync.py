@@ -88,6 +88,19 @@ class Store:
         return True
 
 
+class SequencedStore(Store):
+    """Store that answers the next loads from a script (to reproduce interleavings)."""
+
+    def __init__(self, task: TaskSnapshot | None, sequence: list[TaskSnapshot]) -> None:
+        super().__init__(task)
+        self.sequence = list(sequence)
+
+    async def load(self, task_id: uuid.UUID) -> TaskSnapshot | None:
+        if self.sequence:
+            return self.sequence.pop(0)
+        return await super().load(task_id)
+
+
 class Gateway:
     def __init__(self) -> None:
         self.events: dict[tuple[str, str], dict[str, Any]] = {}
@@ -362,6 +375,64 @@ async def test_a_newer_version_repairs_the_body_left_by_the_older_one() -> None:
         2,
         deterministic_event_id(second.task_id),
     )
+
+
+async def test_a_stale_delivery_does_not_overwrite_an_event_settled_by_a_newer_version() -> None:
+    """Regression: v2 already synced; v1's 409 must not PATCH its old body over v2."""
+    first = _task(version=1, title="Entregar informe")
+    start = datetime(2026, 11, 2, 16, 0, tzinfo=UTC)
+    second = _task(
+        task_id=first.task_id,
+        version=2,
+        title="Entregar informe corregido",
+        detail="Informe revisado y firmado",
+        event_start_at=start,
+        event_end_at=start + timedelta(hours=2),
+    )
+    # The row already holds v2 (its delivery won) while this job runs for v1.
+    store = Store(second)
+    gateway = Gateway()
+    gateway.events[_key(second)] = {
+        "id": deterministic_event_id(second.task_id),
+        **build_event_body(second),
+    }
+
+    outcome = await _engine(store, gateway).sync(first, expected_version=1)
+
+    assert outcome is SyncOutcome.STALE_VERSION
+    assert gateway.update_calls == []
+    assert gateway.events[_key(second)]["summary"] == "Entregar informe corregido"
+    assert store.synced == []
+
+
+async def test_a_version_bump_during_the_patch_repairs_the_event_to_the_newest_body() -> None:
+    """The edit can land between the pre-PATCH reload and the write; heal the event."""
+    first = _task(version=1, title="Entregar informe")
+    start = datetime(2026, 11, 2, 16, 0, tzinfo=UTC)
+    second = _task(
+        task_id=first.task_id,
+        version=2,
+        title="Entregar informe corregido",
+        detail="Informe revisado y firmado",
+        event_start_at=start,
+        event_end_at=start + timedelta(hours=2),
+    )
+    # Pre-PATCH reload still sees v1; the post-PATCH reload sees the winning v2.
+    store = SequencedStore(second, [first, second])
+    gateway = Gateway()
+    gateway.events[_key(first)] = _existing(first)
+
+    outcome = await _engine(store, gateway).sync(first, expected_version=1)
+
+    assert outcome is SyncOutcome.STALE_VERSION
+    assert [call[2]["summary"] for call in gateway.update_calls] == [
+        "Entregar informe",
+        "Entregar informe corregido",
+    ]
+    stored = gateway.events[_key(first)]
+    assert stored["summary"] == "Entregar informe corregido"
+    assert stored["description"] == "Informe revisado y firmado"
+    assert store.synced == []
 
 
 async def test_a_changed_detail_is_patched_into_the_event() -> None:

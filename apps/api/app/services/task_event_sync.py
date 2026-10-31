@@ -3,7 +3,7 @@
 The job must leave **exactly one** Calendar event when a confirmation is delivered twice, a
 response is lost, or a retry follows a timeout. The protocol is:
 
-- **Deterministic event ID.** ``mw`` + lower-case base32hex of the 16 task UUID bytes (28
+- **Deterministic event ID.** ``maul`` + lower-case base32hex of the 16 task UUID bytes (30
   characters, all in Google's ``[a-v0-9]`` alphabet). The same task always targets the same
   event, so a duplicate insert collides instead of creating a second row.
 - **Timeout → query before retrying.** A transient insert failure (timeout, 5xx, 429) never
@@ -13,7 +13,8 @@ response is lost, or a retry follows a timeout. The protocol is:
   event that happens to occupy the ID. Only an event whose private ``maulwurfTaskId`` matches
   this task is reconciled; anything else is left untouched and the task is marked ``failed``.
   When the identity matches but the stored body belongs to an older version, the reconcile
-  **patches** the event before settling, so a newer delivery never leaves stale content.
+  reloads the task and **patches** the event only if this delivery is still current, so a
+  stale job can never overwrite the content of a newer version.
 - **Obsolete versions are discarded.** A job whose ``task_version`` is no longer the stored
   version makes no Google call, and the status update is a compare-and-set on the same
   version, so a concurrent edit can never be overwritten by an old delivery.
@@ -344,11 +345,55 @@ class TaskEventSync:
             return SyncOutcome.FAILED
         body = self._body_builder(task)
         if not event_content_matches(existing, body):
-            # A newer version won the CAS while an older body was being inserted: repair the
-            # event before claiming the task as synced, or Google would keep stale content.
+            # A newer version may have settled while this delivery was in flight: reload
+            # before writing, or the stale body would overwrite the newer event content.
+            current = await self._store.load(task.task_id)
+            if current is None or current.version != task.version:
+                logger.info(
+                    "calendar_sync.stale_before_update task_id=%s job_version=%d",
+                    task.task_id,
+                    task.version,
+                )
+                return SyncOutcome.STALE_VERSION
             await gateway.update_event(calendar_id, event_id, body)
             logger.info("calendar_sync.event_refreshed task_id=%s", task.task_id)
+            if await self._repair_newer_version(task, body, event_id, gateway, calendar_id):
+                return SyncOutcome.STALE_VERSION
         return await self._settle(task, event_id, SyncOutcome.RECONCILED)
+
+    async def _repair_newer_version(
+        self,
+        task: TaskSnapshot,
+        sent: Mapping[str, Any],
+        event_id: str,
+        gateway: CalendarGateway,
+        calendar_id: str,
+    ) -> bool:
+        """Repair the event if a newer version landed while the PATCH was in flight.
+
+        The pre-PATCH reload closes the reported race, but an edit can still commit between
+        that reload and the write. The newer version's own delivery may already have
+        finished, so it cannot be assumed to repair the event: write its body here instead.
+        """
+        current = await self._store.load(task.task_id)
+        if current is None or current.version == task.version:
+            return False
+        logger.info(
+            "calendar_sync.stale_after_update task_id=%s job_version=%d task_version=%d",
+            task.task_id,
+            task.version,
+            current.version,
+        )
+        if not current.has_event_block():
+            # The newer delivery marks the task blocked; there is no writable body.
+            return True
+        latest = self._body_builder(current)
+        if not event_content_matches(sent, latest):
+            # Keep the known event (old calendar) at the newest content; a moved calendar is
+            # the newer delivery's responsibility, not a reason to leave stale text here.
+            await gateway.update_event(calendar_id, event_id, latest)
+            logger.info("calendar_sync.event_repaired task_id=%s", task.task_id)
+        return True
 
     async def _settle(
         self, task: TaskSnapshot, event_id: str, outcome: SyncOutcome
