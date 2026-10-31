@@ -65,6 +65,7 @@ class BackfillStatus(StrEnum):
     ALREADY_QUEUED = "already_queued"
     ALREADY_ANALYZED = "already_analyzed"
     NOT_F1 = "not_f1"
+    UNKNOWN_RUN_STATE = "unknown_run_state"
     NO_TRANSCRIPT = "no_transcript"
     CLEANUP_PENDING = "cleanup_pending"
     OWNER_REVOKED = "owner_revoked"
@@ -270,7 +271,7 @@ async def backfill_audio(
             # Unknown run status: corrupt data, never widen the decision silently.
             return BackfillItem(
                 audio_id=audio_id,
-                status=BackfillStatus.NOT_F1,
+                status=BackfillStatus.UNKNOWN_RUN_STATE,
                 transcript_version=version,
                 run_id=existing.id,
                 run_status=existing.status,
