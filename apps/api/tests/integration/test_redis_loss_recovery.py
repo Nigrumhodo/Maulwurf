@@ -1,9 +1,9 @@
 """I-S2-JF-03: losing Redis does not lose work, and never reconstructs audio (J2.3).
 
 Redis holds only the ARQ queue. The source of truth is PostgreSQL: the transcript, the outbox
-event and the `processing_runs` row. The test runs `FLUSHALL` on the test Redis (CI owns this
-instance), then regenerates the index job with the J2.4 reconciler and the outbox dispatcher, and
-consumes it with a real ARQ burst worker until it completes.
+event and the `processing_runs` row. The test runs `FLUSHDB` on a dedicated test Redis DB
+(`redis_isolated`), then regenerates the index job with the J2.4 reconciler and the outbox
+dispatcher, and consumes it with a real ARQ burst worker until it completes.
 
 Audio is never reconstructed: an attempt that never committed text is not regenerated, and no
 index job is queued for it. The embeddings provider is `FakeProvider` (no network).
@@ -135,12 +135,12 @@ async def _queued_args(pool: ArqRedis, queue: str) -> list[tuple[Any, ...]]:
     return [job.args for job in await pool.queued_jobs(queue_name=queue)]
 
 
-async def test_flushall_regenerates_the_index_job_to_completion(
+async def test_redis_loss_regenerates_the_index_job_to_completion(
     db_session: AsyncSession,
-    redis: tuple[ArqRedis, str],
+    redis_isolated: tuple[ArqRedis, str],
     indexable_text: None,
 ) -> None:
-    pool, queue = redis
+    pool, queue = redis_isolated
     actor, audio, _transcript = await _committed_class(db_session)
     published = datetime.now(UTC)
     event = _index_event(actor, audio)
@@ -149,7 +149,7 @@ async def test_flushall_regenerates_the_index_job_to_completion(
     await dispatch_pending(db_session, pool, queue_name=queue, clock=lambda: published)
     assert await _queued_args(pool, queue) == [(str(audio.id), 1)]
 
-    await pool.flushall()
+    await pool.flushdb()
     assert await pool.queued_jobs(queue_name=queue) == []
 
     # The lost job is only regenerated after the grace margin: a dispatch still in flight is not.
@@ -199,16 +199,16 @@ async def test_flushall_regenerates_the_index_job_to_completion(
 
 async def test_audio_without_committed_text_is_never_reconstructed(
     db_session: AsyncSession,
-    redis: tuple[ArqRedis, str],
+    redis_isolated: tuple[ArqRedis, str],
     indexable_text: None,
 ) -> None:
-    pool, queue = redis
+    pool, queue = redis_isolated
     actor, _audio, _transcript = await _committed_class(db_session)
     stranded = await _stranded_attempt(db_session, actor)
     transcripts_before = await db_session.scalar(
         select(sql_func.count()).select_from(Transcript).where(Transcript.user_id == actor.user_id)
     )
-    await pool.flushall()
+    await pool.flushdb()
 
     later = datetime.now(UTC) + DISPATCH_GRACE + timedelta(minutes=1)
     await reconcile_once(_sessions(db_session), pool, queue_name=queue, now=later)
@@ -239,10 +239,10 @@ async def _driver_connection(db: AsyncSession) -> asyncpg.Connection:
 
 async def test_stranded_attempt_ends_requires_reupload(
     db_session: AsyncSession,
-    redis: tuple[ArqRedis, str],
+    redis_isolated: tuple[ArqRedis, str],
 ) -> None:
     """I-S2-JF-03: the ingest sweep ends a stranded attempt. No ASR, no audio, no index job."""
-    pool, queue = redis
+    pool, queue = redis_isolated
     actor = await make_actor(db_session)
     stranded = await _stranded_attempt(db_session, actor)
     await db_session.refresh(stranded)
@@ -250,7 +250,7 @@ async def test_stranded_attempt_ends_requires_reupload(
     transcripts_before = await db_session.scalar(
         select(sql_func.count()).select_from(Transcript).where(Transcript.user_id == actor.user_id)
     )
-    await pool.flushall()
+    await pool.flushdb()
 
     ended = await sweep_stranded(await _driver_connection(db_session))
 
