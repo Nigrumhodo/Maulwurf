@@ -4,6 +4,21 @@
 Un lease vencido que deja el intento en `pending` no cierra la admisión: solo
 bloquea la outbox de índice y análisis. S2 consultará `uploads_admitted()`; el
 `PUT` de S1 sigue respondiendo `503 capacity_unavailable` por A1.8.
+
+Since S4.2 there are two separate states:
+
+- ``_halted`` is the durable latch: it only turns on when a ``cleanup_status=failed``
+  row exists (or this run persisted one) and it is sticky for the process lifetime.
+- ``_transient_closed`` is the fail-closed state used when the latch cannot be read
+  (database error). A later successful read clears it, so a transient outage does
+  not require a restart; the durable latch is never cleared by that read.
+
+The periodic sweeper calls ``restore_from_database`` on every pass, so a ``failed``
+row persisted by another instance also closes admission here. The specification
+says F0/F1 deploys a single ingestion instance (``docs/ESPECIFICACION.md``, F1
+ingestion bullet: "F0/F1 deploys a single ingestion instance; scaling requires
+routing to the reservation owner"), but the durable row is authoritative and the
+extra read costs one indexed query per pass.
 """
 from __future__ import annotations
 
@@ -25,12 +40,13 @@ class Alert:
 
 
 _halted = False
+_transient_closed = False
 _alerts: list[Alert] = []
 
 
 def uploads_admitted() -> bool:
-    """False solo después de un cleanup persistido como `failed`."""
-    return not _halted
+    """False after a persisted `failed` cleanup or while the latch is unreadable."""
+    return not (_halted or _transient_closed)
 
 
 def alerts() -> tuple[Alert, ...]:
@@ -38,25 +54,43 @@ def alerts() -> tuple[Alert, ...]:
 
 
 def halt(attempt_id: uuid.UUID) -> None:
-    """Cierra la admisión y registra la alerta. Sin rutas ni audio."""
+    """Cierra la admisión de forma durable y registra la alerta. Sin rutas ni audio.
+
+    Idempotente por intento: el sweeper vuelve a leer la misma fila `failed` en cada
+    pase y no debe duplicar la alerta ni el log.
+    """
     global _halted
     _halted = True
+    if any(alert.attempt_id == attempt_id for alert in _alerts):
+        return
     _alerts.append(Alert("cleanup_failed", attempt_id))
     logger.error("ingest.alert code=cleanup_failed attempt_id=%s", attempt_id)
 
 
 def close() -> None:
-    """Fail closed when the persisted latch cannot be read. No attempt id is invented."""
-    global _halted
-    _halted = True
-    logger.error("ingest.alert code=cleanup_failed")
+    """Fail closed when the persisted latch cannot be read. No attempt id is invented.
+
+    This is the transient half of the latch: a later successful read reopens
+    admission unless a durable ``failed`` row exists.
+    """
+    global _transient_closed
+    _transient_closed = True
+    logger.error("ingest.alert code=admission_closed cause=latch_unreadable")
+
+
+def reopen() -> None:
+    """Clear a transient close. A durable halt is never reopened here."""
+    global _transient_closed
+    _transient_closed = False
 
 
 async def restore_from_database(pool: asyncpg.Pool) -> None:
-    """A persisted ``cleanup_status=failed`` keeps admission closed across restarts.
+    """Sync admission with the persisted latch.
 
-    A database error also closes it. An empty result leaves the in-memory latch as it is,
-    so a process that already halted does not reopen itself.
+    A ``cleanup_status=failed`` row closes admission (durable and sticky) even when
+    this instance did not persist it. A successful read with no failed row clears a
+    previous transient close, so one failed database pass does not require a restart.
+    A read error closes admission until the next successful read.
     """
     try:
         row = await rls.fetchrow(pool, None,
@@ -72,10 +106,13 @@ async def restore_from_database(pool: asyncpg.Pool) -> None:
         return
     if row is not None and isinstance(row["id"], uuid.UUID):
         halt(row["id"])
+        return
+    reopen()
 
 
 def reset() -> None:
     """Solo pruebas: la instancia real no se reabre sola tras un cleanup fallido."""
-    global _halted
+    global _halted, _transient_closed
     _halted = False
+    _transient_closed = False
     _alerts.clear()

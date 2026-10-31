@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
@@ -22,7 +23,7 @@ from pydantic import ValidationError
 
 from maulwurf_ingest import admission, hardening, main, supervisor
 from maulwurf_ingest.config import Settings, settings
-from maulwurf_ingest.supervisor import SweepResult, run_sweeper, sweep_once
+from maulwurf_ingest.supervisor import SweepResult, run_sweeper, sweep_once, sweep_pass
 
 
 def _pool() -> asyncpg.Pool:
@@ -34,6 +35,19 @@ def _reset_admission() -> Iterator[None]:
     admission.reset()
     yield
     admission.reset()
+
+
+@pytest.fixture(autouse=True)
+def _readable_latch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default: the latch read succeeds and leaves admission as it is.
+
+    Tests that exercise the read override this fixture.
+    """
+
+    async def _noop(_pool: asyncpg.Pool) -> None:
+        return None
+
+    monkeypatch.setattr(admission, "restore_from_database", _noop)
 
 
 def test_default_sweep_interval_is_60_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -149,6 +163,139 @@ async def test_a_failed_pass_closes_admission_and_the_loop_continues(
 async def test_sweep_interval_must_be_positive_at_runtime() -> None:
     with pytest.raises(ValueError, match="interval"):
         await run_sweeper(_pool(), instance="ingest:test", interval_s=0)
+
+
+async def test_every_pass_resyncs_the_persisted_latch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hoplite 1: a `failed` row written after startup closes admission here."""
+    foreign = uuid.uuid4()
+    reads = 0
+    finished = asyncio.Event()
+
+    async def latch_appears_on_second_read(_pool: asyncpg.Pool) -> None:
+        nonlocal reads
+        reads += 1
+        if reads >= 2:
+            admission.halt(foreign)
+            finished.set()
+
+    async def ok_sweep(
+        _pool: asyncpg.Pool, *, instance: str, tmp_dir: str | None = None,
+    ) -> SweepResult:
+        return SweepResult(committed=(), stranded=())
+
+    monkeypatch.setattr(admission, "restore_from_database", latch_appears_on_second_read)
+    monkeypatch.setattr(supervisor, "sweep_once", ok_sweep)
+    task = asyncio.create_task(
+        run_sweeper(_pool(), instance="ingest:test", interval_s=0.01),
+    )
+    try:
+        await asyncio.wait_for(finished.wait(), timeout=2)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert reads >= 2
+    assert admission.uploads_admitted() is False
+    assert admission.alerts() == (admission.Alert("cleanup_failed", foreign),)
+
+
+async def test_a_clean_pass_reopens_a_transient_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hoplite 2: a database outage closes admission, a clean pass reopens it."""
+    calls = 0
+    finished = asyncio.Event()
+
+    async def clean_latch(_pool: asyncpg.Pool) -> None:
+        admission.reopen()
+
+    async def failing_then_ok(
+        _pool: asyncpg.Pool, *, instance: str, tmp_dir: str | None = None,
+    ) -> SweepResult:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("database down")
+        finished.set()
+        return SweepResult(committed=(), stranded=())
+
+    monkeypatch.setattr(admission, "restore_from_database", clean_latch)
+    monkeypatch.setattr(supervisor, "sweep_once", failing_then_ok)
+    task = asyncio.create_task(
+        run_sweeper(_pool(), instance="ingest:test", interval_s=0.01),
+    )
+    try:
+        await asyncio.wait_for(finished.wait(), timeout=2)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert calls >= 2
+    assert admission.uploads_admitted() is True
+    assert admission.alerts() == ()
+
+
+async def test_a_persisted_failed_latch_is_not_reopened_by_clean_passes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hoplite 2: the durable latch stays closed; only the transient close reopens."""
+    foreign = uuid.uuid4()
+    calls = 0
+    finished = asyncio.Event()
+
+    async def failed_latch(_pool: asyncpg.Pool) -> None:
+        admission.halt(foreign)
+
+    async def ok_sweep(
+        _pool: asyncpg.Pool, *, instance: str, tmp_dir: str | None = None,
+    ) -> SweepResult:
+        nonlocal calls
+        calls += 1
+        if calls >= 2:
+            finished.set()
+        return SweepResult(committed=(), stranded=())
+
+    monkeypatch.setattr(admission, "restore_from_database", failed_latch)
+    monkeypatch.setattr(supervisor, "sweep_once", ok_sweep)
+    task = asyncio.create_task(
+        run_sweeper(_pool(), instance="ingest:test", interval_s=0.01),
+    )
+    try:
+        await asyncio.wait_for(finished.wait(), timeout=2)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert calls >= 2
+    assert admission.uploads_admitted() is False
+    assert admission.alerts() == (admission.Alert("cleanup_failed", foreign),)
+
+
+async def test_sweep_pass_reads_the_latch_before_recovering(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    order: list[str] = []
+
+    async def fake_restore(_pool: asyncpg.Pool) -> None:
+        order.append("latch")
+
+    async def fake_sweep(
+        _pool: asyncpg.Pool, *, instance: str, tmp_dir: str | None = None,
+    ) -> SweepResult:
+        order.append(f"sweep:{instance}:{tmp_dir}")
+        return SweepResult(committed=(), stranded=())
+
+    monkeypatch.setattr(admission, "restore_from_database", fake_restore)
+    monkeypatch.setattr(supervisor, "sweep_once", fake_sweep)
+    result = await sweep_pass(_pool(), instance="ingest:test", tmp_dir=str(tmp_path))
+
+    assert order == ["latch", f"sweep:ingest:test:{tmp_path}"]
+    assert result == SweepResult(committed=(), stranded=())
 
 
 async def test_sweep_once_reconciles_then_ends_stranded_attempts(

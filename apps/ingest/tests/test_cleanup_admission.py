@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
+from typing import cast
 
 import asyncpg
 import pytest
@@ -25,12 +26,16 @@ from test_supervisor import (  # noqa: E402
     tmpfs_dir,
 )
 
-from maulwurf_ingest import admission, lease
+from maulwurf_ingest import admission, lease, rls
 from maulwurf_ingest.asr_job import ORIGINAL
 from maulwurf_ingest.receiver import iter_bytes
 from maulwurf_ingest.supervisor import Outcome, run_attempt
 
 _ = (audio, tmpfs_dir)
+
+
+def _unused_pool() -> asyncpg.Pool:
+    return cast(asyncpg.Pool, object())
 
 
 @pytest.fixture(autouse=True)
@@ -43,6 +48,52 @@ def _reset_admission() -> Iterator[None]:
 def test_halt_closes_admission_until_reset() -> None:
     attempt_id = uuid.uuid4()
     admission.halt(attempt_id)
+
+    assert admission.uploads_admitted() is False
+    assert admission.alerts() == (admission.Alert("cleanup_failed", attempt_id),)
+
+
+async def test_transient_close_reopens_after_a_readable_latch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S4.2: a failed latch read is transient; a clean read reopens admission."""
+
+    async def unreadable(*_args: object, **_kwargs: object) -> object:
+        raise OSError("database down")
+
+    monkeypatch.setattr(rls, "fetchrow", unreadable)
+    await admission.restore_from_database(_unused_pool())
+
+    assert admission.uploads_admitted() is False
+
+    async def no_failed_rows(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(rls, "fetchrow", no_failed_rows)
+    await admission.restore_from_database(_unused_pool())
+
+    assert admission.uploads_admitted() is True
+    assert admission.alerts() == ()
+
+
+async def test_durable_halt_survives_a_clean_latch_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S4.2: a persisted `failed` row is sticky; later clean reads cannot reopen it."""
+    attempt_id = uuid.uuid4()
+
+    async def failed_row(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {"id": attempt_id}
+
+    monkeypatch.setattr(rls, "fetchrow", failed_row)
+    await admission.restore_from_database(_unused_pool())
+    assert admission.uploads_admitted() is False
+
+    async def no_failed_rows(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(rls, "fetchrow", no_failed_rows)
+    await admission.restore_from_database(_unused_pool())
 
     assert admission.uploads_admitted() is False
     assert admission.alerts() == (admission.Alert("cleanup_failed", attempt_id),)

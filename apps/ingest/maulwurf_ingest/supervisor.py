@@ -17,8 +17,12 @@ contenedor (S1.B1) y el intento queda con lease vencido y `cleanup_status = pend
 reconciliación de ese caso es S1.B4/S1.B6.
 
 Since S4.2, `run_sweeper` adds the periodic pass (60 s target): it reconciles
-post-commit attempts and ends stranded ones. A failed pass closes admission (fail
-closed) but does not kill the loop: the next pass still tries to recover. Passes
+post-commit attempts and ends stranded ones. Every pass re-reads the durable
+admission latch from the database (``admission.restore_from_database``), so a
+``cleanup_status=failed`` row persisted by any instance closes admission here even
+when this process started earlier. A failed pass closes admission (fail closed) but
+does not kill the loop: the next pass still tries to recover, and a clean pass
+reopens only the transient close (a durable ``failed`` latch stays closed). Passes
 never overlap.
 """
 from __future__ import annotations
@@ -120,6 +124,19 @@ async def sweep_once(
     return SweepResult(committed=committed, stranded=stranded)
 
 
+async def sweep_pass(
+    pool: asyncpg.Pool, *, instance: str, tmp_dir: str | None = None,
+) -> SweepResult:
+    """One periodic pass: re-sync the admission latch, then recover.
+
+    The latch read is part of the pass, not only of process start: a ``failed`` row
+    written by another instance must stop this instance from admitting uploads. The
+    read itself fail-closes inside ``restore_from_database`` and never raises.
+    """
+    await admission.restore_from_database(pool)
+    return await sweep_once(pool, instance=instance, tmp_dir=tmp_dir)
+
+
 async def run_sweeper(
     pool: asyncpg.Pool, *, instance: str, interval_s: float = SWEEP_INTERVAL_S,
     tmp_dir: str | None = None,
@@ -127,9 +144,11 @@ async def run_sweeper(
     """Run one recovery pass per interval until cancelled (S4.2).
 
     A failed pass closes admission (fail closed) but does not kill the loop: the
-    next pass still tries to recover. Passes run sequentially and never overlap,
-    and a pass that overruns the interval does not trigger a burst of catch-up
-    passes.
+    next pass still tries to recover and, when the latch is readable and no
+    durable ``failed`` row exists, it reopens admission. A durable ``failed``
+    cleanup keeps admission closed because ``sweep_pass`` re-reads it each time.
+    Passes run sequentially and never overlap, and a pass that overruns the
+    interval does not trigger a burst of catch-up passes.
     """
     if interval_s <= 0:
         raise ValueError("sweep interval must be positive")
@@ -138,7 +157,7 @@ async def run_sweeper(
     while True:
         await asyncio.sleep(max(0.0, next_at - loop.time()))
         try:
-            result = await sweep_once(pool, instance=instance, tmp_dir=tmp_dir)
+            result = await sweep_pass(pool, instance=instance, tmp_dir=tmp_dir)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — a failed pass must not kill the loop
