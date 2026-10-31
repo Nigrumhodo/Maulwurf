@@ -27,7 +27,13 @@ from typing import Any, Final
 from arq.worker import Retry
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db import bind_cross_tenant, bind_user, reset_cross_tenant, session_scope
+from app.core.db import (
+    bind_cross_tenant,
+    bind_user,
+    clear_user,
+    reset_cross_tenant,
+    session_scope,
+)
 from app.services import indexing
 from app.services.embeddings import EmbeddingProvider, HttpEmbeddingProvider
 from app.services.index_job import (
@@ -98,6 +104,10 @@ async def index(ctx: dict[str, Any], audio_id: str, transcript_version: int) -> 
             "index.failed audio_id=%s transcript_version=%s attempt=%d error=%s",
             audio_id, transcript_version, job_try, type(exc).__name__,
         )
+    finally:
+        # The ARQ worker may reuse the task context for the next delivery: never leave a
+        # tenant (or the cross-tenant switch) behind.
+        clear_user()
 
 
 async def run_index(

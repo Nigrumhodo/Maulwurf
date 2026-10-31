@@ -63,6 +63,7 @@ async def _role_connection(
     *,
     role: str | None = None,
     user_id: uuid.UUID | None = None,
+    cross_tenant: bool = False,
 ) -> AsyncIterator[Any]:
     """A short connection running as ``role`` with the tenant bound, rolled back."""
     engine = create_async_engine(url, poolclass=NullPool)
@@ -76,6 +77,10 @@ async def _role_connection(
                     await connection.execute(
                         text("SELECT set_config('app.user_id', :user_id, true)"),
                         {"user_id": str(user_id)},
+                    )
+                if cross_tenant:
+                    await connection.execute(
+                        text("SELECT set_config('app.cross_tenant', 'on', true)")
                     )
                 yield connection
             finally:
@@ -220,6 +225,29 @@ async def test_query_without_app_user_id_fails_closed(migrated_database_url: str
                 )
             ).scalar_one()
             assert count == 0, f"{table} exposed rows without app.user_id"
+
+
+async def test_jobs_role_only_widens_with_the_explicit_switch(
+    migrated_database_url: str,
+) -> None:
+    alice, _bob, name = await _seed_two_tenants(migrated_database_url)
+    query = text("SELECT count(*) FROM subjects WHERE name = :name")
+
+    # No switch and no app.user_id: the jobs role sees nothing (not an error).
+    async with _role_connection(migrated_database_url, role=JOBS_ROLE) as connection:
+        assert (await connection.execute(query, {"name": name})).scalar_one() == 0
+
+    # The index job binds the owner after the claim.
+    async with _role_connection(
+        migrated_database_url, role=JOBS_ROLE, user_id=alice
+    ) as connection:
+        assert (await connection.execute(query, {"name": name})).scalar_one() == 1
+
+    # Dispatcher/reconciler/index claim: the documented cross-tenant switch.
+    async with _role_connection(
+        migrated_database_url, role=JOBS_ROLE, cross_tenant=True
+    ) as connection:
+        assert (await connection.execute(query, {"name": name})).scalar_one() == 2
 
 
 async def test_pooled_connection_does_not_leak_the_tenant(migrated_database_url: str) -> None:

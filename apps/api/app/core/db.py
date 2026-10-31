@@ -55,6 +55,11 @@ def reset_user(token: Token[uuid.UUID | None]) -> None:
     _current_user.reset(token)
 
 
+def clear_user() -> None:
+    """Drop the tenant from the context (a worker task may be reused by the next job)."""
+    _current_user.set(None)
+
+
 def bind_cross_tenant() -> Token[bool]:
     """Enable the explicit cross-tenant policy of the jobs role for this context."""
     return _cross_tenant.set(True)
