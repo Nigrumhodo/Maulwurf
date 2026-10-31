@@ -254,6 +254,25 @@ def _mutating_headers(csrf: str, origin: str) -> dict[str, str]:
     return {"Origin": origin, "X-CSRF-Token": csrf}
 
 
+async def _run_states(audio_id: str) -> list[dict[str, Any]]:
+    """Durable `processing_runs` rows for diagnostics (IDs/status/code only, no content)."""
+    from sqlalchemy import text
+
+    from app.core.db import SessionFactory
+
+    async with SessionFactory() as db:
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT stage, status, error_code FROM processing_runs "
+                    "WHERE audio_id = :audio_id ORDER BY created_at"
+                ),
+                {"audio_id": uuid.UUID(audio_id)},
+            )
+        ).mappings().all()
+    return [dict(row) for row in rows]
+
+
 async def _run() -> dict[str, Any]:
     import httpx
     from app.core.config import settings
@@ -347,15 +366,23 @@ async def _run() -> dict[str, Any]:
             raise SmokeFailure("transcript.txt does not match the synthetic fixture")
 
         def indexed(current_detail: Mapping[str, Any]) -> bool:
-            return _stage(current_detail, "index") == "succeeded"
+            stage = _stage(current_detail, "index")
+            if stage in {"failed", "cancelled"}:
+                raise SmokeFailure(f"index stage is {stage}")
+            return stage == "succeeded"
 
-        current = await _wait_for(
-            detail,
-            step="index",
-            timeout_s=INDEX_TIMEOUT_S,
-            predicate=indexed,
-            interval_s=2.0,
-        )
+        try:
+            current = await _wait_for(
+                detail,
+                step="index",
+                timeout_s=INDEX_TIMEOUT_S,
+                predicate=indexed,
+                interval_s=2.0,
+            )
+        except SmokeFailure as exc:
+            # The worker's `processing_runs.error_code` is durable and makes the failure
+            # actionable; it carries no transcript content.
+            raise SmokeFailure(f"{exc}; runs={await _run_states(audio_id)}") from exc
         summary["stages"]["index"] = _stage(current, "index")
         if _attempt(current).get("cleanup_status") != "verified":
             raise SmokeFailure("index succeeded without verified cleanup")
