@@ -15,15 +15,23 @@
 #
 # TLS: `scripts/e2e/gen_riva_tls.sh <dir>` writes an ephemeral CA + server certificate.
 # `E2E_TLS_DIR` selects that directory (default `../.e2e-tls`, relative to this file);
-# nothing is committed (`*.pem`/`*.key` are ignored).
+# nothing is committed (`*.pem`/`*.key` are ignored). `E2E_TLS_GID` is the host group that
+# owns the 640 server key; the e2e-asr container joins it to read the key as UID 10001.
+#
+# This override hardcodes non-production credentials. `E2E_ALLOW_EPHEMERAL_CREDENTIALS`
+# is a required opt-in: without it `docker compose config` (and therefore `up`) aborts, so
+# the file cannot be picked up by accident on a real deployment. The project name is also
+# isolated so `down -v` never touches a developer's normal `maulwurf` stack.
 
-name: maulwurf
+name: maulwurf-e2e
 
 x-e2e-fixture: &e2e-fixture
   SMOKE_EXPECTED_TEXT: "La fotosíntesis convierte la luz del sol en energía química. Las plantas usan clorofila."
 
 x-e2e-api-env: &e2e-api-env
   <<: *e2e-fixture
+  # Deliberate acknowledgement that the fixed values below are ephemeral and non-secret.
+  E2E_ALLOW_EPHEMERAL_CREDENTIALS: "${E2E_ALLOW_EPHEMERAL_CREDENTIALS:?set E2E_ALLOW_EPHEMERAL_CREDENTIALS=1 only for an ephemeral, non-production run}"
   # Same-origin value used by every CSRF check in the smoke (the request headers carry it).
   MAULWURF_PUBLIC_ORIGIN: https://e2e.maulwurf.invalid
   # Fixed, non-secret CI values: they only isolate this ephemeral compose database.
@@ -58,6 +66,7 @@ services:
 
   ingest:
     environment:
+      E2E_ALLOW_EPHEMERAL_CREDENTIALS: "${E2E_ALLOW_EPHEMERAL_CREDENTIALS:?set E2E_ALLOW_EPHEMERAL_CREDENTIALS=1 only for an ephemeral, non-production run}"
       # Fake key: the ASR child requires a non-empty value before it opens the gRPC
       # channel. It authenticates against the local double, never against NVIDIA.
       NVIDIA_API_KEY: e2e-riva-double-not-a-key
@@ -119,6 +128,9 @@ services:
       PORT: "50051"
       TMPDIR: /tmp
     user: "10001:10001"
+    # The server key is 640 on the host; join its group instead of widening the mode.
+    group_add:
+      - "${E2E_TLS_GID:-1001}"
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m

@@ -77,98 +77,87 @@ def synthetic_wav(seconds: float = WAV_SECONDS, rate: int = WAV_RATE) -> bytes:
     return buffer.getvalue()
 
 
-def parse_sse(lines: Iterable[str]) -> list[SseEvent]:
-    """Collect named SSE events; comment lines and unknown fields are ignored."""
-    events: list[SseEvent] = []
-    name = ""
-    event_id: int | None = None
-    data_lines: list[str] = []
+class _SseParser:
+    """One line-oriented SSE state machine shared by the synchronous and async drivers.
 
-    def flush() -> None:
-        nonlocal name, event_id, data_lines
-        if data_lines:
-            raw = "\n".join(data_lines)
-            try:
-                payload: object = json.loads(raw)
-            except ValueError:
-                payload = {"raw": raw}
-            events.append(
-                SseEvent(
-                    name=name or "message",
-                    data=payload if isinstance(payload, dict) else {"value": payload},
-                    event_id=event_id,
-                )
-            )
-        name = ""
-        event_id = None
-        data_lines = []
+    The smoke reads the wire asynchronously (`_iter_sse`), while the helper tests are
+    synchronous (`parse_sse`). Keeping one parser avoids the two copies drifting apart: the
+    production path and the unit-tested path execute the same code.
+    """
 
-    for line in lines:
+    def __init__(self) -> None:
+        self._name = ""
+        self._event_id: int | None = None
+        self._data_lines: list[str] = []
+
+    def feed(self, line: str) -> SseEvent | None:
         if not line:
-            flush()
-            continue
+            return self._flush()
         if line.startswith(":"):
-            continue
+            return None
         field, _, value = line.partition(":")
         value = value[1:] if value.startswith(" ") else value
         if field == "event":
-            name = value
+            self._name = value
         elif field == "data":
-            data_lines.append(value)
+            self._data_lines.append(value)
         elif field == "id":
             try:
-                event_id = int(value)
+                self._event_id = int(value)
             except ValueError:
-                event_id = None
-    flush()
+                self._event_id = None
+        return None
+
+    def close(self) -> SseEvent | None:
+        return self._flush()
+
+    def _flush(self) -> SseEvent | None:
+        if not self._data_lines:
+            self._reset()
+            return None
+        raw = "\n".join(self._data_lines)
+        try:
+            payload: object = json.loads(raw)
+        except ValueError:
+            payload = {"raw": raw}
+        event = SseEvent(
+            name=self._name or "message",
+            data=payload if isinstance(payload, dict) else {"value": payload},
+            event_id=self._event_id,
+        )
+        self._reset()
+        return event
+
+    def _reset(self) -> None:
+        self._name = ""
+        self._event_id = None
+        self._data_lines = []
+
+
+def parse_sse(lines: Iterable[str]) -> list[SseEvent]:
+    """Collect named SSE events; comment lines and unknown fields are ignored."""
+    parser = _SseParser()
+    events: list[SseEvent] = []
+    for line in lines:
+        event = parser.feed(line)
+        if event is not None:
+            events.append(event)
+    event = parser.close()
+    if event is not None:
+        events.append(event)
     return events
 
 
 async def _iter_sse(lines: AsyncIterator[str]) -> AsyncIterator[SseEvent]:
-    name = ""
-    event_id: int | None = None
-    data_lines: list[str] = []
+    """Production path: yield the same events without buffering the whole stream."""
+    parser = _SseParser()
     async for line in lines:
-        if not line:
-            if data_lines:
-                raw = "\n".join(data_lines)
-                try:
-                    payload: object = json.loads(raw)
-                except ValueError:
-                    payload = {"raw": raw}
-                yield SseEvent(
-                    name=name or "message",
-                    data=payload if isinstance(payload, dict) else {"value": payload},
-                    event_id=event_id,
-                )
-            name = ""
-            event_id = None
-            data_lines = []
-            continue
-        if line.startswith(":"):
-            continue
-        field, _, value = line.partition(":")
-        value = value[1:] if value.startswith(" ") else value
-        if field == "event":
-            name = value
-        elif field == "data":
-            data_lines.append(value)
-        elif field == "id":
-            try:
-                event_id = int(value)
-            except ValueError:
-                event_id = None
-    if data_lines:
-        raw = "\n".join(data_lines)
-        try:
-            payload = json.loads(raw)
-        except ValueError:
-            payload = {"raw": raw}
-        yield SseEvent(
-            name=name or "message",
-            data=payload if isinstance(payload, dict) else {"value": payload},
-            event_id=event_id,
-        )
+        event = parser.feed(line)
+        if event is not None:
+            yield event
+    event = parser.close()
+    if event is not None:
+        yield event
 
 
 def _require_json(response: httpx.Response, *, step: str) -> dict[str, Any]:

@@ -46,6 +46,10 @@ part of `.env.example`, the base compose file or any deployment.
 ```bash
 # From the repository root. The certificates are ephemeral and git-ignored; the compose
 # override's default E2E_TLS_DIR=../.e2e-tls resolves to this same directory.
+# The override hardcodes non-production credentials, so it requires an explicit opt-in.
+export E2E_ALLOW_EPHEMERAL_CREDENTIALS=1
+# The server key is mode 640; its group must match the e2e-asr container's extra group.
+export E2E_TLS_GID="$(id -g)"
 bash scripts/e2e/gen_riva_tls.sh .e2e-tls
 
 cd infra
@@ -62,6 +66,10 @@ docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v
 ```
 
 `E2E_TLS_DIR` overrides the certificate directory (CI uses `$RUNNER_TEMP/e2e-tls`).
+`E2E_TLS_GID` is the host group that owns the 640 `server.key`; the `e2e-asr` container joins
+it so the key is never world-readable. `E2E_ALLOW_EPHEMERAL_CREDENTIALS=1` is a required
+acknowledgement: the override uses fixed, non-production credentials, runs under the
+isolated `maulwurf-e2e` compose project and is never valid for a real deployment.
 `SMOKE_TRANSCRIPT_TIMEOUT_S`, `SMOKE_INDEX_TIMEOUT_S` and `SMOKE_CHAT_TIMEOUT_S` bound the
 waits; the index stage may wait up to one dispatcher cron (~60 s by design).
 

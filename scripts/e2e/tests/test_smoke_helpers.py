@@ -10,12 +10,14 @@ Run: python3 -m unittest discover -s scripts/e2e/tests -v
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import math
 import sys
 import unittest
 import wave
+from collections.abc import AsyncIterator, Iterable
 from io import BytesIO
 from pathlib import Path
 
@@ -82,6 +84,94 @@ class SseParserTest(unittest.TestCase):
             ["event: delta", 'data: {"a":', 'data: 1}', ""]
         )
         self.assertEqual(events[0].data, {"a": 1})
+
+
+async def _aiter(lines: Iterable[str]) -> AsyncIterator[str]:
+    for line in lines:
+        yield line
+
+
+class AsyncSseParserTest(unittest.TestCase):
+    """The production path (`_iter_sse`) must honour the same contract as `parse_sse`."""
+
+    LINES = [
+        "event: snapshot",
+        "id: 0",
+        'data: {"message_id":"m1","status":"streaming"}',
+        "",
+        ": keep-alive",
+        "",
+        "event: delta",
+        "id: 12",
+        'data: {"text":"hola",',
+        'data: "index":1}',
+        "",
+        "event: ping",
+        "",
+        "event: done",
+        "id: 13",
+        'data: {"status":"completed"}',
+    ]
+
+    async def _collect(self) -> list[smoke.SseEvent]:
+        return [event async for event in smoke._iter_sse(_aiter(self.LINES))]
+
+    def test_async_parser_matches_the_sync_contract(self) -> None:
+        expected = smoke.parse_sse(self.LINES)
+        actual = asyncio.run(self._collect())
+
+        self.assertEqual(actual, expected)
+        self.assertEqual([event.name for event in actual], ["snapshot", "delta", "done"])
+        self.assertEqual(actual[0].event_id, 0)
+        self.assertEqual(actual[1].data, {"text": "hola", "index": 1})
+        self.assertEqual(actual[2].data["status"], "completed")
+
+    def test_async_parser_flushes_a_final_event_without_a_blank_line(self) -> None:
+        actual = asyncio.run(
+            self._collect_lines(["event: done", 'data: {"status":"completed"}'])
+        )
+        self.assertEqual(len(actual), 1)
+        self.assertEqual(actual[0].name, "done")
+        self.assertEqual(actual[0].data, {"status": "completed"})
+
+    async def _collect_lines(self, lines: Iterable[str]) -> list[smoke.SseEvent]:
+        return [event async for event in smoke._iter_sse(_aiter(lines))]
+
+
+class ComposeOverrideGuardTest(unittest.TestCase):
+    """The fixed credentials in the E2E override must never be reachable by accident."""
+
+    def test_override_requires_an_explicit_ephemeral_opt_in(self) -> None:
+        root = E2E_DIR.parents[1]
+        override = (root / "infra" / "docker-compose.e2e.yml").read_text(encoding="utf-8")
+
+        required = override.count("E2E_ALLOW_EPHEMERAL_CREDENTIALS:?")
+        self.assertGreaterEqual(required, 2)  # api/worker/scheduler and ingest
+        for key in (
+            "MAULWURF_SECRET_KEY",
+            "MAULWURF_ENCRYPTION_KEY",
+            "MAULWURF_INGEST_CREDENTIAL_SECRET",
+            "MAULWURF_D3_TEXT_CLOSED_MODELS",
+        ):
+            self.assertIn(key, override)
+        self.assertIn("name: maulwurf-e2e", override)
+        self.assertIn("group_add:", override)
+        self.assertIn("E2E_TLS_GID", override)
+
+    def test_ci_acknowledges_the_ephemeral_override(self) -> None:
+        root = E2E_DIR.parents[1]
+        workflow = (root / ".github" / "workflows" / "quality.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('E2E_ALLOW_EPHEMERAL_CREDENTIALS: "1"', workflow)
+        self.assertIn("E2E_TLS_GID=$(id -g)", workflow)
+
+
+class TlsMaterialTest(unittest.TestCase):
+    def test_server_key_is_never_world_readable(self) -> None:
+        script = (E2E_DIR / "gen_riva_tls.sh").read_text(encoding="utf-8")
+        self.assertIn('chmod 640 "$dir/server.key"', script)
+        self.assertNotIn('chmod 644 "$dir/ca.pem" "$dir/server.pem" "$dir/server.key"', script)
 
 
 class ProviderDoubleTest(unittest.TestCase):

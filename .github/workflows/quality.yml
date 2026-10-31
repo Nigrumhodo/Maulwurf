@@ -233,15 +233,22 @@ jobs:
   e2e-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    # The compose override hardcodes ephemeral, non-secret credentials and refuses to run
+    # without this explicit acknowledgement (J2.6 finding 4).
+    env:
+      E2E_ALLOW_EPHEMERAL_CREDENTIALS: "1"
     defaults:
       run:
         working-directory: infra
     steps:
       - uses: actions/checkout@v4
       # `runner.temp` is not available in a job-level env; persist it for the next steps.
+      # `E2E_TLS_GID` lets the non-root e2e-asr container read the 640 server key.
       - name: Point the smoke at ephemeral TLS material
         working-directory: ${{ github.workspace }}
-        run: echo "E2E_TLS_DIR=$RUNNER_TEMP/e2e-tls" >> "$GITHUB_ENV"
+        run: |
+          echo "E2E_TLS_DIR=$RUNNER_TEMP/e2e-tls" >> "$GITHUB_ENV"
+          echo "E2E_TLS_GID=$(id -g)" >> "$GITHUB_ENV"
       # Standard library only: a broken fixture fails in seconds, before compose starts.
       - name: Verify the smoke helpers
         working-directory: ${{ github.workspace }}
