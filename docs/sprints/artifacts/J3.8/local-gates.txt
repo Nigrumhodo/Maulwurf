@@ -111,8 +111,8 @@ Coverage of the ticket
 
 Quality CI
 ----------
-Workflow run 41241029349 on head a9c4b06 (2026-10-31): all 17 checks green, including
-`python-unit (api)` **1240 passed**, `integration (api)` **513 passed** (the 24
+Workflow run 41241934657 on head c3da947 (2026-10-31): all 17 checks green, including
+`python-unit (api)` **1240 passed**, `integration (api)` **515 passed** (the 26
 I-S3-JF-07 cases included), `python-unit (ingest)`, `integration (ingest)`,
 `python-static (api/ingest)`, `e2e-smoke`, `docs`, `web`, `build-images`, `secret-scan`,
 `license-report`, `compose-ingest-env` and `caddy-limits`. PR #133 stays open for review;
