@@ -106,3 +106,21 @@ write every tenant's attempt row. This is an explicit accepted risk, not an over
   per-tenant operations for request-bound work and one narrow cross-tenant function for
   the sweeps.
 
+### Runtime identity debt (not changed by A2.17)
+
+RLS here is a second barrier against application bugs, not a boundary against a compromised
+database credential. Today `infra/docker-compose.yml` authenticates the API, the workers and
+ingest with the migration owner (a superuser in the local image), and `0005` grants that owner
+membership in all three runtime roles so one DSN can `SET LOCAL ROLE`. Outside the `begin`
+listener, or through an injected statement inside it, that DSN runs as the owner: `FORCE` does
+not restrict a superuser, and the owner can `SET ROLE maulwurf_jobs` plus
+`app.cross_tenant='on'`.
+
+That is acceptable for local development only. Staging and production must authenticate each
+runtime with a dedicated `LOGIN` role that is a member of only its own runtime role, owns no
+table and is not a superuser; `/internal/metrics` then needs a separate jobs-capable identity
+or a dedicated read path. Splitting the DSNs (Compose profiles plus deployment manifests) and
+adding a startup check that rejects an owner or superuser runtime DSN is follow-up work, not
+part of MAULW-177 (it changes credentials and deployment configuration, not the policies).
+
+

@@ -205,6 +205,13 @@ The API user also needs `maulwurf_jobs` because `/internal/metrics` performs its
 aggregate under that role. When running the ARQ worker or scheduler outside compose, set
 `MAULWURF_DATABASE_ROLE=maulwurf_jobs`; the default is `maulwurf_app`.
 
+**Never reuse the migration owner DSN for a runtime outside local development.** The local
+compose stack does (its PostgreSQL image makes that user a superuser), which is why RLS is
+defense in depth there rather than a boundary. In staging/production, create one `LOGIN` role
+per runtime, grant it only its own runtime role, and keep ownership, `CREATEROLE`,
+`BYPASSRLS` and superuser off it. A runtime DSN that is the table owner or a superuser
+silently bypasses `FORCE ROW LEVEL SECURITY` outside the `SET LOCAL ROLE` block.
+
 
 ## 6. Tests and lint
 
