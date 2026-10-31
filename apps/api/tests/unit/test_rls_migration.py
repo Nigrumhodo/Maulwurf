@@ -2,7 +2,8 @@
 
 I-S2-AN-16 reads the real catalog; this guard catches the cheaper mistake of adding a
 `TenantOwned` model without extending `0005` (or a later migration) while the integration
-suite cannot run. `0006` (J3.7) adds `settings` and `calendar_events` with their own policies.
+suite cannot run. `0006` (J3.3) adds `settings` and `0007` (J3.7) adds `calendar_events`,
+each with their own policies.
 """
 import importlib.util
 from pathlib import Path
@@ -12,7 +13,8 @@ from app.models import Base
 
 VERSIONS = Path(__file__).resolve().parents[2] / "alembic" / "versions"
 MIGRATION_0005 = VERSIONS / "0005_s2_row_level_security.py"
-MIGRATION_0006 = VERSIONS / "0006_s3_calendar_mirror.py"
+MIGRATION_0006 = VERSIONS / "0006_s3_calendar_settings.py"
+MIGRATION_0007 = VERSIONS / "0007_s3_calendar_mirror.py"
 
 
 def _migration(path: Path, name: str) -> ModuleType:
@@ -25,15 +27,21 @@ def _migration(path: Path, name: str) -> ModuleType:
 
 def test_every_tenant_model_has_a_policy_in_the_migrations() -> None:
     base = _migration(MIGRATION_0005, "rls_0005")
-    calendar = _migration(MIGRATION_0006, "rls_0006")
+    settings = _migration(MIGRATION_0006, "rls_0006")
+    calendar = _migration(MIGRATION_0007, "rls_0007")
     # `TenantOwned` is a mixin, but a few tenant tables (chunk_segments, embeddings,
     # google_credentials, settings) declare `user_id` directly; the `user_id` column is the
-    # contract the migrations follow.
+    # contract every RLS migration follows.
     models = {name for name, table in Base.metadata.tables.items() if "user_id" in table.c}
-    covered = set(base.TENANT_TABLES) | set(calendar.TABLES)
+    covered = (
+        set(base.TENANT_TABLES)
+        | set(settings.TENANT_TABLES)
+        | set(calendar.TABLES)
+    )
     assert models == covered
     assert set(base.RLS_TABLES) == set(base.TENANT_TABLES) | {"users"}
-    assert set(calendar.TABLES) == {"settings", "calendar_events"}
+    assert set(settings.TENANT_TABLES) == {"settings"}
+    assert set(calendar.TABLES) == {"calendar_events"}
 
 
 def test_role_scoped_exceptions_stay_narrow() -> None:

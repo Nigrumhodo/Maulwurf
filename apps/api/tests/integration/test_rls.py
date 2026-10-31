@@ -56,8 +56,8 @@ TENANT_MODELS: list[type[TenantOwned]] = sorted(
     key=lambda model: model.__name__,
 )
 TENANT_TABLES = {str(cast(Any, model).__tablename__) for model in TENANT_MODELS}
-# `settings` keys its tenant by `user_id` without the `TenantOwned.id` shape used by
-# `get_owned`; it still gets forced RLS and is asserted here explicitly (J3.7).
+# `settings` (J3.3/J3.7) keys its tenant by `user_id` without the `TenantOwned.id` shape used
+# by `get_owned`; it still gets forced RLS and is asserted here explicitly.
 RLS_TABLES = TENANT_TABLES | {"users", "settings"}
 JOBS_TABLES = (TENANT_TABLES | {"users", "settings"}) - {"sessions", "google_credentials"}
 

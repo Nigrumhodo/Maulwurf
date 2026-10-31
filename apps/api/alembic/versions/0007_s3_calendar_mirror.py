@@ -1,21 +1,23 @@
-"""J3.7: Calendar settings and the `calendar_events` mirror (A3.8 frozen shape).
+"""J3.7: Calendar coverage columns and the `calendar_events` mirror (A3.8 frozen shape).
 
-A3.8 is not in `develop`, so J3.7 provisions the minimum the read/publication path needs,
-faithful to DESIGN §2.8–§2.9:
+J3.3's `0006` already created the per-user `settings` row with its forced RLS. This
+migration only **extends** that row with the coverage columns J3.7 writes after an atomic
+publication and adds the mirror:
 
-- `settings` keeps the writing calendar, the explicitly selected reading calendars, and the
-  coverage columns J3.7 writes after an atomic publication.
+- `settings` gains `calendar_last_synced_at`, `calendar_coverage_from`,
+  `calendar_coverage_to` and `calendar_coverage_calendar_ids`.
 - `calendar_events` keeps one row per remote event keyed by
   `(user_id, calendar_id, event_id)`, with mutually exclusive instant/date pairs and the
   per-event `last_synced_at`. `task_id` has no composite FK because `tasks` (A3.1) is not in
   `develop`; the unique partial index for the one-to-one link is already in place.
 
-Both tables get forced RLS and the same role split as 0005: `maulwurf_app` is tenant-bound;
-`maulwurf_jobs` may read/write across tenants only with the explicit `app.cross_tenant='on'`
-switch (a Calendar refresh worker). A3.8 remains unclaimed: this migration does not close it.
+`calendar_events` gets forced RLS and the same role split as `0005`/`0006`:
+`maulwurf_app` is tenant-bound; `maulwurf_jobs` may read/write across tenants only with the
+explicit `app.cross_tenant='on'` switch (a Calendar refresh worker). A3.8 remains unclaimed:
+this migration does not close it.
 
-Revision ID: 0006
-Revises: 0005
+Revision ID: 0007
+Revises: 0006
 Create Date: 2026-10-31
 """
 
@@ -26,55 +28,44 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "0006"
-down_revision: str | None = "0005"
+revision: str = "0007"
+down_revision: str | None = "0006"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-TABLES = ("settings", "calendar_events")
+TABLES = ("calendar_events",)
 APP_ROLE = "maulwurf_app"
 JOBS_ROLE = "maulwurf_jobs"
 
+COVERAGE_COLUMNS = (
+    "calendar_coverage_calendar_ids",
+    "calendar_coverage_to",
+    "calendar_coverage_from",
+    "calendar_last_synced_at",
+)
 
-def _create_settings() -> None:
-    op.create_table(
+
+def _extend_settings() -> None:
+    op.add_column(
         "settings",
-        sa.Column("user_id", sa.UUID(), nullable=False),
-        sa.Column("calendar_write_calendar_id", sa.Text()),
-        sa.Column(
-            "calendar_read_calendar_ids",
-            postgresql.ARRAY(sa.Text()),
-            server_default=sa.text("'{}'"),
-            nullable=False,
-        ),
         sa.Column("calendar_last_synced_at", sa.DateTime(timezone=True)),
+    )
+    op.add_column(
+        "settings",
         sa.Column("calendar_coverage_from", sa.DateTime(timezone=True)),
+    )
+    op.add_column(
+        "settings",
         sa.Column("calendar_coverage_to", sa.DateTime(timezone=True)),
+    )
+    op.add_column(
+        "settings",
         sa.Column(
             "calendar_coverage_calendar_ids",
             postgresql.ARRAY(sa.Text()),
             server_default=sa.text("'{}'"),
             nullable=False,
         ),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
-            nullable=False,
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
-            nullable=False,
-        ),
-        sa.ForeignKeyConstraint(
-            ["user_id"],
-            ["users.id"],
-            ondelete="CASCADE",
-            name=op.f("fk_settings_user_id_users"),
-        ),
-        sa.PrimaryKeyConstraint("user_id", name=op.f("pk_settings")),
     )
 
 
@@ -201,7 +192,7 @@ def _apply_tenant_policies(table: str) -> None:
 
 
 def upgrade() -> None:
-    _create_settings()
+    _extend_settings()
     _create_calendar_events()
     for table in TABLES:
         _apply_tenant_policies(table)
@@ -217,4 +208,5 @@ def downgrade() -> None:
     op.drop_index("calendar_events_by_window_date", table_name="calendar_events")
     op.drop_index("calendar_events_by_window", table_name="calendar_events")
     op.drop_table("calendar_events")
-    op.drop_table("settings")
+    for column in COVERAGE_COLUMNS:
+        op.drop_column("settings", column)

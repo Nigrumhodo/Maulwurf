@@ -50,6 +50,7 @@ class Actor:
         # Copias planas: los handlers hacen commit() y expiran los atributos del ORM, y
         # leerlos después fuera de un await rompe (MissingGreenlet).
         self.user_id = user.id
+        self.google_sub = user.google_sub
         self.email = user.email
         self.session = issued.session
         self.csrf_token = issued.csrf_token

@@ -2,9 +2,9 @@
 
 Los routers no construyen ni ejecutan consultas: toda lectura de una tabla de propiedad pasa
 por `app.services.tenant` con el `user_id` de la sesión. Las únicas lecturas por PK
-permitidas son `User` y `GoogleCredential`, cuya PK es el propio `user_id` de la sesión.
-Excepción acotada: la sonda de readiness puede ejecutar `text("SELECT 1")`, que no toca
-ninguna tabla.
+permitidas son `User`, `GoogleCredential` y `CalendarSettings`, cuya PK es el propio
+`user_id` de la sesión. Excepción acotada: la sonda de readiness puede ejecutar
+`text("SELECT 1")`, que no toca ninguna tabla.
 """
 import ast
 from pathlib import Path
@@ -24,7 +24,7 @@ QUERY_CONSTRUCTORS = frozenset(
 EXECUTION_METHODS = frozenset(
     {"execute", "scalars", "scalar", "stream", "stream_scalars", "exec_driver_sql"}
 )
-PK_READABLE_MODELS = frozenset({"User", "GoogleCredential"})
+PK_READABLE_MODELS = frozenset({"User", "GoogleCredential", "CalendarSettings"})
 READINESS_PROBE_SQL = "SELECT 1"
 
 

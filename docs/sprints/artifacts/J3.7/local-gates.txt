@@ -246,3 +246,50 @@ diff; no new failure appeared.
 
 $ python3 scripts/docs/check_refs.py
 OK: 770 documented repository paths exist or are expected.
+
+Merge with develop (75084eb, 2026-10-31)
+----------------------------------------
+`develop` gained J3.3 (`0006_s3_calendar_settings`) while this branch carried its own
+`0006` mirror migration, so the PR became conflicting and GitHub stopped scheduling the
+`pull_request` workflow. The branch merged `75084eb` and resolved the overlap:
+
+- The migration chain is now linear: `0006_s3_calendar_settings` (J3.3) creates the
+  per-user `settings` row; `0007_s3_calendar_mirror` (J3.7) adds the coverage columns to
+  that row and creates `calendar_events` with forced RLS. The settings model keeps both
+  J3.3's columns and the J3.7 coverage columns.
+- `test_migrations.py` expects the 0007 head and the two-step downgrade (0007 -> 0006 ->
+  0005); `test_rls_migration.py` imports both migrations and requires the union of their
+  tenant tables to match the models; `test_rls.py` keeps `settings` in the RLS set.
+- `CLAIMS.md` keeps both directed claims and lists J3.3 and J3.7.
+- `apps/web` was not touched.
+
+Commands and results (merge commit, on top of `81c62e7` + `0dcc230`)
+--------------------------------------------------------------------
+$ cd apps/api
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 229 source files
+
+$ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
+    uv run pytest tests/unit -q
+1215 passed, 35 warnings in 18.35s
+
+$ ... uv run pytest tests/integration/test_calendar_read.py -q
+19 passed
+
+$ ... uv run pytest tests/integration/test_migrations.py \
+      tests/integration/test_rls.py tests/unit/test_rls_migration.py -q
+21 passed
+
+$ ... uv run pytest tests/integration -q
+32 failed, 458 passed, 481 warnings in 99.41s
+Same pre-existing pgvector 0.6 failures (test_search.py 11, test_chat_sse.py 17,
+test_g4_eval.py 4). A prior local run counted 33 because the shared Redis still held
+`search:quota:*` keys from the earlier suite and `test_redis_policy` scans every key;
+after clearing those keys the count returned to the known 32. No new failure belongs to
+this diff.
+
+$ python3 scripts/docs/check_refs.py
+OK: 777 documented repository paths exist or are expected.
