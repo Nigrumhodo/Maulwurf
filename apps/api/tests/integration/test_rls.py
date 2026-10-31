@@ -545,6 +545,8 @@ async def test_commit_emits_with_the_tenant_already_bound(
     user_id = uuid.uuid4()
     token = f"token-{uuid.uuid4().hex}"
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    csrf_token = sessions.csrf_token_for(token)
+    csrf_hash = hashlib.sha256(csrf_token.encode("utf-8")).hexdigest()
     name = f"rls-commit-{uuid.uuid4().hex[:10]}"
 
     seed = create_async_engine(migrated_database_url, poolclass=NullPool)
@@ -562,7 +564,7 @@ async def test_commit_emits_with_the_tenant_already_bound(
                     "INSERT INTO sessions (user_id, token_hash, csrf_hash, expires_at) "
                     "VALUES (:user_id, :token_hash, :csrf_hash, now() + interval '1 hour')"
                 ),
-                {"user_id": user_id, "token_hash": token_hash, "csrf_hash": token_hash},
+                {"user_id": user_id, "token_hash": token_hash, "csrf_hash": csrf_hash},
             )
     finally:
         await seed.dispose()
@@ -605,7 +607,7 @@ async def test_commit_emits_with_the_tenant_already_bound(
                 cookies={COOKIE_NAME: token},
                 headers={
                     "Origin": settings.allowed_origin,
-                    "X-CSRF-Token": sessions.csrf_token_for(token),
+                    "X-CSRF-Token": csrf_token,
                 },
             )
     finally:
