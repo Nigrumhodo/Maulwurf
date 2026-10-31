@@ -1793,7 +1793,7 @@ by the lead. The full text, evidence and priorities are in [plan/S2.md](plan/S2.
 | A2.19 | API | Contract conformance (§3.2, §3.3, §3.5) | P1 |
 | S2.12 · S2.13 | Ingestion | Admission latch, heartbeat, ffprobe limits; error-code catalog (§3.2) | P1 |
 | L2.9 | RAG | Align the §M6 `Chunk` contract with §2.5 | P1 |
-| J2.10 | Infra | Ingress upload limit and Caddy limits (Cloudflare Tunnel is no longer planned) | P1 |
+| J2.10 | Infra | Ingress decision (Caddy only; Cloudflare Tunnel dropped) and Caddy body/timeout limits | P1 |
 | A2.15 · J2.9 · L2.11 | API · Infra · lead | Error envelope; CI hygiene; documentation reconciliation | P2 |
 
 ### 4.3 S3 — Action: extraction and Calendar (F2)
@@ -1932,7 +1932,7 @@ delivery tested; runbooks and security/cost review; final demo.
 | 2–3 | J4.4 | Persistent dedupe `(user_id, type, task_id, due_version, occurrence)`; changing the due date/preferences cancels obsolete occurrences; DST: nonexistent hour → next valid; repeated hour → once | DST cases tested |
 | 3–4 | J4.5 | `delivery_unknown` when the response is lost after sending or the `sending` lease expires: **no automatic retry**; visible in the panel; manual resending warns | Uncertain delivery handled |
 | 4 | J4.6 | Daily (07:00 configurable) and weekly (Sunday) digests by local date, with the week's conflicts | Digests sent |
-| 3–5 | J4.7 | Reference deployment (ARM + domain + tunnel per the §5 proposal), versioned images, Alembic as a single job, tested rollback | Deploy with rollback |
+| 3–5 | J4.7 | Reference deployment (ARM + domain + Caddy as the only ingress per ADR-0010), versioned images, Alembic as a single job, tested rollback | Deploy with rollback |
 | 4–5 | J4.8 | Active budget/alerts (tokens, ASR, quotas) and runbooks: cleanup, provider outage, revoked tokens, restore, account deletion | Active alerts |
 | Friday | J4.9 | G8: builds/tests for the 3 apps, verified restore, reminders within target with healthy dependencies | G8 closed |
 | Friday | J4.10 | Real test send observed with an authorized account and subsequent cleanup | Send evidence |

@@ -94,6 +94,24 @@ sudo cp /tmp/maulwurf-root.crt /usr/local/share/ca-certificates/maulwurf-root.cr
 sudo update-ca-certificates
 ```
 
+### 4.1 Edge limits (J2.10)
+
+Caddy is the only HTTP ingress ([ADR-0010](adr/ADR-0010-ingress.md)). It caps the upload at
+220,000,000 bytes and JSON bodies at 10,000,000; `read_body` is 20m, `read_header` 30s,
+`write` stays 0 because `/audios/*/progress` is SSE, and `idle` is 5m. The contract limit is
+still `GET /ingestion/capabilities.max_upload_bytes` (`null` until D4 approves it); the Caddy
+ceiling must stay above it so the API answers with its `413` envelope.
+
+```bash
+python3 scripts/ci/check_caddy_limits.py        # static guard; no Docker needed
+bash scripts/load/ingress_limits.sh             # Docker backend (throw-away network)
+MODE=native CADDY_BIN=/path/to/caddy bash scripts/load/ingress_limits.sh
+```
+
+The 220 MB case streams synthetic bytes from `/dev/zero`; no audio is written. The dated
+record and status codes are in
+[J2.10-ingress-limits.md](spike/J2.10-ingress-limits.md) (C-S2-JF-13).
+
 ## 5. Migrations (A1.7)
 
 The `api` container runs `alembic upgrade head` before uvicorn, so
