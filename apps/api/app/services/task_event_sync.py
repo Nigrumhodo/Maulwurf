@@ -30,6 +30,13 @@ response is lost, or a retry follows a timeout. The protocol is:
   delivery wanted; that read records the ETag as the new baseline, which is the documented
   backfill path for rows created before this ticket. A confirmed revision reaches this path
   through the same deterministic event ID (insert → 409 → conditional PATCH).
+- **A lost conditional write is re-read, never blindly retried.** A transient PATCH error
+  does not prove the write failed. The engine re-reads the event and adopts it only when it
+  already carries exactly the body this delivery sent; anything else is left untouched and
+  fails closed. A retry without that check would compare the ETag the write produced against
+  the old baseline and report a false external conflict. The ETag of a PATCH that did land
+  is persisted before the newer-version repair issues another call, so a transient in the
+  repair cannot roll the baseline back either.
 - **Blocked vs failed.** A missing calendar, a disconnected Google integration or an
   ``invalid_grant`` leaves the task ``blocked`` (J3.3 reconnects it); other terminal failures
   leave it ``failed``. Transient exhaustion raises so ARQ schedules a bounded retry.
@@ -441,10 +448,28 @@ class TaskEventSync:
             return await self._external_conflict(
                 task, body, event_id, gateway, calendar_id
             )
+        except GoogleCalendarTransientError:
+            # A lost PATCH response is indistinguishable from a failed one. If the write
+            # did land, its ETag is already stored in Google and a blind ARQ retry would
+            # compare it with the old baseline and report a false external conflict.
+            # Re-read and adopt only the exact body this delivery sent; anything else
+            # fails closed without another write.
+            logger.warning(
+                "calendar_sync.lost_patch_response task_id=%s", task.task_id
+            )
+            return await self._external_conflict(
+                task, body, event_id, gateway, calendar_id
+            )
         logger.info("calendar_sync.event_refreshed task_id=%s", task.task_id)
         written_etag = _event_etag(updated)
         if await self._repair_newer_version(
-            task, body, event_id, gateway, calendar_id, written_etag=written_etag
+            task,
+            body,
+            event_id,
+            gateway,
+            calendar_id,
+            written_etag=written_etag,
+            baseline=baseline,
         ):
             return SyncOutcome.STALE_VERSION
         return await self._settle(
@@ -459,13 +484,14 @@ class TaskEventSync:
         gateway: CalendarGateway,
         calendar_id: str,
     ) -> SyncOutcome:
-        """Handle a failed ETag precondition without ever merging the two versions.
+        """Handle a write that could not be proven (failed precondition or lost response).
 
         The event is left exactly as Google returned it and the task is marked `failed`, so
         the user reviews and explicitly retries (D3.7) instead of a background retry
         overwriting the external edit. The single safe exception is an event that already
-        carries the content this delivery wanted: another delivery wrote the same body and
-        bumped the ETag, so adopting it overwrites nothing.
+        carries the content this delivery wanted: either another delivery wrote the same
+        body or this delivery's PATCH landed before its response was lost, so adopting it
+        overwrites nothing.
         """
         try:
             current = await gateway.get_event(calendar_id, event_id)
@@ -493,6 +519,7 @@ class TaskEventSync:
         calendar_id: str,
         *,
         written_etag: str | None,
+        baseline: str,
     ) -> bool:
         """Repair the event if a newer version landed while the PATCH was in flight.
 
@@ -501,6 +528,12 @@ class TaskEventSync:
         finished, so it cannot be assumed to repair the event: write its body here instead.
         The write is only sent when the event still carries the ETag this delivery's PATCH
         produced; anything else may be an external edit and is left untouched.
+
+        The ETag of the PATCH that already landed is persisted **before** any repair call:
+        a transient read or write below must not leave the newer row on the previous
+        baseline, or its next delivery would mistake our own write for an external edit.
+        The persistence is skipped when another delivery already recorded a different
+        baseline, which can only be a newer write.
         """
         current = await self._store.load(task.task_id)
         if current is None or current.version == task.version:
@@ -511,18 +544,28 @@ class TaskEventSync:
             task.version,
             current.version,
         )
+        if current.calendar_etag is None or current.calendar_etag in (
+            baseline,
+            written_etag,
+        ):
+            await self._store.mark_etag(task.task_id, current.version, written_etag)
         if not current.has_event_block():
             # The newer delivery marks the task blocked; there is no writable body.
             return True
         latest = self._body_builder(current)
         if event_content_matches(sent, latest):
-            # Our own write already left the newest content; record its ETag so the next
-            # delivery does not mistake that write for an external edit.
-            await self._store.mark_etag(task.task_id, current.version, written_etag)
+            # Our own write already left the newest content; the ETag persisted above is
+            # the baseline, so the next delivery does not mistake that write for an edit.
             return True
         # Keep the known event (old calendar) at the newest content; a moved calendar is
         # the newer delivery's responsibility, not a reason to leave stale text here.
-        event = await gateway.get_event(calendar_id, event_id)
+        try:
+            event = await gateway.get_event(calendar_id, event_id)
+        except GoogleCalendarTransientError:
+            # The reconcile PATCH's ETag is already persisted; the next delivery can
+            # finish the repair once Google answers again.
+            logger.warning("calendar_sync.repair_deferred task_id=%s", task.task_id)
+            return True
         if event is None:
             return True
         if event_content_matches(event, latest):
@@ -541,6 +584,18 @@ class TaskEventSync:
             )
         except GoogleCalendarPreconditionFailed:
             logger.warning("calendar_sync.repair_conflict task_id=%s", task.task_id)
+        except GoogleCalendarTransientError:
+            # The repair may have landed before the response was lost: adopt its ETag only
+            # when the event already carries the newest body, never a different one.
+            try:
+                after = await gateway.get_event(calendar_id, event_id)
+            except GoogleCalendarTransientError:
+                after = None
+            if after is not None and event_content_matches(after, latest):
+                await self._store.mark_etag(
+                    task.task_id, current.version, _event_etag(after)
+                )
+            logger.warning("calendar_sync.repair_deferred task_id=%s", task.task_id)
         else:
             await self._store.mark_etag(task.task_id, current.version, _event_etag(repaired))
             logger.info("calendar_sync.event_repaired task_id=%s", task.task_id)
