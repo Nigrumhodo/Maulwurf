@@ -4,7 +4,7 @@ Maulwurf is a documentation-first project for a study assistant that turns class
 searchable transcripts, cited RAG answers, reviewable task proposals, Google Calendar entries,
 and optional Gmail reminders. The repository contains the product and planning documentation
 plus the **S1 foundation** and a growing **S2 knowledge slice** (ownership and state in
-`docs/sprints/CLAIMS.md`): a Docker Compose stack of 8 services with healthchecks, three
+`docs/sprints/CLAIMS.md`): a Docker Compose stack of 8 services with healthchecks, four
 Alembic migrations (`0001`–`0004`), real API routers (health, session/CSRF, Google login,
 `GET/PATCH /me`, subject CRUD, `POST /audios`, streaming `PUT` with dedupe, search, chat
 SSE, integrations status), a hardened ingestion package with internal reception endpoints,
