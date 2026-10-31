@@ -46,7 +46,20 @@ _PERMANENT_SQLSTATES: Final = frozenset({"28P01"})
 # model, malformed prompt) cannot succeed by repeating the same request.
 _RETRYABLE_LLM_STATUSES: Final = frozenset({408, 429})
 # The adapter wraps a transport failure as `LLMProviderError` and keeps only its type name.
-_PERMANENT_LLM_TRANSPORT_ERRORS: Final = frozenset({"UnsupportedProtocol", "LocalProtocolError"})
+# Without a status only these httpx transport failures are worth another attempt; parse and
+# protocol errors also arrive without a status, so they stay permanent (fail closed).
+_TRANSIENT_LLM_TRANSPORT_ERRORS: Final = frozenset(
+    {
+        "ConnectError",
+        "ConnectTimeout",
+        "ReadError",
+        "ReadTimeout",
+        "WriteTimeout",
+        "PoolTimeout",
+        "RemoteProtocolError",
+        "TimeoutException",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -104,7 +117,10 @@ def _llm_error_is_permanent(exc: LLMProviderError) -> bool:
     status = exc.details.get("status")
     if isinstance(status, int) and not isinstance(status, bool):
         return status < 500 and status not in _RETRYABLE_LLM_STATUSES
-    return exc.details.get("error") in _PERMANENT_LLM_TRANSPORT_ERRORS
+    # No HTTP status: only a known transient transport failure may retry. Parse/protocol
+    # errors carry `details["reason"]` instead, so they are permanent (fail closed).
+    error = exc.details.get("error")
+    return not (isinstance(error, str) and error in _TRANSIENT_LLM_TRANSPORT_ERRORS)
 
 
 def _error_code(exc: BaseException) -> str:

@@ -55,7 +55,7 @@ def _policy() -> RetryPolicy:
     "exc",
     [
         LLMRateLimited("cuota"),
-        LLMProviderError("5xx"),
+        LLMProviderError("5xx", details={"status": 503}),
         httpx.ConnectError("sin conexión"),
         httpx.ReadTimeout("lento"),
         TimeoutError(),
@@ -109,9 +109,61 @@ def test_llm_provider_retryable_statuses_are_transient(status: int) -> None:
     assert classify_analysis_error(exc) is ErrorKind.TRANSIENT
 
 
-def test_llm_provider_error_without_status_stays_transient() -> None:
-    # The adapter wraps transport failures without an HTTP status.
-    assert classify_analysis_error(LLMProviderError("sin respuesta")) is ErrorKind.TRANSIENT
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "invalid_sse_json",
+        "invalid_sse_payload",
+        "stream_error",
+        "missing_choices",
+        "invalid_choice",
+        "non_text_delta",
+        "invalid_max_tokens",
+    ],
+)
+def test_llm_parse_errors_without_status_are_permanent(reason: str) -> None:
+    # The adapter reports a malformed stream with `details["reason"]` and no status;
+    # repeating the same request would fail the same way, so it must not retry.
+    exc = LLMProviderError("respuesta inválida", details={"reason": reason})
+
+    decision = retry_decision(exc, job_try=1)
+
+    assert classify_analysis_error(exc) is ErrorKind.PERMANENT
+    assert decision.retries is False
+    assert decision.delay_seconds is None
+    assert decision.exhausted is False
+    assert decision.error_code == "llm_provider_error"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        "ConnectError",
+        "ConnectTimeout",
+        "ReadError",
+        "ReadTimeout",
+        "WriteTimeout",
+        "PoolTimeout",
+        "RemoteProtocolError",
+        "TimeoutException",
+    ],
+)
+def test_llm_transport_errors_without_status_are_transient(error: str) -> None:
+    # A wrapped transport failure keeps only its type name; these are worth another attempt.
+    exc = LLMProviderError("sin respuesta", details={"error": error})
+
+    assert classify_analysis_error(exc) is ErrorKind.TRANSIENT
+
+
+@pytest.mark.parametrize("details", [{}, {"error": "something_else"}])
+def test_llm_provider_errors_without_a_known_classification_are_permanent(
+    details: dict[str, object],
+) -> None:
+    # Fail closed: an unrecognized provider error must not be retried just because it
+    # arrives without a status.
+    exc = LLMProviderError("sin clasificar", details=details)
+
+    assert classify_analysis_error(exc) is ErrorKind.PERMANENT
 
 
 @pytest.mark.parametrize(
@@ -175,7 +227,9 @@ def test_transient_errors_retry_while_budget_remains(job_try: int) -> None:
 
 def test_the_fourth_delivery_exhausts_three_transient_retries() -> None:
     decision = retry_decision(
-        LLMProviderError("5xx"), job_try=MAX_TRIES, policy=_policy()
+        LLMProviderError("5xx", details={"status": 503}),
+        job_try=MAX_TRIES,
+        policy=_policy(),
     )
 
     assert decision.kind is ErrorKind.TRANSIENT
