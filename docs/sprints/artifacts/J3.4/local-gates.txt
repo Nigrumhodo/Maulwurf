@@ -78,3 +78,41 @@ New cases for the fix:
 Quality CI run 41219465169 (head d67d249, 2026-10-31) is green in all 17 checks:
 python-unit (api) 1152 passed; integration (api) 443 passed (10 I-S3-JF-03 cases);
 integration (ingest) 58 passed; e2e-smoke, docs, secret-scan and build-images green.
+
+--- Review fix 2 (hoplite findings on head 99b5826), 2026-10-31 UTC. Same sandbox:
+--- PostgreSQL 16.15 (pgvector 0.6.0), Redis 7.0.15. No real Google call, credential or
+--- secret.
+
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ cd apps/api && uv run mypy .
+Success: no issues found in 216 source files
+
+$ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 uv run pytest tests/unit -q
+1154 passed, 35 warnings in 8.36s
+
+The required command without the two NO_PROXY overrides still reports 1152 passed and the
+two pre-existing bracketed-IPv6 failures (test_ingest_sink, test_llm) documented above.
+
+$ MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@127.0.0.1:5432/maulwurf \
+  MAULWURF_REDIS_URL=redis://127.0.0.1:6379/0 \
+  uv run pytest tests/integration/test_calendar_sync_job.py \
+  tests/integration/test_dispatcher.py tests/integration/test_transcript_commit_gate.py -q
+49 passed, 1 warning in 7.09s
+
+$ python3 scripts/docs/check_refs.py
+OK: 763 documented repository paths exist or are expected.
+
+New cases for this fix:
+- test_task_event_sync.py: test_a_stale_delivery_does_not_overwrite_an_event_settled_by_a_newer_version
+  (v2 settled first; v1's 409 must not call update_event) and
+  test_a_version_bump_during_the_patch_repairs_the_event_to_the_newest_body (the edit lands
+  between the pre-PATCH reload and the write; the event is repaired to the newest body).
+- test_calendar_sync_job.py: the initial and the reactive (401) refresh of a revoked refresh
+  token disconnect the credential through a real commit/rollback session scope, and an
+  unexpected job failure is re-raised for ARQ's bounded retry.
+
+Red verification before the fix (files restored afterwards): both unit regressions fail against
+head 99b5826 (`RECONCILED` instead of `STALE_VERSION`), and all three new integration cases
+fail too (the credential stays `connected` after the rollback; RuntimeError is swallowed).
