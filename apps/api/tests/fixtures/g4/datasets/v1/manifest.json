@@ -1,0 +1,29 @@
+{
+  "dataset_version": "g4-v1",
+  "created_at": "2026-10-30",
+  "provenance": "authored synthetic class transcripts; no real classes, audio or PII",
+  "languages": [
+    "es",
+    "en",
+    "fr"
+  ],
+  "test": {
+    "per_language": 50,
+    "answerable": 35,
+    "unanswerable": 15
+  },
+  "development": {
+    "per_language": 5,
+    "answerable": 4,
+    "unanswerable": 1
+  },
+  "files": {
+    "corpus/es.jsonl": "sha256:99afe87e9b3f44c80928e92e9530393c7382a95699191500e231382f0fba17e3",
+    "items/es.jsonl": "sha256:a07fa6b4efd25b654696737bb72aa0e381cbd3b5d07c8e66bdaae9d06c5765b1",
+    "corpus/en.jsonl": "sha256:9c65a26145719b63ce33eae5968f91d014d5dff43d7795dee26891e3d5a6c68b",
+    "items/en.jsonl": "sha256:83435b8bb3ec43a892c60c1afdefa04cb370bfba47a8789a27176c79f0660c94",
+    "corpus/fr.jsonl": "sha256:8e6758eba7f394a46c697eb99d13643203686f006b91eb6ff3d765cbc91dd280",
+    "items/fr.jsonl": "sha256:a4f3769030e17cdc0775fc5805d263b607f4e61acfc3880977ad33cb5331a6c9"
+  },
+  "content_sha256": "f4a4cf474ae26863679d6b69c8fa8266385907ca12c3dd10371d1a69c1934677"
+}
