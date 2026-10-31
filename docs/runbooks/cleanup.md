@@ -517,15 +517,17 @@ VERIFIED**. The local compose drill is the only executable equivalent in this re
 | Ruff | `cd apps/ingest && uv run ruff check .` | pass |
 | Mypy | `cd apps/ingest && uv run mypy .` | pass |
 | Documentation paths | `python3 scripts/docs/check_refs.py` | pass |
-| I-S4-SG-03 integration | `cd apps/ingest && uv run pytest -m integration -q tests/test_cleanup_recovery.py` | **NOT RUN HERE**: no PostgreSQL/Docker in this sandbox; the PR's `integration (ingest)` job runs it as root |
+| I-S4-SG-03 integration | `cd apps/ingest && uv run pytest -m integration -q tests/test_cleanup_recovery.py` | Local sandbox: 5 skipped (no PostgreSQL). Quality CI run `41246550059` (head `28472da`), job `integration (ingest)`: **63 passed**, 11 skipped, 1 xfailed; the 5 cases in this file are included |
+| Quality CI | all jobs in `.github/workflows/quality.yml` | Run `41246550059` (head `28472da`): all 17 checks green, including `python-unit (ingest)` 206 passed and `integration (ingest)` 63 passed |
 | Compose detection/recovery drill | steps 4–6 | **NOT RUN HERE**: no Docker in this sandbox; must be executed by the reviewer in the reference environment |
 | Host-loss restoration | section 7 | **NOT RUN HERE**: needs J4.7 provider evidence and a real host; the reviewer records it |
 
 The integration cases use the real migrated PostgreSQL schema and the real
-`run_attempt`/`reconcile_committed`/`sweep_stranded` functions. The host-loss test uses a
-synthetic attestation file; it proves the tool's refusal/acceptance contract, not that a
-real host's memory was destroyed. The reviewer's reference-environment drill is the
-remaining evidence for the ticket's "executed as-is" requirement.
+`run_attempt`/`reconcile_committed`/`sweep_stranded` functions; the Quality CI job above ran
+them as root against PostgreSQL. The host-loss test uses a synthetic attestation file; it
+proves the tool's refusal/acceptance contract, not that a real host's memory was destroyed.
+The reviewer's reference-environment drill is the remaining evidence for the ticket's
+"executed as-is" requirement; until then the claim stays `in progress`.
 
 ## 9. Stop conditions
 
