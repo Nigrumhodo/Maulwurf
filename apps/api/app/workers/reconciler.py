@@ -151,28 +151,14 @@ async def _recover_expired(
         # Release the selection locks before any Redis call (J2.11).
         await db.commit()
 
-    ready: list[tuple[ExpiredRun, bool]] = []
-    for run in candidates:
-        requeue = has_retry_budget(run.attempt_count)
-        if requeue:
-            try:
-                await _reenqueue_index(
-                    redis, queue_name, run.id, run.audio_id, run.transcript_version,
-                    run.attempt_count,
-                )
-            except Exception as exc:
-                logger.warning("reconciler.requeue_failed run_id=%s error=%s",
-                               run.id, type(exc).__name__)
-                continue
-        ready.append((run, requeue))
-    if not ready:
-        return 0
-
-    recovered = 0
+    # Close first, commit, then enqueue. A job enqueued before the close commit would point
+    # at a run that can roll back to `running`; a Redis failure after the close is recovered
+    # by the lost-dispatch step instead.
+    closed: list[tuple[ExpiredRun, bool]] = []
     async with sessions() as db:
-        for run, requeue in ready:
-            # Keep the per-row isolation the old loop had: one CAS failure must not revert
-            # the runs already closed in this batch.
+        for run in candidates:
+            # Keep the per-row isolation: one CAS failure must not revert the runs already
+            # closed in this batch.
             try:
                 async with db.begin_nested():
                     applied = await mark_lease_expired_if_unchanged(db, run, now=now)
@@ -184,10 +170,22 @@ async def _recover_expired(
                 )
                 continue
             if applied:
-                recovered += 1
-                logger.info("reconciler.lease_expired run_id=%s requeued=%s", run.id, requeue)
+                closed.append((run, has_retry_budget(run.attempt_count)))
+                logger.info("reconciler.lease_expired run_id=%s", run.id)
         await db.commit()
-    return recovered
+
+    for run, requeue in closed:
+        if not requeue:
+            continue
+        try:
+            await _reenqueue_index(
+                redis, queue_name, run.id, run.audio_id, run.transcript_version,
+                run.attempt_count,
+            )
+        except Exception as exc:
+            logger.warning("reconciler.requeue_failed run_id=%s error=%s",
+                           run.id, type(exc).__name__)
+    return len(closed)
 
 
 async def _reenqueue_index(

@@ -777,14 +777,14 @@ async def test_overlapping_cycles_recover_an_expired_run_once(
         first_task = asyncio.create_task(
             reconcile_once(factory, cast(ArqRedis, gated), queue_name=queue, now=now)
         )
-        # The first cycle has selected and committed; it is now blocked inside Redis.
+        # The first cycle has selected, closed and committed; it is now blocked in Redis.
         await asyncio.wait_for(gated.entered.wait(), timeout=LOCK_PROBE_TIMEOUT_S)
         second = await reconcile_once(factory, pool, queue_name=queue, now=now)
         gated.released.set()
         first = await asyncio.wait_for(first_task, timeout=LOCK_PROBE_TIMEOUT_S)
 
-        assert second["expired_runs"] == 1
-        assert first["expired_runs"] == 0
+        assert first["expired_runs"] == 1
+        assert second["expired_runs"] == 0
         async with factory() as db:
             stored_run = await db.get(ProcessingRun, run_id)
             assert stored_run is not None
