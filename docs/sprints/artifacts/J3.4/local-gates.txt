@@ -74,3 +74,7 @@ New cases for the fix:
 - test_calendar_sync_job.py: the stale body is patched at the HTTP boundary and the task is
   synced; an expired access token refreshes before the call; a 401 refreshes once and the
   delivery succeeds.
+
+Quality CI run 41219465169 (head d67d249, 2026-10-31) is green in all 17 checks:
+python-unit (api) 1152 passed; integration (api) 443 passed (10 I-S3-JF-03 cases);
+integration (ingest) 58 passed; e2e-smoke, docs, secret-scan and build-images green.
