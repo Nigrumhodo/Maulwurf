@@ -1,8 +1,8 @@
 # Canonical claims registry — Maulwurf
 
-> Status: **S2 open**. Review: 2026-10-09. S3.1, S3.2, S3.3 and S3.4 are recorded under
-> directed claims for MAULW-108, MAULW-109, MAULW-110 and MAULW-111; the rest of S3 remains
-> closed.
+> Status: **S2 open**. Review: 2026-10-09. S3.1, S3.2, S3.3, S3.4 and S3.5 are recorded
+> under directed claims for MAULW-108, MAULW-109, MAULW-110, MAULW-111 and MAULW-112; the
+> rest of S3 remains closed.
 >
 > This file is the single source of truth for ticket ownership. Personal logbooks keep
 > evidence, blockers, and notes, but a row there does not assign a ticket by itself. Rows
@@ -44,9 +44,9 @@ These six values are **all** the status vocabulary: there are no `claimed`, `in_
 ## 3. Active sprint
 
 **S2 is open.** S1 has every implementation ticket `done`; only L1.7 (coordination and the
-formal S1 close) is unclaimed. S3 and S4 remain closed except the directed S3.1, S3.2, S3.3
-and S3.4 claims recorded below. D2 and D6 remain `pending`; D3-Audio and D4 remain
-`blocked`.
+formal S1 close) is unclaimed. S3 and S4 remain closed except the directed S3.1, S3.2,
+S3.3, S3.4 and S3.5 claims recorded below. D2 and D6 remain `pending`; D3-Audio and D4
+remain `blocked`.
 
 ### S1 — Foundation + F0 spike
 
@@ -163,9 +163,9 @@ and S3.4 claims recorded below. D2 and D6 remain `pending`; D3-Audio and D4 rema
 
 ### S3 — Action (extraction and Calendar)
 
-> Only S3.1, S3.2, S3.3 and S3.4 are recorded: they were directed by MAULW-108, MAULW-109,
-> MAULW-110 and MAULW-111. The remaining S3 backlog stays unclaimable until the lead opens
-> the sprint and updates the status above.
+> Only S3.1, S3.2, S3.3, S3.4 and S3.5 are recorded: they were directed by MAULW-108,
+> MAULW-109, MAULW-110, MAULW-111 and MAULW-112. The remaining S3 backlog stays unclaimable
+> until the lead opens the sprint and updates the status above.
 
 | Action | Ticket | Owner | Status | Claimed at (UTC) | Cloud eligibility | Contributors / reviewers | Reason, evidence, or PR |
 |---|---|---|---|---|---|---|---|
@@ -173,6 +173,7 @@ and S3.4 claims recorded below. D2 and D6 remain `pending`; D3-Audio and D4 rema
 | claim | S3.2 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area S, area A | MAULW-109: sentence-aligned analysis windows with a bounded overlap and a hard total-token budget, evidence-identity dedupe, `app/services/analysis_windows.py`, the offline `scripts/eval/window_cost.py` harness and U-S3-SG-02 (43 tests; 926 API unit passed). Default 800/100 measures 10,894–15,705 transcript tokens/class-hour with a 1.073–1.111 amplification; provider latency `NO VERIFICADO`. Token numbers come from authored/redacted spike-derived text; no real LLM call. Branch `task/MAULW-109`; PR #121 open with all Quality CI checks green (926 API unit, 408 API integration, e2e-smoke and web included). |
 | claim | S3.3 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area S, area A | MAULW-110: `app/services/evidence.py` keeps analysis evidence textual without ASR offsets. `reliable_times` withholds times for `timestamp_precision=none`, incomplete/non-finite/inverted pairs and pairs past the class duration; `evidence_reference` falls back to `"segment N"` and never to `00:00`; `resolve_textual_evidence` rebuilds segment/Unicode-span/verbatim-quote evidence with null times; search, RAG labels and citations share the policy. U-S3-SG-03 (24 cases) green; API unit **907 passed**, `ruff`/`mypy` clean. Quality CI run `41202443740` (head `a1ff7be`) all 18 checks green. No web change: the API returns the server-derived reference. PR #122, branch `task/MAULW-110` |
 | claim | S3.4 | NigrumH0do | in progress | 2026-10-31 | not applicable | — / area A, area S | MAULW-111: versioned `processing_runs` ledger. `RunSpec` records the transcript version and the stage configuration version, and `analyze` runs persist `prompt_version` (the analysis config key is derived from it, so a prompt bump creates a new run). Retry/backfill reuse a row only when all versions match; a version change creates a NEW row and never resets or overwrites the old one. Derived stage state and backfill availability ignore obsolete transcript/config rows, and the tenant-scoped `GET /audios/{id}/runs` exposes the durable history with a `current` flag. Model moved to `app/models/processing_run.py` per the S3 implementation map. I-S3-SG-04 (`tests/integration/test_processing_runs_versions.py`, 7 cases) plus `tests/unit/test_run_versions.py` and the updated S3.1 backfill unit matrix. Branch `task/MAULW-111`, PR #123: all Quality CI checks green (run `41204906352`), including `integration (api)` 415 passed (the 7 I-S3-SG-04 cases included) and `e2e-smoke`. Local `ruff`/`mypy` clean and 943 API unit passed; integration could not run in this sandbox (no PostgreSQL/Redis). No Riva/LLM/Google call. |
+| claim | S3.5 | NigrumH0do | in progress | 2026-10-31 | not applicable | — / area S, area A | MAULW-112: ASR effective-minute cost and RAM/tmpfs under load (basis for C-S4-SG-04). `scripts/load/asr_cost.py` runs `--slots` concurrent workers over the production `pipeline.process` audio path used by `asr_job` (ffprobe/silencedetect/ffmpeg) with an empty-words transcriber stub; the synthetic clip is generated in RAM and exists only on a private tmpfs, and every slot directory is deleted and verified. Two 300 s slots: 11 fragments and 302.5 billed seconds per slot, 60.5 effective minutes per class hour (+0.833% overlap); tmpfs peak 13.47 MiB per slot (26.94 MiB summed), worker RSS 34.44–34.86 MiB (delta <0.5 MiB per slot), ffmpeg child max 47.85 MiB. F0.1 leaves the rate `NO VERIFICADO`, so cost per class hour stays `NO VERIFICADO`; an explicit `--rate-usd-per-minute` is labelled operator-provided. Published in `docs/eval/asr-cost.md` with the raw capture in `docs/sprints/artifacts/S3.5/asr-cost.txt`. 17 new unit tests plus the `load` measurement; `ruff`/`mypy` clean and 180 ingest unit passed; Quality CI runs `41209918176` (head `4727443`) and `41210214297` (head `d4fe3d9`) are green in all 17 checks, including `python-unit (ingest)`, `integration (ingest)` and `e2e-smoke`. No Riva/LLM/Google call. Branch `task/MAULW-112`, PR #124. |
 
 ## 4. Change history
 
@@ -237,3 +238,4 @@ and S3.4 claims recorded below. D2 and D6 remain `pending`; D3-Audio and D4 rema
 | 2026-10-31 | S3.2 is claimed by jpinillaz (`in progress`) for the directed MAULW-109 ticket: bounded analysis windows, evidence-identity dedupe and the offline window-cost harness (U-S3-SG-02). The cost numbers use authored/redacted textual fixtures derived from the F0.1 spike scenario; no real provider call, no audio and no real class text are involved. S3 is not declared open; the rest of S3 stays blocked. PR #121. | This PR |
 | 2026-10-31 | S3.3 is claimed by jpinillaz (`in progress`) for the directed MAULW-110 ticket: analysis evidence must keep working when the ASR delivered no offsets, with null times, a server-derived "segment N" reference and zero invented minutes. `app/services/evidence.py` is shared by search hydration, RAG labels and citations; U-S3-SG-03 is green (24 cases) and the API unit suite reports **907 passed** with `ruff`/`mypy` clean. L3.6/A3.1 are absent from `develop`, so this ticket delivers the evidence layer, not extraction output; `apps/web` is untouched and the D3 inbox rendering remains out of scope. S3 is not declared open here; the remaining S3 tickets stay blocked. PR #122. | This PR |
 | 2026-10-31 | S3.4 is claimed by NigrumH0do (`in progress`) for the directed MAULW-111 ticket: `processing_runs` identified by transcript + configuration version, with the analysis prompt version persisted and folded into the config key; retry/backfill create a new run only when a version changes, old runs stay queryable through `GET /audios/{id}/runs`, and derived stage state ignores obsolete versions. S3 is not declared open; the rest of S3 stays blocked. | This PR |
+| 2026-10-31 | S3.5 is claimed by NigrumH0do (`in progress`) for the directed MAULW-112 ticket: ASR effective minutes (fragments with the local overlap) and RAM/tmpfs under concurrent load, measured with the real stub audio path and synthetic RAM-only audio. The 300 s × 2-slot run gives 60.5 effective minutes per class hour and 26.94 MiB of tmpfs; the provider rate and cost stay `NO VERIFICADO` because F0.1 never measured them. `docs/eval/asr-cost.md` and the raw capture are published; 200 MiB/3 h and D4 are not approved. S3 is not declared open; the rest of S3 stays blocked. | This PR |
