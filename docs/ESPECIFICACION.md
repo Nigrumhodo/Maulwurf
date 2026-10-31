@@ -533,9 +533,12 @@ week?").
 - Date/time/title changes to an already-confirmed task stay in a pending revision until a new
   explicit confirmation; a local `PATCH` does not write to Google. When confirming the
   revision, trigger a `patch` of the linked event with version/ETag control; do not silently
-  overwrite changes made in Google. Completing/dismissing a task cancels future reminders but
-  keeps its event with a notice unless remote deletion is explicitly requested. Deleting a
-  class also does not delete events by default.
+  overwrite changes made in Google. Persist the ETag Google returned from the last successful
+  write (`tasks.calendar_etag`) and require it as the baseline: if the current ETag differs,
+  the event was edited outside Maulwurf and the write is refused (flagged for review); a row
+  without a baseline also fails closed instead of assuming "no change". Completing/dismissing
+  a task cancels future reminders but keeps its event with a notice unless remote deletion is
+  explicitly requested. Deleting a class also does not delete events by default.
 - Agenda contract: the due date and the Calendar block are not the same thing. Store
   `event_start_at/event_end_at` for timed events, or
   `event_start_date/event_end_date_exclusive` for all-day; mutually exclusive pairs with end
@@ -901,6 +904,7 @@ erDiagram
         date event_end_date_exclusive
         text calendar_id
         text calendar_event_id
+        text calendar_etag
     }
     CHUNKS {
         uuid id PK

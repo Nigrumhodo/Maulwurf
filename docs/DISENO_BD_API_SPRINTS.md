@@ -719,6 +719,9 @@ CREATE TABLE tasks (
   event_end_date_exclusive   date,
   calendar_id text,
   calendar_event_id text,
+  -- ETag of the last successful Calendar write: the baseline the reconcile must match
+  -- before a conditional PATCH. NULL fails closed (no write) until adopt/review (J3.6).
+  calendar_etag text,
   confirmed_at timestamptz,
   completed_at timestamptz,
   dismissed_at timestamptz,

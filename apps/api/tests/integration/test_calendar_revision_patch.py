@@ -214,6 +214,7 @@ async def _insert_task(
         "calendar_sync_status": "pending",
         "calendar_id": CALENDAR_ID,
         "calendar_event_id": None,
+        "calendar_etag": None,
         "titulo": "Entregar informe corregido",
         "detalle": "Informe revisado y firmado",
         "timezone": "America/Bogota",
@@ -260,6 +261,14 @@ async def _advance_revision(db: AsyncSession, task_id: uuid.UUID) -> None:
     await db.flush()
 
 
+async def _set_baseline(db: AsyncSession, task_id: uuid.UUID, etag: str) -> None:
+    """Simulate the state left by the previous successful write."""
+    await db.execute(
+        TASKS.update().where(TASKS.c.id == task_id).values(calendar_etag=etag)
+    )
+    await db.flush()
+
+
 async def _task_status(db: AsyncSession, task_id: uuid.UUID) -> tuple[str, str, str | None]:
     row = (
         await db.execute(
@@ -271,6 +280,15 @@ async def _task_status(db: AsyncSession, task_id: uuid.UUID) -> tuple[str, str, 
         )
     ).one()
     return row.status, row.calendar_sync_status, row.calendar_event_id
+
+
+async def _baseline(db: AsyncSession, task_id: uuid.UUID) -> str | None:
+    value = (
+        await db.execute(
+            select(TASKS.c.calendar_etag).where(TASKS.c.id == task_id)
+        )
+    ).scalar_one()
+    return str(value) if value is not None else None
 
 
 def _ctx(db: AsyncSession, fake: FakeGoogle) -> dict[str, Any]:
@@ -300,6 +318,7 @@ async def test_confirming_a_revision_patches_the_event_with_its_etag(
     key = (CALENDAR_ID, deterministic_event_id(row["id"]))
     stored = fake._store(key, _synced_event(previous))
     previous_etag = stored["etag"]
+    await _set_baseline(db_session, row["id"], previous_etag)
     await _advance_revision(db_session, row["id"])
 
     await sync_task_event(_ctx(db_session, fake), str(row["id"]), 2)
@@ -314,6 +333,7 @@ async def test_confirming_a_revision_patches_the_event_with_its_etag(
         "synced",
         deterministic_event_id(row["id"]),
     )
+    assert await _baseline(db_session, row["id"]) == fake.events[key]["etag"]
 
 
 async def test_an_external_edit_is_not_overwritten_and_needs_review(
@@ -334,7 +354,8 @@ async def test_an_external_edit_is_not_overwritten_and_needs_review(
     )
     previous = await _snapshot(db_session, row["id"])
     key = (CALENDAR_ID, deterministic_event_id(row["id"]))
-    fake._store(key, _synced_event(previous))
+    stored = fake._store(key, _synced_event(previous))
+    await _set_baseline(db_session, row["id"], stored["etag"])
     await _advance_revision(db_session, row["id"])
 
     await sync_task_event(_ctx(db_session, fake), str(row["id"]), 2)
@@ -345,6 +366,44 @@ async def test_an_external_edit_is_not_overwritten_and_needs_review(
     status, sync_status, _ = await _task_status(db_session, row["id"])
     assert status == "confirmed"  # the task lifecycle is untouched
     assert sync_status == "failed"  # D3.7 surfaces it for review and explicit retry
+
+
+async def test_an_external_edit_before_the_read_is_not_overwritten(
+    db_session: AsyncSession,
+) -> None:
+    """I-S3-JF-04 fix2: an edit made before the reconcile GET keeps the event untouched.
+
+    Regression for the probe where the external ETag was accepted as the `If-Match`: the
+    conditional PATCH succeeded and silently discarded the Google edit.
+    """
+    fake = FakeGoogle()
+    actor = await make_actor(db_session)
+    row = await _insert_task(
+        db_session,
+        actor,
+        version=1,
+        titulo="Entregar informe",
+        detalle="Informe anterior",
+        event_start_at=START,
+        event_end_at=START + timedelta(hours=1),
+    )
+    previous = await _snapshot(db_session, row["id"])
+    key = (CALENDAR_ID, deterministic_event_id(row["id"]))
+    stored = fake._store(key, _synced_event(previous))
+    await _set_baseline(db_session, row["id"], stored["etag"])
+    # The user edits the event in Google after our last write, before this delivery's GET.
+    fake._store(key, {**stored, "summary": "Editado directamente en Google"})
+    external_etag = fake.events[key]["etag"]
+    await _advance_revision(db_session, row["id"])
+
+    await sync_task_event(_ctx(db_session, fake), str(row["id"]), 2)
+
+    assert fake.patch_requests == 0  # the external edit is never overwritten
+    assert fake.events[key]["summary"] == "Editado directamente en Google"
+    assert fake.events[key]["etag"] == external_etag
+    status, sync_status, _ = await _task_status(db_session, row["id"])
+    assert (status, sync_status) == ("confirmed", "failed")
+    assert await _baseline(db_session, row["id"]) == stored["etag"]
 
 
 async def test_a_missing_etag_never_patches_the_linked_event(
@@ -365,7 +424,8 @@ async def test_a_missing_etag_never_patches_the_linked_event(
     )
     previous = await _snapshot(db_session, row["id"])
     key = (CALENDAR_ID, deterministic_event_id(row["id"]))
-    fake._store(key, _synced_event(previous))
+    stored = fake._store(key, _synced_event(previous))
+    await _set_baseline(db_session, row["id"], stored["etag"])
     await _advance_revision(db_session, row["id"])
 
     await sync_task_event(_ctx(db_session, fake), str(row["id"]), 2)
