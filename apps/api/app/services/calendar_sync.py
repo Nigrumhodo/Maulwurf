@@ -13,9 +13,13 @@ The calendar is read as a **full window** every time:
   rejects the mix instead of silently dropping a filter.
 
 `SqlCalendarMirror` replaces the whole window in one transaction (savepoint) after taking a
-per-user transaction advisory lock, then records the covered window and `last_synced_at` in
-`settings`. A crash or a unique-key violation rolls the savepoint back, leaving both the
-previous mirror and the previous coverage untouched.
+per-user transaction advisory lock. Rows of the republished calendars that ended before the
+window are pruned (Google is queried from `window.start`, so it will never return them), the
+window rows the fresh read no longer carries are deleted, and the fetched events are upserted
+on `(user_id, calendar_id, event_id)`: an event rescheduled into the window from an earlier
+publication updates in place instead of colliding with the unique key. It then records the
+covered window and `last_synced_at` in `settings`. Any failure rolls the savepoint back,
+leaving both the previous mirror and the previous coverage untouched.
 """
 
 import uuid
@@ -26,7 +30,7 @@ from typing import Any, Final, Literal, Protocol, cast
 from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import CursorResult, Table, and_, delete, func, insert, or_, select, text
+from sqlalchemy import CursorResult, Table, and_, delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,6 +46,12 @@ MAX_PAGE_SIZE = 2500
 # The spec refreshes the mirror on demand or hourly; two hours is a conservative staleness
 # signal for the dashboard, not a scheduled job of its own.
 STALE_AFTER = timedelta(hours=2)
+
+# Advisory-lock convention (A2.14, `services/audios.py`): the two-int form namespaces our
+# locks instead of a bare bigint. The namespace is the same 0x4D57 ("MW") value that module
+# uses; the per-user key derivation is shared too, so a collision can only serialize two
+# short transactions of the same user, never admit more work than the limits allow.
+_ADVISORY_LOCK_NAMESPACE = 0x4D57
 
 # Closed coverage vocabulary consumed by D3.6 and the `get_calendar_events` tool (J3.8).
 CoverageNotice = Literal[
@@ -90,6 +100,22 @@ def _zone(name: str) -> ZoneInfo:
         # A stored value can predate validation or come from an old client. UTC keeps the
         # window deterministic instead of turning a read into a 500.
         return ZoneInfo("UTC")
+
+
+def _valid_timezone(value: object) -> str | None:
+    """Keep only an IANA zone `zoneinfo` can resolve; a bogus one is stored as unknown."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
+    return value
+
+
+def _user_lock_key(user_id: uuid.UUID) -> int:
+    """Stable 31-bit advisory key for one user (fits the signed `int4` of the lock)."""
+    return user_id.int & 0x7FFF_FFFF
 
 
 @dataclass(frozen=True)
@@ -165,6 +191,11 @@ class RemoteCalendarEvent:
 
 @dataclass(frozen=True)
 class PublicationResult:
+    """Rows written (`inserted` counts inserts and in-place updates) and rows deleted.
+
+    `removed` includes both stale window rows and pruned pre-window rows.
+    """
+
     inserted: int
     removed: int
 
@@ -284,7 +315,7 @@ def parse_remote_event(calendar_id: str, item: Mapping[str, Any]) -> RemoteCalen
         if start_at >= end_at:
             raise CalendarEventInvalid("event_time_inverted")
         raw_zone = start.get("timeZone")
-        timezone = raw_zone if isinstance(raw_zone, str) and raw_zone else None
+        timezone = _valid_timezone(raw_zone)
     elif start.get("date") is not None or end.get("date") is not None:
         start_date = _parse_date(start.get("date"))
         end_date = _parse_date(end.get("date"))
@@ -355,6 +386,10 @@ class GoogleCalendarEventSource:
                 params["pageToken"] = token
             payload = await self._service.request("GET", path, params=params)
             pages += 1
+            if not isinstance(payload, Mapping):
+                # A non-object body (list, null, scalar) has no `.get`: fail with the typed
+                # error instead of leaking an AttributeError as a 500.
+                raise CalendarEventInvalid("events_payload_invalid")
             items = payload.get("items", [])
             if items is None:
                 items = []
@@ -388,6 +423,19 @@ def _overlap_filter(window: CalendarWindow) -> Any:
         CalendarEvent.start_date.is_not(None),
         CalendarEvent.start_date < next_date,
         CalendarEvent.end_date_exclusive > window.start_date,
+    )
+    return or_(timed, all_day)
+
+
+def _before_window_filter(window: CalendarWindow) -> Any:
+    """Rows that ended before the window and can no longer be observed by the read."""
+    timed = and_(
+        CalendarEvent.start_at.is_not(None),
+        CalendarEvent.end_at <= window.start,
+    )
+    all_day = and_(
+        CalendarEvent.start_date.is_not(None),
+        CalendarEvent.end_date_exclusive <= window.start_date,
     )
     return or_(timed, all_day)
 
@@ -430,10 +478,24 @@ class SqlCalendarMirror:
             for event in events
         ]
         async with self._db.begin_nested():
-            # Two concurrent refreshes for one user must not interleave delete/insert.
+            # Two concurrent refreshes for one user must not interleave delete/upsert.
             await self._db.execute(
-                text("SELECT pg_advisory_xact_lock(:key)"),
-                {"key": user_id.int % (2**63)},
+                select(
+                    func.pg_advisory_xact_lock(
+                        _ADVISORY_LOCK_NAMESPACE, _user_lock_key(user_id)
+                    )
+                )
+            )
+            # Google is queried from `window.start`, so a row that ended before the window
+            # will never come back: keeping it would grow the mirror without bound. Rows
+            # linked to a task belong to the write path (J3.4/A3.8) and are never pruned.
+            pruned = await self._db.execute(
+                delete(CalendarEvent).where(
+                    CalendarEvent.user_id == user_id,
+                    CalendarEvent.calendar_id.in_(list(calendars)),
+                    CalendarEvent.task_id.is_(None),
+                    _before_window_filter(window),
+                )
             )
             removed = await self._db.execute(
                 delete(CalendarEvent).where(
@@ -442,11 +504,30 @@ class SqlCalendarMirror:
                     _overlap_filter(window),
                 )
             )
-            removed_count = cast("CursorResult[Any]", removed).rowcount or 0
             if rows:
-                # Core insert on the table, not ORM `add_all`: a failed flush must not leave
-                # pending instances in the caller's unit of work after the savepoint rollback.
-                await self._db.execute(insert(self._EVENTS).values(rows))
+                # Upsert on the natural key: an event already mirrored by an earlier
+                # publication (for example one rescheduled into this window) updates in
+                # place instead of violating the unique key and failing every sync.
+                # `source` and `task_id` are deliberately kept: they record who created the
+                # row and its task link, not where the current remote values came from.
+                statement = pg_insert(self._EVENTS).values(rows)
+                await self._db.execute(
+                    statement.on_conflict_do_update(
+                        index_elements=["user_id", "calendar_id", "event_id"],
+                        set_={
+                            "title": statement.excluded.title,
+                            "start_at": statement.excluded.start_at,
+                            "end_at": statement.excluded.end_at,
+                            "start_date": statement.excluded.start_date,
+                            "end_date_exclusive": statement.excluded.end_date_exclusive,
+                            "timezone": statement.excluded.timezone,
+                            "etag": statement.excluded.etag,
+                            "remote_status": statement.excluded.remote_status,
+                            "last_synced_at": statement.excluded.last_synced_at,
+                            "updated_at": func.now(),
+                        },
+                    )
+                )
             await self._db.execute(
                 pg_insert(self._SETTINGS)
                 .values(
@@ -468,11 +549,15 @@ class SqlCalendarMirror:
                 )
             )
             await self._db.flush()
+        removed_count = (
+            (cast("CursorResult[Any]", pruned).rowcount or 0)
+            + (cast("CursorResult[Any]", removed).rowcount or 0)
+        )
         return PublicationResult(inserted=len(rows), removed=removed_count)
 
 
 def _dedupe(events: Iterable[RemoteCalendarEvent]) -> list[RemoteCalendarEvent]:
-    """Keep one row per `(calendar, event)`; the last page wins like Google's own listing."""
+    """Keep one row per `(calendar, event)`; the last occurrence in read order wins."""
     unique: dict[tuple[str, str], RemoteCalendarEvent] = {}
     for event in events:
         unique[(event.calendar_id, event.event_id)] = event
@@ -584,6 +669,12 @@ class CalendarService:
         date_to: date | None = None,
         now: datetime | None = None,
     ) -> CalendarPage:
+        """Return the whole requested window in one response.
+
+        The J3.7 contract is not paginated: the widest allowed window (366 local days) and
+        the per-user mirror bound the result, and a silent `LIMIT` would report incomplete
+        data as covered. Paging would have to be added to the API contract first.
+        """
         reference = (now or datetime.now(UTC)).astimezone(UTC)
         timezone = await self._timezone(user_id)
         window = _resolve_window(
@@ -649,11 +740,20 @@ def _resolve_window(
     timezone: str,
     now: datetime,
 ) -> CalendarWindow:
-    if date_from is None or date_to is None:
-        default = CalendarWindow.default(now=now, timezone=timezone)
+    """Complete a half-given range from the bound the client actually sent.
+
+    A lone bound anchors the window (`from` → `from + 60`, `to` → `to - 7`). Filling the
+    missing side from today's default would invert a future `from` and answer a misleading
+    "`to` cannot be before `from`" for a parameter the client never sent.
+    """
+    if date_to is None:
+        if date_from is None:
+            return CalendarWindow.default(now=now, timezone=timezone)
         return CalendarWindow.from_dates(
-            date_from or default.start_date,
-            date_to or default.end_date,
-            timezone=timezone,
+            date_from, date_from + timedelta(days=DAYS_FORWARD), timezone=timezone
+        )
+    if date_from is None:
+        return CalendarWindow.from_dates(
+            date_to - timedelta(days=DAYS_BACK), date_to, timezone=timezone
         )
     return CalendarWindow.from_dates(date_from, date_to, timezone=timezone)

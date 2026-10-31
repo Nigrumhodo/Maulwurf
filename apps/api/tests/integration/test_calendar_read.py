@@ -6,9 +6,12 @@ drives the real `GoogleCalendarEventSource` over an `httpx.MockTransport`. No re
 call, credential or secret is involved.
 
 Covered: the whole window is replaced in one transaction (previous rows and the recorded
-coverage survive a mid-publication failure), deleted events disappear, recurring instances
-arrive expanded, other tenants are untouched, the `GET /calendar/events` route reads only the
-mirror and reports freshness/coverage, and `syncToken` is never mixed with window filters.
+coverage survive a mid-publication failure), deleted events disappear, an event rescheduled
+from outside the window updates in place, pre-window rows are pruned for the republished
+calendars, recurring instances arrive expanded, other tenants are untouched, the
+`GET /calendar/events` route reads only the mirror and reports freshness/coverage (a lone
+`from`/`to` derives the other bound from it), and `syncToken` is never mixed with window
+filters.
 """
 
 import uuid
@@ -259,6 +262,96 @@ async def test_republishing_replaces_deleted_and_changed_events_but_not_the_outs
     assert body["coverage_ok"] is True
 
 
+async def test_an_event_reprogrammed_from_outside_the_window_updates_in_place(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await make_actor(db_session)
+    await _settings(db_session, actor)
+    now = datetime.now(UTC)
+    today = now.date()
+    far = now + timedelta(days=90)
+
+    # A wider previous publication left a row far beyond the default +60 window.
+    wide = CalendarWindow.from_dates(
+        today, today + timedelta(days=120), timezone="UTC"
+    )
+    await sync_calendar_window(
+        db_session,
+        user_id=actor.user_id,
+        window=wide,
+        calendars=[CALENDAR],
+        source=FakeSource([_timed("rescheduled", far)]),
+        now=now,
+    )
+
+    # The user moves it inside the default window; Google keeps the same event id.
+    inside = (now + timedelta(days=2)).replace(hour=10, minute=0, second=0, microsecond=0)
+    window = await _sync(
+        db_session,
+        actor,
+        source=FakeSource([_timed("rescheduled", inside, title="moved")]),
+        now=now,
+    )
+
+    rows = await _mirror(db_session, actor)
+    assert [row.event_id for row in rows] == ["rescheduled"]
+    assert rows[0].start_at == inside
+    assert rows[0].title == "moved"
+    assert rows[0].last_synced_at == now
+
+    response = await _get(client, actor, date_from=window.start_date, date_to=window.end_date)
+    body = response.json()
+    assert [item["event_id"] for item in body["events"]] == ["rescheduled"]
+    assert body["events"][0]["title"] == "moved"
+
+
+async def test_rows_before_the_window_are_pruned_only_for_the_republished_calendars(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    await _settings(db_session, actor)
+    now = datetime.now(UTC)
+    old = now - timedelta(days=30)
+
+    for calendar_id in (CALENDAR, "archive"):
+        db_session.add(
+            CalendarEvent(
+                user_id=actor.user_id,
+                calendar_id=calendar_id,
+                event_id="old",
+                title="old",
+                start_at=old,
+                end_at=old + timedelta(hours=1),
+                last_synced_at=old,
+            )
+        )
+    # A task-linked row belongs to the write path, not to the refresh.
+    db_session.add(
+        CalendarEvent(
+            user_id=actor.user_id,
+            calendar_id=CALENDAR,
+            event_id="linked",
+            title="linked",
+            start_at=old,
+            end_at=old + timedelta(hours=1),
+            last_synced_at=old,
+            task_id=uuid.uuid4(),
+        )
+    )
+    await db_session.flush()
+
+    await _sync(db_session, actor, source=FakeSource([]), now=now)
+    await _sync(db_session, actor, source=FakeSource([]), now=now)
+
+    rows = await _mirror(db_session, actor)
+    # `primary` was republished twice and its pre-window rows never pile up; the linked row
+    # and `archive` (not part of the selection) are not touched.
+    assert [(row.calendar_id, row.event_id) for row in rows] == [
+        ("primary", "linked"),
+        ("archive", "old"),
+    ]
+
+
 async def test_a_failed_read_publishes_nothing(
     db_session: AsyncSession,
 ) -> None:
@@ -448,6 +541,27 @@ async def test_get_without_parameters_uses_seven_back_and_sixty_forward_days(
         (before.start_date.isoformat(), before.end_date.isoformat()),
         (after.start_date.isoformat(), after.end_date.isoformat()),
     }
+
+
+async def test_get_with_a_lone_bound_derives_the_other_from_it(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await make_actor(db_session)
+    future_from = datetime.now(UTC).date() + timedelta(days=90)
+
+    from_only = await _get(client, actor, date_from=future_from)
+    assert from_only.status_code == 200
+    body = from_only.json()
+    assert body["from"] == future_from.isoformat()
+    assert body["to"] == (future_from + timedelta(days=60)).isoformat()
+    assert body["coverage_notice"] == "never_synced"
+
+    past_to = datetime.now(UTC).date() - timedelta(days=30)
+    to_only = await _get(client, actor, date_to=past_to)
+    assert to_only.status_code == 200
+    body = to_only.json()
+    assert body["from"] == (past_to - timedelta(days=7)).isoformat()
+    assert body["to"] == past_to.isoformat()
 
 
 async def test_get_rejects_an_inverted_range_and_requires_a_session(

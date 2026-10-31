@@ -1,9 +1,10 @@
 """U-S3-JF-05 support: calendar window, Google pagination and publication ordering (J3.7).
 
 These are the deterministic parts of I-S3-JF-05: local-day window math (including DST),
-the `events.list` query contract (expanded recurrences, deletions, no `syncToken` mixing),
-full pagination, event normalization, and the rule that a failed read publishes nothing.
-No Google call, credential or secret is involved.
+the `events.list` query contract (expanded recurrences, deletions, no `syncToken` mixing,
+typed failures for a non-object body), full pagination, event normalization (including an
+unresolvable event timezone), half-given range anchoring, and the rule that a failed read
+publishes nothing. No Google call, credential or secret is involved.
 """
 
 import uuid
@@ -29,6 +30,7 @@ from app.services.calendar_sync import (
     GoogleCalendarEventSource,
     PublicationResult,
     RemoteCalendarEvent,
+    _resolve_window,
     build_list_params,
     coverage_status,
     parse_remote_event,
@@ -97,6 +99,26 @@ def test_window_rejects_naive_instants() -> None:
         CalendarWindow(
             start=datetime(2026, 10, 1), end=datetime(2026, 10, 2), timezone="UTC"
         )
+
+
+def test_a_lone_from_derives_the_end_from_it_instead_of_the_default_window() -> None:
+    # 2027-03-01 is far beyond the default +60 days from NOW: completing the range from
+    # today's default would invert it and answer a misleading "to before from".
+    window = _resolve_window(
+        date_from=date(2027, 3, 1), date_to=None, timezone="UTC", now=NOW
+    )
+
+    assert window.start_date == date(2027, 3, 1)
+    assert window.end_date == date(2027, 4, 30)
+
+
+def test_a_lone_to_derives_the_start_from_it_instead_of_the_default_window() -> None:
+    window = _resolve_window(
+        date_from=None, date_to=date(2026, 1, 15), timezone="UTC", now=NOW
+    )
+
+    assert window.start_date == date(2026, 1, 8)
+    assert window.end_date == date(2026, 1, 15)
 
 
 # --- Google query contract -------------------------------------------------------------
@@ -207,6 +229,33 @@ async def test_pagination_limit_fails_without_returning_a_partial_read() -> None
         await source.list_events("primary", time_min=window.start, time_max=window.end)
 
 
+class _RawPayloadService:
+    """Bypasses `GoogleCalendarService` to pin the adapter's own payload validation."""
+
+    def __init__(self, payload: object) -> None:
+        self._payload = payload
+
+    async def request(
+        self, method: str, path: str, *, params: Mapping[str, Any] | None = None
+    ) -> object:
+        del method, path, params
+        return self._payload
+
+
+@pytest.mark.parametrize("payload", [[], None, "events"])
+async def test_a_non_object_payload_fails_the_read_with_a_typed_error(
+    payload: object,
+) -> None:
+    stub = _RawPayloadService(payload)
+    source = GoogleCalendarEventSource(cast(GoogleCalendarService, stub))
+    window = _window()
+
+    with pytest.raises(CalendarEventInvalid) as error:
+        await source.list_events("primary", time_min=window.start, time_max=window.end)
+
+    assert error.value.code == "events_payload_invalid"
+
+
 async def test_cancelled_instances_are_dropped_and_instances_stay_distinct() -> None:
     items = [
         {
@@ -295,6 +344,23 @@ def test_cancelled_event_is_a_deletion_not_a_row() -> None:
         )
         is None
     )
+
+
+def test_an_unresolvable_event_timezone_is_stored_as_unknown() -> None:
+    parsed = parse_remote_event(
+        "primary",
+        {
+            "id": "g1",
+            "start": {
+                "dateTime": "2026-10-05T09:00:00-05:00",
+                "timeZone": "Mars/Olympus_Mons",
+            },
+            "end": {"dateTime": "2026-10-05T10:00:00-05:00"},
+        },
+    )
+
+    assert parsed is not None
+    assert parsed.timezone is None
 
 
 @pytest.mark.parametrize(
