@@ -59,3 +59,10 @@ Coverage of the ticket
 - `POST /calendar/sync`: validates selection/grant/scopes, renews the token under the row
   lock, calls the J3.7 atomic window publication, answers 202 with the covered window and
   counts, 409 with a closed reason and 503 only for a transient provider failure.
+
+Quality CI
+----------
+Workflow run 41237622749 on head 4f392bd (2026-10-31): all 17 checks green, including
+python-unit (api), python-unit (ingest), python-static (api/ingest), integration (api),
+integration (ingest), e2e-smoke, docs, web, build-images, secret-scan, license-report and
+caddy-limits. PR #133 stays open for review; it is not merged.
