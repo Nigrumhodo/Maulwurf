@@ -31,7 +31,7 @@ from app.main import app
 from app.models import Audio, IngestionAttempt, OutboxEvent, ProcessingRun
 from app.models.base import TenantOwned
 from app.services import runs
-from app.services.runs import RUN_CONFIG_VERSION
+from app.services.runs import INDEX_CONFIG_VERSION
 from tests.integration import actors
 
 pytestmark = pytest.mark.integration
@@ -84,7 +84,7 @@ async def _seed_failed_run(
         audio_id=audio_id,
         stage=stage,
         transcript_version=1,
-        config_version=RUN_CONFIG_VERSION,
+        config_version=INDEX_CONFIG_VERSION,
         status="failed",
         error_code="worker_crashed",
         finished_at=datetime.now(UTC),
@@ -267,7 +267,7 @@ async def test_concurrent_retries_in_opposite_stage_order_do_not_deadlock(
         *,
         user_id: uuid.UUID,
         audio_id: uuid.UUID,
-        stage: str,
+        spec: runs.RunSpec,
         transcript_version: int,
     ) -> ProcessingRun | None:
         task = asyncio.current_task()
@@ -280,7 +280,7 @@ async def test_concurrent_retries_in_opposite_stage_order_do_not_deadlock(
             db,
             user_id=user_id,
             audio_id=audio_id,
-            stage=stage,
+            spec=spec,
             transcript_version=transcript_version,
         )
 
@@ -369,7 +369,7 @@ async def test_retry_of_a_succeeded_stage_conflicts(
         audio_id=audio_id,
         stage="index",
         transcript_version=1,
-        config_version=RUN_CONFIG_VERSION,
+        config_version=INDEX_CONFIG_VERSION,
         status="succeeded",
     )
     db_session.add(run)

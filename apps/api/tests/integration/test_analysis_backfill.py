@@ -28,7 +28,7 @@ from app.services.analysis_backfill import (
     backfill_classes,
 )
 from app.services.outbox import Outcome
-from app.services.runs import RUN_CONFIG_VERSION
+from app.services.runs import ANALYSIS_CONFIG_VERSION, INDEX_CONFIG_VERSION
 from app.workers.dispatcher import dispatch_pending
 from tests.integration import actors
 
@@ -133,7 +133,7 @@ async def test_backfill_queues_f1_class_without_touching_ingestion(
             audio_id=audio.id,
             stage="index",
             transcript_version=transcript.version,
-            config_version=RUN_CONFIG_VERSION,
+            config_version=INDEX_CONFIG_VERSION,
             status="succeeded",
         )
     )
@@ -166,7 +166,7 @@ async def test_backfill_queues_f1_class_without_touching_ingestion(
     assert run.id == item.run_id
     assert run.status == "pending"
     assert run.transcript_version == transcript.version
-    assert run.config_version == RUN_CONFIG_VERSION
+    assert run.config_version == ANALYSIS_CONFIG_VERSION
 
     events = await _analysis_events(db_session, user_id=actor.user_id, audio_id=audio.id)
     assert len(events) == 1
@@ -301,7 +301,7 @@ async def test_failed_analysis_is_requeued_with_a_fresh_cycle(
         audio_id=audio.id,
         stage="analyze",
         transcript_version=transcript.version,
-        config_version=RUN_CONFIG_VERSION,
+        config_version=ANALYSIS_CONFIG_VERSION,
         status="failed",
         error_code="analysis_unexpected",
         attempt_count=0,
@@ -342,7 +342,7 @@ async def test_f2_classes_are_left_to_retry_unless_analysis_already_succeeded(
             audio_id=analyzed.id,
             stage="analyze",
             transcript_version=transcript2.version,
-            config_version=RUN_CONFIG_VERSION,
+            config_version=ANALYSIS_CONFIG_VERSION,
             status="succeeded",
         )
     )
@@ -386,7 +386,7 @@ async def test_apply_does_not_promote_f1_when_nothing_is_queued(
             audio_id=audio.id,
             stage="analyze",
             transcript_version=transcript.version,
-            config_version=RUN_CONFIG_VERSION,
+            config_version=ANALYSIS_CONFIG_VERSION,
             status=run_status,
         )
     )
@@ -425,7 +425,7 @@ async def test_apply_does_not_promote_f1_on_unknown_run_state(
             audio_id=audio.id,
             stage="analyze",
             transcript_version=transcript.version,
-            config_version=RUN_CONFIG_VERSION,
+            config_version=ANALYSIS_CONFIG_VERSION,
             status="paused",
         )
     )
@@ -456,7 +456,7 @@ async def test_detail_shows_the_explicit_queue_state(
             audio_id=audio.id,
             stage="index",
             transcript_version=1,
-            config_version=RUN_CONFIG_VERSION,
+            config_version=INDEX_CONFIG_VERSION,
             status="succeeded",
         )
     )
@@ -475,6 +475,39 @@ async def test_detail_shows_the_explicit_queue_state(
     assert body["analysis_backfill_available"] is False
     assert body["stages"]["analyze"] == "pending"
     assert body["aggregate_status"] == "processing"
+
+
+async def test_detail_does_not_offer_backfill_for_f2_class_without_run(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """The detail flag and the service agree: an F2 class with no run uses `retry`."""
+    actor = await actors.make_actor(db_session)
+    audio, _attempt, _transcript = await actors.make_class_with_transcript(
+        db_session, actor, required_stages=["index", "analyze"]
+    )
+    audio_id = audio.id
+
+    detail = await client.get(f"/audios/{audio_id}", cookies=actor.cookies)
+
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["stages"]["analyze"] == "pending"
+    assert body["analysis_backfill_available"] is False
+
+    report = await backfill_classes(db_session, user_id=actor.user_id, apply=True)
+    assert report.counts[BackfillStatus.ALREADY_F2_NO_RUN] == 1
+    assert await _analysis_runs(
+        db_session, user_id=actor.user_id, audio_id=audio_id
+    ) == []
+
+    # The action the page must advertise instead: the retry endpoint over persisted text.
+    retried = await client.post(
+        f"/audios/{audio_id}/retry",
+        json={"stages": ["analyze"], "transcript_version": 1},
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+    assert retried.status_code == 202
 
 
 async def test_dispatcher_publishes_only_the_audio_id(
