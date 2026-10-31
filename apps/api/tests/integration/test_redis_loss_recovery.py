@@ -37,7 +37,7 @@ from app.models import (
 from app.services.index_job import index_version_for
 from app.services.outbox import Outcome
 from app.services.reconciliation import DISPATCH_GRACE
-from app.services.runs import RUN_CONFIG_VERSION
+from app.services.runs import INDEX_CONFIG_VERSION
 from app.workers.dispatcher import dispatch_pending
 from app.workers.index_job import JOB_TIMEOUT_S, MAX_TRIES, PROVIDERS_KEY, SESSIONS_KEY, index
 from app.workers.reconciler import reconcile_once
@@ -185,7 +185,7 @@ async def test_redis_loss_regenerates_the_index_job_to_completion(
         select(ProcessingRun.status).where(
             ProcessingRun.audio_id == audio.id,
             ProcessingRun.stage == "index",
-            ProcessingRun.config_version == RUN_CONFIG_VERSION,
+            ProcessingRun.config_version == INDEX_CONFIG_VERSION,
         )
     )
     assert run == "succeeded"

@@ -28,19 +28,30 @@ def test_with_analysis_stage_preserves_order_and_is_idempotent() -> None:
 
 
 @pytest.mark.parametrize(
-    ("has_usable_transcript", "attempt_status", "cleanup_status", "analyze_state", "expected"),
+    (
+        "has_usable_transcript",
+        "attempt_status",
+        "cleanup_status",
+        "analyze_state",
+        "has_current_run",
+        "expected",
+    ),
     [
-        (True, "succeeded", "verified", "not_requested", True),
-        (True, "succeeded", "verified", "failed", True),
-        (True, "succeeded", "verified", "cancelled", True),
-        (True, "succeeded", "verified", "pending", False),
-        (True, "succeeded", "verified", "running", False),
-        (True, "succeeded", "verified", "succeeded", False),
-        (False, "succeeded", "verified", "not_requested", False),
-        (True, "transcript_committed_cleanup_pending", "pending", "not_requested", False),
-        (True, "succeeded", "pending", "not_requested", False),
-        (True, "rejected", "verified", "not_requested", False),
-        (True, None, None, "not_requested", False),
+        (True, "succeeded", "verified", "not_requested", False, True),
+        (True, "succeeded", "verified", "failed", True, True),
+        (True, "succeeded", "verified", "cancelled", True, True),
+        (True, "succeeded", "verified", "pending", True, False),
+        (True, "succeeded", "verified", "running", True, False),
+        (True, "succeeded", "verified", "succeeded", True, False),
+        # No run for the active transcript/current versions: a version changed and
+        # reanalysis is offered even when the stage list already owes analysis (S3.4).
+        (True, "succeeded", "verified", "pending", False, True),
+        (True, "succeeded", "verified", "not_requested", True, True),
+        (False, "succeeded", "verified", "not_requested", False, False),
+        (True, "transcript_committed_cleanup_pending", "pending", "not_requested", False, False),
+        (True, "succeeded", "pending", "not_requested", False, False),
+        (True, "rejected", "verified", "not_requested", False, False),
+        (True, None, None, "not_requested", False, False),
     ],
 )
 def test_analysis_backfill_available_fails_closed(
@@ -48,6 +59,7 @@ def test_analysis_backfill_available_fails_closed(
     attempt_status: str | None,
     cleanup_status: str | None,
     analyze_state: str,
+    has_current_run: bool,
     expected: bool,
 ) -> None:
     assert (
@@ -56,37 +68,46 @@ def test_analysis_backfill_available_fails_closed(
             attempt_status=attempt_status,
             cleanup_status=cleanup_status,
             analyze_state=analyze_state,
+            has_current_run=has_current_run,
         )
         is expected
     )
 
 
 @pytest.mark.parametrize(
-    ("analysis_already_required", "existing_status", "expected"),
+    ("analysis_already_required", "existing_status", "has_previous_run", "expected"),
     [
         # F1 without an analysis run is the only case that may queue (and only on apply).
-        (False, None, None),
+        (False, None, False, None),
         # F2 without a run already owes analysis; retry is its entry point, not the backfill.
-        (True, None, BackfillStatus.ALREADY_F2_NO_RUN),
-        (False, "succeeded", BackfillStatus.ALREADY_ANALYZED),
-        (True, "succeeded", BackfillStatus.ALREADY_ANALYZED),
-        (False, "pending", BackfillStatus.ALREADY_QUEUED),
-        (False, "running", BackfillStatus.ALREADY_QUEUED),
-        (False, "failed", None),
-        (False, "cancelled", None),
-        (True, "failed", None),
+        (True, None, False, BackfillStatus.ALREADY_F2_NO_RUN),
+        # A previous run under another transcript/config version is history: analysis is
+        # owed for the current versions, so a NEW run is queued (S3.4).
+        (False, None, True, None),
+        (True, None, True, None),
+        (False, "succeeded", False, BackfillStatus.ALREADY_ANALYZED),
+        (True, "succeeded", False, BackfillStatus.ALREADY_ANALYZED),
+        (False, "pending", False, BackfillStatus.ALREADY_QUEUED),
+        (False, "running", False, BackfillStatus.ALREADY_QUEUED),
+        (False, "failed", False, None),
+        (False, "cancelled", False, None),
+        (True, "failed", False, None),
         # Corrupt data fails closed instead of widening the decision.
-        (False, "paused", BackfillStatus.UNKNOWN_RUN_STATE),
-        (True, "paused", BackfillStatus.UNKNOWN_RUN_STATE),
+        (False, "paused", False, BackfillStatus.UNKNOWN_RUN_STATE),
+        (True, "paused", True, BackfillStatus.UNKNOWN_RUN_STATE),
     ],
 )
 def test_classify_existing_run_decides_before_any_write(
-    analysis_already_required: bool, existing_status: str | None, expected: BackfillStatus | None
+    analysis_already_required: bool,
+    existing_status: str | None,
+    has_previous_run: bool,
+    expected: BackfillStatus | None,
 ) -> None:
     assert (
         classify_existing_run(
             analysis_already_required=analysis_already_required,
             existing_status=existing_status,
+            has_previous_run=has_previous_run,
         )
         is expected
     )

@@ -5,7 +5,8 @@ from app.models.chat import Conversation, Message, MessageSource
 from app.models.chunk import Chunk, ChunkSegment, Embedding, IndexGeneration
 from app.models.core import GoogleCredential, Session, Subject, User
 from app.models.ingestion import Audio, IngestionAttempt, OutboxEvent, VariantConfirmationToken
-from app.models.transcript import ProcessingRun, Segment, Transcript
+from app.models.processing_run import ProcessingRun
+from app.models.transcript import Segment, Transcript
 
 __all__ = [
     "Audio",

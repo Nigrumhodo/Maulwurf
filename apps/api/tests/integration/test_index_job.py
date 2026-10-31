@@ -42,7 +42,7 @@ from app.services.indexing import (
     build_generation,
     create_generation,
 )
-from app.services.runs import RUN_CONFIG_VERSION
+from app.services.runs import INDEX_CONFIG_VERSION
 from app.workers.index_job import PROVIDERS_KEY, SESSIONS_KEY, index
 from app.workers.reconciler import reconcile_once
 from tests.integration.actors import Actor, make_actor, make_class_with_transcript
@@ -139,7 +139,7 @@ def _run_row(actor: Actor, audio: Audio, *, status: str, started_at: datetime) -
         audio_id=audio.id,
         stage="index",
         transcript_version=1,
-        config_version=RUN_CONFIG_VERSION,
+        config_version=INDEX_CONFIG_VERSION,
         status=status,
         started_at=started_at,
     )

@@ -333,9 +333,11 @@ optional `variant_confirmation_token` → `audio_id`, `attempt_id`, URL, and exp
 `POST /audios/{id}/reupload` (only without a usable transcript);
 `POST /audios/{id}/attempts/{attempt_id}/cancel`; `DELETE /audios/{id}`;
 `GET /audios/{id}/transcript.txt`; `GET /audios/{id}/transcript.srt` (only with valid
-timestamps). The `GET /audios/{id}` detail reports the derived per-stage states and whether
-the explicit analysis backfill is available; the backfill queue is the `analyze` stage over
-the persisted transcript, never a reupload or retranscription.
+timestamps); `GET /audios/{id}/runs` (durable run history with the transcript, configuration
+and prompt version each run applied, its status/timestamps and whether it is the run of the
+active transcript and current versions). The `GET /audios/{id}` detail reports the derived
+per-stage states and whether the explicit analysis backfill is available; the backfill queue
+is the `analyze` stage over the persisted transcript, never a reupload or retranscription.
 
 ---
 
@@ -945,8 +947,11 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   never publish a zero-length range (`t_start < t_end` when both are present).
   `embeddings`: chunk, model, dimension, version, and fixed-dimension vector; HNSW per
   compatible generation. `processing_runs` unique per
-  `(audio_id, stage, transcript_version, config_version)` with status and error. Active
-  versions are published atomically.
+  `(audio_id, stage, transcript_version, config_version)` with status and error; an
+  `analyze` run also stores its `prompt_version`, and the configuration version is derived
+  from it so a prompt change creates a new run. A version bump never overwrites the previous
+  row: old runs remain queryable and only the run of the active transcript and current
+  versions feeds the derived stage state. Active versions are published atomically.
 - `tasks.status`: `pending|needs_review → confirmed|dismissed`;
   `confirmed → completed|dismissed`. Resolve date/quality before confirming; confirming
   requires a valid date and checked evidence for extracted tasks. `calendar_sync_status`

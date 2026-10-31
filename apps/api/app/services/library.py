@@ -97,13 +97,35 @@ def _attempt_summary(attempt: IngestionAttempt | None) -> AttemptSummary | None:
     )
 
 
+def _current_run(runs: list[ProcessingRun], *, stage: str, usable_version: int | None) -> bool:
+    """Whether the class has a run for the active transcript and the current versions."""
+    spec = runs_service.run_spec(stage)
+    return any(
+        run.stage == stage
+        and run.transcript_version == usable_version
+        and run.config_version == spec.config_version
+        and run.prompt_version == spec.prompt_version
+        for run in runs
+    )
+
+
 def _derive_stages(
     audio: Audio, runs: list[ProcessingRun], *, usable_version: int | None
 ) -> dict[str, str]:
-    """Per-stage state from the persisted runs; `usable_version` scopes obsolete rows out."""
+    """Per-stage state from the runs of the active transcript and current versions.
+
+    A run produced by an older transcript/config version is durable history, not the state
+    of the class today: ignoring it makes a version change read as owed work (S3.4), so
+    reanalysis is visible instead of being masked by a stale `succeeded`.
+    """
     return {
         stage: state_machine.stage_status(
-            [run for run in runs if run.stage == stage],
+            [
+                run
+                for run in runs
+                if run.stage == stage
+                and run.config_version == runs_service.run_spec(stage).config_version
+            ],
             required=stage in audio.required_stages,
             active_transcript_version=usable_version,
         )
@@ -311,7 +333,12 @@ async def get_audio_detail(
             has_usable_transcript=usable is not None,
             attempt_status=attempt.status if attempt is not None else None,
             cleanup_status=attempt.cleanup_status if attempt is not None else None,
-            analyze_state=stages[analysis_backfill.ANALYSIS_STAGE],
+            analyze_state=stages[runs_service.ANALYSIS_STAGE],
+            has_current_run=_current_run(
+                runs.get(audio.id, []),
+                stage=runs_service.ANALYSIS_STAGE,
+                usable_version=usable,
+            ),
         ),
     )
 

@@ -28,7 +28,7 @@ from app.services.analysis_backfill import (
     backfill_classes,
 )
 from app.services.outbox import Outcome
-from app.services.runs import RUN_CONFIG_VERSION
+from app.services.runs import ANALYSIS_CONFIG_VERSION, INDEX_CONFIG_VERSION
 from app.workers.dispatcher import dispatch_pending
 from tests.integration import actors
 
@@ -133,7 +133,7 @@ async def test_backfill_queues_f1_class_without_touching_ingestion(
             audio_id=audio.id,
             stage="index",
             transcript_version=transcript.version,
-            config_version=RUN_CONFIG_VERSION,
+            config_version=INDEX_CONFIG_VERSION,
             status="succeeded",
         )
     )
@@ -166,7 +166,7 @@ async def test_backfill_queues_f1_class_without_touching_ingestion(
     assert run.id == item.run_id
     assert run.status == "pending"
     assert run.transcript_version == transcript.version
-    assert run.config_version == RUN_CONFIG_VERSION
+    assert run.config_version == ANALYSIS_CONFIG_VERSION
 
     events = await _analysis_events(db_session, user_id=actor.user_id, audio_id=audio.id)
     assert len(events) == 1
@@ -301,7 +301,7 @@ async def test_failed_analysis_is_requeued_with_a_fresh_cycle(
         audio_id=audio.id,
         stage="analyze",
         transcript_version=transcript.version,
-        config_version=RUN_CONFIG_VERSION,
+        config_version=ANALYSIS_CONFIG_VERSION,
         status="failed",
         error_code="analysis_unexpected",
         attempt_count=0,
@@ -342,7 +342,7 @@ async def test_f2_classes_are_left_to_retry_unless_analysis_already_succeeded(
             audio_id=analyzed.id,
             stage="analyze",
             transcript_version=transcript2.version,
-            config_version=RUN_CONFIG_VERSION,
+            config_version=ANALYSIS_CONFIG_VERSION,
             status="succeeded",
         )
     )
@@ -386,7 +386,7 @@ async def test_apply_does_not_promote_f1_when_nothing_is_queued(
             audio_id=audio.id,
             stage="analyze",
             transcript_version=transcript.version,
-            config_version=RUN_CONFIG_VERSION,
+            config_version=ANALYSIS_CONFIG_VERSION,
             status=run_status,
         )
     )
@@ -425,7 +425,7 @@ async def test_apply_does_not_promote_f1_on_unknown_run_state(
             audio_id=audio.id,
             stage="analyze",
             transcript_version=transcript.version,
-            config_version=RUN_CONFIG_VERSION,
+            config_version=ANALYSIS_CONFIG_VERSION,
             status="paused",
         )
     )
@@ -456,7 +456,7 @@ async def test_detail_shows_the_explicit_queue_state(
             audio_id=audio.id,
             stage="index",
             transcript_version=1,
-            config_version=RUN_CONFIG_VERSION,
+            config_version=INDEX_CONFIG_VERSION,
             status="succeeded",
         )
     )

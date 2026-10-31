@@ -31,7 +31,7 @@ from app.core.deps import progress_session_factory
 from app.main import app
 from app.models import IngestionAttempt, ProcessingRun
 from app.services import library
-from app.services.runs import RUN_CONFIG_VERSION
+from app.services.runs import INDEX_CONFIG_VERSION
 from tests.integration import actors
 
 pytestmark = pytest.mark.integration
@@ -93,7 +93,7 @@ async def _terminal_class(
                 audio_id=audio.id,
                 stage="index",
                 transcript_version=1,
-                config_version=RUN_CONFIG_VERSION,
+                config_version=INDEX_CONFIG_VERSION,
                 status="succeeded",
             )
         )

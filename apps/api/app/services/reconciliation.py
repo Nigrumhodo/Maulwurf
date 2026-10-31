@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import OutboxEvent, ProcessingRun
 from app.services.index_job import LEASE, STAGE_INDEX
-from app.services.runs import RUN_CONFIG_VERSION
+from app.services.runs import INDEX_CONFIG_VERSION
 
 # Longer than a live `index` job can last (`LEASE`), so a dispatch still in flight is never
 # republished. Only `index_requested` is recovered: `analyze` has no run ledger, and republishing a
@@ -74,7 +74,7 @@ async def select_lost_dispatches(
         ProcessingRun.audio_id == OutboxEvent.resource_id,
         ProcessingRun.stage == STAGE_INDEX,
         ProcessingRun.transcript_version == OutboxEvent.resource_version,
-        ProcessingRun.config_version == RUN_CONFIG_VERSION,
+        ProcessingRun.config_version == INDEX_CONFIG_VERSION,
         or_(
             ProcessingRun.status.in_(("succeeded", "cancelled")),
             and_(
@@ -160,8 +160,9 @@ async def select_expired_index_runs(
             ProcessingRun.fencing_token,
         )
         .where(
+            # Liveness, not currentness: a run of an older configuration version that is
+            # still `running` must be reclaimed too (S3.4 bumped config versions).
             ProcessingRun.stage == STAGE_INDEX,
-            ProcessingRun.config_version == RUN_CONFIG_VERSION,
             ProcessingRun.status == "running",
             ProcessingRun.started_at < now - LEASE,
         )
