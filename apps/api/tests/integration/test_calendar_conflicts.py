@@ -709,20 +709,29 @@ async def test_sync_rejects_a_selection_without_read_calendars(
     assert response.json()["error"]["details"]["reason"] == "no_read_calendars"
 
 
-async def test_sync_rejects_a_missing_or_disconnected_grant(
+async def test_sync_rejects_a_missing_grant(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     actor = await make_actor(db_session)
     await _settings(db_session, actor)
 
-    missing = await _post_sync(client, actor)
-    assert missing.status_code == 409
-    assert missing.json()["error"]["details"]["reason"] == "google_not_connected"
+    response = await _post_sync(client, actor)
 
+    assert response.status_code == 409
+    assert response.json()["error"]["details"]["reason"] == "google_not_connected"
+
+
+async def test_sync_rejects_a_disconnected_grant(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await make_actor(db_session)
+    await _settings(db_session, actor)
     await _credential(db_session, actor, status="disconnected")
-    disconnected = await _post_sync(client, actor)
-    assert disconnected.status_code == 409
-    assert disconnected.json()["error"]["details"]["reason"] == "google_not_connected"
+
+    response = await _post_sync(client, actor)
+
+    assert response.status_code == 409
+    assert response.json()["error"]["details"]["reason"] == "google_not_connected"
 
 
 async def test_sync_rejects_a_grant_without_calendar_scopes(
@@ -926,6 +935,40 @@ async def test_sync_reports_a_busy_credential_lock_as_transient(
                     response = await _post_sync(http, actor)
             finally:
                 await transaction.rollback()
+    finally:
+        await holder.dispose()
+        await _delete_committed_user(migrated_database_url, actor.user_id)
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "calendar_sync_temporarily_unavailable"
+    assert int(response.headers["Retry-After"]) >= 1
+
+
+async def test_sync_reports_a_busy_publication_lock_as_transient(
+    migrated_database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-user advisory lock is bounded too; a held one answers 503, not a hang."""
+    actor = await _seed_committed_actor(migrated_database_url)
+    monkeypatch.setattr(calendar_sync_service, "LOCK_TIMEOUT_MS", 250)
+    _patch_source(monkeypatch, FakeSource())
+    lock = {
+        "namespace": calendar_sync_service._ADVISORY_LOCK_NAMESPACE,
+        "user_key": calendar_sync_service._user_lock_key(actor.user_id),
+    }
+    holder = create_async_engine(migrated_database_url, poolclass=NullPool)
+    try:
+        async with holder.connect() as conn:
+            await conn.execute(
+                text("SELECT pg_advisory_lock(:namespace, :user_key)"), lock
+            )
+            try:
+                async with _production_client(migrated_database_url) as http:
+                    response = await _post_sync(http, actor)
+            finally:
+                await conn.execute(
+                    text("SELECT pg_advisory_unlock(:namespace, :user_key)"), lock
+                )
     finally:
         await holder.dispose()
         await _delete_committed_user(migrated_database_url, actor.user_id)

@@ -590,13 +590,24 @@ class SqlCalendarMirror:
         cancelled_keys = [(event.calendar_id, event.event_id) for event in cancelled]
         async with self._db.begin_nested():
             # Two concurrent refreshes for one user must not interleave delete/upsert.
-            await self._db.execute(
-                select(
-                    func.pg_advisory_xact_lock(
-                        _ADVISORY_LOCK_NAMESPACE, _user_lock_key(user_id)
+            # The wait is bounded too: a manual request behind a slow or hung publication
+            # answers the documented transient 503 instead of pinning a pooled connection.
+            try:
+                await self._db.execute(
+                    text("SELECT set_config('lock_timeout', :timeout, true)"),
+                    {"timeout": f"{LOCK_TIMEOUT_MS}ms"},
+                )
+                await self._db.execute(
+                    select(
+                        func.pg_advisory_xact_lock(
+                            _ADVISORY_LOCK_NAMESPACE, _user_lock_key(user_id)
+                        )
                     )
                 )
-            )
+            except DBAPIError as exc:
+                if _is_lock_timeout(exc):
+                    raise CalendarSyncBusy("publication_lock_timeout") from exc
+                raise
             previous_coverage = await self._db.scalar(
                 select(CalendarSettings.calendar_coverage_calendar_ids).where(
                     CalendarSettings.user_id == user_id
@@ -898,6 +909,11 @@ async def _claim_manual_sync(
         timezone = user.timezone if user is not None and user.timezone else "UTC"
         await db.flush()
         await db.commit()
+    except (CalendarSyncCooldown, CalendarSyncUnavailable):
+        # Rejected before any provider call: end the transaction now so the settings row
+        # lock is released instead of waiting for the request-scoped teardown.
+        await db.rollback()
+        raise
     except DBAPIError as exc:
         if _is_lock_timeout(exc):
             raise CalendarSyncBusy("lock_timeout") from exc
@@ -914,8 +930,10 @@ async def _renew_access_token(
 ) -> str:
     """Short locked transaction: validate the grant and renew the token when needed.
 
-    The lock only covers the token decision and the (bounded) token request; the Calendar
-    reads happen after this commits and releases the row.
+    The lock only covers the token decision and the token request; the Calendar reads happen
+    after this commits and releases the row. The only provider I/O held under the lock is
+    that request, bounded by `google_tokens.HTTP_TIMEOUT_SECONDS` (10 s); the acquisition
+    wait is the 2 s `lock_timeout`. Calendar pagination never runs under this lock.
     """
     try:
         await _begin_lock_window(db)
@@ -960,9 +978,11 @@ async def refresh_calendar_mirror(
     This is the manual `POST /calendar/sync` path. Two short `FOR UPDATE` transactions
     validate the state and renew the access token, and each commits before returning; the
     Google reads then run with no row lock and no pooled connection held, so the hourly
-    worker or another request for the same user is never blocked behind pagination. A
-    third transaction publishes the window atomically via `sync_calendar_window`; the
-    caller commits it when this returns.
+    worker or another request for the same user is never blocked behind pagination. The
+    token endpoint is the only provider call inside a lock (its 10 s timeout bounds it).
+    A third transaction publishes the window atomically via `sync_calendar_window` and
+    bounds its per-user advisory lock with the same `LOCK_TIMEOUT_MS`; the caller commits
+    it when this returns.
 
     Every manual call also checks and stamps `calendar_last_manual_sync_at`, so a double
     click or a script answers `CalendarSyncCooldown` (429 `Retry-After`) before reaching

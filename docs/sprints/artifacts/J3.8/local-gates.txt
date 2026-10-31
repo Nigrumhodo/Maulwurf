@@ -13,13 +13,20 @@ Review fix1 scope
   `google_credentials` transaction decides and renews the token, and both commit before
   `sync_calendar_window` reads any page. Publication reopens its own transaction.
 - Both lock waits are bounded (`SET LOCAL lock_timeout = 2s`); PostgreSQL SQLSTATE 55P03
-  maps to `503 calendar_sync_temporarily_unavailable` with `Retry-After`.
+  maps to `503 calendar_sync_temporarily_unavailable` with `Retry-After`. The publication
+  transaction applies the same bound to its per-user `pg_advisory_xact_lock`, and the
+  credential lock only covers the token request (`google_tokens.HTTP_TIMEOUT_SECONDS`,
+  10 s), never the Calendar pagination.
 - `settings.calendar_last_manual_sync_at` (migration `0008_s3_calendar_manual_sync`)
   anchors a 60-second per-user cooldown. A second manual call inside it answers
   `429 rate_limited` with `Retry-After` and `details.reason=calendar_sync_cooldown`
   before any provider call.
 - A second 401 after the forced token renewal is classified as `google_invalid_grant`
   (credential disconnected + 409) instead of `calendar_read_failed`.
+- The claim branches that reject the request (`no_read_calendars`, missing grant/scopes,
+  cooldown) roll back explicitly, so the `settings` row lock ends with the decision.
+- `detect_conflicts` scans by index instead of copying the remaining tail at each step
+  (same deterministic half-open result).
 - The cooldown counts accepted attempts: the stamp is written before the provider call, so
   a failed refresh still waits out the window. `calendar_last_synced_at` keeps its J3.7
   meaning (last complete publication) and is not used for the limit.
@@ -45,11 +52,11 @@ $ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
       tests/integration/test_migrations.py \
       tests/integration/test_rls.py \
       tests/integration/test_isolation.py -q
-142 passed, 147 warnings in 25.82s
+144 passed, 148 warnings in 26.80s
 
 $ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
     uv run pytest tests/integration -q --tb=no
-32 failed, 482 passed, 508 warnings in 89.61s
+32 failed, 484 passed, 509 warnings in 77.51s
 
 New regression coverage
 -----------------------
@@ -58,12 +65,14 @@ cooldown; remaining seconds reported; exact boundary expires; a fractional secon
 so `Retry-After` is never zero; a naive timestamp is read as UTC; a past stamp never yields
 a negative remainder; a future stamp is capped at the cooldown window.
 
-`tests/integration/test_calendar_conflicts.py` (24 cases, 5 new):
+`tests/integration/test_calendar_conflicts.py` (26 cases, 7 more than the pre-fix 19):
 - a second manual call inside the cooldown answers `429 rate_limited` with `Retry-After`
   and `details.reason=calendar_sync_cooldown`, and Google is read once;
 - the cooldown expires and the next call answers 202;
 - a credential row locked by another connection makes the route answer 503 (bounded wait)
   with `Retry-After`, using a production-like session factory with real commits;
+- a per-user publication advisory lock held by another connection answers the same
+  bounded `503`, so the third transaction cannot hang behind the hourly path;
 - a second 401 after the forced renewal disconnects the credential and answers 409
   `google_invalid_grant`;
 - an independent connection probes `SELECT … FOR UPDATE` on `google_credentials` from

@@ -184,8 +184,10 @@ def detect_conflicts(
     time_conflicts: list[TimeConflict] = []
     for index, first in enumerate(timed):
         # Sorted by start: once a later event starts at or after `first.end`, every event
-        # after it does too, so the half-open interval comparison can stop there.
-        for second in timed[index + 1 :]:
+        # after it does too, so the half-open interval comparison can stop there. Indexing
+        # instead of slicing avoids copying the remaining tail on every outer step.
+        for position in range(index + 1, len(timed)):
+            second = timed[position]
             if second.start_at >= first.end_at:
                 break
             time_conflicts.append(TimeConflict(a=first, b=second))
