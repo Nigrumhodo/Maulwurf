@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.evidence import evidence_label
 from app.services.evidence import format_timestamp as format_timestamp
+from app.services.reader_links import class_reader_path
 from app.services.search import RetrievedChunk, SearchService
 
 _MARKER = re.compile(r"\[S([1-9][0-9]*)\]")
@@ -35,10 +36,7 @@ def citation_label(chunk: RetrievedChunk) -> str:
 
 
 def citation_url(chunk: RetrievedChunk) -> str:
-    base = f"/biblioteca/{chunk.audio_id}"
-    if chunk.segment_id is None:
-        return base
-    return f"{base}?segment={chunk.segment_id}"
+    return class_reader_path(chunk.audio_id, chunk.segment_id)
 
 
 @dataclass(frozen=True)
