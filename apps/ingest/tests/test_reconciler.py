@@ -420,7 +420,7 @@ async def test_cleanup_exception_is_recorded_failed_and_halts_admission(
     """S4.2: an exception during recovery cleanup is not a silent retry."""
     if cleanup.open_descriptors_under(tmpfs_dir)[1]:
         pytest.skip("multi-UID /proc: cleanup is fail-closed; run the ingest suite as root")
-    attempt, owned, _audio_id = await _ready(pool)
+    attempt, owned, audio_id = await _ready(pool)
     assert (await _commit(pool, owned, _draft())).outcome is CommitOutcome.COMMITTED
     workdir = cleanup.create_workdir(str(attempt.attempt_id), str(tmpfs_dir))
     cleanup.write_private(workdir / "original", b"RIFF" + b"\x00" * 8)
@@ -437,6 +437,7 @@ async def test_cleanup_exception_is_recorded_failed_and_halts_admission(
         assert mine == [ReconcileResult(attempt.attempt_id, ReconcileAction.CLEANUP_FAILED)]
         row = await _attempt_row(pool, attempt.attempt_id)
         assert row["cleanup_status"] == "failed"
+        assert (await _outbox(pool, audio_id))["enabled"] is False
         assert admission.uploads_admitted() is False
         assert admission.alerts() == (
             admission.Alert("cleanup_failed", attempt.attempt_id),
