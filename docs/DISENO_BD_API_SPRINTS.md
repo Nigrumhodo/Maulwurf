@@ -1255,14 +1255,26 @@ across tenants).
   "aggregate_status": "processing",
   "audio_retained": false,
   "analysis_backfill_available": true,
-  "transcript": { "version": 2, "timestamp_precision": "segment", "char_count": 18422 },
+  "transcript": {
+    "version": 2,
+    "timestamp_precision": "segment",
+    "char_count": 18422,
+    "quality_warnings": [
+      { "code": "repetition", "count": 3 },
+      { "code": "low_confidence", "count": 4, "total": 10 }
+    ]
+  },
   "exports": { "txt": true, "srt": true }
 }
 ```
 
 `transcript` is `null` without a usable transcript; `exports.srt` is `true` only when a
 truthful SRT exists (real precision and ordered times inside `duration_seconds`), so the
-client can enable the download without probing the `409`.
+client can enable the download without probing the `409`. `transcript.quality_warnings`
+carries the non-sensitive ASR signals (`code` plus counts) persisted by ingestion — for
+example `repetition`, `empty_segments` and `low_confidence` — so the inbox/class page can
+warn before proposing dates or tasks. Unknown fields are dropped and the list is bounded;
+no spoken text or provider payload is part of the signal (S3.6).
 
 `analysis_backfill_available` is the explicit S3.1/D3.5 action and mirrors the decision of
 `classify_existing_run`, so the class page never offers an action the service resolves as a

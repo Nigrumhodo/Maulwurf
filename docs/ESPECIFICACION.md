@@ -336,8 +336,9 @@ optional `variant_confirmation_token` → `audio_id`, `attempt_id`, URL, and exp
 timestamps); `GET /audios/{id}/runs` (durable run history with the transcript, configuration
 and prompt version each run applied, its status/timestamps and whether it is the run of the
 active transcript and current versions). The `GET /audios/{id}` detail reports the derived
-per-stage states and whether the explicit analysis backfill is available; the backfill queue
-is the `analyze` stage over the persisted transcript, never a reupload or retranscription.
+per-stage states, whether the explicit analysis backfill is available, and the non-sensitive
+ASR quality warnings (`code` plus counts) for the inbox/class page; the backfill queue is the
+`analyze` stage over the persisted transcript, never a reupload or retranscription.
 
 ---
 
@@ -375,9 +376,9 @@ traceability, without retaining audio.
   model/configuration, transcript version, and precision `word | segment | none`. Do not
   publish an incomplete transcript as complete. An empty/silent response is a result without
   usable text, not a hallucination to fill in.
-- Detect repetitions/silences as quality signals; do not automatically delete legitimate
-  phrases from the teacher. Store warnings and traceable normalized text; low quality
-  requires review before proposing dates/tasks.
+- Detect repetitions, empty segments and low confidence as quality signals; do not
+  automatically delete legitimate phrases from the teacher. Store warnings and traceable
+  normalized text; low quality requires review before proposing dates/tasks.
 - Release buffers, close files/client, and delete original/converted/fragments in `finally`
   when ASR ends (success or error). No core dumps or persistent swap; read-only root
   filesystem and `TMPDIR` on `tmpfs`. This prevents recoverable persistence on disk; it does
