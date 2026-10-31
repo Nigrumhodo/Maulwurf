@@ -14,7 +14,7 @@ never act on the same row at once. Redis state is checked by the caller (`worker
 from datetime import datetime, timedelta
 from typing import Final
 
-from sqlalchemy import exists, select
+from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import OutboxEvent, ProcessingRun
@@ -26,20 +26,29 @@ from app.services.runs import RUN_CONFIG_VERSION
 # job that does nothing would loop forever.
 DISPATCH_GRACE: Final = LEASE + timedelta(minutes=15)
 LEASE_EXPIRED_CODE: Final = "lease_expired"
-TERMINAL_RUN_STATUSES: Final = ("succeeded", "failed", "cancelled")
 
 
 async def select_lost_dispatches(
     db: AsyncSession, *, now: datetime, limit: int
 ) -> list[OutboxEvent]:
-    """Index events dispatched before the grace margin with no terminal run for their version."""
+    """Index events dispatched before the grace margin with no terminal run for their version.
+
+    A `failed` run with `lease_expired` is recoverable: its recovery job can itself be lost
+    when Redis restarts. The retry budget and `OutboxEvent.max_attempts` bound the loop.
+    """
     terminal_run = exists().where(
         ProcessingRun.user_id == OutboxEvent.user_id,
         ProcessingRun.audio_id == OutboxEvent.resource_id,
         ProcessingRun.stage == STAGE_INDEX,
         ProcessingRun.transcript_version == OutboxEvent.resource_version,
         ProcessingRun.config_version == RUN_CONFIG_VERSION,
-        ProcessingRun.status.in_(TERMINAL_RUN_STATUSES),
+        or_(
+            ProcessingRun.status.in_(("succeeded", "cancelled")),
+            and_(
+                ProcessingRun.status == "failed",
+                ProcessingRun.error_code.is_distinct_from(LEASE_EXPIRED_CODE),
+            ),
+        ),
     )
     statement = (
         select(OutboxEvent)
@@ -48,6 +57,9 @@ async def select_lost_dispatches(
             OutboxEvent.status == "dispatched",
             OutboxEvent.published_at < now - DISPATCH_GRACE,
             OutboxEvent.resource_version.is_not(None),
+            # A no-op delivery (e.g. D3-Text still open) creates no processing run. Without
+            # this bound, the event would be republished every grace period forever.
+            OutboxEvent.attempts < OutboxEvent.max_attempts,
             ~terminal_run,
         )
         .order_by(OutboxEvent.published_at, OutboxEvent.id)
