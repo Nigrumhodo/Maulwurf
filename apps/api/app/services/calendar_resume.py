@@ -70,7 +70,11 @@ class ResumeReport:
 
 
 async def tasks_table_available(db: AsyncSession) -> bool:
-    """Whether A3.1's `tasks` table exists in the connected schema."""
+    """Whether A3.1's `tasks` table exists in the connected schema.
+
+    The check resolves through the same `search_path` as the raw statements below, so a
+    deployment that moves the tables does not get a false positive against another schema.
+    """
     connection = await db.connection()
     return bool(
         await connection.run_sync(lambda sync: inspect(sync).has_table("tasks"))

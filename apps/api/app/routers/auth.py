@@ -16,6 +16,10 @@ Cualquier fallo de login redirige a `/login?error=<razón>`; los fallos de Calen
 `/settings?calendar=error&reason=<razón>`. Nunca se devuelven tokens al navegador. Las
 cookies se fijan sobre la `RedirectResponse` devuelta (no sobre el `Response` inyectado),
 que es el objeto que FastAPI envía de vuelta.
+
+Login y Calendar comparten la cookie `mw_oauth`: iniciar cualquiera de los dos flujos
+invalida el material efímero del otro en el mismo navegador, así que solo uno puede estar en
+vuelo a la vez.
 """
 import hmac
 import logging
