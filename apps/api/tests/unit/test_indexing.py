@@ -486,7 +486,7 @@ def test_indexing_real_text_requires_closed_d3(monkeypatch: pytest.MonkeyPatch) 
 
 
 async def test_indexing_uses_chunker_with_the_new_version() -> None:
-    """`ChunkDraft`s (L2.1) are sealed with the new version and each one gets its vector."""
+    """`Chunk`s (L2.1/L2.9) are sealed with the new version and each one gets its vector."""
     user_id = uuid.uuid4()
     db = _session_with_audio(user_id)
     provider = FakeProvider(batch_size=100)

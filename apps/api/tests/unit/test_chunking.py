@@ -1,13 +1,13 @@
 """U-S2-JL-01: chunking with Unicode offsets, sentence/segment cuts and `chunk_segments`.
 
 `app/services/chunking.py` is the single authority that turns a stored transcript plus its
-ordered `segments` rows into the chunk drafts of ESPECIFICACION.md M6 (target ~800 tokens,
-~100 overlap, preferred cuts at sentence and ASR segment boundaries, Unicode offsets
-`[start, end)` in code points). Pure functions and dataclasses, no DB, no HTTP. No
-`integration` marker: runs in `python-unit`.
+ordered `segments` rows into the §M6 `Chunk` objects of ESPECIFICACION.md M6 (target ~800
+tokens, ~100 overlap, preferred cuts at sentence and ASR segment boundaries, Unicode
+offsets `[start, end)` in code points). Pure functions, no DB, no HTTP. No `integration`
+marker: runs in `python-unit`.
 
-The §M6↔table reconciliation (L2.9) is out of scope; these tests pin the chunker's own
-contract, not persistence.
+The schema↔table alignment (L2.9) is exercised by `test_chunk_contract.py`; these tests pin
+the chunker's own decisions.
 """
 
 import time
@@ -16,12 +16,12 @@ from uuid import uuid4
 import pytest
 import tiktoken
 
+from app.schemas.chunk import Chunk
 from app.services.chunking import (
     _TOKEN_RE,
     OVERLAP_TOKENS,
     TARGET_TOKENS,
     TOKEN_SAFETY_FACTOR,
-    ChunkDraft,
     SegmentInput,
     chunk_segments,
     count_tokens_default,
@@ -69,9 +69,10 @@ def _run(
     *,
     target_tokens: int = TARGET_TOKENS,
     overlap_tokens: int = OVERLAP_TOKENS,
-) -> list[ChunkDraft]:
+) -> list[Chunk]:
     return chunk_segments(
         audio_id=uuid4(),
+        transcript_id=uuid4(),
         transcript_version=1,
         index_version="idx-v1",
         transcript_text=text,
@@ -207,12 +208,15 @@ def test_chunk_segments_links_and_ranges() -> None:
     for chunk in chunks:
         assert chunk.segments
         for link in chunk.segments:
-            segment = segments[link.segment_ordinal]
-            assert 0 <= link.inicio_char < link.fin_char <= len(segment.text)
-            assert segment.char_start + link.inicio_char == max(
+            segment = segments[link.overlap_span.segment_ordinal]
+            assert 0 <= link.overlap_span.inicio_char < link.overlap_span.fin_char
+            assert link.overlap_span.fin_char <= len(segment.text)
+            assert segment.char_start + link.overlap_span.inicio_char == max(
                 chunk.char_start, segment.char_start
             )
-            assert segment.char_start + link.fin_char == min(chunk.char_end, segment.char_end)
+            assert segment.char_start + link.overlap_span.fin_char == min(
+                chunk.char_end, segment.char_end
+            )
 
 
 def test_prefers_asr_segment_boundary() -> None:
@@ -305,10 +309,12 @@ def test_cjk_without_punctuation_splits_in_bounded_time() -> None:
 def test_same_input_same_output() -> None:
     text, segments = _build(["Uno. Dos. Tres. Cuatro."])
     audio_id = uuid4()
+    transcript_id = uuid4()
 
-    def run() -> list[ChunkDraft]:
+    def run() -> list[Chunk]:
         return chunk_segments(
             audio_id=audio_id,
+            transcript_id=transcript_id,
             transcript_version=1,
             index_version="idx-v1",
             transcript_text=text,
@@ -436,7 +442,9 @@ def test_empty_asr_segments_are_skipped() -> None:
     chunks = _run(text, segments)
 
     assert "".join(chunk.content for chunk in chunks) == text
-    assert all(link.segment_ordinal != 1 for chunk in chunks for link in chunk.segments)
+    assert all(
+        link.overlap_span.segment_ordinal != 1 for chunk in chunks for link in chunk.segments
+    )
 
 
 def test_offsets_match_schema_contract() -> None:
@@ -447,6 +455,7 @@ def test_offsets_match_schema_contract() -> None:
         assert 0 <= chunk.char_start < chunk.char_end <= len(text)
         assert chunk.content == text[chunk.char_start : chunk.char_end]
         for link in chunk.segments:
-            segment = segments[link.segment_ordinal]
-            assert link.inicio_char >= 0
-            assert link.inicio_char < link.fin_char <= len(segment.text)
+            segment = segments[link.overlap_span.segment_ordinal]
+            assert link.overlap_span.inicio_char >= 0
+            assert link.overlap_span.inicio_char < link.overlap_span.fin_char
+            assert link.overlap_span.fin_char <= len(segment.text)
