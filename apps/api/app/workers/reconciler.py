@@ -1,8 +1,8 @@
-"""Reconciler cycle (J2.4): repairs work that a dead worker or a lost Redis left behind.
+"""Reconciler cycle (J2.4, J2.11): repairs work that a dead worker or a lost Redis left behind.
 
 ARQ runs `reconcile_once` as a cron on the scheduler (`workers/arq_app.py`). It has four steps,
-each in its own transaction and each bounded by `BATCH_SIZE`. A failing step is logged by its
-exception type and the other steps still run.
+each bounded by `BATCH_SIZE`. A failing step is logged by its exception type and the other
+steps still run.
 
 - Lost dispatches go back to `pending`, so `dispatch_pending` republishes them through the usual
   gate and revalidation.
@@ -11,6 +11,11 @@ exception type and the other steps still run.
 - Reservations past `upload_expires_at` that never reached an ingest lease are cancelled
   (A2.14), freeing their quota and slot; `ingest` keeps owning rows that do have a lease.
 - Orphan `building` generations and surplus `retired` generations are deleted.
+
+J2.11: the two steps that touch Redis select candidates in a short transaction, commit, do the
+`redis.exists`/`enqueue_job` work with no row lock held, and then apply the change in a second
+short transaction guarded by a compare-and-set. A slow or blocked Redis therefore cannot keep
+`FOR UPDATE` locks (or an idle transaction) open, and overlapping cycles apply each change once.
 
 The reconciler never reads audio and never retranscribes. Logs carry IDs and counts only.
 """
@@ -36,8 +41,9 @@ from app.services.generation_cleanup import (
     select_surplus_retired,
 )
 from app.services.reconciliation import (
-    mark_lease_expired,
-    reset_to_pending,
+    ExpiredRun,
+    mark_lease_expired_if_unchanged,
+    reset_to_pending_if_unchanged,
     select_expired_index_runs,
     select_lost_dispatches,
 )
@@ -59,7 +65,11 @@ def outbox_job_keys(event_id: uuid.UUID) -> tuple[str, ...]:
 
 
 def has_retry_budget(attempt_count: int) -> bool:
-    """Whether another delivery of a run that already made `attempt_count` claims is allowed."""
+    """Whether a run that already took `attempt_count` claims may take another.
+
+    `attempt_count` counts claims, while ARQ's `MAX_TRIES` counts deliveries; the values are
+    aligned today. A lost dispatch is separately bounded by `OutboxEvent.max_attempts`.
+    """
     return attempt_count < MAX_TRIES
 
 
@@ -103,39 +113,83 @@ async def _guarded(step: str, work: Awaitable[int]) -> int:
 
 
 async def _republish_lost(sessions: SessionFactory, redis: ArqRedis, now: datetime) -> int:
+    async with sessions() as db:
+        candidates = await select_lost_dispatches(db, now=now, limit=BATCH_SIZE)
+        # Release the selection locks before any Redis call (J2.11).
+        await db.commit()
+
+    lost = []
+    for event in candidates:
+        if not await _any_key_exists(redis, outbox_job_keys(event.id)):
+            lost.append(event)
+    if not lost:
+        return 0
+
     reset = 0
     async with sessions() as db:
-        for event in await select_lost_dispatches(db, now=now, limit=BATCH_SIZE):
-            if await _any_key_exists(redis, outbox_job_keys(event.id)):
+        for event in lost:
+            # One savepoint per row: a deadlock/timeout on one candidate must not roll back
+            # the resets already applied to the rest of the batch.
+            try:
+                async with db.begin_nested():
+                    applied = await reset_to_pending_if_unchanged(db, event)
+            except Exception as exc:
+                logger.warning(
+                    "reconciler.reset_cas_failed event_id=%s error=%s",
+                    event.id,
+                    type(exc).__name__,
+                )
                 continue
-            reset_to_pending(event)
-            reset += 1
-            logger.info("reconciler.dispatch_reset event_id=%s", event.id)
+            if applied:
+                reset += 1
+                logger.info("reconciler.dispatch_reset event_id=%s", event.id)
+        await db.commit()
     return reset
 
 
 async def _recover_expired(
     sessions: SessionFactory, redis: ArqRedis, queue_name: str, now: datetime
 ) -> int:
-    recovered = 0
     async with sessions() as db:
-        for run in await select_expired_index_runs(db, now=now, limit=BATCH_SIZE):
-            # Read before any savepoint: a rollback expires the ORM object.
-            run_id, audio_id, version = run.id, run.audio_id, run.transcript_version
+        candidates = await select_expired_index_runs(db, now=now, limit=BATCH_SIZE)
+        # Release the selection locks before any Redis call (J2.11).
+        await db.commit()
+
+    # Close first, commit, then enqueue. A job enqueued before the close commit would point
+    # at a run that can roll back to `running`; a Redis failure after the close is recovered
+    # by the lost-dispatch step instead.
+    closed: list[tuple[ExpiredRun, bool]] = []
+    async with sessions() as db:
+        for run in candidates:
+            # Keep the per-row isolation: one CAS failure must not revert the runs already
+            # closed in this batch.
             try:
                 async with db.begin_nested():
-                    mark_lease_expired(run, now=now)
-                    requeue = has_retry_budget(run.attempt_count)
-                    if requeue:
-                        await _reenqueue_index(redis, queue_name, run_id, audio_id, version,
-                                               run.attempt_count)
+                    applied = await mark_lease_expired_if_unchanged(db, run, now=now)
             except Exception as exc:
-                logger.warning("reconciler.requeue_failed run_id=%s error=%s",
-                               run_id, type(exc).__name__)
+                logger.warning(
+                    "reconciler.lease_cas_failed run_id=%s error=%s",
+                    run.id,
+                    type(exc).__name__,
+                )
                 continue
-            recovered += 1
-            logger.info("reconciler.lease_expired run_id=%s requeued=%s", run_id, requeue)
-    return recovered
+            if applied:
+                closed.append((run, has_retry_budget(run.attempt_count)))
+                logger.info("reconciler.lease_expired run_id=%s", run.id)
+        await db.commit()
+
+    for run, requeue in closed:
+        if not requeue:
+            continue
+        try:
+            await _reenqueue_index(
+                redis, queue_name, run.id, run.audio_id, run.transcript_version,
+                run.attempt_count,
+            )
+        except Exception as exc:
+            logger.warning("reconciler.requeue_failed run_id=%s error=%s",
+                           run.id, type(exc).__name__)
+    return len(closed)
 
 
 async def _reenqueue_index(
