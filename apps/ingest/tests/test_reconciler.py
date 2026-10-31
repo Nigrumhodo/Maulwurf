@@ -444,3 +444,78 @@ async def test_cleanup_exception_is_recorded_failed_and_halts_admission(
         )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+async def test_a_raising_record_cleanup_does_not_skip_the_stranded_sweep(
+    pool: asyncpg.Pool, tmpfs_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hoplite fix2 3: an evidence write that raises must not abort the pass."""
+    if cleanup.open_descriptors_under(tmpfs_dir)[1]:
+        pytest.skip("multi-UID /proc: cleanup is fail-closed; run the ingest suite as root")
+    attempt, owned, _audio_id = await _ready(pool)
+    assert (await _commit(pool, owned, _draft())).outcome is CommitOutcome.COMMITTED
+    workdir = cleanup.create_workdir(str(attempt.attempt_id), str(tmpfs_dir))
+    cleanup.write_private(workdir / "original", b"RIFF" + b"\x00" * 8)
+    await _expire(pool, attempt.attempt_id)
+
+    stranded = await _seed(pool)
+    await pool.execute(
+        "UPDATE ingestion_attempts SET status = 'transcribing' WHERE id = $1",
+        stranded.attempt_id,
+    )
+    await _expire(pool, stranded.attempt_id)
+
+    def destroy_boom(*_args: object, **_kwargs: object) -> cleanup.CleanupEvidence:
+        raise OSError("rmtree")
+
+    async def record_boom(*_args: object, **_kwargs: object) -> bool:
+        raise OSError("record")
+
+    monkeypatch.setattr(cleanup, "destroy_and_verify", destroy_boom)
+    monkeypatch.setattr(leases, "record_cleanup", record_boom)
+    try:
+        result = await sweep_once(pool, instance=_INSTANCE, tmp_dir=str(tmpfs_dir))
+
+        assert attempt.attempt_id in {item.attempt_id for item in result.committed}
+        assert stranded.attempt_id in result.stranded
+        assert (await _attempt_row(pool, attempt.attempt_id))["cleanup_status"] == "pending"
+        assert (
+            await _attempt_row(pool, stranded.attempt_id)
+        )["status"] == "requires_reupload"
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+async def test_a_raising_record_after_verified_evidence_also_continues(
+    pool: asyncpg.Pool, tmpfs_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hoplite fix2 3: the non-exception evidence write has the same protection."""
+    if cleanup.open_descriptors_under(tmpfs_dir)[1]:
+        pytest.skip("multi-UID /proc: cleanup is fail-closed; run the ingest suite as root")
+    attempt, owned, _audio_id = await _ready(pool)
+    assert (await _commit(pool, owned, _draft())).outcome is CommitOutcome.COMMITTED
+    workdir = cleanup.create_workdir(str(attempt.attempt_id), str(tmpfs_dir))
+    cleanup.write_private(workdir / "original", b"RIFF" + b"\x00" * 8)
+    await _expire(pool, attempt.attempt_id)
+
+    stranded = await _seed(pool)
+    await pool.execute(
+        "UPDATE ingestion_attempts SET status = 'transcribing' WHERE id = $1",
+        stranded.attempt_id,
+    )
+    await _expire(pool, stranded.attempt_id)
+
+    async def record_boom(*_args: object, **_kwargs: object) -> bool:
+        raise OSError("record")
+
+    monkeypatch.setattr(leases, "record_cleanup", record_boom)
+    try:
+        result = await sweep_once(pool, instance=_INSTANCE, tmp_dir=str(tmpfs_dir))
+
+        mine = [item for item in result.committed if item.attempt_id == attempt.attempt_id]
+        assert mine == [ReconcileResult(attempt.attempt_id, ReconcileAction.LOST)]
+        assert stranded.attempt_id in result.stranded
+        assert not workdir.exists()
+        assert (await _attempt_row(pool, attempt.attempt_id))["cleanup_status"] == "pending"
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
