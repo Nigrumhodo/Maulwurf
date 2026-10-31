@@ -3,8 +3,15 @@ J3.8 — local gates (MAULW-121)
 
 Date: 2026-10-31 (UTC)
 Host: isolated development sandbox, PostgreSQL 16.15 (pgvector 0.6.0) + Redis 7.0.15.
-Repo: /home/hatch/workspace/repos/mwt-121, branch task/MAULW-121 (from develop 06beb01).
+Repo: /home/hatch/workspace/repos/mwt-121, branch task/MAULW-121.
 No real Google call, credential or secret was used; `apps/web` is untouched.
+
+Develop sync
+------------
+The branch merged `origin/develop` at `70f2465` (PR #132, J3.6 ETag/task lifecycle) after
+the review fix. The only conflict was the `CLAIMS.md` status preamble; it was resolved by
+listing both J3.6/MAULW-119 and J3.8/MAULW-121. No application file conflicted, and
+`0008_s3_calendar_manual_sync` remains the head of the migration chain.
 
 Review fix1 scope
 -----------------
@@ -38,25 +45,26 @@ $ uv run ruff check .
 All checks passed!
 
 $ uv run mypy .
-Success: no issues found in 233 source files
+Success: no issues found in 237 source files
 
 $ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
     uv run pytest tests/unit -q
-1240 passed, 35 warnings in 8.93s
+1285 passed, 35 warnings in 10.26s
 
 $ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
     uv run pytest tests/integration/test_calendar_conflicts.py \
       tests/integration/test_calendar_read.py \
       tests/integration/test_calendar_connect.py \
       tests/integration/test_calendar_sync_job.py \
+      tests/integration/test_calendar_revision_patch.py \
       tests/integration/test_migrations.py \
       tests/integration/test_rls.py \
       tests/integration/test_isolation.py -q
-144 passed, 148 warnings in 26.80s
+154 passed, 148 warnings in 25.72s
 
 $ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
     uv run pytest tests/integration -q --tb=no
-32 failed, 484 passed, 509 warnings in 77.51s
+32 failed, 494 passed, 509 warnings in 85.82s
 
 New regression coverage
 -----------------------
@@ -96,7 +104,7 @@ that configuration. This is environment setup, not an application change.
 Docs
 ----
 $ python3 scripts/docs/check_refs.py
-OK: 785 documented repository paths exist or are expected.
+OK: 790 documented repository paths exist or are expected.
 
 Coverage of the ticket
 ----------------------
@@ -111,9 +119,7 @@ Coverage of the ticket
 
 Quality CI
 ----------
-Workflow run 41241934657 on head c3da947 (2026-10-31): all 17 checks green, including
-`python-unit (api)` **1240 passed**, `integration (api)` **515 passed** (the 26
-I-S3-JF-07 cases included), `python-unit (ingest)`, `integration (ingest)`,
-`python-static (api/ingest)`, `e2e-smoke`, `docs`, `web`, `build-images`, `secret-scan`,
-`license-report`, `compose-ingest-env` and `caddy-limits`. PR #133 stays open for review;
-it is not merged.
+Local gates after merging `develop@70f2465`: `ruff`/`mypy` clean (237 files), **1285 API
+unit**, **154 targeted integration** and **494 full integration** passed with the same 32
+pre-existing pgvector 0.6 failures. The Quality CI run for the merge head is recorded in
+the PR; PR #133 stays open for review and is not merged.

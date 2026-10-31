@@ -8,6 +8,7 @@ ARQ entry point, the PostgreSQL adapter and the outbox wiring are covered by I-S
 import re
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -17,6 +18,7 @@ from app.services.google_calendar import (
     GoogleCalendarConflict,
     GoogleCalendarForbidden,
     GoogleCalendarInvalidGrant,
+    GoogleCalendarPreconditionFailed,
     GoogleCalendarTransientError,
 )
 from app.services.task_event_sync import (
@@ -63,7 +65,8 @@ def _task(**overrides: Any) -> TaskSnapshot:
 class Store:
     def __init__(self, task: TaskSnapshot | None) -> None:
         self.task = task
-        self.synced: list[tuple[uuid.UUID, int, str]] = []
+        self.synced: list[tuple[uuid.UUID, int, str, str | None]] = []
+        self.etags: list[tuple[uuid.UUID, int, str | None]] = []
         self.failed: list[tuple[uuid.UUID, int]] = []
         self.blocked: list[tuple[uuid.UUID, int]] = []
         self.accept_updates = True
@@ -74,10 +77,32 @@ class Store:
         return self.task
 
     async def mark_synced(
-        self, task_id: uuid.UUID, version: int, event_id: str
+        self,
+        task_id: uuid.UUID,
+        version: int,
+        event_id: str,
+        etag: str | None,
     ) -> bool:
-        self.synced.append((task_id, version, event_id))
+        self.synced.append((task_id, version, event_id, etag))
         return self.accept_updates
+
+    async def mark_etag(
+        self,
+        task_id: uuid.UUID,
+        version: int,
+        etag: str | None,
+        *,
+        only_if_missing: bool = False,
+    ) -> bool:
+        self.etags.append((task_id, version, etag))
+        if self.task is None or self.task.task_id != task_id:
+            return False
+        if self.task.version != version:
+            return False
+        if only_if_missing and self.task.calendar_etag is not None:
+            return False
+        self.task = replace(self.task, calendar_etag=etag)
+        return True
 
     async def mark_failed(self, task_id: uuid.UUID, version: int) -> bool:
         self.failed.append((task_id, version))
@@ -101,14 +126,61 @@ class SequencedStore(Store):
         return await super().load(task_id)
 
 
+class RacingStore(Store):
+    """The version CAS loses because a newer row landed while the insert was in flight."""
+
+    def __init__(self, task: TaskSnapshot, newer: TaskSnapshot) -> None:
+        super().__init__(task)
+        self.newer = newer
+        self.raced = False
+
+    async def mark_synced(
+        self,
+        task_id: uuid.UUID,
+        version: int,
+        event_id: str,
+        etag: str | None,
+    ) -> bool:
+        self.synced.append((task_id, version, event_id, etag))
+        if self.raced:
+            return True
+        self.raced = True
+        self.task = self.newer
+        return False
+
+
 class Gateway:
     def __init__(self) -> None:
         self.events: dict[tuple[str, str], dict[str, Any]] = {}
         self.insert_calls: list[tuple[str, str, dict[str, Any]]] = []
         self.get_calls: list[tuple[str, str]] = []
-        self.update_calls: list[tuple[str, str, dict[str, Any]]] = []
+        self.update_calls: list[tuple[str, str, dict[str, Any], str | None]] = []
         self.errors: list[Exception] = []
+        self.update_errors: list[Exception] = []
         self.lose_next_response = False
+        self.lose_next_update_response = False
+        # J3.6: Google rejects a stale `If-Match` and the edit that won is visible afterwards.
+        self._etag_sequence = 0
+        self.reject_update_at: int | None = None
+        self.on_reject_body: dict[str, Any] | None = None
+
+    def _next_etag(self) -> str:
+        self._etag_sequence += 1
+        return f'"etag-{self._etag_sequence}"'
+
+    def _store(self, key: tuple[str, str], body: Mapping[str, Any]) -> dict[str, Any]:
+        stored = dict(body)
+        stored["etag"] = self._next_etag()
+        self.events[key] = stored
+        return dict(stored)
+
+    def apply_external_edit(
+        self, key: tuple[str, str], changes: Mapping[str, Any]
+    ) -> None:
+        stored = dict(self.events[key])
+        stored.update(changes)
+        stored["etag"] = self._next_etag()
+        self.events[key] = stored
 
     async def insert_event(
         self, calendar_id: str, event_id: str, body: Mapping[str, Any]
@@ -119,30 +191,103 @@ class Gateway:
         key = (calendar_id, event_id)
         if self.lose_next_response:
             self.lose_next_response = False
-            self.events[key] = dict(body)
+            self._store(key, {**body, "id": event_id})
             raise GoogleCalendarTransientError("lost response")
         if key in self.events:
             raise GoogleCalendarConflict("duplicate")
-        self.events[key] = dict(body)
-        return self.events[key]
+        return self._store(key, {**body, "id": event_id})
 
     async def get_event(
         self, calendar_id: str, event_id: str
     ) -> dict[str, Any] | None:
         self.get_calls.append((calendar_id, event_id))
-        return self.events.get((calendar_id, event_id))
+        event = self.events.get((calendar_id, event_id))
+        return dict(event) if event is not None else None
 
     async def update_event(
-        self, calendar_id: str, event_id: str, body: Mapping[str, Any]
+        self,
+        calendar_id: str,
+        event_id: str,
+        body: Mapping[str, Any],
+        *,
+        if_match: str | None = None,
     ) -> dict[str, Any]:
-        self.update_calls.append((calendar_id, event_id, dict(body)))
+        self.update_calls.append((calendar_id, event_id, dict(body), if_match))
         if self.errors:
             raise self.errors.pop(0)
+        if self.update_errors:
+            # The request never reached Google: no write is applied.
+            raise self.update_errors.pop(0)
         key = (calendar_id, event_id)
-        stored = dict(body)
-        stored["id"] = event_id
-        self.events[key] = stored
-        return stored
+        if self.lose_next_update_response:
+            # Google applied the write but the response was lost on the way back.
+            self.lose_next_update_response = False
+            self._store(key, {**body, "id": event_id})
+            raise GoogleCalendarTransientError("lost patch response")
+        if self.reject_update_at == len(self.update_calls):
+            self.reject_update_at = None
+            if self.on_reject_body is not None:
+                self.apply_external_edit(key, self.on_reject_body)
+                self.on_reject_body = None
+            raise GoogleCalendarPreconditionFailed("stale etag")
+        return self._store(key, {**body, "id": event_id})
+
+
+class EtaglessRepairGateway(Gateway):
+    """Google omits the ETag on a later read; the delivery must then skip the write."""
+
+    async def get_event(
+        self, calendar_id: str, event_id: str
+    ) -> dict[str, Any] | None:
+        event = await super().get_event(calendar_id, event_id)
+        if event is not None and self.update_calls:
+            event.pop("etag", None)
+        return event
+
+
+class TransientRepairGateway(Gateway):
+    """Fails one read or write that belongs to the newer-version repair, after the PATCH."""
+
+    def __init__(
+        self,
+        *,
+        lose_repair_get: bool = False,
+        fail_repair_update: bool = False,
+        lose_repair_response: bool = False,
+    ) -> None:
+        super().__init__()
+        self.lose_repair_get = lose_repair_get
+        self.fail_repair_update = fail_repair_update
+        self.lose_repair_response = lose_repair_response
+
+    async def get_event(
+        self, calendar_id: str, event_id: str
+    ) -> dict[str, Any] | None:
+        if self.lose_repair_get and self.update_calls:
+            self.lose_repair_get = False
+            raise GoogleCalendarTransientError("timeout")
+        return await super().get_event(calendar_id, event_id)
+
+    async def update_event(
+        self,
+        calendar_id: str,
+        event_id: str,
+        body: Mapping[str, Any],
+        *,
+        if_match: str | None = None,
+    ) -> dict[str, Any]:
+        if self.fail_repair_update and self.update_calls:
+            self.fail_repair_update = False
+            self.update_calls.append((calendar_id, event_id, dict(body), if_match))
+            raise GoogleCalendarTransientError("timeout")
+        if self.lose_repair_response and self.update_calls:
+            self.lose_repair_response = False
+            self.update_calls.append((calendar_id, event_id, dict(body), if_match))
+            self._store((calendar_id, event_id), {**body, "id": event_id})
+            raise GoogleCalendarTransientError("lost repair response")
+        return await super().update_event(
+            calendar_id, event_id, body, if_match=if_match
+        )
 
 
 class Sleeper:
@@ -280,8 +425,8 @@ async def test_double_delivery_creates_one_event_and_reconciles() -> None:
     assert len(gateway.insert_calls) == 2
     assert gateway.get_calls == [_key(task)]
     assert store.synced == [
-        (task.task_id, 1, deterministic_event_id(task.task_id)),
-        (task.task_id, 1, deterministic_event_id(task.task_id)),
+        (task.task_id, 1, deterministic_event_id(task.task_id), '"etag-1"'),
+        (task.task_id, 1, deterministic_event_id(task.task_id), '"etag-1"'),
     ]
 
 
@@ -328,21 +473,14 @@ async def test_conflict_with_matching_identity_and_body_does_not_rewrite() -> No
     assert outcome is SyncOutcome.RECONCILED
     assert gateway.events[_key(task)] == original
     assert gateway.update_calls == []
-    assert store.synced == [(task.task_id, 1, deterministic_event_id(task.task_id))]
+    assert store.synced == [
+        (task.task_id, 1, deterministic_event_id(task.task_id), None)
+    ]
 
 
 async def test_a_newer_version_repairs_the_body_left_by_the_older_one() -> None:
     """Regression: v1 inserts, v2 wins the CAS, v2's delivery must leave v2's body."""
     first = _task(version=1, title="Entregar informe")
-    store = Store(first)
-    store.accept_updates = False  # v2 already won the version CAS while v1 inserted
-    gateway = Gateway()
-
-    stale = await _engine(store, gateway).run(first.task_id, 1)
-    assert stale is SyncOutcome.STALE_VERSION
-    assert gateway.events[_key(first)]["summary"] == "Entregar informe"
-    assert gateway.update_calls == []
-
     start = datetime(2026, 11, 2, 16, 0, tzinfo=UTC)
     second = _task(
         task_id=first.task_id,
@@ -352,8 +490,16 @@ async def test_a_newer_version_repairs_the_body_left_by_the_older_one() -> None:
         event_start_at=start,
         event_end_at=start + timedelta(hours=2),
     )
-    store.task = second
-    store.accept_updates = True
+    store = RacingStore(first, second)  # v2 already won the version CAS on insert
+    gateway = Gateway()
+
+    stale = await _engine(store, gateway).run(first.task_id, 1)
+    assert stale is SyncOutcome.STALE_VERSION
+    assert gateway.events[_key(first)]["summary"] == "Entregar informe"
+    assert gateway.update_calls == []
+    # The insert's ETag is backfilled on v2 so its delivery does not see a false conflict.
+    assert store.task is not None
+    assert store.task.calendar_etag == '"etag-1"'
 
     repaired = await _engine(store, gateway).run(second.task_id, 2)
 
@@ -374,6 +520,7 @@ async def test_a_newer_version_repairs_the_body_left_by_the_older_one() -> None:
         second.task_id,
         2,
         deterministic_event_id(second.task_id),
+        '"etag-2"',
     )
 
 
@@ -407,7 +554,7 @@ async def test_a_stale_delivery_does_not_overwrite_an_event_settled_by_a_newer_v
 
 async def test_a_version_bump_during_the_patch_repairs_the_event_to_the_newest_body() -> None:
     """The edit can land between the pre-PATCH reload and the write; heal the event."""
-    first = _task(version=1, title="Entregar informe")
+    first = _task(version=1, title="Entregar informe", calendar_etag='"etag-v1"')
     start = datetime(2026, 11, 2, 16, 0, tzinfo=UTC)
     second = _task(
         task_id=first.task_id,
@@ -420,7 +567,7 @@ async def test_a_version_bump_during_the_patch_repairs_the_event_to_the_newest_b
     # Pre-PATCH reload still sees v1; the post-PATCH reload sees the winning v2.
     store = SequencedStore(second, [first, second])
     gateway = Gateway()
-    gateway.events[_key(first)] = _existing(first)
+    gateway.events[_key(first)] = {**_existing(first), "etag": '"etag-v1"'}
 
     outcome = await _engine(store, gateway).sync(first, expected_version=1)
 
@@ -437,10 +584,11 @@ async def test_a_version_bump_during_the_patch_repairs_the_event_to_the_newest_b
 
 async def test_a_changed_detail_is_patched_into_the_event() -> None:
     task = _task(detail="detalle nuevo")
-    store = Store(task)
+    store = Store(replace(task, calendar_etag='"etag-old"'))
     gateway = Gateway()
     gateway.events[_key(task)] = {
         "id": deterministic_event_id(task.task_id),
+        "etag": '"etag-old"',
         **build_event_body(_task(task_id=task.task_id, detail="detalle anterior")),
     }
 
@@ -557,7 +705,9 @@ async def test_stale_after_insert_does_not_claim_the_version() -> None:
     outcome = await _engine(store, Gateway()).run(task.task_id, 1)
 
     assert outcome is SyncOutcome.STALE_VERSION
-    assert store.synced == [(task.task_id, 1, deterministic_event_id(task.task_id))]
+    assert store.synced == [
+        (task.task_id, 1, deterministic_event_id(task.task_id), '"etag-1"')
+    ]
 
 
 async def test_missing_calendar_blocks_without_calling_google() -> None:
@@ -642,3 +792,344 @@ async def test_invalid_grant_marks_the_task_blocked() -> None:
     assert outcome is SyncOutcome.BLOCKED
     assert store.blocked == [(task.task_id, 1)]
     assert store.failed == []
+
+
+def _revision(first: TaskSnapshot) -> TaskSnapshot:
+    start = datetime(2026, 11, 2, 16, 0, tzinfo=UTC)
+    return _task(
+        task_id=first.task_id,
+        version=first.version + 1,
+        title="Entregar informe corregido",
+        detail="Informe revisado y firmado",
+        event_start_at=start,
+        event_end_at=start + timedelta(hours=2),
+    )
+
+
+async def test_confirming_a_revision_patches_with_the_events_etag() -> None:
+    """J3.6: the confirmed revision updates the linked event under `If-Match`."""
+    first = _task()
+    revision = _revision(first)
+    store = Store(replace(revision, calendar_etag='"etag-v1"'))
+    gateway = Gateway()
+    key = _key(first)
+    gateway.events[key] = {**_existing(first), "etag": '"etag-v1"'}
+
+    outcome = await _engine(store, gateway).sync(revision, expected_version=2)
+
+    assert outcome is SyncOutcome.RECONCILED
+    assert gateway.update_calls[0][3] == '"etag-v1"'
+    assert gateway.events[key]["summary"] == "Entregar informe corregido"
+    assert store.synced == [
+        (revision.task_id, 2, deterministic_event_id(first.task_id), '"etag-1"')
+    ]
+
+
+async def test_an_external_edit_is_not_overwritten_by_the_revision_patch() -> None:
+    """J3.6: a `412` means someone edited the event; the task is flagged, never merged."""
+    first = _task()
+    revision = _revision(first)
+    store = Store(replace(revision, calendar_etag='"etag-v1"'))
+    gateway = Gateway()
+    key = _key(first)
+    gateway.events[key] = {**_existing(first), "etag": '"etag-v1"'}
+    gateway.reject_update_at = 1
+    gateway.on_reject_body = {"summary": "Editado directamente en Google"}
+
+    outcome = await _engine(store, gateway).sync(revision, expected_version=2)
+
+    assert outcome is SyncOutcome.EXTERNAL_CONFLICT
+    assert store.failed == [(revision.task_id, 2)]
+    assert store.synced == []
+    assert len(gateway.update_calls) == 1
+    assert gateway.events[key]["summary"] == "Editado directamente en Google"
+
+
+async def test_an_external_edit_before_the_read_is_not_overwritten() -> None:
+    """J3.6 fix2: an edit made before the reconcile GET is a conflict, not a PATCH."""
+    first = _task()
+    revision = _revision(first)
+    store = Store(replace(revision, calendar_etag='"etag-v1"'))
+    gateway = Gateway()
+    key = _key(first)
+    gateway.events[key] = {**_existing(first), "etag": '"etag-v1"'}
+    # The user edited the event in Google after our last write and before this delivery.
+    gateway.apply_external_edit(key, {"summary": "Editado directamente en Google"})
+    external_etag = gateway.events[key]["etag"]
+
+    outcome = await _engine(store, gateway).sync(revision, expected_version=2)
+
+    assert outcome is SyncOutcome.EXTERNAL_CONFLICT
+    assert gateway.update_calls == []  # no PATCH at all
+    assert gateway.events[key]["summary"] == "Editado directamente en Google"
+    assert gateway.events[key]["etag"] == external_etag
+    assert store.failed == [(revision.task_id, 2)]
+    assert store.synced == []
+
+
+async def test_a_row_without_a_baseline_fails_closed() -> None:
+    """Fix2: `None` is not "unchanged"; a legacy row needs adoption or explicit review."""
+    first = _task()
+    revision = _revision(first)
+    store = Store(revision)  # no calendar_etag
+    gateway = Gateway()
+    key = _key(first)
+    gateway.events[key] = {**_existing(first), "etag": '"etag-v1"'}
+
+    outcome = await _engine(store, gateway).sync(revision, expected_version=2)
+
+    assert outcome is SyncOutcome.EXTERNAL_CONFLICT
+    assert gateway.update_calls == []
+    assert store.failed == [(revision.task_id, 2)]
+    assert store.synced == []
+
+
+async def test_a_row_without_a_baseline_adopts_a_matching_event() -> None:
+    """The backfill path: a read that needs no write records the current ETag."""
+    first = _task()
+    store = Store(first)  # no calendar_etag
+    gateway = Gateway()
+    key = _key(first)
+    gateway.events[key] = {
+        "id": deterministic_event_id(first.task_id),
+        "etag": '"etag-existing"',
+        **build_event_body(first),
+    }
+
+    outcome = await _engine(store, gateway).run(first.task_id, 1)
+
+    assert outcome is SyncOutcome.RECONCILED
+    assert gateway.update_calls == []
+    assert store.synced == [
+        (first.task_id, 1, deterministic_event_id(first.task_id), '"etag-existing"')
+    ]
+
+
+async def test_a_precondition_failure_with_matching_content_is_reconciled() -> None:
+    """The same body was written by another delivery: adopting it overwrites nothing."""
+    first = _task()
+    revision = _revision(first)
+    store = Store(replace(revision, calendar_etag='"etag-v1"'))
+    gateway = Gateway()
+    key = _key(first)
+    gateway.events[key] = {**_existing(first), "etag": '"etag-v1"'}
+    gateway.reject_update_at = 1
+    gateway.on_reject_body = build_event_body(revision)
+
+    outcome = await _engine(store, gateway).sync(revision, expected_version=2)
+
+    assert outcome is SyncOutcome.RECONCILED
+    assert store.failed == []
+    assert store.synced == [
+        (revision.task_id, 2, deterministic_event_id(first.task_id), '"etag-1"')
+    ]
+    assert len(gateway.update_calls) == 1
+
+
+async def test_the_repair_patch_is_conditional_on_the_fresh_etag() -> None:
+    """Both the reconcile write and the repair carry the ETag they just read."""
+    first = _task(version=1, title="Entregar informe", calendar_etag='"etag-v1"')
+    second = _revision(first)
+    store = SequencedStore(second, [first, second])
+    gateway = Gateway()
+    key = _key(first)
+    gateway.events[key] = {**_existing(first), "etag": '"etag-v1"'}
+
+    outcome = await _engine(store, gateway).sync(first, expected_version=1)
+
+    assert outcome is SyncOutcome.STALE_VERSION
+    assert len(gateway.update_calls) == 2
+    assert gateway.update_calls[0][3] == '"etag-v1"'
+    assert all(call[3] is not None for call in gateway.update_calls)
+    assert gateway.events[key]["summary"] == "Entregar informe corregido"
+
+
+@pytest.mark.parametrize("etag", [None, "", "   "])
+async def test_a_reconcile_without_an_etag_never_patches(etag: str | None) -> None:
+    """Fail closed: an absent or blank ETag means no precondition, so no write is sent."""
+    task = _task()
+    store = Store(replace(task, calendar_etag='"etag-1"'))
+    gateway = Gateway()
+    original = {**_existing(task), "etag": etag}
+    gateway.events[_key(task)] = original
+
+    outcome = await _engine(store, gateway).run(task.task_id, 1)
+
+    assert outcome is SyncOutcome.EXTERNAL_CONFLICT
+    assert gateway.update_calls == []
+    assert gateway.events[_key(task)] == original
+    assert store.failed == [(task.task_id, 1)]
+    assert store.synced == []
+
+
+async def test_a_repair_without_an_etag_skips_the_write(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The post-PATCH repair also fails closed when the fresh read has no ETag."""
+    first = _task(version=1, title="Entregar informe", calendar_etag='"etag-v1"')
+    second = _revision(first)
+    store = SequencedStore(second, [first, second])
+    gateway = EtaglessRepairGateway()
+    key = _key(first)
+    gateway.events[key] = {**_existing(first), "etag": '"etag-v1"'}
+
+    outcome = await _engine(store, gateway).sync(first, expected_version=1)
+
+    assert outcome is SyncOutcome.STALE_VERSION
+    assert len(gateway.update_calls) == 1  # only the reconcile PATCH, no repair write
+    assert gateway.events[key]["summary"] == "Entregar informe"
+    assert "calendar_sync.repair_conflict" in caplog.text
+
+
+async def test_a_repair_that_hits_a_precondition_does_not_overwrite_either() -> None:
+    first = _task(version=1, title="Entregar informe", calendar_etag='"etag-v1"')
+    second = _revision(first)
+    store = SequencedStore(second, [first, second])
+    gateway = Gateway()
+    key = _key(first)
+    gateway.events[key] = {**_existing(first), "etag": '"etag-v1"'}
+    gateway.reject_update_at = 2
+    gateway.on_reject_body = {"summary": "Editado durante la reparación"}
+
+    outcome = await _engine(store, gateway).sync(first, expected_version=1)
+
+    assert outcome is SyncOutcome.STALE_VERSION
+    assert gateway.events[key]["summary"] == "Editado durante la reparación"
+    assert len(gateway.update_calls) == 2
+
+
+async def test_a_lost_patch_response_is_adopted_instead_of_flagged() -> None:
+    """Fix3: the conditional PATCH landed but its response was lost; adopt the write."""
+    first = _task()
+    revision = _revision(first)
+    store = Store(replace(revision, calendar_etag='"etag-1"'))
+    gateway = Gateway()
+    key = _key(first)
+    gateway.events[key] = {**_existing(first)}
+    gateway.apply_external_edit(key, {})  # the event's current ETag is '"etag-1"'
+    gateway.lose_next_update_response = True
+
+    outcome = await _engine(store, gateway).sync(revision, expected_version=2)
+
+    assert outcome is SyncOutcome.RECONCILED
+    assert store.failed == []
+    assert len(gateway.update_calls) == 1
+    assert store.synced == [
+        (revision.task_id, 2, deterministic_event_id(first.task_id), '"etag-2"')
+    ]
+    assert gateway.events[key]["summary"] == "Entregar informe corregido"
+
+    # A later revision builds on the persisted ETag instead of reporting a false conflict.
+    start = datetime(2026, 11, 3, 14, 0, tzinfo=UTC)
+    later = _task(
+        task_id=first.task_id,
+        version=3,
+        title="Entregar informe final",
+        event_start_at=start,
+        event_end_at=start + timedelta(hours=1),
+    )
+    follow = Store(replace(later, calendar_etag='"etag-2"'))
+
+    assert (
+        await _engine(follow, gateway).sync(later, expected_version=3)
+        is SyncOutcome.RECONCILED
+    )
+
+
+async def test_a_lost_patch_response_that_did_not_land_fails_closed() -> None:
+    """Fix3: a transient PATCH that never reached Google is never retried blindly."""
+    first = _task()
+    revision = _revision(first)
+    store = Store(replace(revision, calendar_etag='"etag-v1"'))
+    gateway = Gateway()
+    key = _key(first)
+    original = {**_existing(first), "etag": '"etag-v1"'}
+    gateway.events[key] = original
+    gateway.update_errors = [GoogleCalendarTransientError("timeout")]
+
+    outcome = await _engine(store, gateway).sync(revision, expected_version=2)
+
+    assert outcome is SyncOutcome.EXTERNAL_CONFLICT
+    assert gateway.events[key] == original
+    assert len(gateway.update_calls) == 1
+    assert store.synced == []
+    assert store.failed == [(revision.task_id, 2)]
+
+
+async def test_a_transient_repair_read_keeps_the_patch_etag() -> None:
+    """Fix3: a failed repair GET must not drop the ETag of the PATCH that already landed."""
+    first = _task(version=1, title="Entregar informe", calendar_etag='"etag-v1"')
+    second = _revision(first)
+    store = SequencedStore(second, [first, second])
+    gateway = TransientRepairGateway(lose_repair_get=True)
+    key = _key(first)
+    gateway.events[key] = {**_existing(first), "etag": '"etag-v1"'}
+
+    outcome = await _engine(store, gateway).sync(first, expected_version=1)
+
+    assert outcome is SyncOutcome.STALE_VERSION
+    assert store.synced == []
+    assert store.etags == [(first.task_id, 2, '"etag-1"')]
+    assert gateway.events[key]["summary"] == "Entregar informe"
+
+    # The newer version's delivery resumes from that baseline: no external conflict.
+    follow = await _engine(store, gateway).sync(second, expected_version=2)
+
+    assert follow is SyncOutcome.RECONCILED
+    assert gateway.events[key]["summary"] == "Entregar informe corregido"
+
+
+async def test_a_transient_repair_write_keeps_the_patch_etag() -> None:
+    """Fix3: a failed repair PATCH must not drop the ETag of the PATCH that already landed."""
+    first = _task(version=1, title="Entregar informe", calendar_etag='"etag-v1"')
+    second = _revision(first)
+    store = SequencedStore(second, [first, second])
+    gateway = TransientRepairGateway(fail_repair_update=True)
+    key = _key(first)
+    gateway.events[key] = {**_existing(first), "etag": '"etag-v1"'}
+
+    outcome = await _engine(store, gateway).sync(first, expected_version=1)
+
+    assert outcome is SyncOutcome.STALE_VERSION
+    assert store.etags == [(first.task_id, 2, '"etag-1"')]
+    assert gateway.events[key]["summary"] == "Entregar informe"
+    assert len(gateway.update_calls) == 2
+
+    follow = await _engine(store, gateway).sync(second, expected_version=2)
+
+    assert follow is SyncOutcome.RECONCILED
+    assert gateway.events[key]["summary"] == "Entregar informe corregido"
+
+
+async def test_a_lost_repair_response_records_the_repaired_etag() -> None:
+    """Fix3: if the repair write landed, its own ETag becomes the next baseline."""
+    first = _task(version=1, title="Entregar informe", calendar_etag='"etag-v1"')
+    second = _revision(first)
+    store = SequencedStore(second, [first, second])
+    gateway = TransientRepairGateway(lose_repair_response=True)
+    key = _key(first)
+    gateway.events[key] = {**_existing(first), "etag": '"etag-v1"'}
+
+    outcome = await _engine(store, gateway).sync(first, expected_version=1)
+
+    assert outcome is SyncOutcome.STALE_VERSION
+    assert store.etags == [
+        (first.task_id, 2, '"etag-1"'),
+        (first.task_id, 2, '"etag-2"'),
+    ]
+    assert gateway.events[key]["summary"] == "Entregar informe corregido"
+
+    start = datetime(2026, 11, 3, 14, 0, tzinfo=UTC)
+    later = _task(
+        task_id=first.task_id,
+        version=3,
+        title="Entregar informe final",
+        event_start_at=start,
+        event_end_at=start + timedelta(hours=1),
+    )
+    follow = Store(replace(later, calendar_etag='"etag-2"'))
+
+    assert (
+        await _engine(follow, gateway).sync(later, expected_version=3)
+        is SyncOutcome.RECONCILED
+    )

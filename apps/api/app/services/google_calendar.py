@@ -18,6 +18,9 @@ Design decisions:
   (token endpoint or Calendar body) invokes `on_invalid_grant` once and is never retried.
   A generic 401/403 is not treated as revocation. `disconnect_google_credential` is the
   ready-made callback that flips `google_credentials.status` to `disconnected`.
+- **Conditional writes (J3.6).** Callers may pass `If-Match` headers; a 412 (stale ETag) is
+  a terminal `GoogleCalendarPreconditionFailed`, because retrying would overwrite the edit
+  that won. J3.6's sync engine turns it into an external conflict for explicit review.
 - **No secrets or payloads in logs.** Only method, status, attempt and delay are logged.
 """
 
@@ -102,6 +105,12 @@ class GoogleCalendarConflict(GoogleCalendarError):
 
 class GoogleCalendarNotFound(GoogleCalendarError):
     code = "google_calendar_not_found"
+
+
+class GoogleCalendarPreconditionFailed(GoogleCalendarError):
+    """The event changed since it was read: a conditional write must not overwrite it."""
+
+    code = "google_calendar_precondition_failed"
 
 
 class GoogleCalendarInvalidRequest(GoogleCalendarError):
@@ -218,6 +227,19 @@ async def disconnect_google_credential(db: AsyncSession, user_id: uuid.UUID) -> 
     return True
 
 
+_RESERVED_HEADER_NAMES = frozenset({"authorization", "accept"})
+
+
+def _reject_reserved_headers(headers: Mapping[str, str] | None) -> None:
+    # HTTP header names are case-insensitive: a lowercase "authorization" would be sent next
+    # to the bearer token instead of replacing it, so the check must ignore case.
+    for name in headers or {}:
+        if name.lower() in _RESERVED_HEADER_NAMES:
+            raise ValueError(
+                f"caller header {name!r} is managed by GoogleCalendarService"
+            )
+
+
 class GoogleCalendarService:
     """Minimal blocking Calendar client consumed by J3.3–J3.7."""
 
@@ -253,17 +275,23 @@ class GoogleCalendarService:
         *,
         params: Mapping[str, Any] | None = None,
         json: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
         retry_transient: bool = True,
     ) -> dict[str, Any]:
         """Run one Calendar request in a worker thread and return its JSON object.
+
+        `headers` adds conditional-write headers (``If-Match`` for J3.6). The bearer token
+        and `Accept` are applied by the service; a caller header with either name (in any
+        case) is rejected instead of being sent alongside the real values.
 
         `retry_transient=False` makes the call single-attempt. It is required for
         non-idempotent writes such as `POST /calendars`: a retry after a lost response can
         create a second remote object, so only the caller may reconcile and decide.
         """
+        _reject_reserved_headers(headers)
         try:
             return await asyncio.to_thread(
-                self._request, method, path, params, json, retry_transient
+                self._request, method, path, params, json, headers, retry_transient
             )
         except GoogleCalendarInvalidGrant:
             if self._on_invalid_grant is not None:
@@ -282,13 +310,16 @@ class GoogleCalendarService:
         path: str,
         params: Mapping[str, Any] | None,
         json_body: Mapping[str, Any] | None,
+        extra_headers: Mapping[str, str] | None,
         retry_transient: bool = True,
     ) -> dict[str, Any]:
         url = f"{self._base_url}/{path.lstrip('/')}"
         headers = {
+            **(extra_headers or {}),
             "Authorization": f"Bearer {self._access_token}",
             "Accept": "application/json",
         }
+
         attempt = 0
         max_attempts = self._max_attempts if retry_transient else 1
         with httpx.Client(transport=self._transport, timeout=self._timeout) as client:
@@ -422,6 +453,12 @@ class GoogleCalendarService:
         if status == httpx.codes.UNAUTHORIZED:
             return GoogleCalendarUnauthorized(
                 "Google Calendar rechazó las credenciales.", details=details
+            )
+        if status == httpx.codes.PRECONDITION_FAILED:
+            # `If-Match` did not match: the event was edited after we read it. Fail closed;
+            # the engine treats it as an external conflict instead of overwriting it.
+            return GoogleCalendarPreconditionFailed(
+                "El evento cambió en Google Calendar después de leerlo.", details=details
             )
         if status == httpx.codes.FORBIDDEN:
             return GoogleCalendarForbidden(
