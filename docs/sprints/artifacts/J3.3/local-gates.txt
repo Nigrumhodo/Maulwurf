@@ -12,14 +12,14 @@ $ cd apps/api && uv run ruff check .
 All checks passed!
 
 $ cd apps/api && uv run mypy .
-Success: no issues found in 205 source files
+Success: no issues found in 212 source files
 ```
 
 ## Unit suite
 
 ```text
 $ cd apps/api && uv run pytest tests/unit -q
-1010 passed, 35 warnings in 9.30s
+1123 passed, 35 warnings in 17.65s
 ```
 
 The two `httpx` failures that the sandbox produces when `NO_PROXY` contains bracketed IPv6
@@ -31,8 +31,8 @@ environmental: both pass with the proxy variables cleared, and J3.2 recorded the
 ## Integration suite
 
 ```text
-$ cd apps/api && uv run pytest tests/integration -q
-32 failed, 417 passed, 455 warnings in 75.79s
+$ cd apps/api && uv run pytest tests/integration -q   # after merging origin/develop
+32 failed, 417 passed, 1124 deselected, 458 warnings in 94.09s
 ```
 
 The 32 failures are exactly the same set that a pristine `develop` checkout (`44b576a`)
@@ -47,12 +47,12 @@ Everything else passes, including `test_migrations.py`, `test_rls.py`, `test_iso
 
 ```text
 $ cd apps/ingest && uv run ruff check .        # All checks passed
-$ cd apps/ingest && uv run mypy .              # Success: no issues found in 76 source files
+$ cd apps/ingest && uv run mypy .              # Success: no issues found in 77 source files
 $ cd apps/ingest && uv run pytest -m "not integration and not provider and not load" -q
-180 passed, 71 deselected
+198 passed, 71 deselected
 
 $ python3 scripts/docs/check_refs.py
-OK: 754 documented repository paths exist or are expected.
+OK: 764 documented repository paths exist or are expected.
 ```
 
 ## Not executed
