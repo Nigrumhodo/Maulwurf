@@ -17,6 +17,7 @@ from app.services.google_calendar import (
     GoogleCalendarConflict,
     GoogleCalendarForbidden,
     GoogleCalendarInvalidGrant,
+    GoogleCalendarPreconditionFailed,
     GoogleCalendarTransientError,
 )
 from app.services.task_event_sync import (
@@ -106,9 +107,31 @@ class Gateway:
         self.events: dict[tuple[str, str], dict[str, Any]] = {}
         self.insert_calls: list[tuple[str, str, dict[str, Any]]] = []
         self.get_calls: list[tuple[str, str]] = []
-        self.update_calls: list[tuple[str, str, dict[str, Any]]] = []
+        self.update_calls: list[tuple[str, str, dict[str, Any], str | None]] = []
         self.errors: list[Exception] = []
         self.lose_next_response = False
+        # J3.6: Google rejects a stale `If-Match` and the edit that won is visible afterwards.
+        self._etag_sequence = 0
+        self.reject_update_at: int | None = None
+        self.on_reject_body: dict[str, Any] | None = None
+
+    def _next_etag(self) -> str:
+        self._etag_sequence += 1
+        return f'"etag-{self._etag_sequence}"'
+
+    def _store(self, key: tuple[str, str], body: Mapping[str, Any]) -> dict[str, Any]:
+        stored = dict(body)
+        stored["etag"] = self._next_etag()
+        self.events[key] = stored
+        return dict(stored)
+
+    def apply_external_edit(
+        self, key: tuple[str, str], changes: Mapping[str, Any]
+    ) -> None:
+        stored = dict(self.events[key])
+        stored.update(changes)
+        stored["etag"] = self._next_etag()
+        self.events[key] = stored
 
     async def insert_event(
         self, calendar_id: str, event_id: str, body: Mapping[str, Any]
@@ -119,30 +142,39 @@ class Gateway:
         key = (calendar_id, event_id)
         if self.lose_next_response:
             self.lose_next_response = False
-            self.events[key] = dict(body)
+            self._store(key, {**body, "id": event_id})
             raise GoogleCalendarTransientError("lost response")
         if key in self.events:
             raise GoogleCalendarConflict("duplicate")
-        self.events[key] = dict(body)
-        return self.events[key]
+        return self._store(key, {**body, "id": event_id})
 
     async def get_event(
         self, calendar_id: str, event_id: str
     ) -> dict[str, Any] | None:
         self.get_calls.append((calendar_id, event_id))
-        return self.events.get((calendar_id, event_id))
+        event = self.events.get((calendar_id, event_id))
+        return dict(event) if event is not None else None
 
     async def update_event(
-        self, calendar_id: str, event_id: str, body: Mapping[str, Any]
+        self,
+        calendar_id: str,
+        event_id: str,
+        body: Mapping[str, Any],
+        *,
+        if_match: str | None = None,
     ) -> dict[str, Any]:
-        self.update_calls.append((calendar_id, event_id, dict(body)))
+        self.update_calls.append((calendar_id, event_id, dict(body), if_match))
         if self.errors:
             raise self.errors.pop(0)
         key = (calendar_id, event_id)
-        stored = dict(body)
-        stored["id"] = event_id
-        self.events[key] = stored
-        return stored
+        if self.reject_update_at == len(self.update_calls):
+            self.reject_update_at = None
+            if self.on_reject_body is not None:
+                self.apply_external_edit(key, self.on_reject_body)
+                self.on_reject_body = None
+            raise GoogleCalendarPreconditionFailed("stale etag")
+        return self._store(key, {**body, "id": event_id})
+
 
 
 class Sleeper:
@@ -642,3 +674,107 @@ async def test_invalid_grant_marks_the_task_blocked() -> None:
     assert outcome is SyncOutcome.BLOCKED
     assert store.blocked == [(task.task_id, 1)]
     assert store.failed == []
+
+
+def _revision(first: TaskSnapshot) -> TaskSnapshot:
+    start = datetime(2026, 11, 2, 16, 0, tzinfo=UTC)
+    return _task(
+        task_id=first.task_id,
+        version=first.version + 1,
+        title="Entregar informe corregido",
+        detail="Informe revisado y firmado",
+        event_start_at=start,
+        event_end_at=start + timedelta(hours=2),
+    )
+
+
+async def test_confirming_a_revision_patches_with_the_events_etag() -> None:
+    """J3.6: the confirmed revision updates the linked event under `If-Match`."""
+    first = _task()
+    revision = _revision(first)
+    store = Store(revision)
+    gateway = Gateway()
+    key = _key(first)
+    gateway.events[key] = {**_existing(first), "etag": '"etag-v1"'}
+
+    outcome = await _engine(store, gateway).sync(revision, expected_version=2)
+
+    assert outcome is SyncOutcome.RECONCILED
+    assert gateway.update_calls[0][3] == '"etag-v1"'
+    assert gateway.events[key]["summary"] == "Entregar informe corregido"
+    assert store.synced == [(revision.task_id, 2, deterministic_event_id(first.task_id))]
+
+
+async def test_an_external_edit_is_not_overwritten_by_the_revision_patch() -> None:
+    """J3.6: a `412` means someone edited the event; the task is flagged, never merged."""
+    first = _task()
+    revision = _revision(first)
+    store = Store(revision)
+    gateway = Gateway()
+    key = _key(first)
+    gateway.events[key] = {**_existing(first), "etag": '"etag-v1"'}
+    gateway.reject_update_at = 1
+    gateway.on_reject_body = {"summary": "Editado directamente en Google"}
+
+    outcome = await _engine(store, gateway).sync(revision, expected_version=2)
+
+    assert outcome is SyncOutcome.EXTERNAL_CONFLICT
+    assert store.failed == [(revision.task_id, 2)]
+    assert store.synced == []
+    assert len(gateway.update_calls) == 1
+    assert gateway.events[key]["summary"] == "Editado directamente en Google"
+
+
+async def test_a_precondition_failure_with_matching_content_is_reconciled() -> None:
+    """The same body was written by another delivery: adopting it overwrites nothing."""
+    first = _task()
+    revision = _revision(first)
+    store = Store(revision)
+    gateway = Gateway()
+    key = _key(first)
+    gateway.events[key] = {**_existing(first), "etag": '"etag-v1"'}
+    gateway.reject_update_at = 1
+    gateway.on_reject_body = build_event_body(revision)
+
+    outcome = await _engine(store, gateway).sync(revision, expected_version=2)
+
+    assert outcome is SyncOutcome.RECONCILED
+    assert store.failed == []
+    assert store.synced == [(revision.task_id, 2, deterministic_event_id(first.task_id))]
+    assert len(gateway.update_calls) == 1
+
+
+async def test_the_repair_patch_is_conditional_on_the_fresh_etag() -> None:
+    """The post-PATCH repair re-reads the event instead of writing an unconditional body."""
+    first = _task(version=1, title="Entregar informe")
+    second = _revision(first)
+    store = SequencedStore(second, [first, second])
+    gateway = Gateway()
+    key = _key(first)
+    gateway.events[key] = _existing(first)
+
+    outcome = await _engine(store, gateway).sync(first, expected_version=1)
+
+    assert outcome is SyncOutcome.STALE_VERSION
+    assert len(gateway.update_calls) == 2
+    assert gateway.update_calls[0][3] is None
+    assert gateway.update_calls[1][3] is not None
+    assert gateway.events[key]["summary"] == "Entregar informe corregido"
+
+
+async def test_a_repair_that_hits_a_precondition_does_not_overwrite_either() -> None:
+    first = _task(version=1, title="Entregar informe")
+    second = _revision(first)
+    store = SequencedStore(second, [first, second])
+    gateway = Gateway()
+    key = _key(first)
+    gateway.events[key] = _existing(first)
+    gateway.reject_update_at = 2
+    gateway.on_reject_body = {"summary": "Editado durante la reparación"}
+
+    outcome = await _engine(store, gateway).sync(first, expected_version=1)
+
+    assert outcome is SyncOutcome.STALE_VERSION
+    assert gateway.events[key]["summary"] == "Editado durante la reparación"
+    assert len(gateway.update_calls) == 2
+

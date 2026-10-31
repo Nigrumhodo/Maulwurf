@@ -1,8 +1,9 @@
-"""Google Calendar adapter for the idempotent task-event sync (J3.4).
+"""Google Calendar adapter for the idempotent task-event sync (J3.4, J3.6).
 
 Wraps `GoogleCalendarService` so the orchestrator sees "event or None" instead of the
 service's typed `NotFound` error, and never lists or deletes events. A 401 triggers one
-token refresh through the injected callback before the operation is retried.
+token refresh through the injected callback before the operation is retried. PATCHes can
+carry `If-Match` (J3.6), so an event edited in Google is never overwritten by a stale write.
 """
 
 from collections.abc import Awaitable, Callable, Mapping
@@ -55,17 +56,25 @@ class GoogleCalendarGateway:
             return None
 
     async def update_event(
-        self, calendar_id: str, event_id: str, body: Mapping[str, Any]
+        self,
+        calendar_id: str,
+        event_id: str,
+        body: Mapping[str, Any],
+        *,
+        if_match: str | None = None,
     ) -> Mapping[str, Any]:
+        """Patch an event; with `if_match` Google answers 412 if it changed since the read."""
         payload = dict(body)
         if "description" not in payload:
             # PATCH keeps what is not sent; an empty string clears a removed detail.
             payload["description"] = ""
+        headers = {"If-Match": if_match} if if_match else None
         return await self._request(
             "PATCH",
             f"/calendars/{_calendar(calendar_id)}/events/{quote(event_id, safe='')}",
             params={"sendUpdates": "none"},
             json=payload,
+            headers=headers,
         )
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:

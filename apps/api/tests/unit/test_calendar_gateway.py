@@ -12,6 +12,7 @@ import pytest
 
 from app.services.calendar_gateway import GoogleCalendarGateway
 from app.services.google_calendar import (
+    GoogleCalendarPreconditionFailed,
     GoogleCalendarService,
     GoogleCalendarUnauthorized,
 )
@@ -78,6 +79,39 @@ async def test_update_event_clears_a_detail_the_new_version_removed(
 
     # PATCH keeps the fields it does not receive, so the adapter must send an empty string.
     assert json.loads(calendar.requests[0].content)["description"] == ""
+
+
+async def test_update_event_sends_the_expected_etag(calendar: Calendar) -> None:
+    """J3.6: the patch is conditional, so a concurrent external edit wins over ours."""
+    await _gateway(calendar).update_event(
+        CALENDAR, EVENT_ID, BODY, if_match='"etag-1"'
+    )
+
+    assert calendar.requests[0].headers["if-match"] == '"etag-1"'
+
+
+async def test_update_event_without_an_etag_sends_no_precondition(
+    calendar: Calendar,
+) -> None:
+    await _gateway(calendar).update_event(CALENDAR, EVENT_ID, BODY)
+
+    assert calendar.requests[0].headers.get("if-match") is None
+
+
+async def test_a_precondition_failure_is_typed_and_not_retried() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(412, json={"error": {"code": 412}})
+
+    with pytest.raises(GoogleCalendarPreconditionFailed):
+        await _gateway(handler).update_event(
+            CALENDAR, EVENT_ID, BODY, if_match='"stale"'
+        )
+
+    assert len(requests) == 1
+    assert requests[0].headers["if-match"] == '"stale"'
 
 
 async def test_a_401_refreshes_the_token_once_and_retries(calendar: Calendar) -> None:

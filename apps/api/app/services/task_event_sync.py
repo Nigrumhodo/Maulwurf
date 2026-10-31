@@ -18,6 +18,13 @@ response is lost, or a retry follows a timeout. The protocol is:
 - **Obsolete versions are discarded.** A job whose ``task_version`` is no longer the stored
   version makes no Google call, and the status update is a compare-and-set on the same
   version, so a concurrent edit can never be overwritten by an old delivery.
+- **ETag-conditional edits (J3.6).** A reconcile PATCH sends ``If-Match`` with the ETag of
+  the event it just read. A 412 means the event changed meanwhile: the engine never merges,
+  keeps the Google event untouched and returns ``EXTERNAL_CONFLICT`` after marking the task
+  ``failed``, which D3.7 surfaces as "needs review/explicit retry". The only exception is
+  an event that already holds the exact body this delivery wanted (another delivery wrote
+  the same content), which is adopted without a second write. A confirmed revision reaches
+  this path through the same deterministic event ID (insert → 409 → conditional PATCH).
 - **Blocked vs failed.** A missing calendar, a disconnected Google integration or an
   ``invalid_grant`` leaves the task ``blocked`` (J3.3 reconnects it); other terminal failures
   leave it ``failed``. Transient exhaustion raises so ARQ schedules a bounded retry.
@@ -40,6 +47,7 @@ from app.services.google_calendar import (
     GoogleCalendarConflict,
     GoogleCalendarError,
     GoogleCalendarInvalidGrant,
+    GoogleCalendarPreconditionFailed,
     GoogleCalendarTransientError,
     GoogleCalendarUnauthorized,
 )
@@ -74,6 +82,7 @@ class SyncOutcome(StrEnum):
     TASK_NOT_FOUND = "task_not_found"
     BLOCKED = "blocked"
     FAILED = "failed"
+    EXTERNAL_CONFLICT = "external_conflict"
 
 
 @dataclass(frozen=True)
@@ -123,7 +132,12 @@ class CalendarGateway(Protocol):
     ) -> Mapping[str, Any] | None: ...
 
     async def update_event(
-        self, calendar_id: str, event_id: str, body: Mapping[str, Any]
+        self,
+        calendar_id: str,
+        event_id: str,
+        body: Mapping[str, Any],
+        *,
+        if_match: str | None = None,
     ) -> Mapping[str, Any]: ...
 
 
@@ -152,6 +166,14 @@ def event_identity_matches(event: Mapping[str, Any], task_id: uuid.UUID) -> bool
     if not isinstance(private, Mapping):
         return False
     return private.get(TASK_ID_PROPERTY) == str(task_id)
+
+
+def _event_etag(event: Mapping[str, Any]) -> str | None:
+    """The event's ETag (Google sends it quoted); absent if the provider omitted it."""
+    etag = event.get("etag")
+    if isinstance(etag, str) and etag.strip():
+        return etag
+    return None
 
 
 def _same_instant(left: Any, right: Any) -> bool:
@@ -355,11 +377,51 @@ class TaskEventSync:
                     task.version,
                 )
                 return SyncOutcome.STALE_VERSION
-            await gateway.update_event(calendar_id, event_id, body)
+            try:
+                # `If-Match` makes the write conditional: if the event was edited after the
+                # read above, Google answers 412 instead of letting us overwrite that edit.
+                await gateway.update_event(
+                    calendar_id, event_id, body, if_match=_event_etag(existing)
+                )
+            except GoogleCalendarPreconditionFailed:
+                return await self._external_conflict(
+                    task, body, event_id, gateway, calendar_id
+                )
             logger.info("calendar_sync.event_refreshed task_id=%s", task.task_id)
             if await self._repair_newer_version(task, body, event_id, gateway, calendar_id):
                 return SyncOutcome.STALE_VERSION
         return await self._settle(task, event_id, SyncOutcome.RECONCILED)
+
+    async def _external_conflict(
+        self,
+        task: TaskSnapshot,
+        body: Mapping[str, Any],
+        event_id: str,
+        gateway: CalendarGateway,
+        calendar_id: str,
+    ) -> SyncOutcome:
+        """Handle a failed ETag precondition without ever merging the two versions.
+
+        The event is left exactly as Google returned it and the task is marked `failed`, so
+        the user reviews and explicitly retries (D3.7) instead of a background retry
+        overwriting the external edit. The single safe exception is an event that already
+        carries the content this delivery wanted: another delivery wrote the same body and
+        bumped the ETag, so adopting it overwrites nothing.
+        """
+        try:
+            current = await gateway.get_event(calendar_id, event_id)
+        except GoogleCalendarTransientError:
+            # Fail closed: retrying now could overwrite the external edit that won.
+            current = None
+        if (
+            current is not None
+            and event_identity_matches(current, task.task_id)
+            and event_content_matches(current, body)
+        ):
+            return await self._settle(task, event_id, SyncOutcome.RECONCILED)
+        logger.warning("calendar_sync.external_conflict task_id=%s", task.task_id)
+        await self._mark_failed(task)
+        return SyncOutcome.EXTERNAL_CONFLICT
 
     async def _repair_newer_version(
         self,
@@ -391,8 +453,18 @@ class TaskEventSync:
         if not event_content_matches(sent, latest):
             # Keep the known event (old calendar) at the newest content; a moved calendar is
             # the newer delivery's responsibility, not a reason to leave stale text here.
-            await gateway.update_event(calendar_id, event_id, latest)
-            logger.info("calendar_sync.event_repaired task_id=%s", task.task_id)
+            event = await gateway.get_event(calendar_id, event_id)
+            if event is not None and not event_content_matches(event, latest):
+                try:
+                    await gateway.update_event(
+                        calendar_id, event_id, latest, if_match=_event_etag(event)
+                    )
+                except GoogleCalendarPreconditionFailed:
+                    logger.warning(
+                        "calendar_sync.repair_conflict task_id=%s", task.task_id
+                    )
+                else:
+                    logger.info("calendar_sync.event_repaired task_id=%s", task.task_id)
         return True
 
     async def _settle(

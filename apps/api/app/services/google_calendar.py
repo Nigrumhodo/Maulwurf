@@ -15,6 +15,9 @@ Design decisions:
   (token endpoint or Calendar body) invokes `on_invalid_grant` once and is never retried.
   A generic 401/403 is not treated as revocation. `disconnect_google_credential` is the
   ready-made callback that flips `google_credentials.status` to `disconnected`.
+- **Conditional writes (J3.6).** Callers may pass `If-Match` headers; a 412 (stale ETag) is
+  a terminal `GoogleCalendarPreconditionFailed`, because retrying would overwrite the edit
+  that won. J3.6's sync engine turns it into an external conflict for explicit review.
 - **No secrets or payloads in logs.** Only method, status, attempt and delay are logged.
 """
 
@@ -93,6 +96,12 @@ class GoogleCalendarConflict(GoogleCalendarError):
 
 class GoogleCalendarNotFound(GoogleCalendarError):
     code = "google_calendar_not_found"
+
+
+class GoogleCalendarPreconditionFailed(GoogleCalendarError):
+    """The event changed since it was read: a conditional write must not overwrite it."""
+
+    code = "google_calendar_precondition_failed"
 
 
 class GoogleCalendarInvalidRequest(GoogleCalendarError):
@@ -244,10 +253,17 @@ class GoogleCalendarService:
         *,
         params: Mapping[str, Any] | None = None,
         json: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
-        """Run one Calendar request in a worker thread and return its JSON object."""
+        """Run one Calendar request in a worker thread and return its JSON object.
+
+        `headers` adds conditional-write headers (``If-Match`` for J3.6). The bearer token
+        is applied by the service and cannot be overridden by the caller.
+        """
         try:
-            return await asyncio.to_thread(self._request, method, path, params, json)
+            return await asyncio.to_thread(
+                self._request, method, path, params, json, headers
+            )
         except GoogleCalendarInvalidGrant:
             if self._on_invalid_grant is not None:
                 await self._on_invalid_grant()
@@ -265,12 +281,15 @@ class GoogleCalendarService:
         path: str,
         params: Mapping[str, Any] | None,
         json_body: Mapping[str, Any] | None,
+        extra_headers: Mapping[str, str] | None,
     ) -> dict[str, Any]:
         url = f"{self._base_url}/{path.lstrip('/')}"
         headers = {
+            **(extra_headers or {}),
             "Authorization": f"Bearer {self._access_token}",
             "Accept": "application/json",
         }
+
         attempt = 0
         with httpx.Client(transport=self._transport, timeout=self._timeout) as client:
             while True:
@@ -334,6 +353,12 @@ class GoogleCalendarService:
         if status == httpx.codes.UNAUTHORIZED:
             return GoogleCalendarUnauthorized(
                 "Google Calendar rechazó las credenciales.", details=details
+            )
+        if status == httpx.codes.PRECONDITION_FAILED:
+            # `If-Match` did not match: the event was edited after we read it. Fail closed;
+            # the engine treats it as an external conflict instead of overwriting it.
+            return GoogleCalendarPreconditionFailed(
+                "El evento cambió en Google Calendar después de leerlo.", details=details
             )
         if status == httpx.codes.FORBIDDEN:
             return GoogleCalendarForbidden(
