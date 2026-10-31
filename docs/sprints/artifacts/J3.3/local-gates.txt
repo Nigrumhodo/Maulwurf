@@ -1,0 +1,62 @@
+# J3.3 local gates (MAULW-116)
+
+Date: 2026-10-31 (UTC). Environment: Ubuntu 24.04 container, Python 3.12.3, PostgreSQL 16 with
+pgvector, Redis 7, `uv run` from `apps/api`. No secret, no real Google call and no audio were
+involved: the Calendar API is an `httpx.MockTransport` double and the OAuth token/id-token
+exchange is replaced by deterministic local functions.
+
+## Static gates
+
+```text
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ cd apps/api && uv run mypy .
+Success: no issues found in 205 source files
+```
+
+## Unit suite
+
+```text
+$ cd apps/api && uv run pytest tests/unit -q
+1010 passed, 35 warnings in 9.30s
+```
+
+The two `httpx` failures that the sandbox produces when `NO_PROXY` contains bracketed IPv6
+entries (`Invalid port: ':1]'` in `httpx._utils.URLPattern`, from
+`tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured` and
+`tests/unit/test_llm.py::test_shared_http_client_is_bounded_reused_and_closed`) are
+environmental: both pass with the proxy variables cleared, and J3.2 recorded the same pair.
+
+## Integration suite
+
+```text
+$ cd apps/api && uv run pytest tests/integration -q
+32 failed, 417 passed, 455 warnings in 75.79s
+```
+
+The 32 failures are exactly the same set that a pristine `develop` checkout (`44b576a`)
+produces in this sandbox: `tests/integration/test_chat_sse.py` (17),
+`tests/integration/test_g4_eval.py` (4) and `tests/integration/test_search.py` (11). They are
+provider/environment failures unrelated to J3.3 (the `diff` of both failure lists is empty).
+Everything else passes, including `test_migrations.py`, `test_rls.py`, `test_isolation.py`,
+`test_oauth_google.py`, `test_a18_endpoints.py` and the 17 I-S3-JF-06 cases in
+`test_calendar_connect.py`.
+
+## Other area gates
+
+```text
+$ cd apps/ingest && uv run ruff check .        # All checks passed
+$ cd apps/ingest && uv run mypy .              # Success: no issues found in 76 source files
+$ cd apps/ingest && uv run pytest -m "not integration and not provider and not load" -q
+180 passed, 71 deselected
+
+$ python3 scripts/docs/check_refs.py
+OK: 754 documented repository paths exist or are expected.
+```
+
+## Not executed
+
+- Any real Google OAuth/Calendar call (J3.1's protected account and the cloud leg of
+  P-S3-JF-02 are still pending). Cloud eligibility stays `pending`.
+- The `apps/web` build: no web file was changed.

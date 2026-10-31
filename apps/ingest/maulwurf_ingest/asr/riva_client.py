@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from maulwurf_ingest.audio.reconcile import LocalWord
+from maulwurf_ingest.audio.reconcile import LocalWord, parse_confidence
 
 MAX_ATTEMPTS = 3
 # Presupuesto entre llamadas. No es una cuota medida de Riva.
@@ -331,4 +331,8 @@ def _word_from(word: object) -> LocalWord | None:
     end_s = float(end) * _MS_TO_S
     if end_s <= start_s:
         return None
-    return LocalWord(text, start_s, end_s)
+    raw_confidence = getattr(word, "confidence", None)
+    # Protobuf scalars default to 0.0 when the provider does not report them, so 0.0 at
+    # this boundary means «unknown» instead of flagging every word as low confidence.
+    confidence = None if raw_confidence in (None, 0.0) else parse_confidence(raw_confidence)
+    return LocalWord(text, start_s, end_s, confidence)
