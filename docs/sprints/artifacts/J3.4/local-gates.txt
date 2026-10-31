@@ -20,7 +20,16 @@ Integration executed before the sandbox reset (PostgreSQL 16.15 + Redis local):
 $ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 uv run pytest tests/integration/test_calendar_sync_job.py -q
 7 passed, 1 warning in 2.66s
 
-After the reset this host no longer provides PostgreSQL/Redis binaries, so
-tests/integration/test_dispatcher.py and tests/integration/test_transcript_commit_gate.py
-(edited for the new consumer) were not rerun locally. Quality CI 'integration (api)'
-runs them with service containers.
+Re-run in this sandbox after reprovisioning PostgreSQL 16.15 (pgvector 0.6.0) and
+Redis 7.0.15, covering the new module plus the dispatcher/commit-gate files edited for
+the new consumer:
+
+$ MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@127.0.0.1:5432/maulwurf \
+  MAULWURF_REDIS_URL=redis://127.0.0.1:6379/0 \
+  uv run pytest tests/integration/test_calendar_sync_job.py \
+  tests/integration/test_dispatcher.py tests/integration/test_transcript_commit_gate.py -q
+43 passed, 1 warning in 5.32s
+
+The full API integration suite is not green in this sandbox because the distro pgvector
+is 0.6.0 (<0.8, search/G4 suites); those modules are outside this diff and Quality CI
+'integration (api)' runs the whole suite with pgvector/pg16.
