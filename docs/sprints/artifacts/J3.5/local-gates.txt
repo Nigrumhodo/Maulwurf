@@ -17,3 +17,13 @@ $ cd apps/api && uv run pytest tests/unit/test_calendar_event.py -q
 $ cd apps/api && uv run pytest tests/unit/test_citations.py -q
 .........                                                                [100%]
 9 passed in 0.60s
+
+$ cd apps/api && NO_PROXY=<sanitized> uv run pytest tests/unit -q
+1105 passed, 35 warnings in 11.25s
+
+Note: without sanitizing the sandbox NO_PROXY (its bracketed IPv6 entries, e.g. `[::1]`,
+make httpx 0.28 raise `InvalidURL: Invalid port: ':1]'`), two unrelated tests fail:
+`test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured` and
+`test_llm.py::test_shared_http_client_is_bounded_reused_and_closed`. The same
+environmental quirk is recorded in the S3.6 claim row in `docs/sprints/CLAIMS.md` and in
+prior tickets; it is not caused by this diff.
