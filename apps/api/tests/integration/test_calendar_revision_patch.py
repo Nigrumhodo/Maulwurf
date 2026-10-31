@@ -429,7 +429,7 @@ async def test_completing_cancels_pending_reminders_and_keeps_the_event(
     )
     lifecycle = TaskLifecycle(SqlTaskLifecycleStore(_scoped_session_factory(db_session)))
 
-    result = await lifecycle.complete(row["id"], expected_version=row["version"])
+    result = await lifecycle.complete(actor.user_id, row["id"], expected_version=row["version"])
 
     assert result.status == "completed"
     assert result.cancelled_reminders == 2
@@ -476,7 +476,7 @@ async def test_dismissing_cancels_reminders_and_keeps_the_event(
     )
     lifecycle = TaskLifecycle(SqlTaskLifecycleStore(_scoped_session_factory(db_session)))
 
-    result = await lifecycle.dismiss(row["id"], expected_version=row["version"])
+    result = await lifecycle.dismiss(actor.user_id, row["id"], expected_version=row["version"])
 
     assert result.status == "dismissed"
     assert result.cancelled_reminders == 1
@@ -510,10 +510,35 @@ async def test_a_stale_version_changes_nothing(db_session: AsyncSession) -> None
     lifecycle = TaskLifecycle(SqlTaskLifecycleStore(_scoped_session_factory(db_session)))
 
     with pytest.raises(ApiError) as failure:
-        await lifecycle.complete(row["id"], expected_version=2)
+        await lifecycle.complete(actor.user_id, row["id"], expected_version=2)
 
     assert failure.value.status_code == 409
     assert failure.value.code == "version_conflict"
+    assert await _notification_status(db_session, pending) == "pending"
+    status, sync_status, _ = await _task_status(db_session, row["id"])
+    assert (status, sync_status) == ("confirmed", "pending")
+
+
+async def test_another_users_task_is_not_found_and_changes_nothing(
+    db_session: AsyncSession,
+) -> None:
+    """The explicit tenant filter is a second barrier on top of RLS."""
+    owner = await make_actor(db_session)
+    intruder = await make_actor(db_session)
+    row = await _insert_task(db_session, owner)
+    pending = await _insert_notification(
+        db_session,
+        user_id=owner.user_id,
+        task_id=row["id"],
+        status="pending",
+        scheduled_at=START + timedelta(hours=24),
+    )
+    lifecycle = TaskLifecycle(SqlTaskLifecycleStore(_scoped_session_factory(db_session)))
+
+    with pytest.raises(ApiError) as failure:
+        await lifecycle.complete(intruder.user_id, row["id"], expected_version=row["version"])
+
+    assert failure.value.status_code == 404
     assert await _notification_status(db_session, pending) == "pending"
     status, sync_status, _ = await _task_status(db_session, row["id"])
     assert (status, sync_status) == ("confirmed", "pending")

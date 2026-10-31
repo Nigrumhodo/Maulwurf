@@ -36,21 +36,23 @@ class Store:
         outcome: LifecycleOutcome | None = None,
     ) -> None:
         self.task_id = uuid.uuid4()
+        self.user_id = uuid.uuid4()
         self.status = status
         self.version = version
         self.calendar_event_id = calendar_event_id
         self.outcome = outcome
-        self.calls: list[tuple[uuid.UUID, int, str, datetime]] = []
+        self.calls: list[tuple[uuid.UUID, uuid.UUID, int, str, datetime]] = []
 
     async def transition(
         self,
+        user_id: uuid.UUID,
         task_id: uuid.UUID,
         *,
         expected_version: int,
         target: str,
         now: datetime,
     ) -> LifecycleTransition:
-        self.calls.append((task_id, expected_version, target, now))
+        self.calls.append((user_id, task_id, expected_version, target, now))
         if self.outcome is not None:
             return LifecycleTransition(
                 outcome=self.outcome,
@@ -131,19 +133,19 @@ def test_forbidden_commands_are_a_409(current: str, target: str) -> None:
 async def test_completing_a_confirmed_task_cancels_reminders_and_keeps_the_event() -> None:
     store = Store(calendar_event_id="maulwurf-event")
 
-    result = await _service(store).complete(store.task_id, expected_version=1)
+    result = await _service(store).complete(store.user_id, store.task_id, expected_version=1)
 
     assert result.status == "completed"
     assert result.cancelled_reminders == 3
     assert result.calendar_event_kept is True
     assert result.notice == CALENDAR_EVENT_KEPT_NOTICE
-    assert store.calls == [(store.task_id, 1, "completed", NOW)]
+    assert store.calls == [(store.user_id, store.task_id, 1, "completed", NOW)]
 
 
 async def test_dismissing_a_pending_task_without_an_event_has_no_notice() -> None:
     store = Store(status="needs_review", calendar_event_id=None)
 
-    result = await _service(store).dismiss(store.task_id, expected_version=1)
+    result = await _service(store).dismiss(store.user_id, store.task_id, expected_version=1)
 
     assert result.status == "dismissed"
     assert result.calendar_event_kept is False
@@ -153,7 +155,7 @@ async def test_dismissing_a_pending_task_without_an_event_has_no_notice() -> Non
 async def test_repeating_complete_is_idempotent_and_still_cancels_leftovers() -> None:
     store = Store(status="completed")
 
-    result = await _service(store).complete(store.task_id, expected_version=1)
+    result = await _service(store).complete(store.user_id, store.task_id, expected_version=1)
 
     assert result.status == "completed"
     assert result.cancelled_reminders == 1
@@ -164,7 +166,7 @@ async def test_a_stale_version_raises_version_conflict() -> None:
     store = Store(version=4)
 
     with pytest.raises(ApiError) as failure:
-        await _service(store).complete(store.task_id, expected_version=3)
+        await _service(store).complete(store.user_id, store.task_id, expected_version=3)
 
     assert failure.value.status_code == 409
     assert failure.value.code == "version_conflict"
@@ -175,7 +177,7 @@ async def test_a_missing_task_is_a_404() -> None:
     store = Store(outcome=LifecycleOutcome.NOT_FOUND)
 
     with pytest.raises(ApiError) as failure:
-        await _service(store).dismiss(store.task_id, expected_version=1)
+        await _service(store).dismiss(store.user_id, store.task_id, expected_version=1)
 
     assert failure.value.status_code == 404
 

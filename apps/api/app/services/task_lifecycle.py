@@ -10,9 +10,10 @@ user completes or dismisses a task:
   a task the user already closed (`notifications.status='pending'`).
 
 The pure transition table is the single authority for `complete`/`dismiss`; the store
-adapter locks the task row and performs both writes in the same transaction. `version` is
-the optimistic-locking token of the task contract: a stale `expected_version` is a
-`409 version_conflict`, while repeating the same command is an accepted no-op.
+adapter locks the task row (scoped to the authenticated user) and performs both writes in
+the same transaction. `version` is the optimistic-locking token of the task contract: a
+stale `expected_version` is a `409 version_conflict`, while repeating the same command is an
+accepted no-op. A task of another tenant is a `404`, indistinguishable from a missing one.
 """
 
 import uuid
@@ -70,6 +71,7 @@ class TaskLifecycleResult:
 class TaskLifecycleStore(Protocol):
     async def transition(
         self,
+        user_id: uuid.UUID,
         task_id: uuid.UUID,
         *,
         expected_version: int,
@@ -111,20 +113,28 @@ class TaskLifecycle:
         self._clock = clock
 
     async def complete(
-        self, task_id: uuid.UUID, *, expected_version: int
+        self, user_id: uuid.UUID, task_id: uuid.UUID, *, expected_version: int
     ) -> TaskLifecycleResult:
-        return await self._apply(task_id, expected_version, "completed")
+        return await self._apply(user_id, task_id, expected_version, "completed")
 
     async def dismiss(
-        self, task_id: uuid.UUID, *, expected_version: int
+        self, user_id: uuid.UUID, task_id: uuid.UUID, *, expected_version: int
     ) -> TaskLifecycleResult:
-        return await self._apply(task_id, expected_version, "dismissed")
+        return await self._apply(user_id, task_id, expected_version, "dismissed")
 
     async def _apply(
-        self, task_id: uuid.UUID, expected_version: int, target: str
+        self,
+        user_id: uuid.UUID,
+        task_id: uuid.UUID,
+        expected_version: int,
+        target: str,
     ) -> TaskLifecycleResult:
         transition = await self._store.transition(
-            task_id, expected_version=expected_version, target=target, now=self._clock()
+            user_id,
+            task_id,
+            expected_version=expected_version,
+            target=target,
+            now=self._clock(),
         )
         if transition.outcome is LifecycleOutcome.NOT_FOUND:
             raise ApiError(404, "not_found", "La tarea no existe.")

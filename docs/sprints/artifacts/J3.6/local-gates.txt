@@ -1,0 +1,63 @@
+J3.6 (MAULW-119) local gates — 2026-10-31 UTC
+repo: task/MAULW-119, code head 3245ac5 plus the tenant-scope review fix in this commit
+host: Linux sandbox, Python 3.12.3, uv 0.13.1
+PostgreSQL 16.15 (pgvector 0.6.0), Redis 7.0.15. No real Google call, credential or secret.
+
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ cd apps/api && uv run mypy .
+Success: no issues found in 220 source files
+
+$ NO_PROXY=localhost,127.0.0.1,::1,198.19.0.1,198.19.0.2 \
+  no_proxy=localhost,127.0.0.1,::1,198.19.0.1,198.19.0.2 \
+  uv run pytest tests/unit -q
+1182 passed, 35 warnings
+
+Without the two NO_PROXY overrides the same run reports 1180 passed and these two failures,
+both the pre-existing sandbox issue (httpx parses this host's bracketed IPv6 NO_PROXY
+entries as host:port): tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured
+and tests/unit/test_llm.py::test_shared_http_client_is_bounded_reused_and_closed.
+
+$ MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@127.0.0.1:5432/maulwurf \
+  MAULWURF_REDIS_URL=redis://127.0.0.1:6379/0 \
+  uv run pytest tests/integration/test_calendar_revision_patch.py \
+  tests/integration/test_calendar_sync_job.py -q
+19 passed, 1 warning
+
+I-S3-JF-04 (tests/integration/test_calendar_revision_patch.py) collects 6 cases:
+- revision confirmed: deterministic insert collides (409), the event is PATCHed with the
+  ETag of the previous read and the task ends synced;
+- external edit during the PATCH: 412, the Google event keeps the external summary, the
+  task calendar_sync_status is failed and no second write happens;
+- complete: 2 pending reminders (one future, one overdue) cancelled, sent untouched, the
+  other tenant's reminder untouched, the linked event kept and no Google request;
+- dismiss: reminder cancelled, event kept, no Google request;
+- stale version: 409 version_conflict and no reminder cancelled;
+- another user's task: 404 (explicit user_id scope on top of RLS) and no reminder touched.
+
+$ MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@127.0.0.1:5432/maulwurf \
+  MAULWURF_REDIS_URL=redis://127.0.0.1:6379/0 \
+  uv run pytest tests/integration -q
+421 passed, 32 failed in 140.27s
+
+All 32 failures are pre-existing and outside this diff: 17 test_chat_sse, 4 test_g4_eval
+and 11 test_search fail because this sandbox's distro pgvector is 0.6.0 while the
+search/G4 SQL needs >= 0.8 (already documented in the S3.6 claim). Quality CI
+'integration (api)' runs the same suite against pgvector/pgvector:pg16.
+
+`test_redis_policy.py` is stateful: it fails only when a previous full-suite run left a
+`search:quota:*` key in Redis DB 0, and passes after `redis-cli flushdb` (2 passed); no
+code in this diff writes Redis, so it is not attributable here.
+
+$ python3 scripts/docs/check_refs.py
+OK: 767 documented repository paths exist or are expected.
+
+Review fix in this commit (tenant scope):
+- `SqlTaskLifecycleStore.transition` now also receives the authenticated `user_id` and locks
+  the task with `WHERE id = … AND user_id = …`; another tenant's task returns NOT_FOUND
+  (404), exactly like a missing one. `_cancel_pending` was already tenant-filtered.
+- the service (`TaskLifecycle.complete/dismiss`) forwards the caller's identity; the unit
+  store double asserts it and the new I-S3-JF-04 case creates two actors and checks the
+  owner's reminder/status stay unchanged.
+- docs: S3.md and the claim row record the explicit scope and the 6th integration case.

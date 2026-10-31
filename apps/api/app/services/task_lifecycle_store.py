@@ -1,9 +1,11 @@
 """PostgreSQL adapter for the J3.6 task lifecycle (complete/dismiss).
 
-The adapter owns the transaction: it locks the task row, validates the transition, writes
-the new status/timestamp and cancels the task's not-yet-sent reminders, so a completed task
-can never receive a stale Gmail reminder. Google Calendar is not touched here: the linked
-event is kept, and removing it requires the explicit remote-operation flow (S4).
+The adapter owns the transaction: it locks the task row **scoped to the caller's tenant**,
+validates the transition, writes the new status/timestamp and cancels the task's not-yet-sent
+reminders, so a completed task can never receive a stale Gmail reminder. A task of another
+user is indistinguishable from a missing one (`NOT_FOUND`). Google Calendar is not touched
+here: the linked event is kept, and removing it requires the explicit remote-operation flow
+(S4).
 
 A3.1 owns the real ``tasks`` table and S4 owns ``notifications``. Until their migrations
 land, `TASKS` comes from `task_event_store` and `NOTIFICATIONS` mirrors the frozen §2.9
@@ -38,6 +40,9 @@ from app.services.task_lifecycle import (
 
 SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
+# `complete` and `dismiss` are the only commands this adapter writes.
+LIFECYCLE_TARGETS = frozenset({"completed", "dismissed"})
+
 NOTIFICATIONS = Table(
     "notifications",
     MetaData(),
@@ -59,12 +64,15 @@ class SqlTaskLifecycleStore:
 
     async def transition(
         self,
+        user_id: uuid.UUID,
         task_id: uuid.UUID,
         *,
         expected_version: int,
         target: str,
         now: datetime,
     ) -> LifecycleTransition:
+        if target not in LIFECYCLE_TARGETS:
+            raise ValueError(f"unsupported lifecycle target: {target!r}")
         async with self._sessions() as db:
             row = (
                 await db.execute(
@@ -74,7 +82,7 @@ class SqlTaskLifecycleStore:
                         TASKS.c.status,
                         TASKS.c.calendar_event_id,
                     )
-                    .where(TASKS.c.id == task_id)
+                    .where(TASKS.c.id == task_id, TASKS.c.user_id == user_id)
                     .with_for_update()
                 )
             ).mappings().one_or_none()
