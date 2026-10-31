@@ -54,3 +54,13 @@ Docs
 ----
 $ python3 scripts/docs/check_refs.py
 OK: 766 documented repository paths exist or are expected.
+
+Quality CI
+----------
+Workflow run 41225714988 on head 23d6ad7 (2026-10-31): all 17 checks green.
+  python-unit (api): 1182 passed
+  integration (api): 460 passed (including the 12 I-S3-JF-05 cases)
+  python-unit (ingest): 192 passed, 6 skipped
+  integration (ingest), e2e-smoke, docs, web, build-images, secret-scan,
+  license-report (api/ingest/web), python-static (api/ingest), caddy-limits
+  and compose-ingest-env: green.
