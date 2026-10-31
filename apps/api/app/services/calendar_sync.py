@@ -49,8 +49,8 @@ STALE_AFTER = timedelta(hours=2)
 
 # Advisory-lock convention (A2.14, `services/audios.py`): the two-int form namespaces our
 # locks instead of a bare bigint. The namespace is the same 0x4D57 ("MW") value that module
-# uses; the per-user key derivation is shared too, so a collision can only serialize two
-# short transactions of the same user, never admit more work than the limits allow.
+# uses and the per-user key uses the same derivation; a key collision only serializes two
+# unrelated transactions for a moment and can never admit more work than the limits allow.
 _ADVISORY_LOCK_NAMESPACE = 0x4D57
 
 # Closed coverage vocabulary consumed by D3.6 and the `get_calendar_events` tool (J3.8).
