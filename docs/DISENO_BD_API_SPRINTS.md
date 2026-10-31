@@ -447,7 +447,8 @@ CREATE TABLE chunk_segments (
   segment_id   uuid NOT NULL,
   FOREIGN KEY (user_id, segment_id)
     REFERENCES segments (user_id, id) ON DELETE CASCADE,
-  overlap_span jsonb,                           -- overlap offsets, for evidence
+  overlap_span jsonb,                           -- {segment_ordinal, inicio_char, fin_char,
+                                                 --  overlap?: {inicio_char, fin_char, tokens}}
   PRIMARY KEY (user_id, chunk_id, segment_id)
 );
 CREATE INDEX chunk_segments_by_segment ON chunk_segments (user_id, segment_id);
@@ -508,7 +509,10 @@ CREATE TABLE processing_runs (
 Notes:
 
 - A chunk is **not** the minimal unit of evidence: `chunk_segments` keeps the segments and
-  their spans even when chunks overlap.
+  their spans even when chunks overlap. Each link's `overlap_span` is the validated
+  `{segment_ordinal, inicio_char, fin_char, overlap?}` object (segment-local offsets; the
+  optional `overlap` region is `{inicio_char, fin_char, tokens}`), matching the §M6
+  `Chunk` contract in `apps/api/app/schemas/chunk.py`.
 - Chunks and generations: reindexing with a new `index_version` re-chunks — it creates new
   `chunks`/`chunk_segments` rows for that generation and **retires** the previous one
   (`status = 'retired'`). The retired generation keeps its chunks and embeddings
