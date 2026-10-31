@@ -263,13 +263,18 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     revision = ScriptDirectory.from_config(cfg).get_revision(_head(empty_schema))
     assert revision is not None
     parent = revision.down_revision
-    assert parent == "0006"  # this chain is linear
+    assert parent == "0007"  # this chain is linear
     command.upgrade(cfg, "head")
 
-    # `0007` only adds the mirror and the coverage columns; `0006` only adds `settings`;
-    # `0005` only changes roles, policies and RLS flags; `0003` only backfills `chunks.tsv`
-    # (data, not schema) and `0004` only adds the run fencing token, so the steps back stay
-    # on the previous schemas and only remove those additions.
+    # `0008` only adds the manual-sync cooldown column; `0007` only adds the mirror and the
+    # coverage columns; `0006` only adds `settings`; `0005` only changes roles, policies and
+    # RLS flags; `0003` only backfills `chunks.tsv` (data, not schema) and `0004` only adds
+    # the run fencing token, so the steps back stay on the previous schemas and only remove
+    # those additions.
+    command.downgrade(cfg, "-1")
+    assert _state(empty_schema) == (S3_TABLES, ["0007"])
+    assert _rls_state(empty_schema) == {"subjects": (True, True), "users": (True, True)}
+
     command.downgrade(cfg, "-1")
     assert _state(empty_schema) == (S2_TABLES | {"settings"}, ["0006"])
     assert _rls_state(empty_schema) == {"subjects": (True, True), "users": (True, True)}
