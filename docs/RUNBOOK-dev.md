@@ -135,6 +135,8 @@ The migration account also needs `CREATEROLE` (or the three roles must be pre-cr
 the DSN user of each runtime must be a member of its role: the migration grants membership
 to the migration user, so a deployment that authenticates `api`, `worker` and `ingest` with
 different users must grant `maulwurf_app`/`maulwurf_jobs`/`maulwurf_ingest` to each one.
+The API user also needs `maulwurf_jobs` because `/internal/metrics` performs its read-only
+aggregate under that role.
 
 
 ## 6. Tests and lint

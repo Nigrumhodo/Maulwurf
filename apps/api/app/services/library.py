@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.db import bind_user
 from app.models import (
     Audio,
     IngestionAttempt,
@@ -399,6 +400,9 @@ async def stream_progress(
     STATE, so a reconnect re-sends `snapshot` regardless of `Last-Event-ID`; `done`/`error` is
     the single terminal frame, after which the connection closes.
     """
+    # Bind the tenant in the task that opens the short sessions (A2.17), independent of
+    # whether the request context was inherited by the streaming task.
+    bind_user(user_id)
     loop = asyncio.get_running_loop()
     started = loop.time()
     last_heartbeat = started

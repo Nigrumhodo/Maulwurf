@@ -31,6 +31,7 @@ from sqlalchemy import and_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.db import bind_user
 from app.models.chat import Conversation, Message, MessageSource
 from app.models.chunk import Chunk
 from app.services.chunking import count_tokens_default, tokenizer_is_exact
@@ -776,6 +777,9 @@ class RAGService:
         self, prepared: PreparedStream, *, last_event_id: int = 0
     ) -> AsyncGenerator[str, None]:
         """Yield the SSE frames for a prepared turn, including replay and cancellation."""
+        # The stream task must bind the tenant itself: short-lived sessions opened from
+        # the factory do not share the request's SQL transaction, only this context.
+        bind_user(prepared.user_id)
         if prepared.replay is not None:
             async for event in self._replay_events(prepared, last_event_id):
                 yield event
