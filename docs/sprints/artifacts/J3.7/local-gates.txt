@@ -171,3 +171,78 @@ update) is green in all 17 checks, including `python-unit (api)`, `integration (
 `docs`, `e2e-smoke` and `build-images`. Any later commit that only records this run does not
 change the code under test.
 
+
+Review fix3 (hoplite findings on heads 3faa571/644c109/2e1753c, 2026-10-31)
+----------------------------------------------------------------------------
+1. [media-alta] A calendar removed from the read selection kept its rows forever and
+   `GET /calendar/events` still returned them: `replace_window` only pruned the calendars
+   being republished, and `page` filtered by user and window only.
+   Fix: `CalendarService.page` now filters by the current `calendar_read_calendar_ids`
+   (an empty selection returns no rows), so a deselection is effective immediately; and
+   `SqlCalendarMirror.replace_window` reads the previous coverage inside the same
+   savepoint and deletes the unlinked rows of every calendar that was in it and is no
+   longer selected. Task-linked rows are still never deleted or unlinked.
+   New case: `test_a_deselected_calendar_stops_being_returned_and_is_pruned_on_refresh`
+   (GET hides the deselected calendar before the refresh; the refresh prunes its unlinked
+   row, keeps the linked one, records the new coverage and answers coverage_ok=true).
+   Updated case: `test_get_reports_never_synced_and_changed_coverage` now expects no
+   events after the selection changes instead of returning the old mirror.
+2. [media-alta] A task-linked row inside the window that Google no longer returns kept
+   `remote_status='confirmed'`, so GET presented it as a current event.
+   Fix: before the upsert, linked rows of the republished calendars that overlap the
+   window are marked `remote_status='missing'` (task_id untouched); every event that did
+   arrive is rewritten by the upsert, so only the really absent ones stay `missing`.
+   Rows outside the window are not touched (the read never observed them).
+   Updated case: `test_a_task_linked_row_inside_the_window_survives_a_refresh_without_it`
+   asserts the row survives with task_id, is returned as `missing`, and returns to
+   `confirmed` when Google returns the event again.
+3. [medio] A cancelled linked event kept `confirmed` because `parse_remote_event` dropped
+   cancelled instances with `None`.
+   Fix: a cancelled item is returned as `RemoteCancelledEvent` (a key, no block parsed);
+   `CalendarRead` carries both active events and cancelled keys; `replace_window` marks
+   the matching rows `remote_status='cancelled'` keeping task_id (deleting them would free
+   `calendar_events_one_link`). A known cancellation is not downgraded to `missing` by a
+   later read that simply does not return the event; a read that returns it rewrites the
+   status from Google.
+   New case: `test_a_cancelled_task_linked_event_is_marked_cancelled_and_keeps_the_link`
+   (mirror and GET show `cancelled` with task_id, stays cancelled on an absent refresh,
+   returns to `confirmed` when Google returns it).
+   New unit cases: cancelled keys are exposed by the adapter and deduplicated/forwarded to
+   the mirror.
+
+Low risk, same revision:
+- `_parse_instant`/`_parse_date` now name the failing side: a broken `end` raises
+  `event_end_invalid`/`event_end_naive`/`event_end_date_invalid` instead of blaming the
+  start. Three parametrized unit cases cover it.
+- Evidence counts: the first capture in this file (1182 passed) belongs to head `23d6ad7`,
+  before the fix1 regression cases; the later blocks (1188 for fix1/fix2 and 1192 for
+  fix3) supersede it. No recorded run was rewritten.
+- `docs/sprints/jose-leonardo.md`: the J3.7 row was checked and kept. It is the logbook of
+  the claim owner (`NigrumH0do`, same author as the canonical `CLAIMS.md` row and the
+  previous S3/J3 rows in that file), so it is not another member's logbook.
+
+Commands and results (fix3 code commits cc61cad, 6c61ab0 and 81c62e7)
+---------------------------------------------------------------------
+$ cd apps/api
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 224 source files
+
+$ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
+    uv run pytest tests/unit -q
+1192 passed, 35 warnings in 12.13s
+
+$ ... uv run pytest tests/integration/test_calendar_read.py -q
+19 passed (17 previous + deselection + cancellation; the missing-status assertions were
+added to an existing case)
+
+$ ... uv run pytest tests/integration -q
+32 failed, 436 passed, 438 warnings in 96.49s
+The 32 failures are the same pre-existing set (test_search.py 11, test_chat_sse.py 17,
+test_g4_eval.py 4) caused by pgvector 0.6 < 0.8 (`search_hnsw_unsupported`), outside this
+diff; no new failure appeared.
+
+$ python3 scripts/docs/check_refs.py
+OK: 770 documented repository paths exist or are expected.
