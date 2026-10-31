@@ -494,7 +494,9 @@ dates, recommendations) with traceability to the source.
   altering the active fields. Confirming receives `revision_id` and `expected_version`; in
   one transaction it promotes the revision, increments `tasks.version`, and creates the
   outbox. A stale revision → `409 version_conflict`. Re-analysis uses the same mechanism and
-  never activates partial results.
+  never activates partial results. Completing or dismissing also increments `tasks.version`
+  (a Calendar job queued for the previous version is discarded) and keeps the linked event
+  with a notice.
 
 **Endpoints:** `GET /tasks?status=&subject_id=&due_from=&due_to=`; `GET /tasks/{id}`;
 `PATCH /tasks/{id}` with `version`; `POST /tasks/{id}/confirm` with

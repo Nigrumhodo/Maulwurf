@@ -336,7 +336,8 @@ async def test_a_stale_event_body_is_patched_during_the_reconcile(
     fake = FakeGoogle()
     actor = await make_actor(db_session)
     task_id, version = await _insert_task(db_session, actor)
-    stale = _identity_event(task_id, actor.user_id)
+    # J3.6 fix1: the reconcile only PATCHes an event whose ETag it reads.
+    stale = _identity_event(task_id, actor.user_id, etag='"etag-stale"')
     fake.events[(CALENDAR_ID, deterministic_event_id(task_id))] = stale
 
     await sync_task_event(_ctx(db_session, fake), str(task_id), version)

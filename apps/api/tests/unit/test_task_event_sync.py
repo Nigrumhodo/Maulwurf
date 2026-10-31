@@ -775,12 +775,13 @@ async def test_the_repair_patch_is_conditional_on_the_fresh_etag() -> None:
     assert gateway.events[key]["summary"] == "Entregar informe corregido"
 
 
-async def test_a_reconcile_without_an_etag_never_patches() -> None:
-    """Fail closed: no ETag means no precondition, so no write may be sent."""
+@pytest.mark.parametrize("etag", [None, "", "   "])
+async def test_a_reconcile_without_an_etag_never_patches(etag: str | None) -> None:
+    """Fail closed: an absent or blank ETag means no precondition, so no write is sent."""
     task = _task()
     store = Store(task)
     gateway = Gateway()
-    original = _existing(task)  # Google omitted `etag`
+    original = {**_existing(task), "etag": etag}
     gateway.events[_key(task)] = original
 
     outcome = await _engine(store, gateway).run(task.task_id, 1)
