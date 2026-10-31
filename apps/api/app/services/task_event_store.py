@@ -1,8 +1,8 @@
-"""PostgreSQL adapter for the idempotent Calendar sync (J3.4).
+"""PostgreSQL adapter for the idempotent Calendar sync (J3.4) and the task lifecycle (J3.6).
 
-A3.1 owns the full ``tasks`` table. This module declares only the projection J3.4 reads and
-the two compare-and-set writes it needs, so the job can be implemented and tested against the
-frozen §2.8 contract before that migration lands. ``TASKS`` is a standalone Core table (not an
+A3.1 owns the full ``tasks`` table. This module declares only the projection these tickets
+read and the writes they need, so the job can be implemented and tested against the frozen
+§2.8 contract before that migration lands. ``TASKS`` is a standalone Core table (not an
 ORM model and not part of the Alembic metadata), and every statement is explicit.
 """
 
@@ -37,6 +37,12 @@ TASKS = Table(
     Column("id", PgUUID(as_uuid=True), primary_key=True),
     Column("user_id", PgUUID(as_uuid=True), nullable=False),
     Column("version", Integer, nullable=False),
+    Column(
+        "status",
+        Text,
+        nullable=False,
+        server_default="needs_review",
+    ),
     Column("calendar_sync_status", Text, nullable=False),
     Column("calendar_id", Text),
     Column("calendar_event_id", Text),
@@ -48,6 +54,8 @@ TASKS = Table(
     Column("event_end_at", DateTime(timezone=True)),
     Column("event_start_date", Date),
     Column("event_end_date_exclusive", Date),
+    Column("completed_at", DateTime(timezone=True)),
+    Column("dismissed_at", DateTime(timezone=True)),
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 
