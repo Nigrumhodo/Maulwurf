@@ -45,8 +45,10 @@ S2_TABLES = S1_TABLES | {
     "message_sources",
 }
 
-# J3.3 adds the per-user Calendar `settings` row (DISENO §2.9).
-S3_TABLES = S2_TABLES | {"settings"}
+# J3.3 adds the per-user Calendar `settings` row (DISENO §2.9) and J3.7 adds the
+# `calendar_events` mirror; the migration chain is linear, so the head of the graph
+# includes both.
+S3_TABLES = S2_TABLES | {"settings", "calendar_events"}
 
 S2_COMPOSITE_FOREIGN_KEYS = {
     "variant_confirmation_tokens": {
@@ -261,15 +263,20 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     revision = ScriptDirectory.from_config(cfg).get_revision(_head(empty_schema))
     assert revision is not None
     parent = revision.down_revision
-    assert parent == "0005"  # this chain is linear
+    assert parent == "0006"  # this chain is linear
     command.upgrade(cfg, "head")
 
-    # `0006` only adds `settings`; `0005` only changes roles, policies and RLS flags;
-    # `0003` only backfills `chunks.tsv` (data, not schema) and `0004` only adds the run
-    # fencing token, so the steps back stay on the previous schema and only remove those
-    # additions.
+    # `0007` only adds the mirror and the coverage columns; `0006` only adds `settings`;
+    # `0005` only changes roles, policies and RLS flags; `0003` only backfills `chunks.tsv`
+    # (data, not schema) and `0004` only adds the run fencing token, so the steps back stay
+    # on the previous schemas and only remove those additions.
+    command.downgrade(cfg, "-1")
+    assert _state(empty_schema) == (S2_TABLES | {"settings"}, ["0006"])
+    assert _rls_state(empty_schema) == {"subjects": (True, True), "users": (True, True)}
+
     command.downgrade(cfg, "-1")
     assert _state(empty_schema) == (S2_TABLES, ["0005"])
+    assert _rls_state(empty_schema) == {"subjects": (True, True), "users": (True, True)}
 
     command.downgrade(cfg, "-1")
     assert _state(empty_schema) == (S2_TABLES, ["0004"])
