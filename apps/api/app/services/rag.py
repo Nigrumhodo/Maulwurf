@@ -40,7 +40,6 @@ from app.services.citations import (
     CitationValidator,
     citation_event,
     citation_record,
-    format_timestamp,
     resolve_citation,
     validate_citation_record,
     validate_citation_source,
@@ -55,6 +54,7 @@ from app.services.embeddings import (
     EmbeddingRateLimited,
     embed_query,
 )
+from app.services.evidence import evidence_reference
 from app.services.llm import (
     ChatMessage,
     LLMContextExceeded,
@@ -260,10 +260,13 @@ def render_source(index: int, chunk: RetrievedChunk) -> str:
     an envelope tag or the final question delimiter is neutralized before insertion.
     """
     parts = [chunk.subject_name, chunk.class_date.isoformat()]
-    if chunk.t_start is not None and chunk.t_end is not None:
-        parts.append(format_timestamp(chunk.t_start))
-    elif chunk.segment_ordinal is not None:
-        parts.append(f"segment {chunk.segment_ordinal}")
+    reference = evidence_reference(
+        segment_ordinal=chunk.segment_ordinal,
+        t_start=chunk.t_start,
+        t_end=chunk.t_end,
+    )
+    if reference:
+        parts.append(reference)
     safe_content = _neutralize(chunk.content.strip())
     meta = html.escape(" · ".join(parts), quote=True)
     return f'<source id="S{index}" meta="{meta}">\n{safe_content}\n</source>'
