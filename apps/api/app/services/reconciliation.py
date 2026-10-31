@@ -11,9 +11,11 @@ J2.11 keeps Redis I/O out of the row-lock window: callers select candidates in o
 transaction, commit, inspect/enqueue in Redis without holding any lock, and then apply the
 change in a second short transaction. Each state change is a compare-and-set against the
 snapshot read during selection (`status`, `published_at`, `attempts` for outbox events and
-`status`, `started_at`, `attempt_count` for runs), so overlapping cycles cannot apply the same
-change twice. The selections still use `FOR UPDATE SKIP LOCKED` so concurrent cycles prefer
-disjoint batches; the CAS is what makes the post-commit window safe.
+`status`, `started_at`, `attempt_count`, `fencing_token` for runs), so overlapping cycles
+cannot apply the same change twice. The selections still use `FOR UPDATE SKIP LOCKED` so
+concurrent cycles prefer disjoint batches; the CAS is what makes the post-commit window safe.
+Closing an expired run is also a compare-and-set on its fencing token and `running` status, so
+it can never overwrite a claim that was renewed in between.
 """
 
 import uuid
@@ -21,7 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Final
 
-from sqlalchemy import and_, exists, or_, select
+from sqlalchemy import and_, exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import OutboxEvent, ProcessingRun
@@ -55,6 +57,7 @@ class ExpiredRun:
     status: str
     started_at: datetime | None
     attempt_count: int
+    fencing_token: int
 
 
 async def select_lost_dispatches(
@@ -154,6 +157,7 @@ async def select_expired_index_runs(
             ProcessingRun.status,
             ProcessingRun.started_at,
             ProcessingRun.attempt_count,
+            ProcessingRun.fencing_token,
         )
         .where(
             ProcessingRun.stage == STAGE_INDEX,
@@ -174,35 +178,30 @@ async def select_expired_index_runs(
             status=row.status,
             started_at=row.started_at,
             attempt_count=row.attempt_count,
+            fencing_token=row.fencing_token,
         )
         for row in rows
     ]
 
 
-def mark_lease_expired(run: ProcessingRun, *, now: datetime) -> None:
-    """Closes a dead run so that `claim_run` accepts its next delivery."""
-    run.status = "failed"
-    run.error_code = LEASE_EXPIRED_CODE
-    run.finished_at = now
-
-
-async def mark_lease_expired_if_unchanged(
-    db: AsyncSession, candidate: ExpiredRun, *, now: datetime
+async def close_expired_run(
+    db: AsyncSession, *, run_id: uuid.UUID, fencing_token: int, now: datetime
 ) -> bool:
-    """Closes the run only while it still matches the selected snapshot (J2.11)."""
-    run = await db.scalar(
-        select(ProcessingRun)
-        .where(ProcessingRun.id == candidate.id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
+    """Closes an expired run with a compare-and-set on `(id, token, status='running')`.
+
+    The token is the one the selection read. If a claim renewed the run in between, the token
+    changed and the update affects no row: the reconciler must not close a live lease.
+    """
+    result = await db.execute(
+        update(ProcessingRun)
+        .where(
+            ProcessingRun.id == run_id,
+            ProcessingRun.fencing_token == fencing_token,
+            ProcessingRun.status == "running",
+            ProcessingRun.started_at < now - LEASE,
+        )
+        .values(status="failed", error_code=LEASE_EXPIRED_CODE, finished_at=now)
+        .returning(ProcessingRun.id)
+        .execution_options(synchronize_session=False)
     )
-    if run is None:
-        return False
-    if (
-        run.status != candidate.status
-        or run.started_at != candidate.started_at
-        or run.attempt_count != candidate.attempt_count
-    ):
-        return False
-    mark_lease_expired(run, now=now)
-    return True
+    return result.scalar_one_or_none() is not None

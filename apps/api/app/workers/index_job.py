@@ -32,6 +32,10 @@ from app.services import indexing
 from app.services.embeddings import EmbeddingProvider, HttpEmbeddingProvider
 from app.services.index_job import (
     IndexSkip,
+    RunClaim,
+    RunFenced,
+    RunFenceOutcome,
+    activate_claimed_generation,
     claim_run,
     finish_run,
     generation_for_version,
@@ -66,7 +70,7 @@ RETRY_EXHAUSTED_CODE: Final = "retry_exhausted"
 @dataclass(frozen=True)
 class _Claim:
     user_id: uuid.UUID
-    run_id: uuid.UUID
+    run: RunClaim
 
 
 async def index(ctx: dict[str, Any], audio_id: str, transcript_version: int) -> None:
@@ -117,16 +121,22 @@ async def run_index(
         return
     version = index_version_for(audio_id, transcript_version)
     try:
-        skip = await _index_generation(sessions, providers, claim.user_id, version)
+        skip = await _index_generation(sessions, providers, claim, version)
+    except RunFenced:
+        # The reconciler closed and requeued this run: the recovery delivery owns it now.
+        logger.info("index.noop reason=run_fenced run_id=%s", claim.run.run_id)
+        return
     except Exception as exc:
-        await _record(sessions, claim.run_id, "failed", _error_code(exc, retries_left))
+        await _record(
+            sessions, claim.run, "failed", _error_code(exc, retries_left)
+        )
         raise
     if skip is None or skip is IndexSkip.ALREADY_INDEXED:
-        await _record(sessions, claim.run_id, "succeeded", None)
+        await _record(sessions, claim.run, "succeeded", None)
         return
     logger.info("index.noop reason=%s audio_id=%s transcript_version=%s",
                 skip, audio_id, transcript_version)
-    await _record(sessions, claim.run_id, "cancelled", SUPERSEDED_CODE)
+    await _record(sessions, claim.run, "cancelled", SUPERSEDED_CODE)
 
 
 async def _claim(
@@ -146,16 +156,17 @@ async def _claim(
         )
         if isinstance(claimed, IndexSkip):
             return claimed
-        return _Claim(user_id=revalidated, run_id=claimed)
+        return _Claim(user_id=revalidated, run=claimed)
 
 
 async def _index_generation(
     sessions: SessionFactory,
     providers: ProviderFactory,
-    user_id: uuid.UUID,
+    claim: _Claim,
     version: str,
 ) -> IndexSkip | None:
     """Builds and activates the generation. Returns a skip when it already settled, else None."""
+    user_id = claim.user_id
     async with sessions() as db:
         existing = await generation_for_version(db, user_id=user_id, version=version)
         if existing is None:
@@ -173,19 +184,29 @@ async def _index_generation(
             db, user_id=user_id, version=version, provider=provider, text_kind=TEXT_KIND
         )
     async with sessions() as db:
-        await indexing.activate_generation(db, user_id=user_id, version=version)
+        await activate_claimed_generation(
+            db, user_id=user_id, version=version, claim=claim.run
+        )
     return None
 
 
 async def _record(
-    sessions: SessionFactory, run_id: uuid.UUID, status: str, error_code: str | None
+    sessions: SessionFactory, claim: RunClaim, status: str, error_code: str | None
 ) -> None:
     try:
         async with sessions() as db:
-            await finish_run(db, run_id=run_id, status=status, error_code=error_code)
+            outcome = await finish_run(
+                db,
+                run_id=claim.run_id,
+                fencing_token=claim.fencing_token,
+                status=status,
+                error_code=error_code,
+            )
+        if outcome is RunFenceOutcome.FENCED:
+            logger.info("index.noop reason=run_fenced run_id=%s", claim.run_id)
     except Exception as exc:
         # The lease expires on its own; the run is then claimable again.
-        logger.warning("index.record_failed run_id=%s error=%s", run_id, type(exc).__name__)
+        logger.warning("index.record_failed run_id=%s error=%s", claim.run_id, type(exc).__name__)
 
 
 def _error_code(exc: Exception, retries_left: bool) -> str:

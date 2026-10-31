@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from arq.connections import ArqRedis
 from arq.worker import Retry
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,10 +27,24 @@ from app.models import (
     Segment,
 )
 from app.services.embeddings import EmbeddingInputTooLong, EmbeddingRateLimited
-from app.services.index_job import index_version_for
-from app.services.indexing import INDEX_ACTIVE, INDEX_BUILDING
+from app.services.index_job import (
+    RunClaim,
+    RunFenced,
+    RunFenceOutcome,
+    activate_claimed_generation,
+    claim_run,
+    finish_run,
+    index_version_for,
+)
+from app.services.indexing import (
+    INDEX_ACTIVE,
+    INDEX_BUILDING,
+    build_generation,
+    create_generation,
+)
 from app.services.runs import RUN_CONFIG_VERSION
 from app.workers.index_job import PROVIDERS_KEY, SESSIONS_KEY, index
+from app.workers.reconciler import reconcile_once
 from tests.integration.actors import Actor, make_actor, make_class_with_transcript
 from tests.unit.test_indexing import FakeProvider
 
@@ -66,6 +81,13 @@ def _ctx(db: AsyncSession, provider: FakeProvider, job_try: int = 1) -> dict[str
         return provider
 
     return {SESSIONS_KEY: sessions, PROVIDERS_KEY: providers, "job_try": job_try}
+
+
+def _sessions(db: AsyncSession) -> Any:
+    def factory() -> Any:
+        return _same_session(db)
+
+    return factory
 
 
 async def _indexable(
@@ -144,6 +166,7 @@ async def test_ready_audio_indexes_once(
     run = await _run(db_session, audio)
     assert run is not None
     assert run.status == "succeeded"
+    assert run.fencing_token == 1  # the claim that produced this activation
     assert len(provider.calls) == 1
 
 
@@ -186,6 +209,150 @@ async def test_expired_lease_is_taken_over(
     await index(_ctx(db_session, FakeProvider()), str(audio.id), 1)
 
     assert await _generations(db_session, actor, INDEX_ACTIVE) == 1
+
+
+async def test_each_claim_takes_the_next_fencing_token(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A takeover is a new claim: the old token cannot finish the row the new one owns."""
+    actor, audio, _attempt = await _indexable(db_session, monkeypatch)
+    now = datetime.now(UTC)
+
+    first = await claim_run(
+        db_session,
+        user_id=actor.user_id,
+        audio_id=audio.id,
+        transcript_version=1,
+        now=now - timedelta(hours=1),
+    )
+    second = await claim_run(
+        db_session, user_id=actor.user_id, audio_id=audio.id, transcript_version=1, now=now
+    )
+
+    assert isinstance(first, RunClaim) and isinstance(second, RunClaim)
+    assert second.run_id == first.run_id
+    assert (first.fencing_token, second.fencing_token) == (1, 2)
+    stale = await finish_run(
+        db_session,
+        run_id=first.run_id,
+        fencing_token=first.fencing_token,
+        status="succeeded",
+        error_code=None,
+    )
+    assert stale is RunFenceOutcome.FENCED
+    run = await _run(db_session, audio)
+    assert run is not None
+    await db_session.refresh(run)
+    assert (run.status, run.fencing_token) == ("running", 2)
+
+    applied = await finish_run(
+        db_session,
+        run_id=second.run_id,
+        fencing_token=second.fencing_token,
+        status="succeeded",
+        error_code=None,
+    )
+    assert applied is RunFenceOutcome.APPLIED
+    await db_session.refresh(run)
+    assert run.status == "succeeded"
+
+
+async def test_finish_after_the_reconciler_reclaimed_the_run_is_fenced(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool, queue = redis
+    actor, audio, _attempt = await _indexable(db_session, monkeypatch)
+    now = datetime.now(UTC)
+    claim = await claim_run(
+        db_session,
+        user_id=actor.user_id,
+        audio_id=audio.id,
+        transcript_version=1,
+        now=now - timedelta(hours=1),
+    )
+    assert isinstance(claim, RunClaim)
+
+    report = await reconcile_once(_sessions(db_session), pool, queue_name=queue, now=now)
+
+    assert report["expired_runs"] == 1
+    outcome = await finish_run(
+        db_session,
+        run_id=claim.run_id,
+        fencing_token=claim.fencing_token,
+        status="succeeded",
+        error_code=None,
+    )
+    assert outcome is RunFenceOutcome.FENCED  # typed no-op, never overwrites the terminal row
+    run = await _run(db_session, audio)
+    assert run is not None
+    await db_session.refresh(run)
+    assert (run.status, run.error_code, run.fencing_token) == (
+        "failed",
+        "lease_expired",
+        claim.fencing_token,
+    )
+
+
+async def test_activation_after_orphan_cleanup_is_refused(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool, queue = redis
+    actor, audio, _attempt = await _indexable(db_session, monkeypatch)
+    now = datetime.now(UTC)
+    claim = await claim_run(
+        db_session,
+        user_id=actor.user_id,
+        audio_id=audio.id,
+        transcript_version=1,
+        now=now - timedelta(hours=1),
+    )
+    assert isinstance(claim, RunClaim)
+    version = index_version_for(audio.id, 1)
+    await create_generation(
+        db_session, user_id=actor.user_id, version=version, commit=False
+    )
+    await db_session.flush()
+    await build_generation(
+        db_session,
+        user_id=actor.user_id,
+        version=version,
+        provider=FakeProvider(),
+        text_kind="real",
+    )
+
+    report = await reconcile_once(_sessions(db_session), pool, queue_name=queue, now=now)
+
+    assert report["expired_runs"] == 1
+    assert report["orphan_builds"] == 1  # the stale worker's build was discarded
+    with pytest.raises(RunFenced):
+        await activate_claimed_generation(
+            db_session, user_id=actor.user_id, version=version, claim=claim
+        )
+    assert await _generations(db_session, actor, INDEX_ACTIVE) == 0
+
+
+async def test_a_stale_claim_cannot_activate_a_second_time(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    actor, audio, _attempt = await _indexable(db_session, monkeypatch)
+    provider = FakeProvider()
+    await index(_ctx(db_session, provider), str(audio.id), 1)
+    run = await _run(db_session, audio)
+    assert run is not None
+    await db_session.refresh(run)
+    assert (run.status, run.fencing_token) == ("succeeded", 1)
+
+    stale = RunClaim(run_id=run.id, fencing_token=0)
+    with pytest.raises(RunFenced):
+        await activate_claimed_generation(
+            db_session,
+            user_id=actor.user_id,
+            version=index_version_for(audio.id, 1),
+            claim=stale,
+        )
+
+    assert await _generations(db_session, actor, INDEX_ACTIVE) == 1
+    assert len(provider.calls) == 1
 
 
 async def test_tombstoned_audio_is_a_noop(
