@@ -142,12 +142,60 @@ starts with `SET LOCAL ROLE` and binds `app.user_id` (or, for the jobs role, the
 not carry a tenant. `MAULWURF_DATABASE_ROLE` selects the API role; compose overrides it to
 `maulwurf_jobs` for the two ARQ processes and ingest uses `maulwurf_ingest` unconditionally.
 
-**Data migrations:** run `alembic upgrade head` with the DSN owner. In local compose that
-user is a superuser, which bypasses `FORCE ROW LEVEL SECURITY`. In staging/production the
-migration role must be a superuser or hold `BYPASSRLS` (a migration account, never the API
-account); the app, jobs and ingest roles never receive it. A data migration that runs as a
-non-superuser owner sees only the rows its own policies allow, so grant the bypass to the
-migration role before applying a revision that reads or rewrites tenant rows.
+**Data migrations under `FORCE ROW LEVEL SECURITY` (staging and production):** `FORCE` makes
+the table owner subject to the RLS policies too, so an owner connection without `BYPASSRLS`
+does not see tenant rows (and a policy that reads `app.user_id` can raise instead of
+returning zero rows). `alembic upgrade head` runs as the DSN owner. In local compose that
+user is a superuser, which bypasses RLS. Staging and production follow this procedure:
+
+1. Classify the revision. DDL-only revisions (new columns, indexes, policies, grants) run
+   as the owner and need no bypass. A revision that reads or rewrites tenant rows in
+   `upgrade()` or `downgrade()` needs the bypass window below.
+2. Preflight the account:
+
+   ```sql
+   SELECT current_user, rolsuper, rolbypassrls
+   FROM pg_roles WHERE rolname = current_user;
+   ```
+
+   The migration account needs `CREATEROLE`, or the three runtime roles must be pre-created.
+   The API, worker and ingest accounts must never hold `BYPASSRLS`.
+3. If the revision touches tenant rows, open the window as a superuser:
+
+   ```sql
+   ALTER ROLE "<migration_account>" BYPASSRLS;
+   ```
+
+4. Apply the revision and keep the migration log as evidence:
+
+   ```bash
+   alembic upgrade head
+   ```
+
+5. Close the window in a `finally`/same change window, even if the revision fails:
+
+   ```sql
+   ALTER ROLE "<migration_account>" NOBYPASSRLS;
+   ```
+
+6. Verify before declaring the deployment done:
+
+   ```sql
+   SELECT rolname, rolsuper, rolbypassrls FROM pg_roles
+   WHERE rolname IN ('<migration_account>', 'maulwurf_app', 'maulwurf_jobs', 'maulwurf_ingest');
+   ```
+
+   ```bash
+   alembic current   # expected: head
+   ```
+
+   A tenant-bound read as the app role (`SET LOCAL ROLE maulwurf_app` plus
+   `set_config('app.user_id', '<uuid>', true)`) must still return only that tenant's rows.
+   Never leave `BYPASSRLS` granted after the window closes, and never grant it to a runtime
+   role. The runtime grants also exclude write access to `alembic_version` (SELECT only).
+
+The dedicated production deployment runbook is still pending (J4.x); until it lands, this
+section is the canonical staging/production procedure for RLS and data migrations.
 
 The migration account also needs `CREATEROLE` (or the three roles must be pre-created), and
 the DSN user of each runtime must be a member of its role: the migration grants membership
