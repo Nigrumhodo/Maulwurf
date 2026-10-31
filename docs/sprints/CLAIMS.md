@@ -144,7 +144,7 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | claim | J2.2 | jpinillaz | done | 2026-10-30 | not applicable | — / area A | Merged in #91: in-job revalidation, `processing_runs` lease, atomic activation, max 3 transient retries (I-S2-JF-02). Indexes nothing while D3-Text is open |
 | claim | J2.5 | jpinillaz | in progress | 2026-10-30 | not applicable | — / area S, area A | Merged in #92: JSON logs with ids and redaction, `/internal/metrics`, `cleanup.failed` alert. Not `done`: the mandatory C-S2-JF-10 compose capture, alert destination and scrape config are still pending |
 | claim | J2.4 | jpinillaz | in progress | 2026-10-30 | not applicable | — / area A, area S | Reconciler: dead attempts and expired `running` index runs, stuck outbox re-published, lease duplicates, the `HELD` attempt left after token loss (J2.7), orphan `building`/`retired` generations (I-S2-JF-04); branch `feature/J2.4-reconciler` |
-| claim | J2.3 | jpinillaz | in progress | 2026-10-30 | not applicable | — / area A | Redis-loss recovery: after `FLUSHALL` jobs are regenerated from DB/outbox, never audio (I-S2-JF-03); branch `feature/J2.3-redis-loss-recovery`, stacked on J2.4 |
+| claim | J2.3 | jpinillaz | in progress | 2026-10-30 | not applicable | — / area A | Redis-loss recovery: after losing the queued job (FLUSHDB on the isolated test DB) jobs are regenerated from DB/outbox, never audio (I-S2-JF-03); branch `feature/J2.3-redis-loss-recovery`, stacked on J2.4 |
 
 ## 4. Change history
 
