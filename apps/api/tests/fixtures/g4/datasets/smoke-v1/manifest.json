@@ -1,0 +1,29 @@
+{
+  "dataset_version": "g4-smoke-v1",
+  "created_at": "2026-10-30",
+  "provenance": "authored synthetic class transcripts; no real classes, audio or PII",
+  "languages": [
+    "es",
+    "en",
+    "fr"
+  ],
+  "test": {
+    "per_language": 4,
+    "answerable": 3,
+    "unanswerable": 1
+  },
+  "development": {
+    "per_language": 1,
+    "answerable": 0,
+    "unanswerable": 1
+  },
+  "files": {
+    "corpus/es.jsonl": "sha256:51f4ec34f8fd66de0d9d36ef9550d7ff9fa181f9e525697b27ad4ebae29edd3f",
+    "items/es.jsonl": "sha256:f18affb2e3ffd4e604089aa67d884e6311f95937a459f8dfb810b048f2eea689",
+    "corpus/en.jsonl": "sha256:da77e68966975c135bb7dfeb9055268b295f1fe99c7289d3364e0349046cdb3a",
+    "items/en.jsonl": "sha256:e9f5fddbd0594f04e00b95b4e7952e7e344f28645263147839b5ef8bdcc4dcab",
+    "corpus/fr.jsonl": "sha256:2f26b2fd1247c83d0ada6186e8196ad757068b963ac8351dc66b4461634df219",
+    "items/fr.jsonl": "sha256:75b9ae31b93b7041e4d544def273ad2dcba511a9f5237d2d46fc4a69927ae5a6"
+  },
+  "content_sha256": "7fb321ddea17a4232dc2a8ca5f5be25c9f3dca4b5a30f20c9e486b69623518b4"
+}

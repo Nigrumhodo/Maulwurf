@@ -63,3 +63,6 @@ Thumbs.db
 A2.3_CONTEXT.md
 A2.4_CONTEXT.md
 docs/context/
+
+# --- G4 evaluation (L2.7): raw artifacts contain question/answer text ---
+var/eval/
