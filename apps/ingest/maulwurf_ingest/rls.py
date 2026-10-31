@@ -21,6 +21,10 @@ import asyncpg
 
 DATABASE_ROLE = "maulwurf_ingest"
 
+# Production always passes a pool; the API integration sweep passes the test transaction's
+# connection so it sees uncommitted rows, so both shapes are accepted.
+type Executor = asyncpg.Pool | asyncpg.Connection
+
 
 async def bind_transaction(
     connection: asyncpg.Connection, user_id: uuid.UUID | None
@@ -35,39 +39,57 @@ async def bind_transaction(
 
 @asynccontextmanager
 async def transaction(
-    pool: asyncpg.Pool, user_id: uuid.UUID | None
+    executor: Executor, user_id: uuid.UUID | None
 ) -> AsyncIterator[asyncpg.Connection]:
     """One transaction as the constrained ingest role, optionally tenant-bound."""
-    async with pool.acquire() as connection, connection.transaction():
+    if isinstance(executor, asyncpg.Connection):
+        connection = executor
+        if connection.is_in_transaction():
+            # A caller-owned transaction (tests): SET LOCAL lasts until that transaction
+            # ends, so the role and tenant are restored before returning to the caller.
+            await bind_transaction(connection, user_id)
+            try:
+                yield connection
+            except BaseException:
+                raise
+            else:
+                await connection.execute("RESET ROLE")
+                await connection.execute("RESET app.user_id")
+            return
+        async with connection.transaction():
+            await bind_transaction(connection, user_id)
+            yield connection
+        return
+    async with executor.acquire() as connection, connection.transaction():
         await bind_transaction(connection, user_id)
         yield connection
 
 
 async def execute(
-    pool: asyncpg.Pool, user_id: uuid.UUID | None, query: str, *args: object
+    executor: Executor, user_id: uuid.UUID | None, query: str, *args: object
 ) -> str:
-    async with transaction(pool, user_id) as connection:
+    async with transaction(executor, user_id) as connection:
         status: str = await connection.execute(query, *args)
         return status
 
 
 async def fetchrow(
-    pool: asyncpg.Pool, user_id: uuid.UUID | None, query: str, *args: object
+    executor: Executor, user_id: uuid.UUID | None, query: str, *args: object
 ) -> asyncpg.Record | None:
-    async with transaction(pool, user_id) as connection:
+    async with transaction(executor, user_id) as connection:
         return await connection.fetchrow(query, *args)
 
 
 async def fetch(
-    pool: asyncpg.Pool, user_id: uuid.UUID | None, query: str, *args: object
+    executor: Executor, user_id: uuid.UUID | None, query: str, *args: object
 ) -> list[asyncpg.Record]:
-    async with transaction(pool, user_id) as connection:
+    async with transaction(executor, user_id) as connection:
         rows: list[asyncpg.Record] = await connection.fetch(query, *args)
         return rows
 
 
 async def fetchval(
-    pool: asyncpg.Pool, user_id: uuid.UUID | None, query: str, *args: object
+    executor: Executor, user_id: uuid.UUID | None, query: str, *args: object
 ) -> object:
-    async with transaction(pool, user_id) as connection:
+    async with transaction(executor, user_id) as connection:
         return await connection.fetchval(query, *args)

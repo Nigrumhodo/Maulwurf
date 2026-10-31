@@ -126,8 +126,10 @@ def _tenant_policy(table: str, *, safe_user: bool) -> None:
     # `sessions`/`users` are queried before the request knows its user_id, so a missing
     # GUC must mean "no rows", not a database error there. Every other tenant table
     # fails closed: current_setting without missing_ok raises when app.user_id is unset.
+    # A pooled connection can keep the custom GUC defined as '' after a commit; NULLIF
+    # makes the safe policies treat that as "not set" instead of casting '' to uuid.
     user_setting = (
-        "current_setting('app.user_id', true)::uuid"
+        "NULLIF(current_setting('app.user_id', true), '')::uuid"
         if safe_user
         else "current_setting('app.user_id')::uuid"
     )
@@ -155,21 +157,21 @@ def _bootstrap_policies() -> None:
         f"""
         CREATE POLICY auth_session_lookup ON sessions
           FOR SELECT TO {_quote(APP_ROLE)}
-          USING (token_hash = current_setting('app.session_token_hash', true))
+          USING (token_hash = NULLIF(current_setting('app.session_token_hash', true), ''))
         """
     )
     op.execute(
         f"""
         CREATE POLICY auth_user_lookup ON users
           FOR SELECT TO {_quote(APP_ROLE)}
-          USING (google_sub = current_setting('app.google_sub', true))
+          USING (google_sub = NULLIF(current_setting('app.google_sub', true), ''))
         """
     )
     op.execute(
         f"""
         CREATE POLICY auth_user_insert ON users
           FOR INSERT TO {_quote(APP_ROLE)}
-          WITH CHECK (google_sub = current_setting('app.google_sub', true))
+          WITH CHECK (google_sub = NULLIF(current_setting('app.google_sub', true), ''))
         """
     )
 
@@ -184,16 +186,16 @@ def _cross_tenant_policies() -> None:
             f"""
             CREATE POLICY jobs_tenant ON {_quote(table)}
               FOR ALL TO {_quote(JOBS_ROLE)}
-              USING ({column} = current_setting('app.user_id', true)::uuid)
-              WITH CHECK ({column} = current_setting('app.user_id', true)::uuid)
+              USING ({column} = NULLIF(current_setting('app.user_id', true), '')::uuid)
+              WITH CHECK ({column} = NULLIF(current_setting('app.user_id', true), '')::uuid)
             """
         )
         op.execute(
             f"""
             CREATE POLICY jobs_cross_tenant ON {_quote(table)}
               FOR ALL TO {_quote(JOBS_ROLE)}
-              USING (current_setting('app.cross_tenant', true) = 'on')
-              WITH CHECK (current_setting('app.cross_tenant', true) = 'on')
+              USING (NULLIF(current_setting('app.cross_tenant', true), '') = 'on')
+              WITH CHECK (NULLIF(current_setting('app.cross_tenant', true), '') = 'on')
             """
         )
     op.execute(

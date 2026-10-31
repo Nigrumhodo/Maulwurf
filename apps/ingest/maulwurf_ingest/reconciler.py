@@ -193,7 +193,7 @@ RETURNING ia.id, ia.user_id
 """
 
 
-async def sweep_stranded(pool: asyncpg.Pool) -> tuple[uuid.UUID, ...]:
+async def sweep_stranded(pool: rls.Executor) -> tuple[uuid.UUID, ...]:
     """End receiving/transcribing attempts whose lease expired. Bounded, never retranscribes.
 
     Committed attempts sit in ``transcript_committed_cleanup_pending`` and are not selected.

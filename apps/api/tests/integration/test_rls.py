@@ -280,8 +280,21 @@ async def test_pooled_connection_does_not_leak_the_tenant(migrated_database_url:
                     text("SELECT current_setting('app.user_id', true)")
                 )
                 current_role = await connection.scalar(text("SELECT current_user"))
-                assert leaked is None
+                # PostgreSQL may keep the custom GUC defined as '' after a local set;
+                # what matters is that it is not a user id and the role was reset.
+                assert leaked in (None, "")
                 assert str(current_role) != APP_ROLE
+
+        # The safe bootstrap policies must still answer "no rows" for the empty value
+        # instead of casting '' to uuid.
+        async with engine.connect() as connection:
+            async with connection.begin():
+                await connection.execute(text(f'SET LOCAL ROLE "{APP_ROLE}"'))
+                for table in ("sessions", "users"):
+                    count = await connection.scalar(
+                        text(f"SELECT count(*) FROM {table}")  # noqa: S608 - fixed names
+                    )
+                    assert count == 0, table
     finally:
         await engine.dispose()
 
