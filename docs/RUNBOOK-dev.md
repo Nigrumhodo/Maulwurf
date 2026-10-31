@@ -102,7 +102,7 @@ the same time, an advisory lock serializes them; the one waiting more than 120 s
 of hanging.
 
 ```bash
-docker compose exec api alembic current            # applied revision (head; 0001–0003)
+docker compose exec api alembic current            # applied revision (head; 0001–0004)
 docker compose exec api alembic upgrade head       # apply manually, e.g. after a pull
 docker compose exec api alembic downgrade -1       # rollback to the previous revision
 docker compose exec api alembic history            # revision chain

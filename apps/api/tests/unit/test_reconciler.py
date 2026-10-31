@@ -3,12 +3,10 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from app.models import OutboxEvent, ProcessingRun
+from app.models import OutboxEvent
 from app.services.index_job import LEASE
 from app.services.reconciliation import (
     DISPATCH_GRACE,
-    LEASE_EXPIRED_CODE,
-    mark_lease_expired,
     reset_to_pending,
 )
 from app.workers.index_job import JOB_TIMEOUT_S, MAX_TRIES
@@ -41,14 +39,3 @@ def test_reset_to_pending_clears_the_publication_stamp() -> None:
 
     assert event.status == "pending"
     assert event.published_at is None
-
-
-def test_mark_lease_expired_closes_the_run_with_its_code() -> None:
-    now = datetime.now(UTC)
-    run = ProcessingRun(status="running", started_at=now - LEASE - timedelta(seconds=1))
-
-    mark_lease_expired(run, now=now)
-
-    assert run.status == "failed"
-    assert run.error_code == LEASE_EXPIRED_CODE == "lease_expired"
-    assert run.finished_at == now

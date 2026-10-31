@@ -6,10 +6,13 @@ check here is the real guard. The tenant is read from the audio row, never from 
 
 The claim is the `processing_runs` row of stage `index`. Its unique key makes a redelivery
 land on the same row, and its status is the lease: a `running` row blocks other workers until
-`LEASE` expires, which covers a worker that died mid-job.
+`LEASE` expires, which covers a worker that died mid-job. Each claim takes the next
+`fencing_token`, so a worker that was silent past `LEASE` cannot complete the run or activate
+the generation after the reconciler closed it (A2.20).
 """
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
@@ -18,7 +21,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Audio, IndexGeneration, ProcessingRun, Transcript, User
-from app.services.indexing import INDEX_ACTIVE, INDEX_RETIRED
+from app.services.indexing import INDEX_ACTIVE, INDEX_RETIRED, activate_generation
 from app.services.runs import RUN_CONFIG_VERSION, latest_attempt
 
 STAGE_INDEX = "index"
@@ -37,6 +40,25 @@ class IndexSkip(StrEnum):
     ALREADY_INDEXED = "already_indexed"
     IN_PROGRESS = "in_progress"
     SUPERSEDED = "superseded"
+
+
+class RunFenceOutcome(StrEnum):
+    """Result of a fenced write on a processing run."""
+
+    APPLIED = "applied"
+    FENCED = "fenced"
+
+
+class RunFenced(Exception):
+    """The claim that tries to activate a generation no longer owns a running run."""
+
+
+@dataclass(frozen=True)
+class RunClaim:
+    """The run lease a delivery holds: its row and the token that fences stale workers."""
+
+    run_id: uuid.UUID
+    fencing_token: int
 
 
 def index_version_for(audio_id: uuid.UUID, transcript_version: int) -> str:
@@ -97,11 +119,12 @@ async def claim_run(
     audio_id: uuid.UUID,
     transcript_version: int,
     now: datetime | None = None,
-) -> uuid.UUID | IndexSkip:
-    """Takes the run lease and returns the run id, or the reason another delivery owns it.
+) -> RunClaim | IndexSkip:
+    """Takes the run lease and returns the claim, or the reason another delivery owns it.
 
     Runs under `FOR UPDATE`, so two deliveries that race on the same run queue up behind each
-    other and the second one reads the state the first one left.
+    other and the second one reads the state the first one left. Every successful claim takes
+    the next fencing token: the previous claim can no longer finish or activate this run.
     """
     await db.execute(
         pg_insert(ProcessingRun)
@@ -141,7 +164,8 @@ async def claim_run(
     run.finished_at = None
     run.error_code = None
     run.attempt_count += 1
-    return run.id
+    run.fencing_token += 1
+    return RunClaim(run_id=run.id, fencing_token=run.fencing_token)
 
 
 def _lease_expired(run: ProcessingRun, now: datetime) -> bool:
@@ -149,15 +173,73 @@ def _lease_expired(run: ProcessingRun, now: datetime) -> bool:
 
 
 async def finish_run(
-    db: AsyncSession, *, run_id: uuid.UUID, status: str, error_code: str | None
-) -> None:
-    """Records the terminal state of a claimed run. `status` is one of the CHECK values."""
-    await db.execute(
+    db: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    fencing_token: int,
+    status: str,
+    error_code: str | None,
+) -> RunFenceOutcome:
+    """Records the terminal state only while the claim still owns the running run.
+
+    `FENCED` is the typed no-op for a worker the reconciler overtook: it leaves the terminal
+    state (and the requeued delivery) untouched.
+    """
+    result = await db.execute(
         update(ProcessingRun)
-        .where(ProcessingRun.id == run_id)
+        .where(
+            ProcessingRun.id == run_id,
+            ProcessingRun.fencing_token == fencing_token,
+            ProcessingRun.status == "running",
+        )
         .values(status=status, error_code=error_code, finished_at=datetime.now(UTC))
+        .returning(ProcessingRun.id)
         .execution_options(synchronize_session=False)
     )
+    if result.scalar_one_or_none() is None:
+        return RunFenceOutcome.FENCED
+    return RunFenceOutcome.APPLIED
+
+
+async def require_run_fence(
+    db: AsyncSession, *, run_id: uuid.UUID, fencing_token: int
+) -> None:
+    """Locks the run row and rejects a claim that the reconciler already reclaimed.
+
+    The `FOR UPDATE` is what makes the later activation atomic with this check: a reconciler
+    close of the same row either happens before (and this call sees a terminal run) or waits
+    until the activation transaction commits.
+    """
+    locked = await db.scalar(
+        select(ProcessingRun.id)
+        .where(
+            ProcessingRun.id == run_id,
+            ProcessingRun.fencing_token == fencing_token,
+            ProcessingRun.status == "running",
+        )
+        .with_for_update()
+    )
+    if locked is None:
+        raise RunFenced(f"run {run_id} is not owned by fencing token {fencing_token}")
+
+
+async def activate_claimed_generation(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    version: str,
+    claim: RunClaim,
+    commit: bool = True,
+) -> IndexGeneration:
+    """Activates the generation only if the claim still holds the run lease.
+
+    Both statements share the caller's transaction, so a stale claim cannot retire the active
+    generation or point the classes at a build the reconciler already discarded.
+    """
+    await require_run_fence(
+        db, run_id=claim.run_id, fencing_token=claim.fencing_token
+    )
+    return await activate_generation(db, user_id=user_id, version=version, commit=commit)
 
 
 async def generation_for_version(

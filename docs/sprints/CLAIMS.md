@@ -151,7 +151,7 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | claim | L2.11 | jpinillaz | done | 2026-10-31 | not applicable | — / lead, area L | Merged in #100 (e97a86d): status/path reconciliation and `scripts/docs/check_refs.py` in the CI `docs` job; 652 paths checked. `CLAIMS.md` discrepancies were reported, not rewritten (C-S2-JL-13) |
 | claim | J2.11 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area J | Hoplite C3: keep Redis I/O outside `FOR UPDATE` row locks in the reconciler (I-S2-JF-14); branch `feature/J2.11-reconciler-lock-scope` |
 | claim | A2.20 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area A, area J | Hoplite C4: `processing_runs` fencing so a stale worker cannot finish a reclaimed run (I-S2-JF-15); branch `feature/A2.20-run-fencing`, migration after `0003` |
-| claim | A2.18 | jpinillaz | pending | 2026-10-31 | not applicable | — / area A | Schema integrity follow-up: FK indexes, version invariants and drift test (I-S2-AN-17). Claimed but not started; migration must follow A2.20's revision |
+| claim | A2.18 | jpinillaz | pending | 2026-10-31 | not applicable | — / area A | Schema integrity follow-up: FK indexes, version invariants, drift test and the build-phase fence left by ADR-0009 (I-S2-AN-17). Claimed but not started; migration must follow A2.20's revision |
 | claim | A2.19 | jpinillaz | pending | 2026-10-31 | not applicable | — / area A | Contract conformance of A1.8/A2.3/A2.4: TTL, language, token codes, `/me`, single limit source (U-S2-AN-18). Claimed but not started |
 
 ## 4. Change history

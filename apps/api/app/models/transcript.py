@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     Double,
@@ -105,6 +106,9 @@ class ProcessingRun(TenantOwned, Base):
     config_version: Mapped[str] = mapped_column(Text, nullable=False)
     prompt_version: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    # Monotonic per run: every successful claim takes a new value, so a worker from an
+    # earlier claim cannot complete or activate the work of the current one.
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     error_code: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

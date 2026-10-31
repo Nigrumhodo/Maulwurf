@@ -42,7 +42,7 @@ from app.services.generation_cleanup import (
 )
 from app.services.reconciliation import (
     ExpiredRun,
-    mark_lease_expired_if_unchanged,
+    close_expired_run,
     reset_to_pending_if_unchanged,
     select_expired_index_runs,
     select_lost_dispatches,
@@ -165,7 +165,9 @@ async def _recover_expired(
             # closed in this batch.
             try:
                 async with db.begin_nested():
-                    applied = await mark_lease_expired_if_unchanged(db, run, now=now)
+                    applied = await close_expired_run(
+                        db, run_id=run.id, fencing_token=run.fencing_token, now=now
+                    )
             except Exception as exc:
                 logger.warning(
                     "reconciler.lease_cas_failed run_id=%s error=%s",
@@ -173,9 +175,13 @@ async def _recover_expired(
                     type(exc).__name__,
                 )
                 continue
-            if applied:
-                closed.append((run, has_retry_budget(run.attempt_count)))
-                logger.info("reconciler.lease_expired run_id=%s", run.id)
+            if not applied:
+                # A renewed claim changed the token after the selection: never close it.
+                logger.info("reconciler.lease_renewed run_id=%s", run.id)
+                continue
+            requeue = has_retry_budget(run.attempt_count)
+            closed.append((run, requeue))
+            logger.info("reconciler.lease_expired run_id=%s requeued=%s", run.id, requeue)
         await db.commit()
 
     for run, requeue in closed:

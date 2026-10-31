@@ -43,6 +43,7 @@ from app.models import (
 )
 from app.services.index_job import index_version_for
 from app.services.outbox import Outcome
+from app.services.reconciliation import close_expired_run
 from app.services.runs import RUN_CONFIG_VERSION
 from app.workers.dispatcher import dispatch_pending
 from app.workers.index_job import MAX_TRIES, PROVIDERS_KEY, SESSIONS_KEY, index
@@ -118,6 +119,7 @@ def _run(
     started_at: datetime | None,
     attempt_count: int = 1,
     error_code: str | None = None,
+    fencing_token: int = 0,
 ) -> ProcessingRun:
     return ProcessingRun(
         user_id=actor.user_id,
@@ -129,6 +131,7 @@ def _run(
         started_at=started_at,
         attempt_count=attempt_count,
         error_code=error_code,
+        fencing_token=fencing_token,
     )
 
 
@@ -419,6 +422,39 @@ async def test_expired_run_is_closed_and_reenqueued(
     jobs = await _queued_index_jobs(pool, queue)
     assert [job.args for job in jobs] == [(str(audio.id), 1)]
     assert jobs[0].job_id == f"reconcile-index:{run.id}:1"
+
+
+async def test_expired_run_close_is_a_compare_and_set(
+    db_session: AsyncSession,
+) -> None:
+    now = datetime.now(UTC)
+    actor, audio, _transcript = await _class(db_session)
+    run = _run(
+        actor,
+        audio,
+        status="running",
+        started_at=now - timedelta(hours=1),
+        fencing_token=3,
+    )
+    db_session.add(run)
+    await db_session.flush()
+
+    # A token from an older claim must not close the row the current claim owns.
+    assert not await close_expired_run(
+        db_session, run_id=run.id, fencing_token=2, now=now
+    )
+    await db_session.refresh(run)
+    assert run.status == "running"
+
+    assert await close_expired_run(
+        db_session, run_id=run.id, fencing_token=3, now=now
+    )
+    await db_session.refresh(run)
+    assert (run.status, run.error_code) == ("failed", "lease_expired")
+    # A second cycle cannot close the already terminal row again.
+    assert not await close_expired_run(
+        db_session, run_id=run.id, fencing_token=3, now=now
+    )
 
 
 async def test_live_run_is_not_reaped(

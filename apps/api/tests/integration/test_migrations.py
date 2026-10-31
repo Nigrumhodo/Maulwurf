@@ -123,6 +123,28 @@ def _state(url: str) -> tuple[set[str], list[str]]:
     return asyncio.run(read())
 
 
+def _processing_run_fencing_token(url: str) -> tuple[str, str, str] | None:
+    """Tipo, nulabilidad y default de `processing_runs.fencing_token` (None si no existe)."""
+
+    async def read() -> tuple[str, str, str] | None:
+        engine = create_async_engine(url)
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT data_type, is_nullable, column_default "
+                        "FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'processing_runs' "
+                        "AND column_name = 'fencing_token'"
+                    )
+                )
+            ).one_or_none()
+        await engine.dispose()
+        return None if row is None else (str(row[0]), str(row[1]), str(row[2]))
+
+    return asyncio.run(read())
+
+
 def _s2_catalog(url: str) -> tuple[dict[str, set[str]], dict[str, str], set[str]]:
     """Constraints, índices y columnas reales; no depende de metadata ORM."""
 
@@ -182,19 +204,37 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     revision = ScriptDirectory.from_config(cfg).get_revision(_head(empty_schema))
     assert revision is not None
     parent = revision.down_revision
-    assert isinstance(parent, str)  # this chain is linear
+    assert parent == "0003"  # this chain is linear
     command.upgrade(cfg, "head")
 
-    # `0003` only backfills `chunks.tsv` (data, not schema), so its downgrade is a no-op:
-    # one step back lands on the parent revision with the S2 schema still intact.
+    # `0003` only backfills `chunks.tsv` (data, not schema) and `0004` only adds the run
+    # fencing token, so the two steps back stay on the S2 schema and only drop that column.
     command.downgrade(cfg, "-1")
-    assert _state(empty_schema) == (S2_TABLES, [parent])
+    assert _state(empty_schema) == (S2_TABLES, ["0003"])
+    assert _processing_run_fencing_token(empty_schema) is None
+
+    command.downgrade(cfg, "-1")
+    assert _state(empty_schema) == (S2_TABLES, ["0002"])
 
     command.downgrade(cfg, "-1")
     assert _state(empty_schema) == (S1_TABLES, ["0001"])
 
     command.upgrade(cfg, "head")
     assert _state(empty_schema)[0] == S2_TABLES
+
+
+def test_run_fencing_revision_round_trips(empty_schema: str) -> None:
+    cfg = alembic_config(empty_schema)
+    command.upgrade(cfg, "0003")
+    assert _processing_run_fencing_token(empty_schema) is None
+
+    command.upgrade(cfg, "head")
+    assert _processing_run_fencing_token(empty_schema) == ("bigint", "NO", "0")
+
+    command.downgrade(cfg, "0003")
+    assert _processing_run_fencing_token(empty_schema) is None
+
+    command.upgrade(cfg, "head")
 
 
 def test_upgrade_is_idempotent(empty_schema: str) -> None:
