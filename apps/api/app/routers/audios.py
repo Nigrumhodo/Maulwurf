@@ -37,7 +37,7 @@ SRT only when the measured times are usable (`409 srt_unavailable`). All SQL liv
 import uuid
 from contextlib import suppress
 from datetime import date, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, Header, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -252,6 +252,8 @@ class TranscriptOut(BaseModel):
     version: int
     timestamp_precision: str
     char_count: int
+    # S3.6: non-sensitive ASR signals (code + counts) for the inbox/class page.
+    quality_warnings: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ExportsOut(BaseModel):
@@ -353,6 +355,7 @@ def _detail_out(detail: library.AudioDetail) -> AudioDetailOut:
                 version=detail.transcript.version,
                 timestamp_precision=detail.transcript.timestamp_precision,
                 char_count=detail.transcript.char_count,
+                quality_warnings=list(detail.transcript.quality_warnings),
             )
             if detail.transcript is not None
             else None

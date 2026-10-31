@@ -32,6 +32,7 @@ from app.services import progress as progress_service
 from app.services import runs as runs_service
 from app.services.exports import srt_exportable
 from app.services.progress import ProgressSnapshot
+from app.services.quality import normalize_quality_warnings
 from app.services.tenant import get_owned
 
 
@@ -72,6 +73,7 @@ class TranscriptInfo:
     version: int
     timestamp_precision: str
     char_count: int
+    quality_warnings: tuple[dict[str, Any], ...]
 
 
 @dataclass(frozen=True)
@@ -273,6 +275,16 @@ async def list_audios(
     return summaries
 
 
+def _quality_warnings(transcript: Transcript) -> tuple[dict[str, Any], ...]:
+    """ASR signals from the persisted commit, normalized before leaving the API (S3.6).
+
+    `quality_flags` is the ingestion-owned quality column; `warnings` is its historical
+    twin. If one is empty or malformed the other is tried, but nothing else is invented.
+    """
+    normalized = normalize_quality_warnings(transcript.quality_flags)
+    return normalized or normalize_quality_warnings(transcript.warnings)
+
+
 async def get_audio_detail(
     db: AsyncSession, *, user_id: uuid.UUID, audio: Audio
 ) -> AudioDetail:
@@ -295,6 +307,7 @@ async def get_audio_detail(
                 version=transcript.version,
                 timestamp_precision=transcript.timestamp_precision,
                 char_count=transcript.char_count,
+                quality_warnings=_quality_warnings(transcript),
             )
             segments = await segments_for(db, user_id=user_id, transcript_id=transcript.id)
             exportable = srt_exportable(

@@ -13,6 +13,20 @@ def _word(text: str, start_s: float, end_s: float) -> LocalWord:
     return LocalWord(text, start_s, end_s)
 
 
+def test_reconcile_carries_word_confidence() -> None:
+    result = reconcile(
+        (
+            FragmentTranscript(
+                0.0,
+                2.0,
+                words=(LocalWord("hoy", 0.2, 0.6, confidence=0.35),),
+            ),
+        )
+    )
+
+    assert result.words[0].confidence == 0.35
+
+
 def test_silence_keeps_both_words_in_order() -> None:
     fragments = (
         FragmentTranscript(0.0, 2.0, words=(_word("hoy", 0.2, 0.6),)),
