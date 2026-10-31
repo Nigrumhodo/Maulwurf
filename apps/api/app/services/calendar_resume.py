@@ -19,8 +19,9 @@ The rules this module enforces:
 
 A3.1's `tasks` and `task_revisions` tables are not in this revision of `develop`. The
 module checks for the table at runtime: before A3.1 lands it reports `available=False` and
-changes nothing, so a connect never fails because of a table that does not exist yet. The
-statement follows the DISENO §2.8 shape and is exercised by I-S3-JF-06 against that shape.
+changes nothing, so the connection still succeeds without touching a table that does not
+exist yet. The statement follows the DISENO §2.8 shape and is exercised by I-S3-JF-06
+against that shape.
 """
 
 import logging
@@ -36,8 +37,6 @@ from app.models import OutboxEvent
 logger = logging.getLogger(__name__)
 
 SYNC_TASK_EVENT = "sync_task_event"
-BLOCKED = "blocked"
-PENDING = "pending"
 # Only a confirmed task owes a Calendar event; completed/dismissed rows are tombstones.
 _RESUMABLE_TASKS = text(
     """

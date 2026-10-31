@@ -178,7 +178,7 @@ async def _calendar_callback(
 
     credential = await db.get(GoogleCredential, user_id)
     requested = calendar_connection.requested_scopes(
-        credential.scopes if credential is not None else [],
+        (credential.scopes or []) if credential is not None else [],
         reconnect=mode == CALENDAR_RECONNECT,
     )
 

@@ -364,6 +364,30 @@ async def test_connect_without_oauth_configuration_fails_cleanly(
     assert response.json()["error"]["code"] == "google_integration_unavailable"
 
 
+async def test_integrations_status_never_leaks_another_users_calendar(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await make_actor(db_session)
+    bob = await make_actor(db_session)
+    await _seed_credential(db_session, alice, scopes=["openid", *CALENDAR_SCOPES])
+    await db_session.execute(
+        text(
+            "INSERT INTO settings (user_id, calendar_write_calendar_id) "
+            "VALUES (:user, :calendar)"
+        ),
+        {"user": alice.user_id, "calendar": MAULWURF_ID},
+    )
+    await db_session.commit()
+
+    alice_status = (await client.get("/integrations/status", cookies=alice.cookies)).json()
+    bob_status = (await client.get("/integrations/status", cookies=bob.cookies)).json()
+
+    assert alice_status["google"]["calendar_id"] == MAULWURF_ID
+    assert bob_status["google"]["calendar_id"] is None
+    assert bob_status["google"]["status"] == "disconnected"
+    assert MAULWURF_ID not in json.dumps(bob_status)
+
+
 # --- Callback phase -------------------------------------------------------------------
 
 

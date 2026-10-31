@@ -23,6 +23,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import CalendarSettings, User
@@ -152,10 +154,20 @@ async def connect_calendar(
         stored_calendar_id=row.calendar_write_calendar_id if row is not None else None,
         timezone=user.timezone,
     )
-    if row is None:
-        row = CalendarSettings(user_id=user.id)
-        db.add(row)
-    row.calendar_write_calendar_id = binding.calendar_id
+    # Upsert: two concurrent callbacks for the same user must converge on the last
+    # reconciled ID instead of racing the primary key. `updated_at` is set explicitly
+    # because the raw statement bypasses the ORM's onupdate.
+    await db.execute(
+        pg_insert(CalendarSettings)
+        .values(user_id=user.id, calendar_write_calendar_id=binding.calendar_id)
+        .on_conflict_do_update(
+            index_elements=["user_id"],
+            set_={
+                "calendar_write_calendar_id": binding.calendar_id,
+                "updated_at": func.now(),
+            },
+        )
+    )
     await db.flush()
     return binding
 

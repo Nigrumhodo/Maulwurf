@@ -332,10 +332,11 @@ async def apply_incremental_grant(
     """Persist an incremental Calendar grant without re-requesting the login scopes.
 
     The recorded grant is exactly what the token response says it covers (which, with
-    `include_granted_scopes`, includes the previously granted login scopes). When Google
-    omits `scope`, the previous grant is kept and the requested scopes are added: the code
-    never claims a capability from what it asked for when the response did not confirm it,
-    and it never loses a grant it cannot prove was dropped.
+    `include_granted_scopes`, includes the previously granted login scopes). OAuth 2.0 §5.1
+    makes `scope` optional only while it equals the requested set, so an omitted value keeps
+    the previous grant and adds the requested scopes: a login can never silently lose a
+    capability the account still holds, and the code never invents a scope it did not ask
+    for.
     """
     credential = await db.get(GoogleCredential, user.id)
     current = list(credential.scopes) if credential is not None and credential.scopes else []

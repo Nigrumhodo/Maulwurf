@@ -70,7 +70,7 @@ async def integrations_status(
     else:
         google = GoogleStatus(
             status="connected" if credential.status == "connected" else "disconnected",
-            scopes=list(credential.scopes),
+            scopes=list(credential.scopes or []),
             calendar_id=calendar_id,
             token_expires_at=credential.token_expires_at,
             last_refresh_at=credential.last_refresh_at,
@@ -91,7 +91,8 @@ async def _start_calendar_flow(
     if reconnect and credential is None:
         raise google_not_connected()
     scopes = calendar_connection.requested_scopes(
-        credential.scopes if credential is not None else [], reconnect=reconnect
+        (credential.scopes or []) if credential is not None else [],
+        reconnect=reconnect,
     )
     request = oauth_google.build_incremental_authorization_request(
         scopes=scopes, login_hint=user.email
