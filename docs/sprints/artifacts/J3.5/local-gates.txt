@@ -1,5 +1,5 @@
 J3.5 (MAULW-118) local gates
-Captured: 2026-10-31T15:48:41Z
+Captured: 2026-10-31T15:50Z
 Host: Linux 7.0.0-39-generic x86_64
 Python: Python 3.12.3
 uv: uv 0.13.1 (x86_64-unknown-linux-gnu)
@@ -12,33 +12,32 @@ Success: no issues found in 206 source files
 
 $ cd apps/api && uv run pytest tests/unit/test_calendar_event.py -q
 ...............................                                          [100%]
-31 passed in 0.07s
+31 passed in 0.13s
 
 $ cd apps/api && uv run pytest tests/unit/test_citations.py -q
 .........                                                                [100%]
-9 passed in 1.60s
-
-$ cd apps/api && uv run pytest tests/unit -q   (sandbox no_proxy as exported)
--- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-=========================== short test summary info ============================
-FAILED tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured
-FAILED tests/unit/test_llm.py::test_shared_http_client_is_bounded_reused_and_closed
-2 failed, 1105 passed, 35 warnings in 11.01s
+9 passed in 1.05s
 
 $ cd apps/api && env -u no_proxy -u NO_PROXY uv run pytest tests/unit -q
-
-# Final capture after review follow-up (repeated-prefix collapse, bare description,
-# reader-line rename)
-
-$ cd apps/api && uv run pytest tests/unit/test_calendar_event.py -q
-...............................                                          [100%]
-31 passed in 0.13s
-
-$ cd apps/api && uv run ruff check .
-All checks passed!
-
-$ cd apps/api && uv run mypy .
-Success: no issues found in 206 source files
-
-$ cd apps/api && NO_PROXY=<sanitized> uv run pytest tests/unit -q
 1107 passed, 35 warnings in 12.48s
+
+Note: this sandbox exports no_proxy/NO_PROXY with bracketed IPv6 entries ([::1]);
+httpx 0.28 misparses them and the unrelated tests
+test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured and
+test_llm.py::test_shared_http_client_is_bounded_reused_and_closed fail before
+reaching their assertions (2 failed, 1105 passed before the two review-follow-up
+cases were added). Both pass with the variables unset, as shown above; no test in
+this ticket depends on the proxy environment.
+
+$ git diff --stat origin/develop...HEAD
+ apps/api/app/services/calendar_event.py     | 248 +++++++++++++++++++
+ apps/api/app/services/citations.py          |   6 +-
+ apps/api/app/services/reader_links.py       |  17 ++
+ apps/api/tests/unit/test_calendar_event.py  | 369 ++++++++++++++++++++++++++++
+ docs/plan/S3.md                             |  33 ++-
+ docs/sprints/CLAIMS.md                      |  10 +-
+ docs/sprints/artifacts/J3.5/local-gates.txt |  44 ++++
+ 7 files changed, 718 insertions(+), 9 deletions(-)
+
+$ git diff --stat origin/develop...HEAD -- apps/web
+(no output: apps/web is untouched)
