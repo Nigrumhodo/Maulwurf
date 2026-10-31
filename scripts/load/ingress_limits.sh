@@ -18,6 +18,7 @@
 #   request_body.max_size upload         -> 202, sink receives every byte
 #   one byte over the upload ceiling     -> 413, sink receives nothing
 #   one byte over the @api 10 MB ceiling -> 413
+#   one byte over the web fallback 10 MB ceiling -> 413
 #   read_body=2s and a 5 s upload        -> connection cut, sink receives nothing
 #   no new proxy files, deleted fds or request bodies in the log
 #
@@ -99,11 +100,13 @@ read -r UPLOAD_MAX_BYTES API_JSON_MAX_BYTES API_CONTRACT_MAX_BYTES <<<"$SIZES"
 TMP_DIR="$(mktemp -d)"
 UPLOAD_URL="https://localhost:${TEST_PORT}/audios/smoke/content?attempt_id=smoke"
 API_URL="https://localhost:${TEST_PORT}/subjects"
+FALLBACK_URL="https://localhost:${TEST_PORT}/not-a-route"
 SLOW_URL="https://localhost:${SLOW_PORT}/audios/smoke/content?attempt_id=smoke"
 
 render_docker() {
 	local out="$1" slow="$2"
-	sed "s|api:8000|${SINK_NAME}:8000|g" "$CADDYFILE" >"$out"
+	sed -e "s|api:8000|${SINK_NAME}:8000|g" -e "s|web:3000|${SINK_NAME}:8000|g" \
+		"$CADDYFILE" >"$out"
 	grep -q "${SINK_NAME}:8000" "$out" || die "could not point the Caddyfile at the sink"
 	if [ "$slow" = "yes" ]; then
 		sed '0,/read_body 20m/s//read_body 2s/' "$out" >"$out.slow"
@@ -328,6 +331,9 @@ expect_eq "one byte over the upload ceiling" "$code" "413"
 
 read -r code rc <<<"$(send_stream 10000001 "$API_URL" POST)"
 expect_eq "one byte over the @api 10 MB ceiling" "$code" "413"
+
+read -r code rc <<<"$(send_stream 10000001 "$FALLBACK_URL" POST)"
+expect_eq "one byte over the web fallback 10 MB ceiling" "$code" "413"
 
 expect_eq "sink received only valid bodies" "$(sink_count)" "$((BASE_COUNT + 2))"
 

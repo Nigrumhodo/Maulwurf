@@ -52,6 +52,11 @@ https://localhost {
 	# 2) SSE de progreso: flush inmediato por evento.
 	@progress path /audios/*/progress
 	handle @progress {
+		# J2.10: the matcher is path-only, so a POST to this URL would otherwise reach
+		# the API with an unbounded body. The limit does not affect event streaming.
+		request_body {
+			max_size 10MB
+		}
 		reverse_proxy api:8000 {
 			flush_interval -1
 		}
@@ -67,8 +72,13 @@ https://localhost {
 		reverse_proxy api:8000
 	}
 
-	# 4) Web (fallback).
+	# 4) Web (fallback). Every route that does not match above lands here, including
+	# unknown PUT/POST paths. Without this ceiling the fallback would forward an
+	# unbounded body; `read_body` bounds time, not size.
 	handle {
+		request_body {
+			max_size 10MB
+		}
 		reverse_proxy web:3000
 	}
 

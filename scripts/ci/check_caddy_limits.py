@@ -2,9 +2,15 @@
 
 The live measurement is `scripts/load/ingress_limits.sh` and needs Docker (or a Caddy
 binary). This check runs everywhere, catches a regression that removes the limits, and
-pins the invariant that the upload ceiling stays *above* the API contract limit so the
-API, not Caddy, answers a request that exceeds the published limit with the structured
-`payload_too_large` envelope.
+pins three invariants:
+
+* the upload ceiling stays *above* the API contract limit so the API, not Caddy,
+  answers a request that exceeds the published limit with the structured
+  `payload_too_large` envelope;
+* every `handle` block that proxies declares `request_body.max_size`, including the
+  catch-all web fallback that receives unknown routes;
+* the `/internal/*` guard is a real `handle @internal { respond 404 }` block placed
+  before the catch-all handler, not a stray matcher or comment.
 
 Usage:
     python3 scripts/ci/check_caddy_limits.py [--caddyfile PATH]
@@ -55,10 +61,19 @@ class ServerTimeouts:
 
 
 @dataclass(frozen=True)
+class HandleBlock:
+    opener: str
+    body: tuple[str, ...]
+    start: int
+
+
+@dataclass(frozen=True)
 class Report:
     timeouts: ServerTimeouts
     upload_max_bytes: int
     api_max_bytes: int
+    fallback_max_bytes: int
+    proxy_handle_count: int
 
 
 def _fail(message: str) -> None:
@@ -78,7 +93,7 @@ def _strip_comment(line: str) -> str:
     return line.split("#", 1)[0].rstrip()
 
 
-def _block(lines: list[str], opener: str) -> list[str]:
+def _find_block(lines: list[str], opener: str) -> list[str] | None:
     """Return the lines inside the first block whose stripped line starts with `opener`."""
     for start, raw in enumerate(lines):
         if _strip_comment(raw).strip().startswith(opener):
@@ -91,9 +106,99 @@ def _block(lines: list[str], opener: str) -> list[str]:
                     return body
                 if depth > 0:
                     body.append(line)
-            break
-    _fail(f"missing block `{opener}`")
-    raise AssertionError("unreachable")
+            return None
+    return None
+
+
+def _block(lines: list[str], opener: str) -> list[str]:
+    body = _find_block(lines, opener)
+    if body is None:
+        _fail(f"missing block `{opener}`")
+    return body
+
+
+def _handle_blocks(lines: list[str]) -> list[HandleBlock]:
+    """Return every `handle` directive block with its opening line and source index."""
+    blocks: list[HandleBlock] = []
+    for start, raw in enumerate(lines):
+        code = _strip_comment(raw).strip()
+        is_handle = code == "handle {" or (
+            code.startswith("handle ") and code.endswith("{")
+        )
+        if not is_handle:
+            continue
+        depth = 0
+        for end in range(start, len(lines)):
+            line = _strip_comment(lines[end])
+            depth += line.count("{") - line.count("}")
+            if depth == 0 and end > start:
+                blocks.append(HandleBlock(code, tuple(lines[start + 1 : end]), start))
+                break
+        else:
+            _fail(f"unclosed block `{code}`")
+    if not blocks:
+        _fail("missing `handle` blocks")
+    return blocks
+
+
+def _body_max_size(lines: list[str] | tuple[str, ...]) -> int | None:
+    body = _find_block(list(lines), "request_body")
+    if body is None:
+        return None
+    value = _assignments(body).get("max_size")
+    return None if value is None else parse_size(value)
+
+
+def _proxy_limits(blocks: list[HandleBlock]) -> dict[str, int]:
+    limits: dict[str, int] = {}
+    for block in blocks:
+        proxies = any(
+            _strip_comment(line).strip().startswith("reverse_proxy")
+            for line in block.body
+        )
+        if not proxies:
+            continue
+        limit = _body_max_size(block.body)
+        if limit is None:
+            _fail(f"`{block.opener}` proxies without request_body.max_size")
+        if limit <= 0:
+            _fail(f"`{block.opener}` declares a non-positive request_body.max_size")
+        if block.opener in limits:
+            _fail(f"duplicate `handle` block `{block.opener}`")
+        limits[block.opener] = limit
+    if not limits:
+        _fail("no proxying `handle` blocks found")
+    return limits
+
+
+def _internal_guard(lines: list[str], blocks: list[HandleBlock]) -> None:
+    matchers = [
+        _strip_comment(raw).strip()
+        for raw in lines
+        if _strip_comment(raw).strip().startswith("@internal")
+    ]
+    if matchers != ["@internal path /internal/*"]:
+        _fail(
+            "the internal matcher must be exactly `@internal path /internal/*` (ADR-0008)"
+        )
+
+    guards = [block for block in blocks if block.opener == "handle @internal {"]
+    if len(guards) != 1:
+        _fail("missing or duplicated `handle @internal` block (ADR-0008)")
+    guard = guards[0]
+    statements = [
+        _strip_comment(line).strip()
+        for line in guard.body
+        if _strip_comment(line).strip()
+    ]
+    if statements != ["respond 404"]:
+        _fail("`handle @internal` must contain only `respond 404` (ADR-0008)")
+
+    fallbacks = [block for block in blocks if block.opener == "handle {"]
+    if len(fallbacks) != 1:
+        _fail("exactly one catch-all `handle` block is required")
+    if guard.start > fallbacks[0].start:
+        _fail("`handle @internal` must precede the catch-all web handle (ADR-0008)")
 
 
 def _assignments(lines: list[str]) -> dict[str, str]:
@@ -145,24 +250,6 @@ def _timeouts(lines: list[str]) -> ServerTimeouts:
     )
 
 
-def _upload_ceiling(lines: list[str]) -> int:
-    upload = _block(lines, "handle @upload")
-    body = _block(upload, "request_body")
-    values = _assignments(body)
-    if "max_size" not in values:
-        _fail("the @upload handler does not declare request_body.max_size")
-    return parse_size(values["max_size"])
-
-
-def _api_ceiling(lines: list[str]) -> int:
-    api = _block(lines, "handle @api")
-    body = _block(api, "request_body")
-    values = _assignments(body)
-    if "max_size" not in values:
-        _fail("the @api handler does not declare request_body.max_size")
-    return parse_size(values["max_size"])
-
-
 def check(caddyfile: Path) -> Report:
     lines = _lines(caddyfile)
     joined = "\n".join(_strip_comment(line) for line in lines)
@@ -171,12 +258,20 @@ def check(caddyfile: Path) -> Report:
         _fail("missing `admin off`")
     if "tls internal" not in joined:
         _fail("missing `tls internal`")
-    if "@internal" not in joined or "respond 404" not in joined:
-        _fail("the /internal/* route must stay unexposed (ADR-0008)")
+
+    blocks = _handle_blocks(lines)
+    _internal_guard(lines, blocks)
+    proxy_limits = _proxy_limits(blocks)
+
+    upload = proxy_limits.get("handle @upload {")
+    if upload is None:
+        _fail("missing `handle @upload` proxy route")
+    api = proxy_limits.get("handle @api {")
+    if api is None:
+        _fail("missing `handle @api` proxy route")
+    fallback = proxy_limits["handle {"]
 
     timeouts = _timeouts(lines)
-    upload = _upload_ceiling(lines)
-    api = _api_ceiling(lines)
 
     # J2.10: the edge ceiling is an abuse guard, not the contract. It must stay above
     # the API limit so the structured 413 envelope is the one the client sees.
@@ -187,6 +282,9 @@ def check(caddyfile: Path) -> Report:
         )
     if api >= upload:
         _fail("request_body.max_size for @api must be lower than the @upload one")
+    # Unknown routes (including POST /search and /chat/*) reach the web fallback.
+    if fallback > api:
+        _fail("the catch-all web handler ceiling must not exceed the @api ceiling")
     if timeouts.read_body < API_UPLOAD_TTL_SECONDS:
         _fail(
             f"read_body ({timeouts.read_body:g}s) must cover the API upload window "
@@ -200,7 +298,13 @@ def check(caddyfile: Path) -> Report:
     if timeouts.write != 0:
         _fail("write must be 0 (no total deadline) so SSE streams are not cut")
 
-    return Report(timeouts=timeouts, upload_max_bytes=upload, api_max_bytes=api)
+    return Report(
+        timeouts=timeouts,
+        upload_max_bytes=upload,
+        api_max_bytes=api,
+        fallback_max_bytes=fallback,
+        proxy_handle_count=len(proxy_limits),
+    )
 
 
 def summarize(report: Report) -> str:
@@ -210,6 +314,8 @@ def summarize(report: Report) -> str:
         f"read_header={timeouts.read_header:g}s write={timeouts.write:g}s "
         f"idle={timeouts.idle:g}s | @upload max_size={report.upload_max_bytes} "
         f"| @api max_size={report.api_max_bytes} "
+        f"| web fallback max_size={report.fallback_max_bytes} "
+        f"| proxying handles={report.proxy_handle_count} "
         f"| API provisional={API_UPLOAD_MAX_BYTES}"
     )
 
@@ -232,7 +338,9 @@ def main() -> int:
         print(f"FAIL: {exc}", file=sys.stderr)
         return 1
     if args.print_sizes:
-        print(f"{report.upload_max_bytes} {report.api_max_bytes} {API_UPLOAD_MAX_BYTES}")
+        print(
+            f"{report.upload_max_bytes} {report.api_max_bytes} {API_UPLOAD_MAX_BYTES}"
+        )
         return 0
     print(f"Caddyfile: {args.caddyfile}")
     print(summarize(report))
