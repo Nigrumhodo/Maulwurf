@@ -396,6 +396,37 @@ def test_malformed_events_fail_the_read(item: dict[str, Any]) -> None:
         parse_remote_event("primary", item)
 
 
+@pytest.mark.parametrize(
+    ("item", "code"),
+    [
+        (
+            {
+                "start": {"dateTime": "2026-10-06T09:00:00Z"},
+                "end": {"dateTime": "not-an-instant"},
+            },
+            "event_end_invalid",
+        ),
+        (
+            {
+                "start": {"dateTime": "2026-10-06T09:00:00Z"},
+                "end": {"dateTime": "2026-10-06T10:00:00"},
+            },
+            "event_end_naive",
+        ),
+        (
+            {"start": {"date": "2026-10-06"}, "end": {"date": "not-a-date"}},
+            "event_end_date_invalid",
+        ),
+    ],
+)
+def test_an_invalid_end_reports_the_end_field(item: dict[str, Any], code: str) -> None:
+    # The error must not name the start of an event whose `end` is the broken side.
+    with pytest.raises(CalendarEventInvalid) as error:
+        parse_remote_event("primary", {"id": "g1", **item})
+
+    assert error.value.code == code
+
+
 # --- Publication ordering --------------------------------------------------------------
 
 

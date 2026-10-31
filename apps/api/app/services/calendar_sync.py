@@ -306,26 +306,28 @@ def build_list_params(
     return params
 
 
-def _parse_instant(value: object) -> datetime:
+def _parse_instant(value: object, *, field: Literal["start", "end"]) -> datetime:
+    code = f"event_{field}_invalid"
     if not isinstance(value, str) or not value:
-        raise CalendarEventInvalid("event_start_invalid")
+        raise CalendarEventInvalid(code)
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise CalendarEventInvalid("event_start_invalid") from exc
+        raise CalendarEventInvalid(code) from exc
     if parsed.tzinfo is None:
         # RFC 3339 always carries an offset; guessing UTC would misplace the event.
-        raise CalendarEventInvalid("event_start_naive")
+        raise CalendarEventInvalid(f"event_{field}_naive")
     return parsed.astimezone(UTC)
 
 
-def _parse_date(value: object) -> date:
+def _parse_date(value: object, *, field: Literal["start", "end"]) -> date:
+    code = f"event_{field}_date_invalid"
     if not isinstance(value, str) or not value:
-        raise CalendarEventInvalid("event_date_invalid")
+        raise CalendarEventInvalid(code)
     try:
         return date.fromisoformat(value)
     except ValueError as exc:
-        raise CalendarEventInvalid("event_date_invalid") from exc
+        raise CalendarEventInvalid(code) from exc
 
 
 def parse_remote_event(
@@ -355,15 +357,15 @@ def parse_remote_event(
     start_at = start_date = end_at = end_date = None
     timezone: str | None = None
     if start.get("dateTime") is not None or end.get("dateTime") is not None:
-        start_at = _parse_instant(start.get("dateTime"))
-        end_at = _parse_instant(end.get("dateTime"))
+        start_at = _parse_instant(start.get("dateTime"), field="start")
+        end_at = _parse_instant(end.get("dateTime"), field="end")
         if start_at >= end_at:
             raise CalendarEventInvalid("event_time_inverted")
         raw_zone = start.get("timeZone")
         timezone = _valid_timezone(raw_zone)
     elif start.get("date") is not None or end.get("date") is not None:
-        start_date = _parse_date(start.get("date"))
-        end_date = _parse_date(end.get("date"))
+        start_date = _parse_date(start.get("date"), field="start")
+        end_date = _parse_date(end.get("date"), field="end")
         if start_date >= end_date:
             raise CalendarEventInvalid("event_date_inverted")
     else:
