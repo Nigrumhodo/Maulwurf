@@ -19,8 +19,11 @@ from app.core.config import settings
 from app.models import (
     Audio,
     Chunk,
+    Conversation,
     Embedding,
     IndexGeneration,
+    Message,
+    MessageSource,
     OutboxEvent,
     ProcessingRun,
     Segment,
@@ -414,3 +417,55 @@ async def test_only_the_newest_retired_generation_is_kept(
     assert await _count(db_session, Embedding, index_version="gen-older") == 0
     assert await _count(db_session, IndexGeneration, status="active") == 1
     assert await _count(db_session, IndexGeneration, status="retired") == 1
+
+
+async def test_retired_generation_with_a_cited_chunk_is_kept(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    """A delivered citation keeps its generation: message_sources has no ON DELETE CASCADE."""
+    pool, queue = redis
+    now = datetime.now(UTC)
+    actor, _audio, transcript = await _class(db_session)
+    cited = _generation(actor, "gen-cited", "retired", activated_at=now - timedelta(days=3))
+    surplus = _generation(actor, "gen-surplus", "retired", activated_at=now - timedelta(days=2))
+    rollback = _generation(actor, "gen-rollback", "retired", activated_at=now - timedelta(days=1))
+    current = _generation(actor, "gen-current", "active", activated_at=now)
+    cited_chunk = await _materialize(db_session, actor, transcript, cited)
+    for generation in (surplus, rollback, current):
+        await _materialize(db_session, actor, transcript, generation)
+
+    conversation = Conversation(user_id=actor.user_id, mode="all")
+    db_session.add(conversation)
+    await db_session.flush()
+    message = Message(
+        user_id=actor.user_id,
+        conversation_id=conversation.id,
+        role="assistant",
+        status="completed",
+        content="respuesta",
+    )
+    db_session.add(message)
+    await db_session.flush()
+    db_session.add(
+        MessageSource(
+            user_id=actor.user_id,
+            message_id=message.id,
+            kind="transcript",
+            audio_id=transcript.audio_id,
+            transcript_id=transcript.id,
+            transcript_version=transcript.version,
+            chunk_id=cited_chunk.id,
+        )
+    )
+    await db_session.flush()
+
+    report = await reconcile_once(_sessions(db_session), pool, queue_name=queue, now=now)
+
+    assert report["retired_generations"] == 1
+    assert await _count(db_session, Chunk, index_version="gen-cited") == 1
+    assert await _count(db_session, Embedding, index_version="gen-cited") == 1
+    assert await _count(db_session, IndexGeneration, version="gen-cited") == 1
+    assert await _count(db_session, MessageSource) == 1
+    assert await _count(db_session, Chunk, index_version="gen-surplus") == 0
+    assert await _count(db_session, IndexGeneration, version="gen-surplus") == 0
+    assert await _count(db_session, Chunk, index_version="gen-rollback") == 1

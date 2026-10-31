@@ -5,6 +5,9 @@
   it from the transcript.
 - `retired` generations are kept as the rollback target. Only the most recent one per user stays,
   because that is the one a rollback would reactivate. Older ones are deleted.
+- `retired` generations with chunks cited by a delivered message are kept: `message_sources` is
+  durable evidence, its `chunk_id` foreign key has no cascade, and deleting the chunk would
+  either fail or erase provenance. A later retention/purge policy can decide otherwise.
 
 Deletion takes the generation row lock first and rechecks its status, so an activation that
 races with the cleanup wins and the cleanup skips the row.
@@ -17,7 +20,7 @@ from typing import Final
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Chunk, Embedding, IndexGeneration, ProcessingRun
+from app.models import Chunk, Embedding, IndexGeneration, MessageSource, ProcessingRun
 from app.services.index_job import LEASE, STAGE_INDEX, index_version_for
 from app.services.indexing import INDEX_BUILDING, INDEX_RETIRED
 from app.services.runs import RUN_CONFIG_VERSION
@@ -80,7 +83,24 @@ async def discard_orphan_building(
 async def select_surplus_retired(
     db: AsyncSession, *, keep: int, limit: int
 ) -> list[GenerationKey]:
-    """Retired generations beyond the `keep` most recent of each user."""
+    """Retired generations beyond the `keep` most recent of each user.
+
+    Generations with a chunk cited by a delivered message are excluded: their chunks are
+    referenced by `message_sources` and must stay until a purge policy removes the citation.
+    """
+    cited = (
+        select(Chunk.id)
+        .join(
+            MessageSource,
+            (MessageSource.user_id == Chunk.user_id) & (MessageSource.chunk_id == Chunk.id),
+        )
+        .where(
+            Chunk.user_id == IndexGeneration.user_id,
+            Chunk.index_version == IndexGeneration.version,
+        )
+        .correlate(IndexGeneration)
+        .exists()
+    )
     rank = (
         func.row_number()
         .over(
@@ -95,7 +115,7 @@ async def select_surplus_retired(
     )
     ranked = (
         select(IndexGeneration.user_id, IndexGeneration.version, rank)
-        .where(IndexGeneration.status == INDEX_RETIRED)
+        .where(IndexGeneration.status == INDEX_RETIRED, ~cited)
         .subquery()
     )
     rows = (
@@ -130,6 +150,19 @@ async def _discard_generation(
         )
     ).scalar_one_or_none()
     if locked is None:
+        return False
+    cited = await db.scalar(
+        select(Chunk.id)
+        .join(
+            MessageSource,
+            (MessageSource.user_id == Chunk.user_id) & (MessageSource.chunk_id == Chunk.id),
+        )
+        .where(Chunk.user_id == user_id, Chunk.index_version == version)
+        .limit(1)
+    )
+    if cited is not None:
+        # Chunks referenced by message_sources are durable citation evidence and have no
+        # ON DELETE CASCADE. Keep the whole generation instead of failing the delete forever.
         return False
     # Embeddings and chunk_segments follow their chunk through ON DELETE CASCADE; embeddings are
     # also deleted by version so no vector can outlive its generation.
