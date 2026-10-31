@@ -1,0 +1,31 @@
+# S4.2 local gates — 2026-10-31T21:53:27Z
+
+environment: Linux 7.0.0-39-generic, Python 3.12.3; no Docker, PostgreSQL or Redis in this sandbox
+espeak-ng on PATH: no
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 78 source files
+
+$ uv run pytest tests -q -m "not integration and not provider and not load"
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_synthetic_audio.py::test_same_seed_is_byte_identical - Runt...
+FAILED tests/test_synthetic_audio.py::test_different_seed_changes_bytes - Run...
+FAILED tests/test_synthetic_audio.py::test_wav_is_pcm_s16_mono - RuntimeError...
+FAILED tests/test_synthetic_audio.py::test_expected_text_is_the_requested_phrase
+FAILED tests/test_synthetic_audio.py::test_spectrum_is_not_a_pure_tone - Runt...
+FAILED tests/test_synthetic_audio.py::test_does_not_write_wav_to_disk - Runti...
+FAILED tests/test_synthetic_audio.py::test_leading_dash_is_spoken_not_espeak_flags
+FAILED tests/test_synthetic_audio.py::test_rejects_overlong_utterance - Asser...
+8 failed, 203 passed, 75 deselected, 2 warnings in 4.27s
+
+Known environment-only failures (not introduced by this change): the 8
+`test_synthetic_audio.py` cases need espeak-ng. The baseline run before the
+change reported the same 8 failures and 190 passed. Error cause:
+E       RuntimeError: espeak-ng is required for synthetic audio (S1.A1). Install the system package (espeak-ng on Linux/macOS; espeak-ng on Windows) and ensure it is on PATH.
+FAILED tests/test_synthetic_audio.py::test_same_seed_is_byte_identical - Runt...
+1 failed in 0.16s
