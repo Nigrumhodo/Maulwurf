@@ -59,4 +59,11 @@ The 8 failures are the pre-existing `test_synthetic_audio.py` cases that need
 203 passed. Integration cases above run in the Quality CI job `integration (ingest)`;
 they were skipped locally because `MAULWURF_DATABASE_URL` is unset.
 
+## CI
+
+Quality run `41247655096` on head `e7f0c18` (before this evidence-only commit) is green in
+all 16 jobs: `python-unit (ingest)` 213 passed/6 skipped and `integration (ingest)`
+65 passed/11 skipped/1 xfailed, plus `python-static (ingest)`, `docs`, `web`,
+`e2e-smoke`, `integration (api)` and `build-images`.
+
 No provider or Riva call.
