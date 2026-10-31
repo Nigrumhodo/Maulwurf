@@ -40,6 +40,9 @@ jobs:
   python-unit:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # A2.16: MAULWURF_ENV is required; tests use the lenient local guards with fake secrets.
+    env:
+      MAULWURF_ENV: local
     strategy:
       fail-fast: false
       matrix:

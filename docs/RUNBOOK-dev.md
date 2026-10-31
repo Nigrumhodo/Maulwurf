@@ -198,8 +198,9 @@ disappear when the container is recreated.
   or `api` was not recreated after editing `.env`.
 - **`/login?error=oauth_failed`**: see `docker compose logs api`; common causes are an
   unverified Google email or a login attempt older than 10 minutes.
-- **The API does not start**: a `MAULWURF_ENV` other than `local` with
-  `change-me` secrets fails on purpose (fail-fast in `app/core/config.py`).
+- **The API does not start**: `MAULWURF_ENV` is required with no default; a non-`local`
+  environment with `change-me`, too short or reused secrets also fails on purpose (fail-fast
+  in `app/core/config.py`).
 - **Certificate warning**: trust the CA (§4) or use `curl -k`.
 - **Slow first build**: it downloads ffmpeg, Python dependencies, and `npm ci`.
 - **`api` replicas failing at startup**: when scaling `api`, all replicas try to migrate.

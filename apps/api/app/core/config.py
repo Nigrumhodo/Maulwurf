@@ -45,6 +45,12 @@ _SECRET_FIELDS = (
     "embedding_api_key",
     "llm_api_key",
 )
+# Outside `local`, a forgotten variable must fail at startup. 32 bytes matches the AES-GCM
+# key size used by `crypto.py` and the ingest credential floor (ADR-0008).
+SECRET_MIN_BYTES = 32
+# These three guard different boundaries (sessions, encrypted data, OAuth state); reusing
+# one value would let a leak in one boundary compromise the others.
+_DISTINCT_SECRET_FIELDS = ("secret_key", "encryption_key", "oauth_state_secret")
 # Pinned by `embeddings.vector vector(1536)` in migration 0002 (M6). Changing it requires a
 # migration and a whole new index generation, so startup validates it instead of silently
 # accepting a model with another dimension.
@@ -81,7 +87,9 @@ class Settings(BaseSettings):
         finally:
             _active_env_files.reset(token)
 
-    env: Literal["local", "ci", "staging", "prod"] = "local"
+    # No default: a deployment that forgets MAULWURF_ENV must not inherit the local guards
+    # and their lenient secret rules (A2.16).
+    env: Literal["local", "ci", "staging", "prod"]
     secret_key: SecretStr  # sin default: obliga a definirlo por entorno
     encryption_key: SecretStr  # AES-GCM (M1); nunca loguear .get_secret_value()
     encryption_key_version: int = Field(default=1, ge=1)  # se guarda junto a cada cifrado
@@ -255,17 +263,31 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _reject_insecure_defaults(self) -> "Settings":
-        # Fail-fast fuera de local: secreto vacío o "change-me", u Origin sin TLS.
+        # Fail-fast outside local: empty, placeholder, too short or reused secrets, or a
+        # public origin without TLS. Local keeps the development placeholders usable.
         if self.env == "local":
             return self
+        secret_values: dict[str, str] = {}
         for name in _SECRET_FIELDS:
             value: SecretStr | None = getattr(self, name)
             if value is None:
                 continue
-            if not value.get_secret_value().strip():
+            raw = value.get_secret_value().strip()
+            if not raw:
                 raise ValueError(f"{name} vacío en env={self.env}")
-            if "change-me" in value.get_secret_value():
+            if "change-me" in raw:
                 raise ValueError(f"{name} inseguro en env={self.env}")
+            if len(raw.encode("utf-8")) < SECRET_MIN_BYTES:
+                raise ValueError(
+                    f"{name} debe tener al menos {SECRET_MIN_BYTES} bytes en env={self.env}"
+                )
+            secret_values[name] = raw
+        distinct = {secret_values[name] for name in _DISTINCT_SECRET_FIELDS}
+        if len(distinct) != len(_DISTINCT_SECRET_FIELDS):
+            raise ValueError(
+                "secret_key, encryption_key y oauth_state_secret deben ser distintos "
+                f"en env={self.env}"
+            )
         if self.public_origin.scheme != "https":
             raise ValueError(f"public_origin debe usar https en env={self.env}")
         for name in _DEV_DEFAULT_FIELDS:

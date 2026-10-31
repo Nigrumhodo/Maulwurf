@@ -8,9 +8,9 @@ from pydantic import Field, RedisDsn, ValidationError
 from app.core.config import Settings
 
 SECRETS: dict[str, Any] = {
-    "secret_key": "s3cret-value-for-test",
-    "encryption_key": "enc-value-for-test",
-    "oauth_state_secret": "state-value-for-test",
+    "secret_key": "s2-test-secret-key-0123456789abcdef",
+    "encryption_key": "s2-test-encryption-key-0123456789ab",
+    "oauth_state_secret": "s2-test-oauth-state-secret-0123456789",
 }
 
 
@@ -56,6 +56,60 @@ def test_change_me_placeholder_rejected_outside_local(field: str) -> None:
 
 def test_change_me_placeholder_allowed_in_local() -> None:
     assert _settings(secret_key="change-me").env == "local"
+
+
+# --- A2.16 / U-S2-AN-15: fail-closed settings -----------------------------------------
+
+
+def test_env_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Without MAULWURF_ENV the local guard must not be inherited by accident.
+    monkeypatch.delenv("MAULWURF_ENV", raising=False)
+
+    with pytest.raises(ValidationError, match="env"):
+        Settings(_env_file=None, **SECRETS)
+
+
+def test_empty_env_is_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MAULWURF_ENV", "")
+
+    with pytest.raises(ValidationError, match="env"):
+        Settings(_env_file=None, **SECRETS)
+
+
+@pytest.mark.parametrize("field", ["secret_key", "encryption_key", "oauth_state_secret"])
+def test_weak_secret_rejected_outside_local(field: str) -> None:
+    with pytest.raises(ValidationError, match=f"{field}.*32"):
+        _prod(**{field: "x" * 31})
+
+
+def test_secret_of_minimum_length_is_accepted_outside_local() -> None:
+    assert _prod(secret_key="k" * 32).env == "prod"
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("secret_key", "encryption_key"),
+        ("secret_key", "oauth_state_secret"),
+        ("encryption_key", "oauth_state_secret"),
+    ],
+)
+def test_reused_secrets_rejected_outside_local(first: str, second: str) -> None:
+    shared = "shared-secret-value-0123456789abcdef"
+
+    with pytest.raises(ValidationError, match="distintos"):
+        _prod(**{first: shared, second: shared})
+
+
+def test_short_or_reused_secrets_remain_usable_in_local() -> None:
+    settings = _settings(
+        env="local",
+        secret_key="short",
+        encryption_key="short",
+        oauth_state_secret="short",
+    )
+
+    assert settings.env == "local"
 
 
 def test_public_origin_requires_https_outside_local() -> None:
