@@ -6,9 +6,11 @@ Riva transport double) -> atomic transcript commit -> verified cleanup -> outbox
 `index(audio_id)` in the worker -> hybrid search -> chat SSE with a validated citation.
 
 The driver runs inside the `api` container (``docker compose exec -T api python -``) so it
-can seed one user + opaque session directly, exactly like the integration fixtures: Google
-OAuth is not exercised and no credential is needed. The audio is a synthetic tone generated
-at execution time; it is never written to disk by this script and never becomes an artifact.
+can seed one user + opaque session directly: Google OAuth is not exercised and no credential
+is needed. The seed uses the same `app.google_sub` bootstrap context as the real first
+login, so the insert passes the `users` RLS policy instead of running as the owner (which
+would bypass the barrier). The audio is a synthetic tone generated at execution time; it is
+never written to disk by this script and never becomes an artifact.
 
 Gate/contract: G5-F1 and the frozen interfaces of S2 §1.1/§1.2/§1.3. This is an API-level
 E2E smoke over the compose network; the browser/Caddy leg belongs to D2.x and stays out of
@@ -191,14 +193,19 @@ def _attempt(detail: Mapping[str, Any]) -> Mapping[str, Any]:
 
 async def _seed() -> tuple[str, str, uuid.UUID]:
     """Create one user, one opaque session and one conversation; return cookie, csrf, id."""
-    from app.core.db import SessionFactory
+    from app.core.db import SessionFactory, bind_google_sub
     from app.models import User
     from app.models.chat import Conversation
     from app.services import sessions as session_service
 
+    sub = f"e2e-{uuid.uuid4().hex}"
     async with SessionFactory() as db:
+        # A2.17: the driver runs as `maulwurf_app` and has no tenant yet. First login binds
+        # the verified Google `sub`; the narrow `auth_user_insert` policy then admits only
+        # this user's row. Seeding as the owner would skip the policy the smoke verifies.
+        await bind_google_sub(db, sub)
         user = User(
-            google_sub=f"e2e-{uuid.uuid4().hex}",
+            google_sub=sub,
             email=f"e2e-{uuid.uuid4().hex[:8]}@maulwurf.invalid",
             email_verified=True,
         )
