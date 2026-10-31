@@ -16,10 +16,11 @@ MIGRATION = (
     / "versions"
     / "0005_s2_row_level_security.py"
 )
+SETTINGS_MIGRATION = MIGRATION.with_name("0006_s3_calendar_settings.py")
 
 
-def _migration() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("rls_0005", MIGRATION)
+def _migration(path: Path = MIGRATION, name: str = "rls_0005") -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -28,13 +29,14 @@ def _migration() -> ModuleType:
 
 def test_every_tenant_model_has_a_policy_in_the_migration() -> None:
     migration = _migration()
+    settings_migration = _migration(SETTINGS_MIGRATION, "rls_0006")
     # `TenantOwned` is a mixin, but a few tenant tables (chunk_segments, embeddings,
-    # google_credentials) declare `user_id` directly; the `user_id` column is the
-    # contract this migration follows.
+    # google_credentials, and J3.3's settings) declare `user_id` directly; the `user_id`
+    # column is the contract every RLS migration follows.
     models = {name for name, table in Base.metadata.tables.items() if "user_id" in table.c}
-    covered = set(migration.TENANT_TABLES)
+    covered = set(migration.TENANT_TABLES) | set(settings_migration.TENANT_TABLES)
     assert models == covered
-    assert set(migration.RLS_TABLES) == covered | {"users"}
+    assert set(migration.RLS_TABLES) == set(migration.TENANT_TABLES) | {"users"}
 
 
 def test_role_scoped_exceptions_stay_narrow() -> None:
