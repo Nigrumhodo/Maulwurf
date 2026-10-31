@@ -119,3 +119,54 @@ Quality CI: not observable from the development sandbox (the GitHub credentials 
 environment are invalid), so the fix1 commit was pushed to update PR #131 and trigger a
 fresh workflow. The prior run 41225714988 on 23d6ad7 was green in all 17 checks.
 
+Review fix2 (hoplite finding on head b8f7c0b, 2026-10-31)
+--------------------------------------------------------
+Finding: `SqlCalendarMirror.replace_window` deleted every window row without excluding the
+task-linked ones. The upsert that followed re-inserted the row without `task_id` (the
+inserted values never carry it), so every refresh silently unlinked the task and freed the
+partial unique index `calendar_events_one_link` (one linked event per task).
+
+Reproduction on the pre-fix head b8f7c0b (only the fix stashed, new tests applied):
+$ ... uv run pytest tests/integration/test_calendar_read.py -q -k "task_linked"
+2 failed, 15 deselected
+  test_a_task_linked_row_inside_the_window_keeps_its_link_across_refreshes
+  test_a_task_linked_row_inside_the_window_survives_a_refresh_without_it
+
+Decision (recorded in the `replace_window` comment and the module docstring): the read
+mirror never deletes nor unlinks a task-linked row. If the linked event disappears from
+Google or moves out of the window, the row is deliberately kept inside the mirror; the
+write path (J3.4/A3.8) owns those rows and is the only place allowed to reconcile or unlink
+them.
+
+Fix: the window delete adds `CalendarEvent.task_id.is_(None)`, the same rule the pre-window
+prune already used. The `ON CONFLICT DO UPDATE` SET list still omits `task_id` (and
+`source`), so an upsert over an existing linked row only refreshes the remote values.
+
+Commands and results (fix2 code commit 2e1753c)
+----------------------------------------------
+$ cd apps/api
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 224 source files
+
+$ ... uv run pytest tests/unit -q
+1188 passed, 35 warnings in 15.89s
+
+$ ... uv run pytest tests/integration/test_calendar_read.py -q
+17 passed (15 previous + 2 fix2 regressions)
+
+$ ... uv run pytest tests/integration -q
+32 failed, 434 passed, 434 warnings in 118.37s
+
+The 32 failures are the same pre-existing pgvector 0.6 search/chat/G4 set listed above; no
+new failure appeared. Without the sanitized `no_proxy`, the same two pre-existing HTTP-client
+unit tests fail as recorded in the environment note; the unit count above was produced with
+the sanitized variable. `python3 scripts/docs/check_refs.py` -> OK: 770 documented repository
+paths exist or are expected.
+
+Quality CI: the fix2 head was pushed to update PR #131 and trigger a fresh workflow; CI is
+not observable from this sandbox (invalid GitHub credentials). The last observed run,
+41225714988 on 23d6ad7, was green in all 17 checks.
+
