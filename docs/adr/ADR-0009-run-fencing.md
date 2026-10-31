@@ -58,8 +58,11 @@ ledger had no equivalent (`docs/plan/S2.md` §A2.20).
   `0004`.
 - Live workers keep the same retry and idempotency behavior: the token only changes on a new
   successful claim, and the claim path is unchanged for them.
-- A stale worker now costs at most bounded wasted work (the build it already ran); its finish
-  and activation are no-ops, and orphan cleanup remains the only owner of discarded builds.
+- Finish and activation of a stale worker are no-ops. Its **build writes are not fenced yet**:
+  a stale worker can still commit chunks/embeddings after orphan cleanup, and because those
+  rows keep the same `index_version` the next build can adopt them. This is not "bounded wasted
+  work" and orphan cleanup is not the only writer. A2.18 must add a per-batch write fence or
+  prove the build idempotent under a generation lock, and its criteria record this gap.
 - The column is not part of `ESPECIFICACION.md`'s functional contract; the DDL sketch in
   `docs/DISENO_BD_API_SPRINTS.md` is a design reference and does not list this internal column.
 

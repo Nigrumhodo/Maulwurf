@@ -261,7 +261,7 @@ were open S1 tickets when this backlog was written; both are now `done` (see
 | A2.15 | *(gap, P2)* Error envelope on 404, 405 and unhandled exceptions | A2.4 | U-S2-AN-14 |
 | A2.16 | *(gap, P1)* Fail-closed settings: `MAULWURF_ENV` required, secret strength and distinctness | A1.2 | U-S2-AN-15 |
 | A2.17 | *(gap, P1)* PostgreSQL RLS with `SET LOCAL app.user_id` (ADR-0006 second barrier) | A2.1; A1.9 | I-S2-AN-16 |
-| A2.18 | *(gap, P1)* Schema integrity follow-up (new migration after A2.20): FK indexes, version invariants, drift test | A2.1, A2.20 | I-S2-AN-17 |
+| A2.18 | *(gap, P1)* Schema integrity follow-up (new migration after A2.20): FK indexes, version invariants, drift test, and the build-phase fence left by ADR-0009 | A2.1, A2.20 | I-S2-AN-17 |
 | A2.19 | *(gap, P1)* Contract conformance of A1.8/A2.3/A2.4: TTL, language, token codes, `/me`, single limit source | A2.4 | U-S2-AN-18 |
 | A2.20 | *(gap, P1)* `processing_runs` fencing: a stale worker cannot finish a run or activate a generation after the reconciler reclaimed it | A2.1, J2.2, J2.4 | I-S2-JF-15 |
 

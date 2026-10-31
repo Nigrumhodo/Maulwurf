@@ -342,7 +342,8 @@ async def test_a_stale_claim_cannot_activate_a_second_time(
     await db_session.refresh(run)
     assert (run.status, run.fencing_token) == ("succeeded", 1)
 
-    stale = RunClaim(run_id=run.id, fencing_token=0)
+    # Same token as the successful claim: only the status='running' predicate refuses it.
+    stale = RunClaim(run_id=run.id, fencing_token=run.fencing_token)
     with pytest.raises(RunFenced):
         await activate_claimed_generation(
             db_session,
