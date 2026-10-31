@@ -207,6 +207,33 @@ async def test_failed_cleanup_cannot_be_upgraded_to_verified(pool: asyncpg.Pool)
 
 
 @pytest.mark.integration
+async def test_failed_cleanup_clears_a_previous_audio_deleted_at(pool: asyncpg.Pool) -> None:
+    """S4.2: moving to `failed` must not leave the deletion stamp from an earlier pass."""
+    attempt = await _seed(pool)
+    owned = await lease.acquire(
+        pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, instance="ingest:a",
+        ttl=timedelta(seconds=30),
+    )
+    assert owned is not None
+    assert await lease.record_cleanup(
+        pool, owned, verified=True, evidence=PROVEN_CLEANUP,
+    )
+    row = await _row(pool, attempt)
+    assert row["cleanup_status"] == "verified"
+    assert row["cleanup_verified_at"] is not None
+    assert row["audio_deleted_at"] is not None
+
+    assert await lease.record_cleanup(
+        pool, owned, verified=False, evidence={"verified": False, "error": "OSError"},
+    )
+    row = await _row(pool, attempt)
+
+    assert row["cleanup_status"] == "failed"
+    assert row["cleanup_verified_at"] is None
+    assert row["audio_deleted_at"] is None
+
+
+@pytest.mark.integration
 async def test_failed_cleanup_blocks_a_new_owner(pool: asyncpg.Pool) -> None:
     """S4.2: the failed latch also fences acquisition, not only ``reclaim_committed``."""
     attempt = await _seed(pool)

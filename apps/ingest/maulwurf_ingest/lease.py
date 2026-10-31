@@ -139,7 +139,9 @@ async def record_cleanup(
 
     A ``verified`` claim without the descriptor/process/mount checks is rejected
     (nothing is written, so the attempt stays pending and the outbox stays blocked).
-    A previously failed cleanup can never be upgraded to verified.
+    A previously failed cleanup can never be upgraded to verified. Conversely, a
+    later ``failed`` transition clears ``cleanup_verified_at`` and
+    ``audio_deleted_at``: a failed row must never claim that audio is gone.
     """
     if verified and not cleanup.absence_verified(evidence):
         logger.error(
@@ -151,8 +153,8 @@ async def record_cleanup(
         """
         UPDATE ingestion_attempts
            SET cleanup_status = $4::text, cleanup_evidence = $5::jsonb,
-               cleanup_verified_at = CASE WHEN $4 = 'verified' THEN now() END,
-               audio_deleted_at = CASE WHEN $4 = 'verified' THEN now() END,
+               cleanup_verified_at = CASE WHEN $4 = 'verified' THEN now() ELSE NULL END,
+               audio_deleted_at = CASE WHEN $4 = 'verified' THEN now() ELSE NULL END,
                updated_at = now()
          WHERE id = $1 AND user_id = $2 AND fencing_token = $3
            AND NOT (cleanup_status = 'failed' AND $4 = 'verified')
