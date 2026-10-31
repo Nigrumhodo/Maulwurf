@@ -280,6 +280,9 @@ async def test_connect_and_reconnect_are_in_the_openapi_contract(client: AsyncCl
     paths = (await client.get("/openapi.json")).json()["paths"]
 
     assert CONNECT in paths and RECONNECT in paths
+    # The contract sends the user to Google with a 302 (DISENO §3.3), not a 200.
+    assert "302" in paths[CONNECT]["post"]["responses"]
+    assert "302" in paths[RECONNECT]["post"]["responses"]
 
 
 async def test_connect_requires_a_mutation_session(

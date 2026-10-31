@@ -115,11 +115,11 @@ async def _start_calendar_flow(
     return redirect
 
 
-@router.post("/integrations/google/connect", response_model=None)
+@router.post("/integrations/google/connect", status_code=302, response_model=None)
 async def google_connect(db: DbSession, session: MutationSession) -> RedirectResponse:
     return await _start_calendar_flow(db, session, reconnect=False)
 
 
-@router.post("/integrations/google/reconnect", response_model=None)
+@router.post("/integrations/google/reconnect", status_code=302, response_model=None)
 async def google_reconnect(db: DbSession, session: MutationSession) -> RedirectResponse:
     return await _start_calendar_flow(db, session, reconnect=True)
