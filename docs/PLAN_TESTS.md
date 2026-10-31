@@ -219,7 +219,7 @@ published per the PLAN_IMPLEMENTACION §7.1 protocol.
 |---|---|---|---|
 | U-S2-JF-01 | U | Backoff with bounded jitter (max 3 transients); non-transient cases do not retry | M3 |
 | I-S2-JF-02 | I | Idempotent `index(audio_id)` job: double delivery → a single index; no partially active versions | G5-F1 |
-| I-S2-JF-03 | I | Redis `FLUSHALL` in the test environment → jobs regenerated from DB/outbox end to end | G5-F1 |
+| I-S2-JF-03 | I | Redis queue loss (`FLUSHDB` on a dedicated test DB) → jobs regenerated from DB/outbox end to end; DB 0 untouched | G5-F1 |
 | I-S2-JF-04 | I | Reconciler: dead attempts marked, stuck outbox re-published, duplicates resolved by uniqueness/lease | G5-F1 |
 | I-S2-JF-05 | I | Injected crash before and after the commit between ingestion and API: outcome per contract | G5-F1 |
 | E-S2-JF-06 | E | Pipeline E2E smoke: upload → transcript → cleanup → index → question with citation | G4/G5-F1 |
@@ -227,6 +227,8 @@ published per the PLAN_IMPLEMENTACION §7.1 protocol.
 | I-S2-JF-11 | I | `docker compose config`: `ingest` has the Riva and `INGEST_*` variable names and none of the API secrets; no default for `NVIDIA_API_KEY`; `ingest` still runs as UID 10001; `.env` can override `MAULWURF_PUBLIC_ORIGIN` | M2/G1 |
 | C-S2-JF-12 | C | Checklist: CI fails on a seeded fake secret and on an emptied suite; CI Redis has `maxmemory` and `noeviction`; license report published | G8/ADR-0005 |
 | C-S2-JF-13 | C | Checklist: ingress decided; its effective upload limit, timeouts and buffering measured or documented (date, environment, status codes); Caddy body and timeout limits set | D4/M2 |
+| I-S2-JF-14 | I | Reconciler lock scope: a blocked/slow Redis leaves no `FOR UPDATE` transaction open; two concurrent cycles do not duplicate a job | G5-F1 |
+| I-S2-JF-15 | I | Run fencing: a stale worker cannot finish a reclaimed run or activate the generation it was building | G5-F1 |
 
 ### 2.5 Web/UX — upload, library and chat
 
