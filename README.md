@@ -6,14 +6,19 @@
 *Maulwurf* means “mole” in German: the project is intended to dig through class recordings
 and build connections between notes, a calendar, and reminders.
 
-> **Project status — foundation under construction.** The repository contains the monorepo
-> with its S1 foundation: a local Docker Compose stack (8 services, S1/J1.1), the core
-> schema migration (A1.7), opaque sessions with CSRF (A1.4), the S1 ingestion contract
-> (A1.8, `PUT` answers 503 until S2), unit and integration test suites, and a quality CI
-> workflow (S1/J1.4). There is still **no end-to-end feature**: Google login (A1.3),
-> subject CRUD (A1.6), real upload/transcription (S2), provider contracts (F0 gates open)
-> and deployment manifests are pending. Planned services and roadmap gates must not be
-> read as implemented features.
+> **Project status — S1 implementation complete (L1.7 pending); S2 in progress.** The
+> repository contains the monorepo with its S1 foundation and a growing S2 knowledge slice: a
+> local Docker Compose stack (8 services, S1/J1.1), three Alembic migrations (`0001`–`0003`),
+> opaque sessions with CSRF (A1.4), Google login (A1.3), subject CRUD (A1.6), streaming
+> upload with SHA-256 and dedupe (A2.3/A2.4), hybrid search (L2.3/L2.4/A2.11), chat SSE with
+> validated citations (L2.5/L2.6), a hardened ingestion package (S2.1–S2.13), ARQ dispatch,
+> indexing and reconciliation (J2.1–J2.4), unit and integration test suites, and the quality
+> CI workflow (J1.4/J2.9). There is still **no end-to-end feature**: the default ingest sink
+> answers `503` until the API-to-ingest transport is configured, the S2 upload/library web
+> flows (`D2.x`) are only starting (`D2.1` in progress), analysis/Calendar/Gmail (S3–S4) do
+> not exist, and real ingestion is gated by the open F0 decisions (D2/D6 `pending`,
+> D3-Audio/D4 `blocked`). Planned services and roadmap gates must not be read as implemented
+> features.
 
 ## Product vision
 
@@ -86,9 +91,10 @@ The following are explicitly outside the current MVP/v1 scope:
 
 ## Proposed architecture
 
-The following architecture is the target design from the specification. Sprint S1 provides
-its foundation as local Compose services (`web`, `api`, `ingest`, `worker`, `scheduler`,
-`postgres`, `redis`, `caddy`), but the end-to-end flow below is not implemented yet.
+The following architecture is the target design from the specification. S1 and part of S2
+provide its foundation as local Compose services (`web`, `api`, `ingest`, `worker`,
+`scheduler`, `postgres`, `redis`, `caddy`), but the end-to-end flow below is not implemented
+yet.
 
 ```mermaid
 flowchart TD
@@ -187,8 +193,11 @@ are already implemented:
 
 ## Roadmap
 
-No phase below is implemented in the current tree. The detailed plan defines the evidence and
-acceptance gates for each phase.
+No phase below is complete. F0 has partial spike evidence, but its decisions remain open; F1
+is partially implemented (ingestion, API, search and chat pieces) without a browser
+end-to-end flow; F2–F4 have not started. The detailed plan defines the evidence and
+acceptance gates for each phase; the table describes scope and exit conditions, not
+completion.
 
 | Phase | Planned scope | Exit condition |
 | --- | --- | --- |
@@ -209,12 +218,12 @@ complete.
 .
 ├── .github/workflows/             # quality.yml (CI) and the external QA webhook
 ├── apps/
-│   ├── api/                       # FastAPI: routers, core, models, workers, alembic, tests
-│   ├── ingest/                    # Ingestion: admission, lease, cleanup, hardening, tests
-│   └── web/                       # React SPA (Vite): login, base routes, theme (D1.1–D1.3)
+│   ├── api/                       # FastAPI: routers, core, models, services, workers, alembic
+│   ├── ingest/                    # Ingestion: reception, admission, lease, cleanup, ASR client
+│   └── web/                       # React SPA (Vite): login, subjects, library, upload, chat
 ├── docs/                          # Specification, plans, ADRs, F0 spike, runbook, sprints
 ├── infra/                         # docker-compose.yml (8 services) and Caddyfile
-├── scripts/                       # scaffold (historical), provider/ (Riva spike), load/ helpers
+├── scripts/                       # CI guards, docs checks, provider/, e2e/, load/ helpers
 ├── AGENTS.md                      # Repository guidance for coding agents
 ├── LICENSE                        # GNU AGPL v3
 ├── README.md
@@ -258,12 +267,14 @@ See [docs/RUNBOOK-dev.md](docs/RUNBOOK-dev.md) for the reproducible commands. Su
 | Tests | pytest (api/ingest: unit + integration suites); Vitest (web: unit tests) |
 | Lint and formatting | Ruff (Python) and ESLint (web), configured |
 | Type checking | mypy strict (Python) and `tsc --noEmit` (web), configured |
-| Migrations | Merged (A1.7): the `api` container runs `alembic upgrade head` on boot (runbook §5) |
+| Documentation references | `python3 scripts/docs/check_refs.py` (docs, README and AGENTS paths) |
+| Migrations | Three revisions (`0001`–`0003`); the `api` container runs `alembic upgrade head` on boot (runbook §5) |
 | Deployment | No deployment manifests exist yet (S4/J4.x) |
 
 CI is defined in `.github/workflows/quality.yml` (lint, types, unit and integration tests,
-image builds); provider-contract tests remain protected and manual or scheduled, and mocks do
-not establish provider support or retention behavior.
+secret/license scans, image builds and the documentation reference check); provider-contract
+tests remain protected and manual or scheduled, and mocks do not establish provider support
+or retention behavior.
 
 ## NVIDIA Riva integration reference
 
@@ -315,7 +326,7 @@ unapproved provider test.
 
 ## Testing strategy
 
-Once the scaffold exists, the documented test layers are:
+The test layers are:
 
 1. **Unit tests:** dates and DST, Unicode character offsets, ASR fragment reconciliation,
    evidence spans, chunking, RRF retrieval, state transitions, idempotency, deduplication, and
@@ -356,7 +367,7 @@ must establish quotas, rate limits, alerts, retention policies, and provider ter
   dependencies and a Definition of Done per sprint; only the active sprint is claimable, and
   ownership lives in [docs/sprints/CLAIMS.md](docs/sprints/CLAIMS.md) (per-sprint specs in
   [docs/plan/S1.md](docs/plan/S1.md)–[docs/plan/S4.md](docs/plan/S4.md)).
-- [Test catalog by sprint (planned suites, gates G1–G8)](docs/PLAN_TESTS.md)
+- [Test catalog by sprint (layers, gates G1–G8)](docs/PLAN_TESTS.md)
 - [NVIDIA Riva client audit](docs/NVIDIA_RIVA.md)
 - [Pinned Riva dependency](requirements-riva.txt)
 - [Repository agent guidance](AGENTS.md)

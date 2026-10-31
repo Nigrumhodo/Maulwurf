@@ -1,6 +1,7 @@
 # Maulwurf — Proposed sprint sequence (S1–S4)
 
-> Status: revision 2026-09-19. **Model: open backlog per sprint, no pre-assignment.** The
+> Status: revision 2026-09-19; status text reconciled 2026-10-30. **Model: open backlog per
+> sprint, no pre-assignment.** The
 > only accepted ownership registry is [sprints/CLAIMS.md](sprints/CLAIMS.md); personal
 > logbooks document work and evidence but do not assign tickets. Only an active sprint can
 > open for claiming and future weeks remain blocked. Subordinate to
@@ -9,8 +10,8 @@
 > specification of how each sprint must work** lives in [plan/S1.md](plan/S1.md) ·
 > [plan/S2.md](plan/S2.md) · [plan/S3.md](plan/S3.md) · [plan/S4.md](plan/S4.md) (frozen
 > contracts, per-ticket behavior, acceptance criteria, and tests). If this document
-> contradicts the specification, the specification wins. Nothing described here is
-> implemented except what is explicitly marked as existing skeleton.
+> contradicts the specification, the specification wins. Implementation status is tracked in
+> [sprints/CLAIMS.md](sprints/CLAIMS.md); the backlog defines scope, not evidence.
 
 ## 0. Planning model
 
@@ -48,8 +49,8 @@ person**:
 | `L-` | RAG · prompts · quality · leadership | `apps/api/prompts/`, datasets, ADRs | LLM/embeddings, coordination |
 | `A-` | API · database | `apps/api` (routers, services, models, core) | Python/FastAPI/SQLAlchemy |
 | `S-` | Ingestion · audio · ASR | `apps/ingest`, Riva client, ffmpeg, tmpfs | Systems, audio, resilience |
-| `J-` | Infra · workers · integrations | `infra/`, CI, `apps/api/workers/`, Google | Docker/CI, ARQ/Redis, Google APIs |
-| `D-` | Web · UX | `apps/web` | Next.js/TypeScript, UX |
+| `J-` | Infra · workers · integrations | `infra/`, CI, `apps/api/app/workers/`, Google | Docker/CI, ARQ/Redis, Google APIs |
+| `D-` | Web · UX | `apps/web` | React/Vite/TypeScript, UX |
 
 Any member may claim from any area. A ticket whose Tests field includes `P-*`, or whose
 execution makes a real call to Riva, LLM/embeddings, or Google, requires the owner to have
@@ -99,12 +100,11 @@ availability. S1 opens first; S2–S4 remain blocked until the previous gate clo
 Hard rule: **no real ingestion before S1 closes the F0 gate** (D3 retention, D2/D4
 limits, D6 timestamps, G1, and an approved G2 variant).
 
-**Skeleton status (revision 2026-09-19):** `apps/api` already exists (minimal FastAPI with
-`/healthz`+`/readyz` and Pydantic Settings config), `apps/ingest` (empty package),
-`apps/web` (Next.js scaffold; placeholder landing to be replaced by D1.8), and
-`scripts/scaffold_monorepo.sh`. There is no compose, quality CI, tests, or migrations yet.
-Tickets `L1.1`, `A1.1`, `A1.2`, `D1.1` are marked as *verify/complete*, not as from-scratch
-creation.
+**Status (reconciled 2026-10-30):** S1 is complete except L1.7 (the formal close), and S2
+is open. The repository has a running 8-service compose stack, three Alembic migrations,
+sessions/CSRF, Google login, subject CRUD, a hardened ingestion package, search and chat
+APIs, tests and quality CI. The web is a Vite + React SPA (ADR-0007), not the original
+Next.js scaffold. Exact ownership and state remain in [sprints/CLAIMS.md](sprints/CLAIMS.md).
 
 ## 2. Week 1 (S1) — Foundation + feasibility spike (F0)
 
@@ -179,7 +179,7 @@ progress SSE response shape.
 
 | Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| D1.1 | Verify the `apps/web` scaffold (Next.js + TS + Tailwind) *(base already created; placeholder landing replaced in D1.8)* | L1.1 | — |
+| D1.1 | Verify the `apps/web` scaffold (Vite + React + TS + Tailwind, ADR-0007) *(base already created; placeholder landing replaced in D1.8)* | L1.1 | — |
 | D1.2 | Base routes (`/biblioteca`, `/chat`, `/materias`, `/settings`) and navigation layout | D1.1 | — |
 | D1.3 | Google login with redirect/callback; logout; loading/error states | A1.3/A1.4, L1.6 | — |
 | D1.4 | HTTP client: CSRF on mutations; 401/403/429 interceptors | L1.6 | U-S1-DA-01 |
@@ -221,7 +221,8 @@ terminal event; citation format `[Subject · Class · mm:ss]`; paginated `/searc
 2026-10-11 to cover gaps between the code and the specification that no ticket owned (detail,
 evidence and priorities in [plan/S2.md](plan/S2.md) §10). They are claimed like any other ticket;
 the lead decides which `P1`/`P2` ones move to S3. `A1.3` (Google login) and `A1.6` (subject CRUD)
-remain open S1 tickets and the slice cannot run without them.
+were open S1 tickets when this backlog was written; both are now `done` (see
+[sprints/CLAIMS.md](sprints/CLAIMS.md)).
 
 ### S2 backlog — RAG (`L2.x`)
 

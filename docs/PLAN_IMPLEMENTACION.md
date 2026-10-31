@@ -297,8 +297,8 @@ synthetic-only evaluation leaves that generalization unverified.
    filter/context combinations, and effective limits. Measure resources and non-persistence
    under load too.
 5. **Build/delivery:** lint, types, suites, and builds of all apps/images; migrations and
-   restore. Record exact commands once the scaffold exists, without inventing commands that
-   do not exist today.
+   restore. Commands are documented in [RUNBOOK-dev.md](RUNBOOK-dev.md); do not invent
+   commands that do not exist today.
 
 ## 8. Risks and closing decisions
 

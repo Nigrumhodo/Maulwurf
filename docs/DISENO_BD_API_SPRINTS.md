@@ -3,18 +3,23 @@
 > **Status: design document.** Derived from
 > [ESPECIFICACION.md](ESPECIFICACION.md) (source of truth for contracts),
 > [PLAN_IMPLEMENTACION.md](PLAN_IMPLEMENTACION.md) (gates G1–G8, decisions D1–D8), and
-> [PLAN_SPRINTS.md](PLAN_SPRINTS.md) (per-sprint backlog with claiming). Nothing that
-> follows is implemented; this document defines **what is going to be built**, not evidence
-> that it exists. If it contradicts the specification, the specification wins and this file
+> [PLAN_SPRINTS.md](PLAN_SPRINTS.md) (per-sprint backlog with claiming). This document defines
+> the design contracts; implementation status is tracked in
+> [sprints/CLAIMS.md](sprints/CLAIMS.md) and [../README.md](../README.md), not inferred from the
+> schemas below. If it contradicts the specification, the specification wins and this file
 > is corrected in the same revision.
 
 ---
 
-## 1. Current project status (review 2026-09-19)
+## 1. Current project status (review 2026-09-19; historical)
+
+> This snapshot predates S1. For the current state see
+> [sprints/CLAIMS.md](sprints/CLAIMS.md) and [../README.md](../README.md). The web stack is
+> Vite + React (ADR-0007), not the Next.js scaffold named below.
 
 | Area | Status observed in the repository |
 |---|---|
-| Application code | Minimal skeleton: `apps/api` exposes health checks and configuration; `apps/ingest` is an empty package; `apps/web` is a Next.js scaffold. There is no functionality, compose, migrations, test suites, or quality CI pipeline. |
+| Application code | Historical snapshot: the tree now has the S1 foundation and part of S2 (API, ingestion, web, migrations, compose and CI). See `CLAIMS.md` for ticket state. |
 | Manifests and dependencies | `apps/api/pyproject.toml` + `uv.lock`, `apps/ingest/pyproject.toml` + `uv.lock`, `apps/web/package.json` + `package-lock.json`, and `requirements-riva.txt` exist. The Riva client is pinned to `2.27.0`; the other ranges belong to the scaffold and do not demonstrate installation, build, or E2E compatibility. |
 | Functional contracts | `docs/ESPECIFICACION.md` — modules M1–M9, data model §6, NFRs §8 |
 | Delivery plan | `docs/PLAN_IMPLEMENTACION.md` — phases F0–F3, gates G1–G8, decisions D1–D8 |
@@ -1650,7 +1655,7 @@ CSRF with a development login behind a temporary feature flag, never merged to d
 
 | Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1 | D1.1 | `apps/web` scaffold: Next.js App Router + TS + Tailwind + shadcn/ui with lockfile | App runs against the local API |
+| 1 | D1.1 | `apps/web` scaffold: Vite + React + TS + Tailwind with lockfile (ADR-0007) | App runs against the local API |
 | 1–2 | D1.2 | Base routes `/`, `/biblioteca`, `/chat`, `/materias`, `/settings` with layout | Visible navigation |
 | 2–3 | D1.3 | Google login: redirect to `/auth/google/start`, callback, loading/error states; logout | Demonstrable login |
 | 3 | D1.4 | HTTP client: same-origin cookies, CSRF on mutations, 401/403/429 interceptors | Tested client |
