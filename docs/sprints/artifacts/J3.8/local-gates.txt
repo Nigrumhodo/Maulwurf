@@ -119,7 +119,9 @@ Coverage of the ticket
 
 Quality CI
 ----------
-Local gates after merging `develop@70f2465`: `ruff`/`mypy` clean (237 files), **1285 API
-unit**, **154 targeted integration** and **494 full integration** passed with the same 32
-pre-existing pgvector 0.6 failures. The Quality CI run for the merge head is recorded in
-the PR; PR #133 stays open for review and is not merged.
+Workflow run 41242768639 on the merge head 7ba79ba (2026-10-31): all 17 checks green,
+including `python-unit (api)` **1285 passed**, `integration (api)` **525 passed** (the 26
+I-S3-JF-07 cases included), `python-unit (ingest)`, `integration (ingest)`,
+`python-static (api/ingest)`, `e2e-smoke`, `docs`, `web`, `build-images`, `secret-scan`,
+`license-report`, `compose-ingest-env` and `caddy-limits`. PR #133 stays open for review;
+it is not merged.
