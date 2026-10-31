@@ -22,6 +22,7 @@ import asyncio
 import logging
 import secrets
 import time
+import urllib.parse
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
@@ -37,6 +38,11 @@ logger = logging.getLogger(__name__)
 
 GOOGLE_CALENDAR_API_URL = "https://www.googleapis.com/calendar/v3"
 _BACKOFF_BASE_SECONDS = 0.5
+# Bounded calendar-list pagination: the Calendar API returns at most 250 entries per page
+# and a user has no legitimate reason to exceed a few pages. The bound keeps a corrupt or
+# hostile `nextPageToken` from turning one connect into an unbounded loop (guardrail 10).
+CALENDAR_LIST_PAGE_SIZE = 250
+CALENDAR_LIST_MAX_PAGES = 10
 _RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 # Google reports some transient quota errors as 403. Only these reasons are retryable; a
 # permission/forbidden 403 is a configuration or consent problem, not a transient failure.
@@ -294,6 +300,50 @@ class GoogleCalendarService:
                 if response.status_code >= httpx.codes.BAD_REQUEST:
                     raise self._client_error(response, attempt)
                 return self._parse(response)
+
+    async def list_calendars(self) -> list[dict[str, Any]]:
+        """Every entry of the user's calendar list, following pagination up to the cap."""
+        items: list[dict[str, Any]] = []
+        page_token: str | None = None
+        for _ in range(CALENDAR_LIST_MAX_PAGES):
+            params: dict[str, Any] = {
+                "maxResults": CALENDAR_LIST_PAGE_SIZE,
+                "showDeleted": "false",
+            }
+            if page_token is not None:
+                params["pageToken"] = page_token
+            payload = await self.request("GET", "users/me/calendarList", params=params)
+            page_items = payload.get("items")
+            if isinstance(page_items, list):
+                items.extend(item for item in page_items if isinstance(item, dict))
+            next_token = payload.get("nextPageToken")
+            if not isinstance(next_token, str) or not next_token:
+                return items
+            page_token = next_token
+        logger.warning("google_calendar.list_truncated pages=%d", CALENDAR_LIST_MAX_PAGES)
+        return items
+
+    async def get_calendar(self, calendar_id: str) -> dict[str, Any]:
+        """One calendar by ID; a deleted or unknown ID raises `GoogleCalendarNotFound`."""
+        path = f"calendars/{urllib.parse.quote(calendar_id, safe='')}"
+        return await self.request("GET", path)
+
+    async def create_calendar(
+        self, *, summary: str, description: str, timezone: str
+    ) -> dict[str, Any]:
+        """Create one secondary calendar owned by the authenticated user."""
+        payload = await self.request(
+            "POST",
+            "calendars",
+            json={"summary": summary, "description": description, "timeZone": timezone},
+        )
+        calendar_id = payload.get("id")
+        if not isinstance(calendar_id, str) or not calendar_id:
+            raise GoogleCalendarResponseError(
+                "Google Calendar creó un calendario sin identificador.",
+                details={"status": httpx.codes.OK},
+            )
+        return payload
 
     def _pause(self, attempt: int, retry_after: float | None) -> None:
         delay = retry_after if retry_after is not None else _backoff(attempt, self._jitter)
