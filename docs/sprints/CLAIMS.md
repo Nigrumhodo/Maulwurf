@@ -1,7 +1,7 @@
 # Canonical claims registry — Maulwurf
 
-> Status: **S2 open**. Review: 2026-10-09. S3.1 is recorded under a directed claim for
-> MAULW-108; the rest of S3 remains closed.
+> Status: **S2 open**. Review: 2026-10-09. S3.1 and S3.2 are recorded under directed
+> claims for MAULW-108 and MAULW-109; the rest of S3 remains closed.
 >
 > This file is the single source of truth for ticket ownership. Personal logbooks keep
 > evidence, blockers, and notes, but a row there does not assign a ticket by itself. Rows
@@ -160,12 +160,14 @@ MAULW-108 recorded below. D2 and D6 remain `pending`; D3-Audio and D4 remain `bl
 
 ### S3 — Action (extraction and Calendar)
 
-> Only S3.1 is recorded: it was directed by MAULW-108. The remaining S3 backlog stays
-> unclaimable until the lead opens the sprint and updates the status above.
+> Only S3.1 and S3.2 are recorded: they were directed by MAULW-108 and MAULW-109. The
+> remaining S3 backlog stays unclaimable until the lead opens the sprint and updates the
+> status above.
 
 | Action | Ticket | Owner | Status | Claimed at (UTC) | Cloud eligibility | Contributors / reviewers | Reason, evidence, or PR |
 |---|---|---|---|---|---|---|---|
 | claim | S3.1 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area S, area A | MAULW-108: explicit analysis backfill for F1 classes over persisted text only (no reupload/retranscription), `app/services/analysis_backfill.py` + `scripts/backfill_analysis.py`, `analysis_backfill_available` on `GET /audios/{id}`, I-S3-SG-01. L3.6/A3.1 are not in `develop`; the queue reaches the S2 `analyze` no-op, so extraction output is not claimed. PR #119: Quality CI green, `integration (api)` 404 passed and `integration (ingest)` passed. Branch `task/MAULW-108` |
+| claim | S3.2 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area S, area A | MAULW-109: sentence-aligned analysis windows with a bounded overlap and a hard total-token budget, evidence-identity dedupe, `app/services/analysis_windows.py`, the offline `scripts/eval/window_cost.py` harness and U-S3-SG-02. Token numbers come from authored/redacted spike-derived text; no real LLM call or provider latency is claimed. Branch `task/MAULW-109` |
 
 ## 4. Change history
 
@@ -222,3 +224,4 @@ MAULW-108 recorded below. D2 and D6 remain `pending`; D3-Audio and D4 remain `bl
 | 2026-10-31 | L2.9 is claimed by angalindog (`in progress`): align the §M6 `Chunk` contract with the `chunks`/`chunk_segments` tables of migration `0002`, with a validated `overlap_span` shape and U-S2-JL-11. No cloud provider. | This PR |
 | 2026-10-31 | J2.10 is claimed by jpinillaz (`in progress`): ADR-0010 records Caddy as the only HTTP ingress (Cloudflare Tunnel dropped) and the Caddyfile sets a 220 MB upload ceiling, a 10 MB JSON ceiling and `read_body`/`read_header`/`write`/`idle` timeouts. C-S2-JF-13 is recorded with a native Caddy 2.8.4 measurement; `scripts/ci/check_caddy_limits.py` guards the envelope in CI. Branch `task/MAULW-186`. | This PR |
 | 2026-10-31 | S3.1 is claimed by jpinillaz (`in progress`) for the directed MAULW-108 ticket: explicit analysis backfill for F1 classes only from persisted text, an operator script with dry-run by default and the `analysis_backfill_available` detail flag. L3.6/A3.1 are absent from `develop`, so the queue reaches the S2 `analyze` no-op and no extraction result is claimed. S3 is not declared open here; the remaining S3 tickets stay blocked. PR #119: all Quality CI checks green, `integration (api)` 404 passed. | This PR |
+| 2026-10-31 | S3.2 is claimed by jpinillaz (`in progress`) for the directed MAULW-109 ticket: bounded analysis windows, evidence-identity dedupe and the offline window-cost harness (U-S3-SG-02). The cost numbers use authored/redacted textual fixtures derived from the F0.1 spike scenario; no real provider call, no audio and no real class text are involved. S3 is not declared open; the rest of S3 stays blocked. | This PR |
