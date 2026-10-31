@@ -1,0 +1,56 @@
+J3.7 — local gates (MAULW-120)
+===============================
+
+Date: 2026-10-31 (UTC)
+Host: isolated development sandbox, PostgreSQL 16.15 + Redis 7 available.
+Repo: /home/hatch/workspace/repos/mwt-120, branch task/MAULW-120.
+No real Google call, credential or secret was used.
+
+Environment note
+----------------
+The sandbox exports a NO_PROXY value containing bracketed IPv6 literals (`[::1]`).
+httpx parses that list incorrectly, which breaks two pre-existing unit tests
+(`test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured` and
+`test_llm.py::test_shared_http_client_is_bounded_reused_and_closed`). They pass with a
+syntactically valid NO_PROXY, which is how the counts below were produced. This is an
+environment issue outside this diff, already recorded by J3.4/J3.5.
+
+Commands and results
+--------------------
+$ cd apps/api
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 224 source files
+
+$ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
+    uv run pytest tests/unit -q
+1182 passed, 35 warnings in 10.67s
+
+$ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
+    uv run pytest tests/integration/test_calendar_read.py \
+      tests/integration/test_migrations.py \
+      tests/integration/test_rls.py \
+      tests/integration/test_isolation.py -q
+77 passed, 72 warnings in 25.94s
+
+$ NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" \
+    uv run pytest tests/integration -q
+32 failed, 429 passed, 431 warnings in 109.05s
+
+Known pre-existing integration failures
+---------------------------------------
+All 32 failures are in test_search.py, test_chat_sse.py and test_g4_eval.py. They depend on
+`SET LOCAL hnsw.iterative_scan`, which requires pgvector >= 0.8; this sandbox has pgvector
+0.6.0, so the API answers the documented `500 search_hnsw_unsupported`. They are outside
+this diff; the 12 new I-S3-JF-05 cases pass, as do the migration, RLS and isolation suites.
+
+$ psql -h localhost -U maulwurf -d maulwurf \
+    -c "select extversion from pg_extension where extname='vector';"
+ 0.6.0
+
+Docs
+----
+$ python3 scripts/docs/check_refs.py
+OK: 766 documented repository paths exist or are expected.

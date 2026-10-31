@@ -45,6 +45,10 @@ S2_TABLES = S1_TABLES | {
     "message_sources",
 }
 
+# J3.7 provisions A3.8's frozen Calendar shape; the migration chain is linear, so the
+# head of the graph now includes these two tables.
+S3_TABLES = S2_TABLES | {"settings", "calendar_events"}
+
 S2_COMPOSITE_FOREIGN_KEYS = {
     "variant_confirmation_tokens": {
         "FOREIGN KEY (user_id, canonical_audio_id) REFERENCES audios(user_id, id)",
@@ -250,7 +254,7 @@ def test_upgrade_from_empty_reaches_head(empty_schema: str) -> None:
 
     command.upgrade(alembic_config(empty_schema), "head")
 
-    assert _state(empty_schema) == (S2_TABLES, [_head(empty_schema)])
+    assert _state(empty_schema) == (S3_TABLES, [_head(empty_schema)])
 
 
 def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
@@ -258,12 +262,17 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     revision = ScriptDirectory.from_config(cfg).get_revision(_head(empty_schema))
     assert revision is not None
     parent = revision.down_revision
-    assert parent == "0004"  # this chain is linear
+    assert parent == "0005"  # this chain is linear
     command.upgrade(cfg, "head")
 
-    # `0005` only changes roles, policies and RLS flags; `0003` only backfills
-    # `chunks.tsv` (data, not schema) and `0004` only adds the run fencing token, so the
-    # steps back stay on the S2 schema and only remove those additions.
+    # `0006` only adds the Calendar mirror/settings tables and their policies; `0005` only
+    # changes roles and RLS flags; `0003` only backfills `chunks.tsv` (data, not schema) and
+    # `0004` only adds the run fencing token, so the steps back stay on the S2 schema and
+    # only remove those additions.
+    command.downgrade(cfg, "-1")
+    assert _state(empty_schema) == (S2_TABLES, ["0005"])
+    assert _rls_state(empty_schema) == {"subjects": (True, True), "users": (True, True)}
+
     command.downgrade(cfg, "-1")
     assert _state(empty_schema) == (S2_TABLES, ["0004"])
     assert _processing_run_fencing_token(empty_schema) == ("bigint", "NO", "0")
@@ -280,7 +289,7 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     assert _state(empty_schema) == (S1_TABLES, ["0001"])
 
     command.upgrade(cfg, "head")
-    assert _state(empty_schema)[0] == S2_TABLES
+    assert _state(empty_schema)[0] == S3_TABLES
 
 
 def test_rls_revision_round_trips(empty_schema: str) -> None:
@@ -384,4 +393,4 @@ def test_concurrent_upgrades_serialize_without_errors(empty_schema: str) -> None
             raise
         assert replica.returncode == 0, stderr.decode()[-500:]
 
-    assert _state(empty_schema) == (S2_TABLES, [_head(empty_schema)])
+    assert _state(empty_schema) == (S3_TABLES, [_head(empty_schema)])

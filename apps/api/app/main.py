@@ -12,6 +12,7 @@ from app.core.request_context import RequestIdMiddleware
 from app.routers import (
     audios,
     auth,
+    calendar,
     chat,
     health,
     ingestion,
@@ -53,4 +54,5 @@ app.include_router(integrations.router)
 app.include_router(subjects.router)
 app.include_router(search.router)
 app.include_router(chat.router)
+app.include_router(calendar.router)
 app.include_router(internal_metrics.router)
