@@ -106,11 +106,13 @@ async def google_callback(
         if not isinstance(id_token, str):
             raise OAuthError("token_exchange_incomplete")
         claims = await oauth_google.verify_id_token(id_token, nonce)
-        user = await oauth_google.upsert_google_identity(db, claims, tokens)
         # Session fixation: a session the browser already carried never survives a login.
+        # It is revoked before the identity upsert so the old tenant is still the one bound
+        # by RLS during the revocation.
         previous = await sessions.resolve_session(db, request.cookies.get(COOKIE_NAME))
         if previous is not None:
             await sessions.revoke_session(db, previous)
+        user = await oauth_google.upsert_google_identity(db, claims, tokens)
         issued = await sessions.create_session(db, user.id)
     except OAuthError:
         await db.rollback()

@@ -166,6 +166,9 @@ class Settings(BaseSettings):
     database_url: PostgresDsn = cast(
         PostgresDsn, "postgresql+asyncpg://maulwurf:maulwurf@localhost:5432/maulwurf"
     )
+    # A2.17: constrained runtime role (NOLOGIN, no BYPASSRLS). Every transaction starts
+    # with SET LOCAL ROLE before touching tenant rows; migrations keep the DSN owner.
+    database_role: str = Field(default="maulwurf_app", pattern=r"^[a-z_][a-z0-9_]{0,62}$")
     redis_url: RedisDsn = cast(RedisDsn, "redis://localhost:6379/0")
 
     @property

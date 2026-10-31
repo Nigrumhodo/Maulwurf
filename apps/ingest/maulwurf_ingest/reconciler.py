@@ -20,7 +20,7 @@ from pathlib import Path
 
 import asyncpg
 
-from maulwurf_ingest import admission, cleanup, persistence
+from maulwurf_ingest import admission, cleanup, persistence, rls
 from maulwurf_ingest import lease as leases
 from maulwurf_ingest.cleanup import CleanupEvidence
 
@@ -76,7 +76,7 @@ async def _destroy(workdirs: list[Path]) -> CleanupEvidence:
 async def _active_version(
     pool: asyncpg.Pool, lease: leases.Lease,
 ) -> tuple[uuid.UUID, int] | None:
-    row = await pool.fetchrow(
+    row = await rls.fetchrow(pool, lease.user_id,
         """
         SELECT ia.audio_id, a.active_transcript_version
           FROM ingestion_attempts ia
@@ -115,7 +115,7 @@ async def reconcile_committed(
 ) -> tuple[ReconcileResult, ...]:
     """Enable the text outbox for expired post-commit attempts. Never retranscribes."""
     root = Path(tmp_dir) if tmp_dir is not None else Path(tempfile.gettempdir())
-    rows = await pool.fetch(
+    rows = await rls.fetch(pool, None,
         """
         SELECT id, user_id, cleanup_status
           FROM ingestion_attempts
@@ -201,7 +201,7 @@ async def sweep_stranded(pool: asyncpg.Pool) -> tuple[uuid.UUID, ...]:
     """
     ended: list[uuid.UUID] = []
     for _ in range(SWEEP_MAX_BATCHES):
-        rows = await pool.fetch(
+        rows = await rls.fetch(pool, None,
             _SWEEP_SQL, list(STRANDED_STATES), SWEEP_BATCH_SIZE,
             STRANDED_STATUS, STRANDED_ERROR_CODE,
         )

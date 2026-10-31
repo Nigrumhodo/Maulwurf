@@ -7,6 +7,9 @@ name: maulwurf
 x-api-env: &api-env
   # A2.16: required with no default in Settings; Compose is the local environment.
   MAULWURF_ENV: local
+  # A2.17: runtime role the API downgrades to with SET LOCAL ROLE on every transaction.
+  # It is NOLOGIN and has no BYPASSRLS; the DSN still authenticates as the migration owner.
+  MAULWURF_DATABASE_ROLE: maulwurf_app
   MAULWURF_DATABASE_URL: postgresql+asyncpg://maulwurf:${POSTGRES_PASSWORD:-maulwurf}@postgres:5432/maulwurf
   MAULWURF_REDIS_URL: redis://redis:6379/0
   # Exact origin the browser sees (CSRF, A1.4); the default port 443 is normalized.
@@ -99,7 +102,11 @@ services:
     env_file:
       - path: ../.env
         required: false
-    environment: *api-env
+    environment:
+      <<: *api-env
+      # A2.17: cross-tenant dispatcher/reconciler/index; the explicit jobs policy only
+      # applies to this role and still requires app.cross_tenant='on' in code.
+      MAULWURF_DATABASE_ROLE: maulwurf_jobs
     # Solo Redis (y Postgres para el dispatcher): un fallo de la API no debe dejar la
     # cola sin drenar.
     depends_on:
@@ -128,7 +135,10 @@ services:
     env_file:
       - path: ../.env
         required: false
-    environment: *api-env
+    environment:
+      <<: *api-env
+      # A2.17: see the worker service.
+      MAULWURF_DATABASE_ROLE: maulwurf_jobs
     # Solo Redis (y Postgres para el dispatcher): un fallo de la API no debe dejar la
     # cola sin drenar.
     depends_on:
