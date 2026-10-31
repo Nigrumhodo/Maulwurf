@@ -3,15 +3,18 @@
 Maulwurf is a documentation-first project for a study assistant that turns class audio into
 searchable transcripts, cited RAG answers, reviewable task proposals, Google Calendar entries,
 and optional Gmail reminders. The repository contains the product and planning documentation
-plus the **S1 foundation** (sprint S1; ownership and state in `docs/sprints/CLAIMS.md`): a
-Docker Compose stack of 8 services with healthchecks, one Alembic migration, real API
-routers (health, session/CSRF, `GET/PATCH /me`, `POST /audios`, integrations status), a
-hardened ingestion package with leases and cleanup, ARQ worker/scheduler processes, unit
-and integration test suites, and a GitHub Actions quality pipeline.
-There is still **no end-to-end feature**: Google login (A1.3), subject CRUD (A1.6) and
-tenant-isolation tests (A1.9) are unclaimed, `PUT /audios/{id}/content` answers `503` in
-S1, the web area (`D-`) is unstarted, and real ingestion is gated by the open F0 decisions
-(D2/D6 `pending`, D3-Audio/D4 `blocked`).
+plus the **S1 foundation** and a growing **S2 knowledge slice** (ownership and state in
+`docs/sprints/CLAIMS.md`): a Docker Compose stack of 8 services with healthchecks, three
+Alembic migrations (`0001`–`0003`), real API routers (health, session/CSRF, Google login,
+`GET/PATCH /me`, subject CRUD, `POST /audios`, streaming `PUT` with dedupe, search, chat
+SSE, integrations status), a hardened ingestion package with internal reception endpoints,
+leases and cleanup, ARQ worker/scheduler processes with outbox dispatch, indexing and
+reconciliation, unit and integration test suites, and a GitHub Actions quality pipeline.
+There is still **no end-to-end feature**: the default ingest sink answers `503` until
+`MAULWURF_INGEST_URL` and the ingest credential are configured, the S2 upload/library web
+flows (`D2.x`) are only starting (`D2.1` in progress), analysis/Calendar/Gmail (S3–S4) do
+not exist, and real ingestion is gated by the open F0 decisions (D2/D6 `pending`,
+D3-Audio/D4 `blocked`).
 Elevator pitch: upload a class recording, keep only its durable text, and turn what the
 teacher said into evidence-backed study actions without silently writing to external
 services.
@@ -24,24 +27,30 @@ explicit Definition of Done. See "Sprint Model" below.
 ## Repository Structure
 
 - `.github/workflows/quality.yml` — Quality CI (J1.4): ruff+mypy, unit tests, web
-  lint/typecheck/test/build, integration tests with service containers, image builds;
-  runs on PRs and pushes to `develop`.
+  lint/typecheck/test/build, integration tests with service containers, image builds,
+  secret/license scans, the compose ingest environment check (J2.8) and the documentation
+  reference check (L2.11); runs on PRs and pushes to `develop`.
 - `.github/workflows/trigger-hoplite-qa.yml` — External QA webhook trigger on PRs (not a
   build/test pipeline; does not replace `quality.yml`).
-- `apps/api/` — FastAPI service (area `A-`): routers (health, auth logout, `me`, audios,
-  integrations), `core/` (fail-fast settings, db, AES-GCM crypto, deps, errors,
-  validation), `models/` (core + ingestion shapes), `services/` (sessions, tenant,
-  outbox), `workers/` (ARQ worker/scheduler + outbox dispatcher), one Alembic migration
-  (`0001_core_schema_s1`), `prompts/v1/` (still empty), and real `tests/{unit,integration}/`
-  suites. Dependency and tool config in `pyproject.toml` (Ruff, mypy strict, pytest
-  markers); lockfile `uv.lock`.
-- `apps/ingest/` — Ingestion package (area `S-`): `maulwurf_ingest/` with admission,
-  supervisor, lease/fencing, cleanup, capacity, hardening, audio validation, synthetic
-  generator and timestamps, ASR job, and main; real test suite (synthetic-audio tests need
-  `espeak-ng` on PATH). Pinned `nvidia-riva-client==2.27.0`; lockfile `uv.lock`.
-- `apps/web/` — React SPA built with Vite (ADR-0007; area `D-`): `src/pages/` (React Router
-  routes), `src/components/`, `src/lib/`, and `src/server/` (Express serving only static files
-  and the SPA fallback); `package.json` (Vitest, ESLint, Tailwind 4), `tsconfig.json`.
+- `apps/api/` — FastAPI service (area `A-`): routers (health, auth including Google OAuth,
+  `me`, subjects, audios, ingestion, search, chat, integrations), `core/` (fail-fast
+  settings, db, AES-GCM crypto, deps, errors, logging, providers, validation), `models/`
+  (core, ingestion, transcript, chunk, chat), `services/` (sessions, tenant, audios,
+  uploads, dedupe, search, chat/RAG, citations, outbox, indexing, reconciliation),
+  `workers/` (ARQ worker/scheduler, outbox dispatcher, index job, reconciler), Alembic
+  migrations `0001_core_schema_s1`, `0002_s2_schema` and `0003_backfill_chunks_tsv`,
+  `prompts/v1/` (versioned chat prompt), and real `tests/{unit,integration}/` suites.
+  Dependency and tool config in `pyproject.toml` (Ruff, mypy strict, pytest markers);
+  lockfile `uv.lock`.
+- `apps/ingest/` — Ingestion package (area `S-`): `maulwurf_ingest/` with internal
+  reception routes, admission, supervisor, lease/fencing, cleanup, capacity, hardening,
+  audio validation, synthetic generator and timestamps, ASR job and Riva client, and main;
+  real test suite (synthetic-audio tests need `espeak-ng` on PATH). Pinned
+  `nvidia-riva-client==2.27.0`; lockfile `uv.lock`.
+- `apps/web/` — React SPA built with Vite (ADR-0007; area `D-`): `src/pages/` (login,
+  dashboard, subjects, library, upload, chat, settings), `src/components/`, `src/lib/`, and
+  `src/server/` (Express serving only static files and the SPA fallback); `package.json`
+  (Vitest, ESLint, Tailwind 4), `tsconfig.json` and `tests/unit/`.
 - `docs/` — English-language product, architecture, provider, and delivery documentation
   (the original Spanish sources are archived under `docs/es/`).
   - `docs/ESPECIFICACION.md` — Source of truth for contracts (M1–M9), data model, security.
@@ -70,8 +79,10 @@ explicit Definition of Done. See "Sprint Model" below.
   with healthchecks, images pinned by digest) and `Caddyfile` (local TLS proxy without
   buffering). See `infra/README.md` and `docs/RUNBOOK-dev.md`.
 - `scripts/scaffold_monorepo.sh` — Generated the original skeleton (historical; see
-  `README.scaffold.md`); `scripts/provider/` holds the Riva spike scripts (protected
-  `P-*` provider runs) and `scripts/load/` the proxy no-buffering test helpers.
+  `README.scaffold.md`); `scripts/ci/` holds the CI guards, `scripts/docs/` the
+  documentation checks and diagram export, `scripts/provider/` the Riva spike scripts
+  (protected `P-*` provider runs), `scripts/e2e/` the synthetic class helper and
+  `scripts/load/` the proxy no-buffering and load helpers.
 - `.env.example` — Template for `MAULWURF_*`, Google OAuth, NVIDIA, and provisional ingest
   limit variables; copy to `.env` (never commit `.env`).
 - `.gitignore`, `AGENTS.md`, `LICENSE` (AGPL-3.0), `README.md`, `README.scaffold.md`
@@ -133,6 +144,7 @@ cd apps/web && npm run lint && npm run typecheck && npm test && npm run build
 cd apps/api && uv run ruff check . && uv run mypy .
 cd apps/ingest && uv run ruff check . && uv run mypy .
 cd apps/web && npm run lint && npm run typecheck
+python3 scripts/docs/check_refs.py   # documented repository paths in README/docs/AGENTS
 ```
 
 ### Run
@@ -203,8 +215,9 @@ application and has not been run against NVIDIA from this repository.
 
 ## Architecture Notes
 
-The following is the proposed architecture from the specification, not an implementation
-currently present in this repository.
+The following is the target architecture from the specification. S1 and part of S2 implement
+pieces of it, but the diagram is not evidence of an end-to-end flow; see
+`docs/sprints/CLAIMS.md` for what is done.
 
 ```mermaid
 flowchart TD
@@ -243,11 +256,12 @@ indexing can retry from persisted text.
 ## Testing Strategy
 
 Real suites exist for `apps/api` (unit + integration: config, crypto, sessions/CSRF, DB
-schema, outbox policy, dispatcher, endpoints) and `apps/ingest` (unit + integration:
-admission, cleanup, leases, hardening, capacity, failure matrix, no-audio-persistence,
-synthetic audio via `espeak-ng`); `apps/web` runs Vitest unit suites (HTTP client, status
-contract, form validation). Pytest
-markers are configured (`integration`, `provider`, `load`). The documented layers (see
+schema and migrations, outbox policy, dispatcher retries, index job, Redis recovery,
+reconciliation, search/RRF, citations, chat SSE, endpoints) and `apps/ingest` (unit +
+integration: reception, admission, cleanup, leases, hardening, capacity, failure matrix,
+no-audio-persistence, synthetic audio via `espeak-ng`); `apps/web` runs Vitest unit suites
+(HTTP client, auth, status contract, subject CRUD, upload validation). Pytest markers are
+configured (`integration`, `provider`, `load`). The documented layers (see
 `docs/PLAN_TESTS.md` for the per-sprint catalog):
 
 1. **Unit tests (`U-`):** dates and DST, Unicode character offsets, ASR overlap and boundary
@@ -333,8 +347,8 @@ versioned or retained as a CI artifact. Persist only non-sensitive metrics and e
    changes must update `docs/ESPECIFICACION.md` and `docs/PLAN_IMPLEMENTACION.md` together.
 7. Respect the sprint claiming model: work belongs to a ticket with an accepted claim in
    `docs/sprints/CLAIMS.md`; do not silently take over a claimed ticket, split it, or edit
-   someone's logbook. The placeholder landing page in `apps/web/app/page.tsx` is out of scope — do
-   not invest in it.
+   someone's logbook. The placeholder landing page in the web app is out of scope — do not
+   invest in it.
 8. Preserve unrequested user changes and do not edit editor or agent workspace
    configuration or generated environment files as a side effect of application work.
    `> TODO:` define ownership and review paths before production work.
@@ -350,26 +364,29 @@ versioned or retained as a CI artifact. Persist only non-sensitive metrics and e
 
 ## Extensibility Hooks
 
-- **Provider adapters:** the planned transcription, LLM, and embedding interfaces isolate
-  providers. A replacement provider requires capability/contract tests; changing embedding
-  model, dimension, or version requires a new index generation and reindexing rather than
-  mixing vectors.
-- **Versioned prompts:** `apps/api/prompts/v1/` exists as an empty placeholder; versioned
-  prompt directories with regression tests and stored prompt versions are planned there.
-- **Durable work hooks:** the planned database outbox, ARQ workers (`apps/api/app/workers/`
-  placeholder), leases, and idempotent job keys are extension points for indexing, analysis,
-  Calendar, and notifications. Outbox messages may contain IDs and non-sensitive
-  configuration only, never audio or tokens.
+- **Provider adapters:** transcription, LLM, and embedding adapters isolate providers
+  (`maulwurf_ingest/asr/riva_client.py`, `apps/api/app/services/{llm,embeddings}.py`). A
+  replacement provider requires capability/contract tests; changing embedding model,
+  dimension, or version requires a new index generation and reindexing rather than mixing
+  vectors.
+- **Versioned prompts:** `apps/api/prompts/v1/` holds the first versioned chat prompt
+  (`chat_system.txt`); prompt regression tests and stored prompt versions are planned
+  alongside S3.
+- **Durable work hooks:** the database outbox, ARQ workers (`apps/api/app/workers/`), leases,
+  and idempotent job keys are extension points for indexing, analysis, Calendar, and
+  notifications. Outbox messages may contain IDs and non-sensitive configuration only,
+  never audio or tokens.
 - **Configuration:** `.env.example` names the current environment variables (`MAULWURF_*`,
-  `MAULWURF_GOOGLE_CLIENT_ID/SECRET`, `NVIDIA_API_KEY`, `RIVA_*`, provisional `INGEST_*`).
-  `apps/api/app/core/config.py` loads the `MAULWURF_*` backend settings (secrets, DSNs,
-  session TTL, optional Google OAuth, S1 ingestion contract) with fail-fast validation;
-  `apps/ingest/maulwurf_ingest/config.py` loads `MAULWURF_DATABASE_URL` plus `INGEST_*`.
-  `> TODO:` extend the settings schema (without exposing secrets) as tickets land.
+  `MAULWURF_GOOGLE_CLIENT_ID/SECRET`, `MAULWURF_INGEST_URL`/credential, `NVIDIA_API_KEY`,
+  `RIVA_*`, provisional `INGEST_*`). `apps/api/app/core/config.py` loads the `MAULWURF_*`
+  backend settings (secrets, DSNs, session TTL, optional Google OAuth, ingestion contract)
+  with fail-fast validation; `apps/ingest/maulwurf_ingest/config.py` loads
+  `MAULWURF_DATABASE_URL` plus `INGEST_*`. `> TODO:` extend the settings schema (without
+  exposing secrets) as tickets land.
 - **Feature progression:** the documented phases gate indexing/chat (F1), analysis and
-  Calendar (F2), and opt-in Gmail/reminders (F3), mapped to sprints S2–S4. There is no
-  implemented feature-flag system; `> TODO:` define flags, defaults, and safe rollout
-  behavior when code exists.
+  Calendar (F2), and opt-in Gmail/reminders (F3), mapped to sprints S2–S4. F1 has API-side
+  search and chat, but no browser end-to-end flow. There is no implemented feature-flag
+  system; `> TODO:` define flags, defaults, and safe rollout behavior when code exists.
 - **Future plugins:** no formal plugin registry exists. New integrations should use an
   explicit adapter plus contract tests, least-privilege scopes, tenant checks, bounded rate
   limits, and human confirmation for external writes.

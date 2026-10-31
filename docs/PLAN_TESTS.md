@@ -1,12 +1,13 @@
 # Maulwurf — Sprint Test Catalog
 
-> Status: operational plan pending execution, revision 2026-09-19. Subordinate to
+> Status: operational catalog, revision 2026-09-19; execution status is tracked per ticket
+> in [sprints/CLAIMS.md](sprints/CLAIMS.md) and in the logbooks. Subordinate to
 > [ESPECIFICACION.md](ESPECIFICACION.md) (contracts M1–M9, §6 data model) and
 > [PLAN_IMPLEMENTACION.md](PLAN_IMPLEMENTACION.md) (§7 test layers and G1–G8 gate variants).
 > Each ticket in the [PLAN_SPRINTS.md](PLAN_SPRINTS.md) backlog references here the tests that
 > evidence it; whoever claims a ticket records its execution in their logbook at
-> [sprints/](sprints/README.md). **No test exists yet:** this document defines what must exist
-> and when.
+> [sprints/](sprints/README.md). The S1 and S2 suites exist for the tickets recorded as
+> `done`; tests for S3–S4 remain planned.
 
 ---
 
@@ -34,8 +35,8 @@ renamed**. Responsibility comes only from the ticket claim, recorded in
 
 ### 0.3 Location (per §3.3 of the specification)
 
-- Python: `apps/api/tests/unit/`, `apps/api/tests/integration/`, `apps/ingest/tests/…`,
-  `workers/tests/…` — pytest, markers `@pytest.mark.integration` / `provider` / `load`.
+- Python: `apps/api/tests/unit/`, `apps/api/tests/integration/`, `apps/ingest/tests/` —
+  pytest, markers `@pytest.mark.integration` / `provider` / `load`.
 - Web: `apps/web/tests/unit/`, `apps/web/tests/e2e/` — Vitest (+ Playwright once E2E exists).
 - Load and provider scripts: `scripts/load/`, `scripts/provider/` (no embedded secrets).
 
@@ -204,7 +205,7 @@ These associations complete the backlog references without changing the stable I
 | P-S2-JL-10 | P | Embedding/LLM provider: real contract, dimensions and quotas (protected) — feeds D5 | D5 |
 | U-S2-JL-11 | U | A `Chunk` (§M6) persists into `chunks`/`chunk_segments` with no extra mapping; every `NOT NULL` column is derivable; `overlap_span` shape validated | M6 |
 | C-S2-JL-12 | C | Checklist: web stack ADR published, `ARCH.md` §7 row closed, PR #42 merged, rebased or closed | ARCH |
-| C-S2-JL-13 | C | Checklist: `scripts/docs/check_refs.py` passes in CI; `AGENTS.md`/`README.md` status matches `CLAIMS.md`; corrected `CLAIMS.md` rows | docs |
+| C-S2-JL-13 | C | Checklist: `scripts/docs/check_refs.py` passes in CI; `AGENTS.md`/`README.md` status matches `CLAIMS.md`; `CLAIMS.md` discrepancies reported to the lead (ownership and history are not rewritten without review) | docs |
 
 **G4 criterion (weekly, reproducible script):** Recall@8 ≥ 0.85 (answerables, with tenant/version
 filters active), citation precision

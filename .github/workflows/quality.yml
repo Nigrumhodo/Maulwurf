@@ -233,3 +233,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 scripts/ci/check_compose_ingest_env.py
+
+  # C-S2-JL-13 (L2.11): fail when a backticked repository path does not exist.
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/docs/check_refs.py

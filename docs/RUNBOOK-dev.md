@@ -102,14 +102,14 @@ the same time, an advisory lock serializes them; the one waiting more than 120 s
 of hanging.
 
 ```bash
-docker compose exec api alembic current            # applied revision (0001 in S1)
+docker compose exec api alembic current            # applied revision (head; 0001–0003)
 docker compose exec api alembic upgrade head       # apply manually, e.g. after a pull
 docker compose exec api alembic downgrade -1       # rollback to the previous revision
 docker compose exec api alembic history            # revision chain
 ```
 
-Rolling back `0001` drops all the app tables and their local data: use it only in
-development. A schema change is always a new revision
+Rolling back to `base` (or below `0001`) drops all the app tables and their local data: use
+it only in development. A schema change is always a new revision
 (`uv run alembic revision --autogenerate -m "..."` from `apps/api`, reviewed by hand);
 an already-applied revision is never edited. `uv run alembic check` must answer "No new
 upgrade operations detected" before opening the PR.
@@ -133,6 +133,10 @@ uv run pytest -m "not integration and not provider and not load"
 cd apps/web
 npm ci
 npm run lint && npm run typecheck && npm test && npm run build
+
+# Documentation
+cd ../..
+python3 scripts/docs/check_refs.py
 ```
 
 Local integration (Redis is published on loopback only; PostgreSQL is not published
@@ -210,7 +214,8 @@ disappear when the container is recreated.
 
 ## 9. Local environment privacy rules
 
-- No real class recordings or durable audio: real ingestion arrives in S2.
+- No real class recordings or durable audio: real-class ingestion remains blocked until the
+  F0 decisions close and the API-to-ingest transport is configured.
 - No `NVIDIA_API_KEY` in logs, the frontend, or commits.
 - The `P-*` suites only with an authorized account and a documented budget.
 
