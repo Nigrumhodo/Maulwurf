@@ -337,8 +337,9 @@ timestamps); `GET /audios/{id}/runs` (durable run history with the transcript, c
 and prompt version each run applied, its status/timestamps and whether it is the run of the
 active transcript and current versions). The `GET /audios/{id}` detail reports the derived
 per-stage states, whether the explicit analysis backfill is available, and the non-sensitive
-ASR quality warnings (`code` plus counts) for the inbox/class page; the backfill queue is the
-`analyze` stage over the persisted transcript, never a reupload or retranscription.
+ASR quality warnings (`code` from the closed ingestion set `repetition`, `empty_segments`,
+`low_confidence`, plus counts) for the inbox/class page; the backfill queue is the `analyze`
+stage over the persisted transcript, never a reupload or retranscription.
 
 ---
 
@@ -806,8 +807,9 @@ sequenceDiagram
 audio before the commit requires a re-upload. If the commit exists and the process dies
 before publishing, the reconciler cleans/verifies the attempt and enables the outbox without
 retranscribing. Analysis and index are retried independently from text (initial maximum 3
-for transient errors, backoff with jitter). An analysis failure does not block chat with a
-valid index. Calendar keeps `confirmed` with pending/failed/blocked syncing; the worker
+for transient errors, backoff with jitter); provider 4xx responses other than 408/429,
+protocol/configuration errors and non-retryable database errors are permanent and are not
+retried. An analysis failure does not block chat with a valid index. Calendar keeps `confirmed` with pending/failed/blocked syncing; the worker
 reconciles the remote ID before inserting. Redis can be lost: the DB/outbox allow rebuilding
 durable work, **not** rebuilding audio. The UI does not declare a stage done or a temporary
 deleted without the corresponding confirmation.

@@ -25,8 +25,28 @@ MAX_TRANSIENT_RETRIES: Final = 3
 MAX_TRIES: Final = MAX_TRANSIENT_RETRIES + 1
 RETRY_EXHAUSTED_CODE: Final = "retry_exhausted"
 UNEXPECTED_CODE: Final = "analysis_unexpected"
+# Closed vocabulary persisted in `processing_runs.error_code`: an arbitrary attribute from a
+# provider or driver error is never written as-is.
+_SAFE_ERROR_CODES: Final = frozenset(
+    {
+        "llm_error",
+        "llm_not_configured",
+        "llm_provider_error",
+        "llm_rate_limited",
+        "llm_context_exceeded",
+        RETRY_EXHAUSTED_CODE,
+        UNEXPECTED_CODE,
+    }
+)
 # serialization_failure, deadlock_detected: PostgreSQL asks the client to run the work again.
-_RETRYABLE_SQLSTATES = frozenset({"40001", "40P01"})
+_RETRYABLE_SQLSTATES: Final = frozenset({"40001", "40P01"})
+# invalid_password: repeating the same credentials can never succeed.
+_PERMANENT_SQLSTATES: Final = frozenset({"28P01"})
+# 408/429 plus every 5xx are worth another attempt; the remaining 4xx (bad key, missing
+# model, malformed prompt) cannot succeed by repeating the same request.
+_RETRYABLE_LLM_STATUSES: Final = frozenset({408, 429})
+# The adapter wraps a transport failure as `LLMProviderError` and keeps only its type name.
+_PERMANENT_LLM_TRANSPORT_ERRORS: Final = frozenset({"UnsupportedProtocol", "LocalProtocolError"})
 
 
 @dataclass(frozen=True)
@@ -42,14 +62,20 @@ class RetryDecision:
 
 def classify_analysis_error(exc: BaseException) -> ErrorKind:
     """Returns `TRANSIENT` for errors worth another attempt, `PERMANENT` otherwise."""
-    if isinstance(exc, LLMRateLimited | LLMProviderError | httpx.TransportError):
+    if isinstance(exc, httpx.UnsupportedProtocol | httpx.LocalProtocolError):
+        return ErrorKind.PERMANENT
+    if isinstance(exc, LLMProviderError):
+        return ErrorKind.PERMANENT if _llm_error_is_permanent(exc) else ErrorKind.TRANSIENT
+    if isinstance(exc, LLMRateLimited | httpx.TransportError):
         return ErrorKind.TRANSIENT
     if isinstance(exc, TimeoutError | ConnectionError):
         return ErrorKind.TRANSIENT
-    if isinstance(exc, OperationalError):
-        return ErrorKind.TRANSIENT
-    if isinstance(exc, DBAPIError) and _sqlstate(exc) in _RETRYABLE_SQLSTATES:
-        return ErrorKind.TRANSIENT
+    if isinstance(exc, DBAPIError):
+        sqlstate = _sqlstate(exc)
+        if sqlstate in _PERMANENT_SQLSTATES:
+            return ErrorKind.PERMANENT
+        if isinstance(exc, OperationalError) or sqlstate in _RETRYABLE_SQLSTATES:
+            return ErrorKind.TRANSIENT
     return ErrorKind.PERMANENT
 
 
@@ -74,9 +100,16 @@ def retry_decision(
     return RetryDecision(kind, True, delay, False, _error_code(exc))
 
 
+def _llm_error_is_permanent(exc: LLMProviderError) -> bool:
+    status = exc.details.get("status")
+    if isinstance(status, int) and not isinstance(status, bool):
+        return status < 500 and status not in _RETRYABLE_LLM_STATUSES
+    return exc.details.get("error") in _PERMANENT_LLM_TRANSPORT_ERRORS
+
+
 def _error_code(exc: BaseException) -> str:
     code = getattr(exc, "code", None)
-    return code if isinstance(code, str) and code else UNEXPECTED_CODE
+    return code if isinstance(code, str) and code in _SAFE_ERROR_CODES else UNEXPECTED_CODE
 
 
 def _sqlstate(exc: DBAPIError) -> str | None:

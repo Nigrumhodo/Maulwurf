@@ -10,7 +10,8 @@ from typing import Any, Final
 
 # Bounded list: the UI only needs the signals, and a corrupt row cannot flood the response.
 MAX_QUALITY_WARNINGS: Final = 20
-MAX_CODE_LENGTH: Final = 64
+# Ingestion only emits these codes; unknown ones are dropped instead of being echoed back.
+_KNOWN_CODES: Final = frozenset({"repetition", "empty_segments", "low_confidence"})
 _COUNT_FIELDS = ("count", "total")
 
 
@@ -25,7 +26,7 @@ def normalize_quality_warnings(raw: object) -> tuple[dict[str, Any], ...]:
         if not isinstance(item, dict):
             continue
         code = item.get("code")
-        if not isinstance(code, str) or not code or len(code) > MAX_CODE_LENGTH:
+        if not isinstance(code, str) or code not in _KNOWN_CODES:
             continue
         warning: dict[str, Any] = {"code": code}
         for field in _COUNT_FIELDS:

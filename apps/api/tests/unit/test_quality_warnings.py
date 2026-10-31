@@ -66,9 +66,36 @@ def test_counts_must_be_non_negative_integers() -> None:
 
 
 def test_warning_list_is_bounded() -> None:
-    raw = [{"code": f"warning_{index}", "count": 1} for index in range(100)]
+    raw = [{"code": "repetition", "count": index} for index in range(100)]
 
     normalized = normalize_quality_warnings(raw)
 
     assert len(normalized) == 20
-    assert normalized[0] == {"code": "warning_0", "count": 1}
+    assert normalized[0] == {"code": "repetition", "count": 0}
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "unknown",
+        "repetition_typo",
+        "llm_provider_error",
+        "x" * 64,
+        "REPETITION",
+    ],
+)
+def test_codes_outside_the_ingestion_allowlist_are_dropped(code: str) -> None:
+    assert normalize_quality_warnings([{"code": code, "count": 1}]) == ()
+
+
+def test_known_codes_survive_next_to_unknown_codes() -> None:
+    raw = [
+        {"code": "repetition", "count": 3},
+        {"code": "made_up", "count": 9},
+        {"code": "empty_segments", "count": 1},
+    ]
+
+    assert normalize_quality_warnings(raw) == (
+        {"code": "repetition", "count": 3},
+        {"code": "empty_segments", "count": 1},
+    )
