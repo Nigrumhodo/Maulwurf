@@ -16,6 +16,9 @@ for _name in [k for k in os.environ if k.upper().startswith("MAULWURF_")]:
 
 os.environ.update(
     {
+        # A2.16: MAULWURF_ENV is required and has no default. Tests use the lenient local
+        # guards unless they pass an explicit environment to Settings.
+        "MAULWURF_ENV": "local",
         "MAULWURF_SECRET_KEY": "test-only-secret-key",
         "MAULWURF_ENCRYPTION_KEY": "test-only-encryption-key",
         "MAULWURF_OAUTH_STATE_SECRET": "test-only-oauth-state",

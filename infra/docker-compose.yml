@@ -5,6 +5,7 @@
 name: maulwurf
 
 x-api-env: &api-env
+  # A2.16: required with no default in Settings; Compose is the local environment.
   MAULWURF_ENV: local
   MAULWURF_DATABASE_URL: postgresql+asyncpg://maulwurf:${POSTGRES_PASSWORD:-maulwurf}@postgres:5432/maulwurf
   MAULWURF_REDIS_URL: redis://redis:6379/0
