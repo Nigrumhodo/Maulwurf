@@ -12,7 +12,7 @@ import pytest
 
 from app.models import Chunk as ChunkRow
 from app.models import ChunkSegment as ChunkSegmentRow
-from app.schemas.chunk import Chunk
+from app.schemas.chunk import Chunk, ChunkSegmentLink
 from app.services import indexing
 from app.services.chunking import SegmentInput, chunk_segments
 
@@ -141,10 +141,18 @@ def test_every_chunker_shape_validates_check_against() -> None:
         segments=segments,
         target_tokens=4,
         overlap_tokens=0,
+        count_tokens=_word_count,
     )
     texts = {segment.id: segment.text for segment in segments}
     for chunk in chunks:
         chunk.check_against(texts)
+
+
+def test_every_contract_field_maps_to_a_same_named_column() -> None:
+    chunk_columns = {column.name for column in ChunkRow.__table__.columns}
+    assert set(Chunk.model_fields) - {"segments"} <= chunk_columns
+    link_columns = {column.name for column in ChunkSegmentRow.__table__.columns}
+    assert set(ChunkSegmentLink.model_fields) <= link_columns
 
 
 def test_overlap_span_is_json_serializable() -> None:
