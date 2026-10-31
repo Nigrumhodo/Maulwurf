@@ -87,3 +87,53 @@ integration (ingest), web, build-images, e2e-smoke, docs, caddy-limits,
 compose-ingest-env, secret-scan, license reports and send-webhook.
 The run was created at 2026-10-31T18:17:52Z, after the last merge into develop
 (5a0a329, 2026-10-31T17:00:07Z), and the PR reports all 17 checks passing.
+
+== fix2 (2026-10-31, hoplite findings 1-2 on head 5a4e09a) — re-run after the corrections ==
+git head: 36efd5a + a52a999 (code; this docs/evidence commit follows)
+base: develop@75084eb (merged with `git merge origin/develop`; apps/web untouched)
+python: Python 3.12.3  psql (PostgreSQL) 16.15  Redis 7.0.15
+
+== ruff check . (apps/api)
+All checks passed!
+
+== mypy . (apps/api)
+Success: no issues found in 226 source files
+
+== pytest tests/unit -q (apps/api, sanitized no_proxy)
+1217 passed, 35 warnings
+   The suite count grew from 1188 (fix1) because the develop sync added the J3.3/A3.x
+   tests; fix2 adds 4 task-event-sync cases and 3 reserved-header cases:
+   * an external edit made BEFORE the reconcile GET -> EXTERNAL_CONFLICT, 0 PATCH,
+     external ETag/summary preserved, task `failed`;
+   * a row without a baseline fails closed (0 PATCH) while a matching-content read
+     adopts the ETag as the backfill;
+   * the newer-version repair stores its own write's ETag (and the lost-insert-CAS
+     backfill does the same only when the newer row has no baseline);
+   * `authorization`/`AUTHORIZATION`/`Accept` caller headers raise ValueError before
+     any HTTP request (parametrized: 3 cases), so the bearer token is never duplicated.
+
+== pytest tests/integration/test_calendar_revision_patch.py -q
+10 passed
+   I-S3-JF-04: + an external edit made before the GET is never overwritten (0 PATCH);
+   the revision PATCH stores the post-PATCH ETag as the new baseline.
+
+== pytest tests/integration/test_calendar_revision_patch.py
+   tests/integration/test_calendar_sync_job.py -q
+23 passed
+   I-S3-JF-03 regression still 13 cases; the stale-body case now records the previous
+   baseline, as a real previous write would.
+
+== pytest tests/integration -q (full API integration, sanitized no_proxy)
+447 passed, 32 failed in 137.15s
+   All 32 failures are the same untouched pgvector-dependent modules:
+     17 FAILED tests/integration/test_chat_sse.py
+      4 FAILED tests/integration/test_g4_eval.py
+     11 FAILED tests/integration/test_search.py
+   pgvector 0.6.0 < 0.8 (pre-existing sandbox limitation, S3.6 claim); none of those
+   modules imports J3.6 code.
+
+== python3 scripts/docs/check_refs.py (repo root)
+OK: 773 documented repository paths exist or are expected.
+
+== apps/web / apps/ingest
+untouched (no fix2 change under apps/web or apps/ingest).
