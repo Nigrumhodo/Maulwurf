@@ -1264,17 +1264,22 @@ across tenants).
 truthful SRT exists (real precision and ordered times inside `duration_seconds`), so the
 client can enable the download without probing the `409`.
 
-`analysis_backfill_available` is the explicit S3.1/D3.5 action: it is `true` only for a live
-class with a persisted transcript, a latest attempt with `cleanup_status='verified'`, and an
-`analyze` stage that is `not_requested` (F1), `failed` or `cancelled`. While the analysis run
-is `pending`/`running` the stage itself is the visible queue and the flag is `false`, so a
-second click cannot duplicate work. Queueing never uploads audio or retranscribes: the
-operator script (`scripts/backfill_analysis.py`, dry-run by default) upgrades
-`required_stages` to `['index','analyze']` and creates the `analyze` run plus its
-cleanup-gated event. The upgrade is persisted only on the branch that actually queues a
-run: `already_analyzed`, `already_queued` and `unknown_run_state` leave the stage list
-untouched, and a class that is already F2 without an `analyze` run is reported as
-`already_f2_no_run` (its entry point is `POST /audios/{id}/retry`, not the backfill).
+`analysis_backfill_available` is the explicit S3.1/D3.5 action and mirrors the decision of
+`classify_existing_run`, so the class page never offers an action the service resolves as a
+no-op. It is `true` only for a live class with a persisted transcript and a latest attempt
+with `cleanup_status='verified'` when the `analyze` stage of the current transcript/config
+is `not_requested` (F1), `failed` or `cancelled`; without a run for those versions it is
+`true` only for an F1 class or when a previous analysis run exists under another version
+(reanalysis after a version change, S3.4). While the analysis run is `pending`/`running`
+the stage itself is the visible queue and the flag is `false`, so a second click cannot
+duplicate work. Queueing never uploads audio or retranscribes: the operator script
+(`scripts/backfill_analysis.py`, dry-run by default) upgrades `required_stages` to
+`['index','analyze']` and creates the `analyze` run plus its cleanup-gated event. The
+upgrade is persisted only on the branch that actually queues a run: `already_analyzed`,
+`already_queued` and `unknown_run_state` leave the stage list untouched, and a class that
+is already F2 without an `analyze` run is reported as `already_f2_no_run` and keeps
+`analysis_backfill_available: false` (its entry point is `POST /audios/{id}/retry`, not the
+backfill).
 
 `aggregate_status`: `processing` while required stages are pending/running; `ready` if all
 succeeded; `partial` if there is a usable transcript but some required stage failed/was

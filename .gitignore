@@ -48,6 +48,9 @@ docs/PLANE_MCP.md
 *.webm
 *.aac
 
+# --- E2E smoke (J2.6): ephemeral TLS material, generated per run ---
+.e2e-tls/
+
 # --- Cobertura / dumps ---
 .coverage
 coverage/

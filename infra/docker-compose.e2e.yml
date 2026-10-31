@@ -1,0 +1,156 @@
+# J2.6 — E2E smoke override (E-S2-JF-06).
+#
+# `docker compose -f docker-compose.yml -f docker-compose.e2e.yml up ...` adds two
+# deterministic doubles (OpenAI-compatible provider, Riva gRPC over TLS) and points the real
+# `api`, `worker`, `scheduler` and `ingest` at them. The smoke therefore runs the real
+# pipeline without NVIDIA, LLM or embeddings credentials and without sending real data.
+#
+# The doubles are local/CI-only. They are not provider-contract evidence (a mock never is)
+# and they must never be used for real class audio.
+#
+# D3-Texto stays OPEN. `MAULWURF_D3_TEXT_CLOSED_MODELS` below only names the synthetic
+# smoke model so the fixture transcript can be indexed; it is not a decision about any
+# real provider/model and it is not copied to `.env`, `infra/docker-compose.yml` or any
+# deployment file.
+#
+# TLS: `scripts/e2e/gen_riva_tls.sh <dir>` writes an ephemeral CA + server certificate.
+# `E2E_TLS_DIR` selects that directory (default `../.e2e-tls`, relative to this file);
+# nothing is committed (`*.pem`/`*.key` are ignored). `E2E_TLS_GID` is the host group that
+# owns the 640 server key; the e2e-asr container joins it to read the key as UID 10001.
+#
+# This override hardcodes non-production credentials. `E2E_ALLOW_EPHEMERAL_CREDENTIALS`
+# is a required opt-in: without it `docker compose config` (and therefore `up`) aborts, so
+# the file cannot be picked up by accident on a real deployment. The project name is also
+# isolated so `down -v` never touches a developer's normal `maulwurf` stack.
+
+name: maulwurf-e2e
+
+x-e2e-fixture: &e2e-fixture
+  SMOKE_EXPECTED_TEXT: "La fotosíntesis convierte la luz del sol en energía química. Las plantas usan clorofila."
+
+x-e2e-api-env: &e2e-api-env
+  <<: *e2e-fixture
+  # Deliberate acknowledgement that the fixed values below are ephemeral and non-secret.
+  E2E_ALLOW_EPHEMERAL_CREDENTIALS: "${E2E_ALLOW_EPHEMERAL_CREDENTIALS:?set E2E_ALLOW_EPHEMERAL_CREDENTIALS=1 only for an ephemeral, non-production run}"
+  # Same-origin value used by every CSRF check in the smoke (the request headers carry it).
+  MAULWURF_PUBLIC_ORIGIN: https://e2e.maulwurf.invalid
+  # Fixed, non-secret CI values: they only isolate this ephemeral compose database.
+  MAULWURF_SECRET_KEY: e2e-session-boundary-0000000000000000000000000000
+  MAULWURF_ENCRYPTION_KEY: e2e-crypto-boundary-11111111111111111111111111111
+  MAULWURF_OAUTH_STATE_SECRET: e2e-oauth-boundary-2222222222222222222222222222
+  MAULWURF_INGEST_URL: http://ingest:8000
+  MAULWURF_INGEST_CREDENTIAL_SECRET: 4d41554c575552464d41554c575552464d41554c575552464d41554c57555246
+  MAULWURF_EMBEDDING_BASE_URL: http://e2e-provider:8080/v1
+  MAULWURF_EMBEDDING_API_KEY: e2e-gateway-key-not-a-provider-secret
+  MAULWURF_EMBEDDING_MODEL: maulwurf-e2e-synthetic-v1
+  MAULWURF_EMBEDDING_MAX_RETRIES: "1"
+  MAULWURF_LLM_BASE_URL: http://e2e-provider:8080/v1
+  MAULWURF_LLM_API_KEY: e2e-gateway-key-not-a-provider-secret
+  MAULWURF_LLM_MODEL: maulwurf-e2e-synthetic-v1
+  MAULWURF_LLM_MODEL_WINDOW: "8192"
+  MAULWURF_LLM_MAX_RETRIES: "1"
+  MAULWURF_D3_TEXT_CLOSED_MODELS: '["maulwurf-e2e-synthetic-v1"]'
+
+services:
+  api:
+    environment:
+      <<: *e2e-api-env
+
+  worker:
+    environment:
+      <<: *e2e-api-env
+
+  scheduler:
+    environment:
+      <<: *e2e-api-env
+
+  ingest:
+    environment:
+      E2E_ALLOW_EPHEMERAL_CREDENTIALS: "${E2E_ALLOW_EPHEMERAL_CREDENTIALS:?set E2E_ALLOW_EPHEMERAL_CREDENTIALS=1 only for an ephemeral, non-production run}"
+      # Fake key: the ASR child requires a non-empty value before it opens the gRPC
+      # channel. It authenticates against the local double, never against NVIDIA.
+      NVIDIA_API_KEY: e2e-riva-double-not-a-key
+      RIVA_SERVER: e2e-asr:50051
+      RIVA_FUNCTION_ID: e2e-function
+      RIVA_USE_SSL: "true"
+      GRPC_DEFAULT_SSL_ROOTS_FILE_PATH: /e2e-tls/ca.pem
+      INGEST_CREDENTIAL_SECRET: 4d41554c575552464d41554c575552464d41554c575552464d41554c57555246
+    volumes:
+      - ${E2E_TLS_DIR:-../.e2e-tls}:/e2e-tls:ro
+    depends_on:
+      # The ingest startup reconciler fail-closes admission if the schema is not there yet;
+      # waiting for the API's migration + health removes that race in the smoke.
+      api:
+        condition: service_healthy
+      e2e-asr:
+        condition: service_healthy
+
+  # Deterministic OpenAI-compatible embeddings + streaming chat. Standard library only.
+  e2e-provider:
+    image: python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
+    command: ["python", "/e2e/provider_double.py"]
+    environment:
+      PORT: "8080"
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 128m
+    volumes:
+      - ../scripts/e2e/e2e_stubs:/e2e:ro
+    expose: ["8080"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import socket;socket.create_connection(('127.0.0.1',8080),2).close()
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [data]
+    restart: unless-stopped
+
+  # Riva SpeechRecognition gRPC double over TLS. It reuses the ingest runtime image, which
+  # already carries grpcio and the pinned Riva protos, so there is no extra image to build.
+  e2e-asr:
+    build:
+      context: ../apps/ingest
+      dockerfile: Dockerfile
+      target: runtime
+    image: maulwurf-ingest-e2e:local
+    command: ["python", "/e2e/asr_double.py"]
+    environment:
+      <<: *e2e-fixture
+      ASR_TLS_DIR: /e2e-tls
+      PORT: "50051"
+      TMPDIR: /tmp
+    user: "10001:10001"
+    # The server key is 640 on the host; join its group instead of widening the mode.
+    group_add:
+      - "${E2E_TLS_GID:-1001}"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+    volumes:
+      - ../scripts/e2e/e2e_stubs:/e2e:ro
+      - ${E2E_TLS_DIR:-../.e2e-tls}:/e2e-tls:ro
+    expose: ["50051"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import socket;socket.create_connection(('127.0.0.1',50051),2).close()
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [data]
+    restart: unless-stopped

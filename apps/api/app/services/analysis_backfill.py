@@ -50,17 +50,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Audio, ProcessingRun, User
 from app.services import state_machine
 from app.services.runs import (
-    RUN_CONFIG_VERSION,
+    ANALYSIS_STAGE,
     ensure_stage_run,
     latest_attempt,
+    run_spec,
     usable_transcript_version,
 )
 
-ANALYSIS_STAGE = "analyze"
-# The analysis prompt/configuration version is owned by L3.6. The run row already needs a
-# stable value for its unique key, so the backfill uses the same provisional config version
-# as every other text stage until that contract lands.
-ANALYSIS_CONFIG_VERSION = RUN_CONFIG_VERSION
+# The analysis prompt/configuration version is owned by L3.1/L3.6; S3.4 records it in the
+# run row and derives the run's config version from the prompt version.
+ANALYSIS_CONFIG_VERSION = run_spec(ANALYSIS_STAGE).config_version
 # Statuses the backfill may requeue, mirroring `runs.RETRYABLE_RUN_STATES`.
 REQUEUEABLE_RUN_STATES = ("failed", "cancelled")
 
@@ -120,15 +119,22 @@ def with_analysis_stage(required_stages: Sequence[str]) -> list[str]:
 
 
 def classify_existing_run(
-    *, analysis_already_required: bool, existing_status: str | None
+    *,
+    analysis_already_required: bool,
+    existing_status: str | None,
+    has_previous_run: bool = False,
 ) -> BackfillStatus | None:
     """Terminal outcome for this pass, or ``None`` when analysis must be queued.
 
     Called before the caller mutates anything: an already analyzed, already queued or
-    corrupt run must never promote an F1 class to F2. An F2 class without a run row already
-    owes analysis and keeps ``retry`` as its entry point.
+    corrupt run must never promote an F1 class to F2. A previous run under another
+    transcript/config version means reanalysis is necessary (S3.4), so it queues a new run
+    even for an F2 class. Only an F2 class with no analysis run at all keeps ``retry`` as
+    its entry point.
     """
     if existing_status is None:
+        if has_previous_run:
+            return None
         return BackfillStatus.ALREADY_F2_NO_RUN if analysis_already_required else None
     if existing_status == "succeeded":
         return BackfillStatus.ALREADY_ANALYZED
@@ -145,17 +151,27 @@ def analysis_backfill_available(
     attempt_status: str | None,
     cleanup_status: str | None,
     analyze_state: str,
+    has_current_run: bool,
+    analysis_already_required: bool,
+    has_previous_run: bool,
 ) -> bool:
     """Whether the class page may offer «backfill/re-analysis» right now.
 
-    F1 classes read ``not_requested`` and terminal analysis failures/cancellations may be
-    retried. An active or successful analysis is not offered again, and without verified
-    cleanup there is nothing safe to queue (fail closed).
+    The answer mirrors `classify_existing_run`, so the advertised action and the endpoint
+    that performs it never disagree. F1 classes read ``not_requested`` and terminal analysis
+    failures/cancellations may be retried. An active or successful analysis of the CURRENT
+    transcript/config versions is not offered again. With no run for those versions the
+    class is offered when it is still F1 (the backfill is its upgrade path) or when a
+    previous analysis run exists under another version (reanalysis, S3.4); an F2 class with
+    no analysis run at all keeps ``POST /audios/{id}/retry`` as its entry point. Without
+    verified cleanup there is nothing safe to queue (fail closed).
     """
     if not has_usable_transcript:
         return False
     if attempt_status != "succeeded" or cleanup_status != "verified":
         return False
+    if not has_current_run:
+        return has_previous_run or not analysis_already_required
     return analyze_state == "not_requested" or analyze_state in REQUEUEABLE_RUN_STATES
 
 
@@ -238,6 +254,22 @@ async def _existing_analysis_run(
     ).scalar_one_or_none()
 
 
+async def _any_analysis_run(
+    db: AsyncSession, *, user_id: uuid.UUID, audio_id: uuid.UUID
+) -> bool:
+    """Whether the class has any analysis run, regardless of transcript/config version."""
+    found = await db.scalar(
+        select(ProcessingRun.id)
+        .where(
+            ProcessingRun.user_id == user_id,
+            ProcessingRun.audio_id == audio_id,
+            ProcessingRun.stage == ANALYSIS_STAGE,
+        )
+        .limit(1)
+    )
+    return found is not None
+
+
 async def backfill_audio(
     db: AsyncSession, *, user_id: uuid.UUID, audio_id: uuid.UUID, apply: bool
 ) -> BackfillItem:
@@ -270,9 +302,13 @@ async def backfill_audio(
     existing = await _existing_analysis_run(
         db, user_id=user_id, audio_id=audio_id, transcript_version=version
     )
+    previous = existing is not None or await _any_analysis_run(
+        db, user_id=user_id, audio_id=audio_id
+    )
     decision = classify_existing_run(
         analysis_already_required=required,
         existing_status=existing.status if existing is not None else None,
+        has_previous_run=previous,
     )
     if decision is not None:
         # Every non-writing outcome is resolved here, before any row is touched.

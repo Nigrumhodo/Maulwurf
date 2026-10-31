@@ -352,13 +352,20 @@ def _timed_segments(draft: TranscriptDraft) -> tuple[tuple[SegmentDraft, ...], s
     if not words or any(not _valid_span(word) for word in words):
         return None
     pieces = [word.text.strip() for word in words]
+    text = " ".join(pieces)
     segments: list[SegmentDraft] = []
     cursor = 0
     for ordinal, (piece, word) in enumerate(zip(pieces, words, strict=True)):
         end = cursor + len(piece)
-        segments.append(SegmentDraft(ordinal, piece, cursor, end, word.start_s, word.end_s))
-        cursor = end + 1
-    return tuple(segments), " ".join(pieces)
+        if ordinal + 1 < len(pieces):
+            # The separator belongs to the preceding word so the ranges partition the
+            # transcript: the chunker (L2.1) rejects any non-contiguous segment.
+            end += 1
+        segments.append(
+            SegmentDraft(ordinal, text[cursor:end], cursor, end, word.start_s, word.end_s)
+        )
+        cursor = end
+    return tuple(segments), text
 
 
 def _required_stages(raw: object) -> tuple[str, ...]:

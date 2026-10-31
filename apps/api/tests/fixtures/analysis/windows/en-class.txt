@@ -1,0 +1,76 @@
+Good morning, today we will review photosynthesis and prepare the laboratory report.
+Open your notebook to page thirty, please.
+Photosynthesis converts light energy into chemical energy stored in glucose.
+The overall equation uses carbon dioxide and water, and it releases oxygen.
+The light-dependent reactions happen in the thylakoid membranes of the chloroplast.
+There, chlorophyll absorbs photons and excites electrons in photosystem two.
+Water is split to replace those electrons, and oxygen leaves the plant as a by-product.
+The excited electrons travel through an electron transport chain and pump protons.
+That proton gradient drives ATP synthase, which produces ATP for the next stage.
+The light-independent reactions, also called the Calvin cycle, happen in the stroma.
+The enzyme rubisco fixes carbon dioxide into a three-carbon compound.
+The cycle uses ATP and NADPH from the light reactions to build sugars.
+One common misconception is that plants only breathe at night; that is not correct.
+Plants respire all the time, but during the day photosynthesis usually exceeds respiration.
+Another misconception is that the oxygen comes from carbon dioxide; it comes from water.
+Let us compare the two stages using a simple table in your notebook.
+Your laboratory report on the effect of light intensity is due on Monday the twenty-first before class.
+Include one graph with light intensity on the horizontal axis and oxygen production on the vertical axis.
+State your hypothesis in one sentence and describe the control condition.
+Report the mean of three trials and mention any outlier you removed.
+The project poster is due on Wednesday the thirtieth, and each group will present for five minutes.
+Groups of four are allowed, but every member must explain one section.
+Choose a real ecosystem and connect at least two cycles to the reactions we studied.
+Do not copy text from the textbook; paraphrase and cite the page number.
+The short quiz on Friday will cover the equation, the two stages, and the role of rubisco.
+Bring a pencil and your student card, and arrive five minutes early.
+Tutoring is on Tuesday at four in the afternoon in room two hundred and four.
+If you cannot attend, post your question in the course forum before noon on Tuesday.
+Let us return to the electron transport chain and trace the path of one electron.
+Start at photosystem two, follow the carrier proteins, and finish at photosystem one.
+Where is the energy used to pump protons, and where is it stored?
+Notice that the final electron acceptor is NADP plus, not oxygen.
+This is the point most students miss, so write it down and compare with your partner.
+Tomorrow we will review cellular respiration and connect it to today's diagram.
+Read pages forty-five to forty-eight and bring two written questions.
+Remember that the quiz is individual and that late laboratory reports lose ten percent per day.
+See you on Thursday, and do not forget to submit the report draft.
+Now let us connect photosynthesis to cellular respiration.
+Respiration breaks down glucose and releases energy that the cell can use.
+It happens in three main stages: glycolysis, the citric acid cycle, and oxidative phosphorylation.
+Glycolysis takes place in the cytoplasm and does not require oxygen.
+The citric acid cycle happens in the mitochondrial matrix.
+Oxidative phosphorylation happens at the inner mitochondrial membrane.
+Both processes use electron carriers, but they move energy in opposite directions.
+Photosynthesis stores energy, while respiration releases it.
+A useful comparison is a rechargeable battery: photosynthesis charges it and respiration uses it.
+Write this comparison in your notebook and add one example of an organism that does both.
+Plants, algae, and some bacteria perform photosynthesis, but all living cells respire.
+The laboratory safety rules are mandatory during the next session.
+Wear goggles and a lab coat, and never taste any solution.
+Label every tube with your group number and the concentration.
+Dispose of the used reagents in the container marked for chemical waste.
+If a spill happens, stop the experiment and call the instructor immediately.
+Record the data in ink, not in pencil, and never erase a measurement.
+If you make a mistake, draw one line through the value and write the correction beside it.
+The group presentation will use the same rubric as the written report.
+One member introduces the question, another explains the method, and the others present the results.
+Keep the presentation under five minutes and leave one minute for questions.
+Practice the transition between speakers so the talk sounds coherent.
+The classroom projector needs a USB-C adapter, and the one at the front desk is available.
+Test your slides during the break, not when your group is already presenting.
+Friday's quiz will include one graph interpretation question.
+Look at the axes, the units, and the trend before writing your answer.
+A common mistake is to describe the line without explaining what it means biologically.
+Use evidence from the graph and connect it to the reactions we reviewed today.
+If the question asks for a hypothesis, write a testable statement rather than a definition.
+The final exam schedule is published on the course page, and the date will not change.
+Bring your student card to every assessment; without it, the instructor may not admit you.
+If you need accommodations, contact the student office at least one week before the exam.
+Office hours are on Tuesday and Thursday from four to five in room two hundred and four.
+Send a short message before visiting so we can reserve enough time for your question.
+Read the feedback on your last report and choose one improvement goal for the next one.
+Good scientific writing is precise, concise, and honest about uncertainty.
+Do not hide a result that contradicts your hypothesis; explain it instead.
+That is how science works, and it is also how you earn credit for critical thinking.
+Thank you for your attention; we will continue with the lab preparation on Thursday.

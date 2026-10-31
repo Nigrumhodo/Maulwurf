@@ -74,7 +74,7 @@ from app.services.embeddings import (
     EmbeddingProvider,
     embed_query,
 )
-from app.services.exports import EPS, EXPORTABLE_PRECISIONS
+from app.services.evidence import reliable_times
 from app.services.indexing import active_generation
 
 logger = logging.getLogger(__name__)
@@ -806,21 +806,12 @@ def _reliable_times(
     duration_seconds: float | None,
 ) -> tuple[float | None, float | None]:
     """Return the segment times only when they are truthful; otherwise both are null."""
-    if precision not in EXPORTABLE_PRECISIONS:
-        return None, None
-    if t_start is None or t_end is None:
-        return None, None
-    if not (math.isfinite(t_start) and math.isfinite(t_end)):
-        return None, None
-    if not 0 <= t_start < t_end:
-        return None, None
-    if (
-        duration_seconds is not None
-        and math.isfinite(duration_seconds)
-        and t_end > duration_seconds + EPS
-    ):
-        return None, None
-    return t_start, t_end
+    return reliable_times(
+        timestamp_precision=precision,
+        t_start=t_start,
+        t_end=t_end,
+        duration_seconds=duration_seconds,
+    )
 
 
 def _validated_query(query: str, *, max_chars: int = QUERY_MAX_CHARS) -> str:
