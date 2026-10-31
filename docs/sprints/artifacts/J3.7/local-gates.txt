@@ -166,7 +166,8 @@ unit tests fail as recorded in the environment note; the unit count above was pr
 the sanitized variable. `python3 scripts/docs/check_refs.py` -> OK: 770 documented repository
 paths exist or are expected.
 
-Quality CI: the fix2 head was pushed to update PR #131 and trigger a fresh workflow; CI is
-not observable from this sandbox (invalid GitHub credentials). The last observed run,
-41225714988 on 23d6ad7, was green in all 17 checks.
+Quality CI: run 41228819918 on head 644c109 (fix2 code commit 2e1753c + this evidence
+update) is green in all 17 checks, including `python-unit (api)`, `integration (api)`,
+`docs`, `e2e-smoke` and `build-images`. Any later commit that only records this run does not
+change the code under test.
 
