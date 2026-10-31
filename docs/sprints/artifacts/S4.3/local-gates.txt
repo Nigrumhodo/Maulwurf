@@ -32,3 +32,39 @@ $ cd apps/ingest && uv run pytest tests/test_g1_load.py -q -m load
 
 $ python3 scripts/docs/check_refs.py
 OK: 798 documented repository paths exist or are expected.
+
+# Review fix1 — hoplite finding 1 on head d3c8932 (2026-10-31)
+$ git log --oneline -3
+43c7a21 [MAULW-151] fix1: record the unmount regression and the local-evidence scope
+51f7bb7 [MAULW-151] fix1: a failed clean unmount is never masked by the lazy detach
+1aa025d [MAULW-151] wip: regression for a failed unmount masked by the lazy attempt
+
+# Red before the code fix: the fake umount exits 1 for the clean detach and 0 for -l,
+# and the old code still returned ok=True because the mount point was removed.
+$ cd apps/ingest && uv run pytest tests/test_g1_load.py -q -k unmount
+FAILED tests/test_g1_load.py::test_a_failed_unmount_is_not_masked_by_a_successful_lazy_attempt
+E       assert True is False
+1 failed, 1 passed, 20 deselected in 0.42s
+
+# Green after the fix (final head).
+$ cd apps/ingest && uv run ruff check .
+All checks passed!
+
+$ cd apps/ingest && uv run mypy .
+Success: no issues found in 78 source files
+
+$ cd apps/ingest && uv run pytest tests -q -m 'not integration and not provider and not load' --ignore=tests/test_synthetic_audio.py
+211 passed, 72 deselected, 2 warnings in 6.27s
+
+$ cd apps/ingest && uv run pytest tests/test_g1_load.py -q
+22 passed in 5.61s
+
+$ cd apps/ingest && uv run pytest tests/test_g1_load.py -q -m load
+1 passed, 21 deselected in 3.46s
+
+$ cd apps/ingest && uv run pytest tests -q -m 'not integration and not provider and not load'
+# Same 8 pre-existing tests/test_synthetic_audio.py failures (espeak-ng missing on PATH).
+8 failed, 212 passed, 72 deselected, 2 warnings in 4.90s
+
+$ python3 scripts/docs/check_refs.py
+OK: 798 documented repository paths exist or are expected.
