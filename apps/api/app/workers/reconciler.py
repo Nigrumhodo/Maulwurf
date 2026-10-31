@@ -124,7 +124,19 @@ async def _republish_lost(sessions: SessionFactory, redis: ArqRedis, now: dateti
     reset = 0
     async with sessions() as db:
         for event in lost:
-            if await reset_to_pending_if_unchanged(db, event):
+            # One savepoint per row: a deadlock/timeout on one candidate must not roll back
+            # the resets already applied to the rest of the batch.
+            try:
+                async with db.begin_nested():
+                    applied = await reset_to_pending_if_unchanged(db, event)
+            except Exception as exc:
+                logger.warning(
+                    "reconciler.reset_cas_failed event_id=%s error=%s",
+                    event.id,
+                    type(exc).__name__,
+                )
+                continue
+            if applied:
                 reset += 1
                 logger.info("reconciler.dispatch_reset event_id=%s", event.id)
         await db.commit()
@@ -159,7 +171,19 @@ async def _recover_expired(
     recovered = 0
     async with sessions() as db:
         for run, requeue in ready:
-            if await mark_lease_expired_if_unchanged(db, run, now=now):
+            # Keep the per-row isolation the old loop had: one CAS failure must not revert
+            # the runs already closed in this batch.
+            try:
+                async with db.begin_nested():
+                    applied = await mark_lease_expired_if_unchanged(db, run, now=now)
+            except Exception as exc:
+                logger.warning(
+                    "reconciler.lease_cas_failed run_id=%s error=%s",
+                    run.id,
+                    type(exc).__name__,
+                )
+                continue
+            if applied:
                 recovered += 1
                 logger.info("reconciler.lease_expired run_id=%s requeued=%s", run.id, requeue)
         await db.commit()
