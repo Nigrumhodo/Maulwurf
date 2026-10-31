@@ -259,6 +259,29 @@ disappear when the container is recreated.
 - No `NVIDIA_API_KEY` in logs, the frontend, or commits.
 - The `P-*` suites only with an authorized account and a documented budget.
 
+## 10. Explicit analysis backfill (S3.1)
+
+F1 classes transcribed in S2 keep `analyze=not_requested`. The backfill queues the analysis
+run from the **persisted transcript**; it never re-uploads audio or re-runs ASR. It is
+tenant-scoped, idempotent and dry-run by default:
+
+```bash
+cd apps/api
+uv run python ../../scripts/backfill_analysis.py --user-id <uuid>
+uv run python ../../scripts/backfill_analysis.py --user-id <uuid> --apply
+```
+
+Narrow the pass with `--subject-id`, `--from-date`/`--to-date`, repeated `--audio-id`, or
+`--limit` (default 500, maximum 2000). The command prints only class IDs, transcript
+versions and statuses. `queued` is the only writing outcome: `already_analyzed`,
+`already_queued` and `unknown_run_state` never modify `required_stages`, and
+`already_f2_no_run` marks a class that already owes analysis but has no `analyze` run row
+(queue it with `POST /audios/{id}/retry`, not with this script). Only the branch that really
+queues persists the F1 → F2 upgrade, so an `--apply` pass that queues nothing changes no
+row. `GET /audios/{id}` reports `analysis_backfill_available` before the pass and the
+`analyze` stage becomes `pending` after it. Until L3.6 lands, the queued job is the existing
+S2 `analyze` no-op: this command proves the queue, not extraction output.
+
 ## Links
 
 - [../README.md](../README.md) — repository vision and status.

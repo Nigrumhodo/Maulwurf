@@ -1,6 +1,7 @@
 # Canonical claims registry — Maulwurf
 
-> Status: **S2 open**. Review: 2026-10-09.
+> Status: **S2 open**. Review: 2026-10-09. S3.1 is recorded under a directed claim for
+> MAULW-108; the rest of S3 remains closed.
 >
 > This file is the single source of truth for ticket ownership. Personal logbooks keep
 > evidence, blockers, and notes, but a row there does not assign a ticket by itself. Rows
@@ -42,8 +43,8 @@ These six values are **all** the status vocabulary: there are no `claimed`, `in_
 ## 3. Active sprint
 
 **S2 is open.** S1 has every implementation ticket `done`; only L1.7 (coordination and the
-formal S1 close) is unclaimed. S3 and S4 remain closed. D2 and D6
-remain `pending`; D3-Audio and D4 remain `blocked`.
+formal S1 close) is unclaimed. S3 and S4 remain closed except the directed S3.1 claim under
+MAULW-108 recorded below. D2 and D6 remain `pending`; D3-Audio and D4 remain `blocked`.
 
 ### S1 — Foundation + F0 spike
 
@@ -158,6 +159,15 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | claim | L2.9 | angalindog | in progress | 2026-10-31 | not applicable | — / lead | §M6 `Chunk` contract aligned with `chunks`/`chunk_segments`: `content`/`transcript_id`/`index_version`/`char_start`/`char_end`/`token_count` and a validated `overlap_span` JSON shape; `U-S2-JL-11` green (`test_chunk_contract.py`), chunker emits the contract and the indexer persists it without remapping. `ruff`/`mypy` clean, 854 API unit passed; local integration not run (sandbox without Docker/PostgreSQL/Redis) but Quality CI `integration (api)`/`integration (ingest)` passed and every PR #115 check is green. Branch `task/MAULW-170`; `done` waits for review and merge |
 | claim | J2.10 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area J, lead | C-S2-JF-13: ADR-0010 (Caddy is the only HTTP ingress; Cloudflare Tunnel dropped), Caddy 220 MB upload / 10 MB JSON ceilings and read/header/write/idle timeouts, and the native Caddy 2.8.4 measurement in `docs/sprints/artifacts/J2.10/ingress-limits.txt`. Branch `task/MAULW-186` |
 
+### S3 — Action (extraction and Calendar)
+
+> Only S3.1 is recorded: it was directed by MAULW-108. The remaining S3 backlog stays
+> unclaimable until the lead opens the sprint and updates the status above.
+
+| Action | Ticket | Owner | Status | Claimed at (UTC) | Cloud eligibility | Contributors / reviewers | Reason, evidence, or PR |
+|---|---|---|---|---|---|---|---|
+| claim | S3.1 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area S, area A | MAULW-108: explicit analysis backfill for F1 classes over persisted text only (no reupload/retranscription), `app/services/analysis_backfill.py` + `scripts/backfill_analysis.py`, `analysis_backfill_available` on `GET /audios/{id}`, I-S3-SG-01. L3.6/A3.1 are not in `develop`; the queue reaches the S2 `analyze` no-op, so extraction output is not claimed. PR #119: Quality CI green, `integration (api)` 404 passed and `integration (ingest)` passed. Branch `task/MAULW-108` |
+
 ## 4. Change history
 
 | Date (UTC) | Decision | Reference |
@@ -216,3 +226,4 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | 2026-10-31 | J2.6 moves to `blocked`: the first `e2e-smoke` run on PR #118 reached transcript + verified cleanup but the `index` job failed with `GenerationIncomplete`. The smoke found a real integration defect outside J2.6: `apps/ingest/maulwurf_ingest/persistence.py` omits the word separator from segment ranges while `apps/api/app/services/chunking.py` requires contiguous ranges. Recorded with the exact pure-chunker reproduction; no area-S/area-A code was changed here. | This PR |
 | 2026-10-31 | J2.6 moves back to `in progress`: `_timed_segments` now includes the separator in the preceding word segment, so the committed ranges partition the transcript and keep the L2.1 contiguity invariant without changing the chunker. The E2E helper findings are also addressed (shared SSE parser with the async path tested, 640 TLS key with group access, required ephemeral opt-in plus an isolated compose project). Local gates in the claim row; final `e2e-smoke` green is the remaining evidence for `done`. | This PR |
 | 2026-10-31 | J2.6 is `done`: Quality CI run `41200218783` (head `350c5c7`) passed all 16 checks, including `e2e-smoke` (`index: succeeded`, fixture match, citation index 1, empty ingest tmpfs, 25.1 s driver). Re-review fixes for the four PR findings are in the same head; PR #118 stays open for review and merge. | This PR |
+| 2026-10-31 | S3.1 is claimed by jpinillaz (`in progress`) for the directed MAULW-108 ticket: explicit analysis backfill for F1 classes only from persisted text, an operator script with dry-run by default and the `analysis_backfill_available` detail flag. L3.6/A3.1 are absent from `develop`, so the queue reaches the S2 `analyze` no-op and no extraction result is claimed. S3 is not declared open here; the remaining S3 tickets stay blocked. PR #119: all Quality CI checks green, `integration (api)` 404 passed. | This PR |
