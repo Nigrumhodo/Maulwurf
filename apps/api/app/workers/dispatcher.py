@@ -5,8 +5,10 @@ event), applies `services.outbox.decide`, revalidates the event and enqueues onl
 
 - The batch only contains events that can advance: publishable ones, ones to discard,
   and those whose retry wait has elapsed. Left out without leaving gaps or staying `pending`:
-  types with no consumer in S1, index/analyze events without verified cleanup, and retries
+  types with no consumer yet, index/analyze events without verified cleanup, and retries
   still waiting (`next_attempt_at` in the future).
+- Task events (`sync_task_event`, J3.4) are enqueued with `(task_id, task_version)` and are
+  not revalidated against the audio table; only `resource_type='audio'` rows take that path.
 - Each row is counted once, with its final result (`Outcome`).
 - Enqueue errors (`workers/outbox_errors.py`):
   - infra (Redis down, OOM): the cycle stops without touching the remaining events or spending
@@ -77,7 +79,14 @@ def _utc_now() -> datetime:
 
 
 def _malformed(event: OutboxEvent) -> str | None:
-    """Motivo por el que un evento con gate nunca podrá publicarse, o `None`."""
+    """Motivo por el que un evento nunca podrá publicarse, o `None`."""
+    if event.type == "sync_task_event":
+        # J3.4 receives (task_id, task_version); anything else would be a future bug.
+        if event.resource_type != "task":
+            return "sync_non_task"
+        if event.resource_version is None:
+            return "missing_version"
+        return None
     if event.type not in CLEANUP_GATED_TYPES:
         return None
     if event.resource_type != "audio":
@@ -170,7 +179,9 @@ async def _dispatch_one(
     if not decision.publish or decision.job is None:
         return decision.outcome
 
-    rejection = await revalidate(db, event)
+    rejection = (
+        await revalidate(db, event) if event.resource_type == "audio" else None
+    )
     if rejection is not None:
         logger.info("outbox.revalidation_rejected event_id=%s reason=%s", event.id, rejection)
         event.status = "skipped"

@@ -270,6 +270,12 @@ class GoogleCalendarService:
                 await self._on_invalid_grant()
             raise
 
+    def update_access_token(self, access_token: str) -> None:
+        """Rotate the bearer token after a job refreshed it (call between requests)."""
+        if not access_token:
+            raise ValueError("access_token must not be empty")
+        self._access_token = access_token
+
     def _request(
         self,
         method: str,
