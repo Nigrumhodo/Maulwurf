@@ -1,0 +1,70 @@
+Buenos días, hoy vamos a repasar la integración por partes y a resolver tres ejercicios antes de terminar.
+Abran el cuaderno por la página cuarenta y dos, por favor.
+La idea central es elegir una parte de la integral que se vuelva más simple cuando la derivamos.
+Recordemos la fórmula: la integral de u por dv es igual a u por v menos la integral de v por du.
+Ese menos es el error más común en el examen, así que vamos a repetirlo en voz alta.
+Ahora resolvamos la integral de x por el seno de x.
+Elegimos u igual a x, porque su derivada es uno.
+Entonces dv es el seno de x por dx, y v es menos el coseno de x.
+Aplicamos la fórmula y nos queda menos x por el coseno de x más la integral del coseno de x.
+El resultado final es menos x por el coseno de x más el seno de x, más la constante.
+¿Alguien puede explicar por qué no elegimos u igual al seno?
+Sí, exacto: si derivamos el seno obtenemos el coseno y no simplificamos nada.
+Regla práctica: elegimos u como la función que desaparece al derivar, por ejemplo un polinomio.
+Para el segundo ejercicio tenemos la integral de x al cuadrado por e elevado a x.
+Aquí hay que aplicar integración por partes dos veces seguidas.
+No se apuren; primero identifiquen u y dv, y después sustituyan con cuidado.
+El tercer ejercicio combina integración por partes con sustitución trigonométrica.
+Vamos a dejarlo para la segunda mitad de la clase.
+Antes de continuar, recuerden que la tarea del capítulo cinco se entrega el viernes dieciocho a las once de la noche.
+El informe de laboratorio se entrega el lunes veintiuno antes de la clase.
+Para el proyecto final necesitan formar grupos de tres personas y enviarme los nombres antes del miércoles.
+La exposición del proyecto será en la semana del diez de noviembre, con diez minutos por grupo.
+En la exposición deben explicar el método, mostrar un ejemplo resuelto y mencionar una aplicación real.
+No quiero diapositivas llenas de texto; prefieran un diagrama y una frase por idea.
+Si tienen dudas, la tutoría es el martes a las cuatro de la tarde en el salón doscientos cuatro.
+También pueden escribirme por el foro del curso, pero revisen primero las preguntas frecuentes.
+Volvamos al segundo ejercicio: x al cuadrado por e elevado a x.
+Elegimos u igual a x al cuadrado y dv igual a e elevado a x por dx.
+Después de la primera integración obtenemos x al cuadrado por e elevado a x menos dos veces la integral de x por e elevado a x.
+Repetimos el proceso con x por e elevado a x y llegamos a la respuesta final.
+Comparen su resultado con el de su compañero y marquen en qué paso se equivocaron.
+El error de signo vuelve a aparecer cuando distribuyen el menos dos.
+Mañana veremos integrales impropias y el criterio de convergencia.
+Para mañana lean las páginas cuarenta y cinco a cuarenta y ocho y traigan dos preguntas escritas.
+La evaluación corta del viernes cubrirá solo los ejercicios uno y dos.
+Recuerden que no hay calculadora en la evaluación, pero sí pueden usar la tabla de integrales.
+Nos vemos el jueves; no olviden entregar la tarea del capítulo cinco.
+El tercer ejercicio es la integral de x al cubo por el logaritmo natural de x.
+En este caso conviene elegir u igual al logaritmo y dv igual a x al cubo por dx.
+La derivada del logaritmo es uno sobre x, y eso simplifica mucho la integral.
+Después de sustituir obtenemos un polinomio sencillo que ya sabemos integrar.
+Revisen los límites de integración si el ejercicio es definido; no los ignoren.
+Cuando el intervalo es simétrico, verifiquen si la función es par o impar antes de calcular.
+Una función impar sobre un intervalo simétrico tiene integral cero, y eso ahorra tiempo.
+Pero no lo usen como atajo sin justificar; escriban la razón en el examen.
+Ahora hagamos una pausa de cinco minutos y después resolvemos el ejercicio completo en el tablero.
+Mientras tanto, comparen sus apuntes con los de su compañero y corrijan la fórmula.
+La próxima semana tendremos una sesión de repaso antes de la evaluación parcial.
+El parcial cubre los capítulos cuatro, cinco y seis, incluidos los ejercicios de aplicación.
+Las preguntas de aplicación valen más que las de cálculo directo, así que practiquen la interpretación.
+Estudien con ejemplos de otras carreras: economía, biología e ingeniería usan estas integrales.
+La integración por partes también aparece al calcular el valor esperado en probabilidad.
+Si el integrando tiene un polinomio y una exponencial, prueben derivar el polinomio hasta que desaparezca.
+Si tiene un logaritmo, déjenlo como u porque su derivada es más simple.
+Si tiene una función trigonométrica inversa, también conviene elegirla como u.
+Estas tres reglas resumen la mayoría de los ejercicios del parcial.
+Anoten las reglas en una tarjeta y revísenlas antes de dormir; la memoria espacial ayuda.
+El jueves resolveremos un examen de práctica cronometrado y luego lo corregiremos entre todos.
+Traigan la tabla de integrales impresa porque en el examen solo se permite una hoja.
+La entrega del proyecto final se hace por la plataforma, no por correo electrónico.
+Si la plataforma falla, avisen de inmediato y guarden una copia con la fecha.
+La rúbrica del proyecto está publicada en el curso; lean los criterios antes de empezar.
+El criterio de claridad vale veinte por ciento y el de evidencia vale treinta por ciento.
+No dejen la grabación de la exposición para el último día; prueben el audio con anticipación.
+La tutoría del martes es opcional, pero recomiendo asistir si tienen dudas del ejercicio tres.
+También pueden formar un grupo de estudio; el salón está disponible los miércoles por la tarde.
+Recuerden que el aprendizaje requiere práctica deliberada, no solo lectura.
+Resuelvan al menos diez integrales por semana y anoten los errores en un diario.
+Al final del curso haremos una reflexión sobre qué estrategias les funcionaron mejor.
+Nos vemos el jueves y no olviden traer la tabla y la tarea del capítulo cinco.

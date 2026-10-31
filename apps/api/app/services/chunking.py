@@ -152,13 +152,50 @@ class SegmentInput:
 
 
 @dataclass(frozen=True)
-class _Unit:
-    """Atomic chunker unit: a sentence span, or a token-bounded piece of one."""
+class TextUnit:
+    """Atomic sentence span, or a token-bounded piece of one.
+
+    Shared by the §M6 chunker and the M4 analysis windows so both cut at the same sentence
+    boundaries with the same Unicode offsets.
+    """
 
     start: int
     end: int
     tokens: int
     segment_index: int
+
+
+def transcript_units(
+    *,
+    transcript_text: str,
+    segments: Sequence[SegmentInput],
+    target_tokens: int = TARGET_TOKENS,
+    count_tokens: TokenCounter = count_tokens_default,
+) -> list[TextUnit]:
+    """Validated contiguous units covering ``transcript_text``.
+
+    Raises ``ValueError`` on the same segment invariants as ``chunk_segments``. A blank
+    transcript has no units; text without segments is rejected because no offset could be
+    trusted.
+    """
+    if target_tokens < 1:
+        raise ValueError("target_tokens debe ser >= 1")
+    if not transcript_text.strip():
+        return []
+    if not segments:
+        raise ValueError("se requiere al menos un segmento cuando hay texto")
+    _validate_segments(transcript_text, segments)
+    units: list[TextUnit] = []
+    for segment_index, segment in enumerate(segments):
+        units.extend(
+            _segment_units(
+                segment_index,
+                segment,
+                target_tokens=target_tokens,
+                count_tokens=count_tokens,
+            )
+        )
+    return units
 
 
 def chunk_segments(
@@ -186,23 +223,12 @@ def chunk_segments(
     if overlap_tokens < 0:
         raise ValueError("overlap_tokens debe ser >= 0")
     # A whitespace-only transcript has no indexable content; never emit a blank chunk.
-    if not transcript_text.strip():
-        return []
-    if not segments:
-        raise ValueError("se requiere al menos un segmento cuando hay texto")
-
-    _validate_segments(transcript_text, segments)
-
-    units: list[_Unit] = []
-    for segment_index, segment in enumerate(segments):
-        units.extend(
-            _segment_units(
-                segment_index,
-                segment,
-                target_tokens=target_tokens,
-                count_tokens=count_tokens,
-            )
-        )
+    units = transcript_units(
+        transcript_text=transcript_text,
+        segments=segments,
+        target_tokens=target_tokens,
+        count_tokens=count_tokens,
+    )
     if not units:
         return []
 
@@ -271,14 +297,14 @@ def _segment_units(
     *,
     target_tokens: int,
     count_tokens: TokenCounter,
-) -> list[_Unit]:
-    units: list[_Unit] = []
+) -> list[TextUnit]:
+    units: list[TextUnit] = []
     for local_start, local_end in split_sentences(segment.text):
         global_start = segment.char_start + local_start
         global_end = segment.char_start + local_end
         tokens = count_tokens(segment.text[local_start:local_end])
         if tokens <= target_tokens:
-            units.append(_Unit(global_start, global_end, tokens, segment_index))
+            units.append(TextUnit(global_start, global_end, tokens, segment_index))
         else:
             units.extend(
                 _split_oversized(
@@ -349,19 +375,19 @@ def _split_oversized(
     segment_index: int,
     target_tokens: int,
     count_tokens: TokenCounter,
-) -> list[_Unit]:
+) -> list[TextUnit]:
     """Split a sentence that alone exceeds ``target_tokens``, preserving character offsets.
 
     The cut prefers the last whitespace inside the token-bounded prefix so a word is not
     split unless unavoidable (for example in CJK text with no spaces).
     """
-    units: list[_Unit] = []
+    units: list[TextUnit] = []
     position = start
     while position < end:
         split = _max_prefix_end(text, position, end, target_tokens, count_tokens)
         if split >= end:
             units.append(
-                _Unit(
+                TextUnit(
                     offset + position, offset + end, count_tokens(text[position:end]), segment_index
                 )
             )
@@ -372,7 +398,7 @@ def _split_oversized(
         elif split <= position:
             split = position + 1
         units.append(
-            _Unit(
+            TextUnit(
                 offset + position,
                 offset + split,
                 count_tokens(text[position:split]),
@@ -384,7 +410,7 @@ def _split_oversized(
 
 
 def _chunk_ranges(
-    units: Sequence[_Unit], target_tokens: int, overlap_tokens: int
+    units: Sequence[TextUnit], target_tokens: int, overlap_tokens: int
 ) -> list[tuple[int, int]]:
     """Greedy unit ranges, each overlapping the previous one by up to ``overlap_tokens``.
 
@@ -407,7 +433,7 @@ def _chunk_ranges(
     return ranges
 
 
-def _greedy_end(units: Sequence[_Unit], first: int, target_tokens: int) -> int:
+def _greedy_end(units: Sequence[TextUnit], first: int, target_tokens: int) -> int:
     """Exclusive end of the greedy chunk that starts at ``first`` (at least one unit)."""
     last = first
     tokens = 0
@@ -418,7 +444,7 @@ def _greedy_end(units: Sequence[_Unit], first: int, target_tokens: int) -> int:
 
 
 def _next_start(
-    units: Sequence[_Unit], first: int, last: int, target_tokens: int, overlap_tokens: int
+    units: Sequence[TextUnit], first: int, last: int, target_tokens: int, overlap_tokens: int
 ) -> int:
     """First unit of the next chunk: sentence-aligned overlap that still makes progress.
 
