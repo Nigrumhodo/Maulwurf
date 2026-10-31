@@ -22,11 +22,21 @@ from contextlib import asynccontextmanager
 from typing import Any, cast
 
 import pytest
-from sqlalchemy import text
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import event, text
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.pool import NullPool
 
+from app.core import db
+from app.core.config import settings
+from app.core.db import get_session
+from app.core.deps import COOKIE_NAME
+from app.main import app
 from app.models import Base
 from app.models.base import TenantOwned
 from app.services import sessions
@@ -345,6 +355,69 @@ async def test_app_role_resolves_a_session_before_the_tenant_is_known(
                     await transaction.rollback()
     finally:
         await engine.dispose()
+
+
+async def test_authenticated_reads_run_under_the_app_role(
+    migrated_database_url: str,
+) -> None:
+    """A1.9-style reads through the real routers, not only raw SQL.
+
+    The engine installs the production `begin` listener, so every request transaction
+    downgrades to the app role; `resolve_session` binds the tenant exactly as it does in
+    `app/core/db.py`. `/subjects` and `/me` both have to work with RLS on.
+    """
+    user_id = uuid.uuid4()
+    token = f"token-{uuid.uuid4().hex}"
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    name = f"rls-http-{uuid.uuid4().hex[:10]}"
+
+    seed = create_async_engine(migrated_database_url, poolclass=NullPool)
+    try:
+        async with seed.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO users (id, google_sub, email) "
+                    "VALUES (:id, :sub, :email)"
+                ),
+                {"id": user_id, "sub": f"sub-{user_id}", "email": "http@example.test"},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO sessions (user_id, token_hash, csrf_hash, expires_at) "
+                    "VALUES (:user_id, :token_hash, :csrf_hash, now() + interval '1 hour')"
+                ),
+                {"user_id": user_id, "token_hash": token_hash, "csrf_hash": token_hash},
+            )
+            await connection.execute(
+                text("INSERT INTO subjects (user_id, name) VALUES (:id, :name)"),
+                {"id": user_id, "name": name},
+            )
+    finally:
+        await seed.dispose()
+
+    engine = create_async_engine(migrated_database_url)
+    event.listen(engine.sync_engine, "begin", db._apply_tenant_settings)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def override() -> AsyncIterator[AsyncSession]:
+        async with factory() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = override
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url=settings.allowed_origin
+        ) as client:
+            subjects = await client.get("/subjects", cookies={COOKIE_NAME: token})
+            me = await client.get("/me", cookies={COOKIE_NAME: token})
+    finally:
+        app.dependency_overrides.clear()
+        await engine.dispose()
+
+    assert subjects.status_code == 200
+    assert [item["name"] for item in subjects.json()["items"]] == [name]
+    assert me.status_code == 200
+    assert me.json()["id"] == str(user_id)
 
 
 async def test_app_role_bootstraps_a_login_and_then_binds_the_new_user(

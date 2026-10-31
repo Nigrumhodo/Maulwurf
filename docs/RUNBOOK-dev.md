@@ -131,6 +131,11 @@ account); the app, jobs and ingest roles never receive it. A data migration that
 non-superuser owner sees only the rows its own policies allow, so grant the bypass to the
 migration role before applying a revision that reads or rewrites tenant rows.
 
+The migration account also needs `CREATEROLE` (or the three roles must be pre-created), and
+the DSN user of each runtime must be a member of its role: the migration grants membership
+to the migration user, so a deployment that authenticates `api`, `worker` and `ingest` with
+different users must grant `maulwurf_app`/`maulwurf_jobs`/`maulwurf_ingest` to each one.
+
 
 ## 6. Tests and lint
 
