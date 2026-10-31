@@ -29,6 +29,11 @@ Out of scope:
 - real class audio, real transcripts, student data or a 1 h/200 MiB upload;
 - approving the provisional limits: D4 remains `blocked`.
 
+The analysis-token rows that S3.5 depends on are published separately by S3.2 in
+[`window-cost.md`](window-cost.md) (10,894–15,705 transcript tokens and 17–27 calls per
+class hour at the default 800/100 profile). This harness does not re-measure them; S4.5
+combines both sets with the ffmpeg CPU term.
+
 ## Contract under measurement
 
 `apps/ingest/maulwurf_ingest/pipeline.py` plans fragments with the observed 30 s ceiling and
@@ -99,13 +104,13 @@ independent of the clip length at this fragment size.
 |---|---:|---:|---:|
 | tmpfs peak (original + one active fragment + stub) | 13.47 MiB | 13.47 MiB | 26.94 MiB |
 | tmpfs after the run, before deletion | 12.62 MiB | 12.62 MiB | 25.24 MiB |
-| Worker RSS before | 34.41 MiB | 34.38 MiB | — |
-| Worker RSS peak | 34.77 MiB | 34.74 MiB | 69.51 MiB |
-| Worker RSS delta | 0.36 MiB (per slot) | — | under 0.5 MiB per slot |
-| ffmpeg child max RSS | — | — | 47.11 MiB (max, not additive) |
+| Worker RSS before | 34.51 MiB | 34.44 MiB | — |
+| Worker RSS peak | 34.74 MiB | 34.86 MiB | 69.60 MiB |
+| Worker RSS delta | 0.23–0.41 MiB (per slot) | — | under 0.5 MiB per slot |
+| ffmpeg child max RSS | — | — | 47.85 MiB (max, not additive) |
 
 The 60 s run shows the same shape: 3.40 MiB tmpfs peak per slot, 6.81 MiB for both slots,
-and a worker RSS peak of 34.75–34.88 MiB. The tmpfs term is dominated by the original WAV
+and a worker RSS peak of 34.55–34.73 MiB. The tmpfs term is dominated by the original WAV
 (2.52 MiB per minute at 22050 Hz mono s16); the active PCM fragment adds under 0.9 MiB and
 the run leaves only the original (12.62 MiB) before deletion. A compressed real upload has a
 different original size, and the provisional 200 MiB ceiling is not approved, so the table
@@ -113,7 +118,7 @@ is not a slot budget for 200 MiB or 3 h.
 
 The worker RSS baseline (under 35 MiB) is the Python process after imports; the measured
 delta during the audio path is under 0.5 MiB per slot because the worker streams the WAV
-through ffmpeg and never holds the whole class in its heap. The 47.11 MiB figure is the
+through ffmpeg and never holds the whole class in its heap. The 47.85 MiB figure is the
 maximum RSS of any waited ffmpeg child for a 30 s fragment; it is a single-child high-water
 mark, not a sum and not a full slot. The Riva SDK buffer is absent by construction in this
 harness.
@@ -124,7 +129,7 @@ reported only as context:
 | Fit | Result |
 |---|---|
 | 26.94 MiB vs provisional 256 MiB tmpfs | yes |
-| 69.51 MiB vs provisional 1 GiB container memory | yes |
+| 69.60 MiB vs provisional 1 GiB container memory | yes |
 | 200 MiB / 3 h approved | **no: `false`** |
 | D4 capacity decision | `blocked` |
 
@@ -163,8 +168,8 @@ provider price remains an explicit input until the protected-account spike measu
 | ASR cost per class hour | `NO VERIFICADO` | `60.5 x rate`; operator rate is labelled separately |
 | tmpfs peak per concurrent slot | 13.47 MiB | 300 s WAV source + one 30 s PCM fragment + stub; compressed uploads differ |
 | tmpfs peak, 2 concurrent slots | 26.94 MiB | Sum of per-slot maxima, conservative upper bound |
-| Worker RSS peak per slot | 34.38–34.77 MiB | Absolute RSS; delta under 0.5 MiB per slot; excludes ffmpeg child and Riva SDK |
-| ffmpeg child max RSS | 47.11 MiB | Max of any waited child, not additive |
+| Worker RSS peak per slot | 34.44–34.86 MiB | Absolute RSS; delta under 0.5 MiB per slot; excludes ffmpeg child and Riva SDK |
+| ffmpeg child max RSS | 47.85 MiB | Max of any waited child, not additive |
 | Provider latency and SDK RSS | `NO VERIFICADO` | Requires an authorized `P-*` run |
 
 ## Reproduce
@@ -177,9 +182,9 @@ cd apps/ingest && uv run python ../../scripts/load/asr_cost.py
 cd apps/ingest && uv run python ../../scripts/load/asr_cost.py \
     --slots 2 --clip-seconds 300 --format json
 
-# Explicit operator rate (not a spike measurement)
+# Explicit operator rate (arbitrary example, not a spike measurement)
 cd apps/ingest && uv run python ../../scripts/load/asr_cost.py \
-    --clip-seconds 300 --rate-usd-per-minute 0.0065
+    --clip-seconds 300 --rate-usd-per-minute 0.01
 
 # Pure model and report tests; the load test exercises ffmpeg + espeak
 cd apps/ingest && uv run pytest tests/test_asr_cost.py -m "not load" -q
@@ -194,6 +199,8 @@ writes no repository file and prints no audio. `--slots` is bounded to 4 and the
 ## Limitations
 
 - The ASR rate is unmeasured; the cost is a formula until the authorized spike closes it.
+- Provider billing granularity and minimums are `NO VERIFICADO`; effective minutes are the
+  audio sent to the provider, not an invoice.
 - The stub transcriber does not include the Riva SDK, network latency, retries or provider
   memory. It measures the local audio path only.
 - The source is a WAV synthesized by espeak-ng. Real uploads are compressed and may have a
@@ -202,5 +209,4 @@ writes no repository file and prints no audio. `--slots` is bounded to 4 and the
 - Two slots of 300 s are not the same as a 1 h class under compose. S4.3 owns the G1 load
   with injected failures; S4.5 owns the final table with ffmpeg CPU and the real rate.
 - The tmpfs upper bound adds per-slot maxima even when the peaks do not coincide; the
-  sampled concurrent peak was 26.94 MiB, essentially equal to the 26.94 MiB upper bound in
-  this run.
+  sampled concurrent peak was 26.82 MiB against the 26.94 MiB upper bound in this run.

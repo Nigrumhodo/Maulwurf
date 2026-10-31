@@ -3,7 +3,7 @@
 Basis for **C-S4-SG-04** (the reproducible cost table of S4.5). The harness measures two
 different things and keeps them separate:
 
-* **ASR cost:** the audio seconds actually sent to the provider (fragments, including the
+* **ASR cost:** the audio seconds a run would send to the provider (fragments, including the
   local overlap), projected to one class hour. The provider rate measured by the F0.1
   spike is ``NO VERIFICADO`` (S1.A7 never obtained a price), so the rate is an explicit
   operator input; without it the cost stays ``NO VERIFICADO`` instead of inventing a
@@ -20,7 +20,7 @@ Run from the repository root with the ingest environment::
     cd apps/ingest && uv run python ../../scripts/load/asr_cost.py
     cd apps/ingest && uv run python ../../scripts/load/asr_cost.py --format json
     cd apps/ingest && uv run python ../../scripts/load/asr_cost.py \
-        --rate-usd-per-minute 0.0065 --clip-seconds 300
+        --rate-usd-per-minute 0.01 --clip-seconds 300
 
 The harness refuses to run if it cannot find a writable tmpfs. It never writes audio to
 persistent storage, never prints audio and never keeps a WAV after the run. The synthetic
@@ -482,6 +482,8 @@ def _limitations() -> list[str]:
     return [
         "ASR rate: NO VERIFICADO. The F0.1 spike did not measure a cost per minute (S1.A7); "
         "an operator-provided rate is labelled operator-provided, not spike-measured.",
+        "Billing granularity and minimums are NO VERIFICADO. Effective minutes are the audio "
+        "sent to the provider, not an invoice.",
         "No Riva channel is opened. The stub transcriber measures the ffmpeg/tmpfs path, "
         "not provider latency, provider RAM or ASR quality.",
         "Worker RSS excludes the ffmpeg child peak (reported separately) and any Riva SDK "
