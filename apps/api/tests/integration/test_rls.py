@@ -40,9 +40,9 @@ from app.core.config import settings
 from app.core.db import get_session
 from app.core.deps import COOKIE_NAME
 from app.main import app
-from app.models import Base
+from app.models import Base, GoogleCredential
 from app.models.base import TenantOwned
-from app.services import sessions
+from app.services import oauth_google, sessions
 
 pytestmark = pytest.mark.integration
 
@@ -617,6 +617,39 @@ async def test_commit_emits_with_the_tenant_already_bound(
     assert response.status_code == 201
     assert committed_tenants == [str(user_id)]
     assert teardown_tenants == [user_id]
+
+
+async def test_real_google_upsert_bootstraps_without_a_tenant(
+    migrated_database_url: str,
+) -> None:
+    """The production first-login path also works before `app.user_id` exists.
+
+    `test_app_role_bootstraps_a_login...` proves the policy with raw SQL; this test runs
+    `upsert_google_identity`, the code the OAuth callback actually calls, under
+    `maulwurf_app` and without inheriting a tenant. It uses `bind_google_sub` exactly like
+    the E2E seed, so the two sanctioned bootstrap callers cannot drift apart.
+    """
+    sub = f"sub-{uuid.uuid4()}"
+    async with _role_connection(migrated_database_url, role=APP_ROLE) as connection:
+        session = AsyncSession(bind=connection, join_transaction_mode="create_savepoint")
+        try:
+            user = await oauth_google.upsert_google_identity(
+                session,
+                {
+                    "sub": sub,
+                    "email": "first-login@example.test",
+                    "email_verified": True,
+                    "name": "First Login",
+                },
+                {"access_token": "ya29.test-first-login", "expires_in": 3600},
+            )
+            assert user.google_sub == sub
+            assert db._current_user.get() == user.id
+            credential = await session.get(GoogleCredential, user.id)
+            assert credential is not None
+            assert credential.status == "connected"
+        finally:
+            await session.close()
 
 
 async def test_app_role_bootstraps_a_login_and_then_binds_the_new_user(
