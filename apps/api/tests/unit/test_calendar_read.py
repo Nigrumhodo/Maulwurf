@@ -24,12 +24,14 @@ from app.services.calendar_sync import (
     STALE,
     CalendarEventInvalid,
     CalendarPaginationExhausted,
+    CalendarRead,
     CalendarSyncResult,
     CalendarWindow,
     CalendarWindowInvalid,
     GoogleCalendarEventSource,
     PublicationResult,
     RemoteCalendarEvent,
+    RemoteCancelledEvent,
     _resolve_window,
     build_list_params,
     coverage_status,
@@ -207,11 +209,15 @@ async def test_pagination_follows_every_next_page_token() -> None:
 
     events = await source.list_events("primary", time_min=window.start, time_max=window.end)
 
-    assert [event.event_id for event in events] == ["recurring_20261005T090000Z", "g2"]
-    assert events[0].start_at == datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
-    assert events[0].timezone == "America/Bogota"
-    assert events[1].start_date == date(2026, 10, 6)
-    assert events[1].end_date_exclusive == date(2026, 10, 7)
+    assert [event.event_id for event in events.events] == [
+        "recurring_20261005T090000Z",
+        "g2",
+    ]
+    assert events.events[0].start_at == datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
+    assert events.events[0].timezone == "America/Bogota"
+    assert events.events[1].start_date == date(2026, 10, 6)
+    assert events.events[1].end_date_exclusive == date(2026, 10, 7)
+    assert events.cancelled == ()
     assert len(fake.requests) == 2
     assert all("syncToken" not in request.url.params for request in fake.requests)
     assert all(request.url.params["singleEvents"] == "true" for request in fake.requests)
@@ -256,7 +262,7 @@ async def test_a_non_object_payload_fails_the_read_with_a_typed_error(
     assert error.value.code == "events_payload_invalid"
 
 
-async def test_cancelled_instances_are_dropped_and_instances_stay_distinct() -> None:
+async def test_cancelled_instances_are_exposed_as_keys_and_active_instances_stay_distinct() -> None:
     items = [
         {
             "id": "series_20261005T090000Z",
@@ -271,8 +277,7 @@ async def test_cancelled_instances_are_dropped_and_instances_stay_distinct() -> 
             "status": "cancelled",
             "summary": "Weekly lecture",
             "recurringEventId": "series",
-            "start": {"dateTime": "2026-10-12T09:00:00-05:00"},
-            "end": {"dateTime": "2026-10-12T10:00:00-05:00"},
+            # Google may omit the block of a cancelled instance: it must not fail the read.
         },
         {
             "id": "series_20261019T090000Z",
@@ -286,12 +291,15 @@ async def test_cancelled_instances_are_dropped_and_instances_stay_distinct() -> 
     _fake, source = await _source([{"items": items}])
     window = _window(31)
 
-    events = await source.list_events("primary", time_min=window.start, time_max=window.end)
+    read = await source.list_events("primary", time_min=window.start, time_max=window.end)
 
-    assert [event.event_id for event in events] == [
+    assert [event.event_id for event in read.events] == [
         "series_20261005T090000Z",
         "series_20261019T090000Z",
     ]
+    assert read.cancelled == (
+        RemoteCancelledEvent(calendar_id="primary", event_id="series_20261012T090000Z"),
+    )
 
 
 # --- Event normalization ---------------------------------------------------------------
@@ -322,12 +330,12 @@ def test_timed_and_all_day_events_are_normalized_to_utc_and_exclusive_dates() ->
         },
     )
 
-    assert timed is not None
+    assert isinstance(timed, RemoteCalendarEvent)
     assert timed.start_at == datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
     assert timed.remote_status == "tentative"
     assert timed.etag == '"abc"'
     assert timed.start_date is None
-    assert all_day is not None
+    assert isinstance(all_day, RemoteCalendarEvent)
     assert all_day.title == ""
     assert all_day.start_date == date(2026, 10, 6)
     assert all_day.end_date_exclusive == date(2026, 10, 8)
@@ -336,14 +344,15 @@ def test_timed_and_all_day_events_are_normalized_to_utc_and_exclusive_dates() ->
     assert all_day.source == "google"
 
 
-def test_cancelled_event_is_a_deletion_not_a_row() -> None:
-    assert (
-        parse_remote_event(
-            "primary",
-            {"id": "gone", "status": "cancelled", "start": {"date": "2026-10-06"}},
-        )
-        is None
+def test_cancelled_event_is_exposed_as_a_key_not_a_row() -> None:
+    parsed = parse_remote_event(
+        "primary",
+        {"id": "gone", "status": "cancelled", "start": {"date": "2026-10-06"}},
     )
+
+    # The publication only marks an existing linked row; it never inserts a cancelled one,
+    # so no block is parsed or required here.
+    assert parsed == RemoteCancelledEvent(calendar_id="primary", event_id="gone")
 
 
 def test_an_unresolvable_event_timezone_is_stored_as_unknown() -> None:
@@ -359,7 +368,7 @@ def test_an_unresolvable_event_timezone_is_stored_as_unknown() -> None:
         },
     )
 
-    assert parsed is not None
+    assert isinstance(parsed, RemoteCalendarEvent)
     assert parsed.timezone is None
 
 
@@ -393,6 +402,7 @@ def test_malformed_events_fail_the_read(item: dict[str, Any]) -> None:
 class _RecordingMirror:
     def __init__(self) -> None:
         self.calls: list[list[RemoteCalendarEvent]] = []
+        self.cancelled_calls: list[list[RemoteCancelledEvent]] = []
 
     async def replace_window(
         self,
@@ -401,27 +411,39 @@ class _RecordingMirror:
         window: CalendarWindow,
         calendars: tuple[str, ...],
         events: Iterable[RemoteCalendarEvent],
+        cancelled: Iterable[RemoteCancelledEvent] = (),
         synced_at: datetime,
     ) -> PublicationResult:
         del user_id, window, calendars, synced_at
-        self.calls.append(list(events))
-        return PublicationResult(inserted=len(self.calls[-1]), removed=0)
+        published = list(events)
+        self.calls.append(published)
+        self.cancelled_calls.append(list(cancelled))
+        return PublicationResult(inserted=len(published), removed=0)
 
 
 class _Source:
-    def __init__(self, events: dict[str, list[RemoteCalendarEvent]], failures: set[str]) -> None:
+    def __init__(
+        self,
+        events: dict[str, list[RemoteCalendarEvent]],
+        failures: set[str],
+        cancelled: dict[str, list[RemoteCancelledEvent]] | None = None,
+    ) -> None:
         self._events = events
         self._failures = failures
+        self._cancelled = cancelled or {}
         self.calls: list[str] = []
 
     async def list_events(
         self, calendar_id: str, *, time_min: datetime, time_max: datetime
-    ) -> list[RemoteCalendarEvent]:
+    ) -> CalendarRead:
         del time_min, time_max
         self.calls.append(calendar_id)
         if calendar_id in self._failures:
             raise CalendarEventInvalid("read_failed")
-        return list(self._events.get(calendar_id, []))
+        return CalendarRead(
+            events=tuple(self._events.get(calendar_id, [])),
+            cancelled=tuple(self._cancelled.get(calendar_id, [])),
+        )
 
 
 async def test_failed_read_publishes_nothing() -> None:
@@ -480,6 +502,28 @@ async def test_duplicate_keys_are_collapsed_before_publication() -> None:
     assert mirror.calls == [[_timed("g1", start + timedelta(hours=2))]]
     assert result.inserted == 1
     assert result.last_synced_at == NOW
+
+
+async def test_cancelled_keys_are_deduplicated_and_forwarded_to_the_mirror() -> None:
+    cancelled = [
+        RemoteCancelledEvent(calendar_id="a", event_id="gone"),
+        RemoteCancelledEvent(calendar_id="a", event_id="gone"),
+    ]
+    source = _Source({}, set(), cancelled={"a": cancelled})
+    mirror = _RecordingMirror()
+
+    await sync_calendar_window(
+        cast(AsyncSession, object()),
+        user_id=uuid.uuid4(),
+        window=_window(),
+        calendars=["a"],
+        source=source,
+        mirror=mirror,
+        now=NOW,
+    )
+
+    assert mirror.calls == [[]]
+    assert mirror.cancelled_calls == [[RemoteCancelledEvent(calendar_id="a", event_id="gone")]]
 
 
 # --- Coverage decision -----------------------------------------------------------------

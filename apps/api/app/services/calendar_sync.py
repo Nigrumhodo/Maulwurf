@@ -7,10 +7,18 @@ The calendar is read as a **full window** every time:
 - Every page is followed (`nextPageToken`) before anything is written. A truncated or
   failed read publishes nothing: partial results would be reported as complete coverage.
 - `singleEvents=true` makes Google expand recurrences into instances and `showDeleted=true`
-  surfaces deleted instances; a cancelled event is removed from the mirror, never stored.
+  surfaces deleted instances; a cancelled instance is returned as a key, never stored as a
+  new row, so a task-linked row can be marked `cancelled` instead of keeping a false
+  `confirmed` status.
 - `syncToken` is never sent. It is incompatible with `timeMin`/`timeMax`/`singleEvents`/
   `orderBy`, and the MVP contract is an explicit full-window refresh. `build_list_params`
   rejects the mix instead of silently dropping a filter.
+
+`remote_status` records what the last read observed: Google's own value (`confirmed`,
+`tentative`, …) for an event the read returned, `missing` for a task-linked row the read did
+not return, and `cancelled` for a task-linked row Google reported cancelled. `missing` and
+`cancelled` rows are kept because the link belongs to the write path; a later read that
+returns the event rewrites the status from Google.
 
 `SqlCalendarMirror` replaces the whole window in one transaction (savepoint) after taking a
 per-user transaction advisory lock. Rows of the republished calendars that ended before the
@@ -37,7 +45,7 @@ from typing import Any, Final, Literal, Protocol, cast
 from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import CursorResult, Table, and_, delete, func, or_, select
+from sqlalchemy import CursorResult, Table, and_, delete, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,6 +61,13 @@ MAX_PAGE_SIZE = 2500
 # The spec refreshes the mirror on demand or hourly; two hours is a conservative staleness
 # signal for the dashboard, not a scheduled job of its own.
 STALE_AFTER = timedelta(hours=2)
+
+# Local `remote_status` values added by this mirror on top of Google's own vocabulary:
+# `missing` = a task-linked row the read did not return; `cancelled` = Google reported the
+# linked event as cancelled. Both keep `task_id`; only a later read that returns the event
+# rewrites the status. Unlinked rows are deleted instead, because they carry no link.
+MISSING: Final = "missing"
+CANCELLED: Final = "cancelled"
 
 # Advisory-lock convention (A2.14, `services/audios.py`): the two-int form namespaces our
 # locks instead of a bare bigint. The namespace is the same 0x4D57 ("MW") value that module
@@ -197,6 +212,22 @@ class RemoteCalendarEvent:
 
 
 @dataclass(frozen=True)
+class RemoteCancelledEvent:
+    """Key of a remote event Google reported as cancelled; never itself a mirrored row."""
+
+    calendar_id: str
+    event_id: str
+
+
+@dataclass(frozen=True)
+class CalendarRead:
+    """One calendar's complete read: active events plus the keys Google cancelled."""
+
+    events: tuple[RemoteCalendarEvent, ...] = ()
+    cancelled: tuple[RemoteCancelledEvent, ...] = ()
+
+
+@dataclass(frozen=True)
 class PublicationResult:
     """Rows written (`inserted` counts inserts and in-place updates) and rows deleted.
 
@@ -297,15 +328,22 @@ def _parse_date(value: object) -> date:
         raise CalendarEventInvalid("event_date_invalid") from exc
 
 
-def parse_remote_event(calendar_id: str, item: Mapping[str, Any]) -> RemoteCalendarEvent | None:
-    """Normalize one Google event; `None` means it is cancelled and must leave the mirror."""
+def parse_remote_event(
+    calendar_id: str, item: Mapping[str, Any]
+) -> RemoteCalendarEvent | RemoteCancelledEvent:
+    """Normalize one Google event.
+
+    A cancelled instance comes back as a `RemoteCancelledEvent` key: Google may omit its
+    times, and the publication must only mark an existing linked row, never insert a new
+    one. Every other item must carry a valid block or the whole read fails.
+    """
     raw_id = item.get("id")
     if not isinstance(raw_id, str) or not raw_id:
         raise CalendarEventInvalid("event_id_invalid")
     status = item.get("status")
     remote_status = status if isinstance(status, str) and status else "confirmed"
-    if remote_status == "cancelled":
-        return None
+    if remote_status == CANCELLED:
+        return RemoteCancelledEvent(calendar_id=calendar_id, event_id=raw_id)
     summary = item.get("summary")
     title = summary if isinstance(summary, str) else ""
     etag = item.get("etag")
@@ -348,7 +386,7 @@ def parse_remote_event(calendar_id: str, item: Mapping[str, Any]) -> RemoteCalen
 class CalendarEventSource(Protocol):
     async def list_events(
         self, calendar_id: str, *, time_min: datetime, time_max: datetime
-    ) -> list[RemoteCalendarEvent]: ...
+    ) -> CalendarRead: ...
 
 
 class CalendarMirror(Protocol):
@@ -359,6 +397,7 @@ class CalendarMirror(Protocol):
         window: CalendarWindow,
         calendars: tuple[str, ...],
         events: Iterable[RemoteCalendarEvent],
+        cancelled: Iterable[RemoteCancelledEvent] = (),
         synced_at: datetime,
     ) -> PublicationResult: ...
 
@@ -379,12 +418,13 @@ class GoogleCalendarEventSource:
 
     async def list_events(
         self, calendar_id: str, *, time_min: datetime, time_max: datetime
-    ) -> list[RemoteCalendarEvent]:
+    ) -> CalendarRead:
         if not calendar_id:
             raise CalendarEventInvalid("calendar_id_invalid")
         path = f"/calendars/{quote(calendar_id, safe='')}/events"
         base = build_list_params(time_min=time_min, time_max=time_max)
         events: list[RemoteCalendarEvent] = []
+        cancelled: list[RemoteCancelledEvent] = []
         token: str | None = None
         pages = 0
         while True:
@@ -406,11 +446,13 @@ class GoogleCalendarEventSource:
                 if not isinstance(item, Mapping):
                     raise CalendarEventInvalid("event_payload_invalid")
                 parsed = parse_remote_event(calendar_id, item)
-                if parsed is not None:
+                if isinstance(parsed, RemoteCancelledEvent):
+                    cancelled.append(parsed)
+                else:
                     events.append(parsed)
             next_token = payload.get("nextPageToken")
             if next_token is None or next_token == "":
-                return events
+                return CalendarRead(events=tuple(events), cancelled=tuple(cancelled))
             if not isinstance(next_token, str):
                 raise CalendarEventInvalid("next_page_token_invalid")
             if pages >= self._max_pages:
@@ -464,6 +506,7 @@ class SqlCalendarMirror:
         window: CalendarWindow,
         calendars: tuple[str, ...],
         events: Iterable[RemoteCalendarEvent],
+        cancelled: Iterable[RemoteCancelledEvent] = (),
         synced_at: datetime,
     ) -> PublicationResult:
         rows = [
@@ -484,6 +527,7 @@ class SqlCalendarMirror:
             }
             for event in events
         ]
+        cancelled_keys = [(event.calendar_id, event.event_id) for event in cancelled]
         async with self._db.begin_nested():
             # Two concurrent refreshes for one user must not interleave delete/upsert.
             await self._db.execute(
@@ -540,6 +584,27 @@ class SqlCalendarMirror:
                     _overlap_filter(window),
                 )
             )
+            # A linked row the read no longer returns must not keep presenting old values as
+            # current. It is marked `missing` (never deleted nor unlinked) before the upsert,
+            # so every event that did arrive rewrites its own status right after; a row
+            # already known to be `cancelled` keeps that stronger fact until Google returns
+            # the event again. Rows outside the window are not touched: the read never
+            # observed them, and an event moved outside the window still exists.
+            await self._db.execute(
+                update(CalendarEvent)
+                .where(
+                    CalendarEvent.user_id == user_id,
+                    CalendarEvent.calendar_id.in_(list(calendars)),
+                    CalendarEvent.task_id.is_not(None),
+                    CalendarEvent.remote_status != CANCELLED,
+                    _overlap_filter(window),
+                )
+                .values(
+                    remote_status=MISSING,
+                    last_synced_at=synced_at,
+                    updated_at=func.now(),
+                )
+            )
             if rows:
                 # Upsert on the natural key: an event already mirrored by an earlier
                 # publication (for example one rescheduled into this window) updates in
@@ -562,6 +627,26 @@ class SqlCalendarMirror:
                             "last_synced_at": statement.excluded.last_synced_at,
                             "updated_at": func.now(),
                         },
+                    )
+                )
+            if cancelled_keys:
+                # Google reported these instances as cancelled. A linked row is kept (deleting
+                # it would free `calendar_events_one_link`) but its old values must never be
+                # presented as current again; a later read that returns the event rewrites the
+                # status from the upsert above.
+                await self._db.execute(
+                    update(CalendarEvent)
+                    .where(
+                        CalendarEvent.user_id == user_id,
+                        CalendarEvent.calendar_id.in_(list(calendars)),
+                        tuple_(
+                            CalendarEvent.calendar_id, CalendarEvent.event_id
+                        ).in_(cancelled_keys),
+                    )
+                    .values(
+                        remote_status=CANCELLED,
+                        last_synced_at=synced_at,
+                        updated_at=func.now(),
                     )
                 )
             await self._db.execute(
@@ -593,9 +678,11 @@ class SqlCalendarMirror:
         return PublicationResult(inserted=len(rows), removed=removed_count)
 
 
-def _dedupe(events: Iterable[RemoteCalendarEvent]) -> list[RemoteCalendarEvent]:
+def _dedupe[RemoteEvent: (RemoteCalendarEvent, RemoteCancelledEvent)](
+    events: Iterable[RemoteEvent],
+) -> list[RemoteEvent]:
     """Keep one row per `(calendar, event)`; the last occurrence in read order wins."""
-    unique: dict[tuple[str, str], RemoteCalendarEvent] = {}
+    unique: dict[tuple[str, str], RemoteEvent] = {}
     for event in events:
         unique[(event.calendar_id, event.event_id)] = event
     return list(unique.values())
@@ -630,17 +717,19 @@ async def sync_calendar_window(
     # No database work happens until every page of every calendar was read: a failure
     # leaves the previous mirror and its coverage untouched.
     fetched: list[RemoteCalendarEvent] = []
+    cancelled: list[RemoteCancelledEvent] = []
     for calendar_id in selected:
-        fetched.extend(
-            await source.list_events(
-                calendar_id, time_min=window.start, time_max=window.end
-            )
+        read = await source.list_events(
+            calendar_id, time_min=window.start, time_max=window.end
         )
+        fetched.extend(read.events)
+        cancelled.extend(read.cancelled)
     publication = await (mirror or SqlCalendarMirror(db)).replace_window(
         user_id=user_id,
         window=window,
         calendars=selected,
         events=_dedupe(fetched),
+        cancelled=_dedupe(cancelled),
         synced_at=synced_at,
     )
     return CalendarSyncResult(

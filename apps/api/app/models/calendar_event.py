@@ -9,6 +9,11 @@ guess whether a row is an instant or a whole day.
 composite foreign key of the design document; the unique partial index for "one linked event
 per task" is already in place for when A3.1 lands. J3.7 publishes `source='google'` rows and
 never links tasks: the link belongs to the write path (J3.4/A3.8).
+
+`remote_status` keeps what the last read observed: Google's own status (`confirmed`,
+`tentative`, …) for a returned event, `missing` for a task-linked row the read did not
+return, and `cancelled` for a task-linked row Google reported cancelled. The two local values
+are only written on linked rows; a later read that returns the event rewrites the status.
 """
 
 import uuid

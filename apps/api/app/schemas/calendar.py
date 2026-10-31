@@ -5,7 +5,9 @@ closed-set `coverage_notice` are additive to the design example: without them th
 and the `get_calendar_events` tool cannot tell a complete window from a stale one.
 
 Timed events carry `start_at`/`end_at` (instants); all-day events carry the exclusive
-`start_date`/`end_date_exclusive` pair. The two pairs are never mixed.
+`start_date`/`end_date_exclusive` pair. The two pairs are never mixed. `remote_status` is
+Google's status for a returned event, or the mirror's own `missing`/`cancelled` marker on a
+row linked to a task that the last read did not return or reported cancelled.
 """
 
 from datetime import date, datetime

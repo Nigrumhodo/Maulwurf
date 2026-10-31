@@ -8,10 +8,12 @@ call, credential or secret is involved.
 Covered: the whole window is replaced in one transaction (previous rows and the recorded
 coverage survive a mid-publication failure), deleted events disappear, an event rescheduled
 from outside the window updates in place, pre-window rows are pruned for the republished
-calendars, recurring instances arrive expanded, other tenants are untouched, the
-`GET /calendar/events` route reads only the mirror and reports freshness/coverage (a lone
-`from`/`to` derives the other bound from it), and `syncToken` is never mixed with window
-filters.
+calendars, a deselected calendar stops being returned and is pruned on the next refresh,
+recurring instances arrive expanded, other tenants are untouched, a task-linked row that
+Google no longer returns is marked `missing` (and restored when it returns), a cancelled
+task-linked row is marked `cancelled` without losing its link, the `GET /calendar/events`
+route reads only the mirror and reports freshness/coverage (a lone `from`/`to` derives the
+other bound from it), and `syncToken` is never mixed with window filters.
 """
 
 import uuid
@@ -32,9 +34,11 @@ from app.main import app
 from app.models import CalendarEvent, CalendarSettings
 from app.services.calendar_sync import (
     CalendarEventInvalid,
+    CalendarRead,
     CalendarWindow,
     GoogleCalendarEventSource,
     RemoteCalendarEvent,
+    RemoteCancelledEvent,
     sync_calendar_window,
 )
 from app.services.google_calendar import GoogleCalendarService
@@ -61,18 +65,30 @@ async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
 class FakeSource:
     """Deterministic calendar source; records what the service asked for."""
 
-    def __init__(self, events: list[RemoteCalendarEvent] | None = None) -> None:
+    def __init__(
+        self,
+        events: list[RemoteCalendarEvent] | None = None,
+        cancelled: list[RemoteCancelledEvent] | None = None,
+    ) -> None:
         self.events = events or []
+        self.cancelled = cancelled or []
         self.calls: list[tuple[str, datetime, datetime]] = []
         self.fail_after: int | None = None
 
     async def list_events(
         self, calendar_id: str, *, time_min: datetime, time_max: datetime
-    ) -> list[RemoteCalendarEvent]:
+    ) -> CalendarRead:
         self.calls.append((calendar_id, time_min, time_max))
         if self.fail_after is not None and len(self.calls) > self.fail_after:
             raise CalendarEventInvalid("read_failed")
-        return [event for event in self.events if event.calendar_id == calendar_id]
+        return CalendarRead(
+            events=tuple(
+                event for event in self.events if event.calendar_id == calendar_id
+            ),
+            cancelled=tuple(
+                event for event in self.cancelled if event.calendar_id == calendar_id
+            ),
+        )
 
 
 def _timed(
@@ -158,10 +174,13 @@ async def _get(
 
 
 async def _mirror(db: AsyncSession, actor: Actor) -> list[CalendarEvent]:
+    # Publication uses Core DML, which does not refresh instances already in the identity
+    # map: `populate_existing` makes every assertion read what the database really stores.
     result = await db.execute(
         select(CalendarEvent)
         .where(CalendarEvent.user_id == actor.user_id)
         .order_by(CalendarEvent.event_id)
+        .execution_options(populate_existing=True)
     )
     return list(result.scalars())
 
@@ -461,7 +480,7 @@ async def test_a_task_linked_row_inside_the_window_keeps_its_link_across_refresh
 
 
 async def test_a_task_linked_row_inside_the_window_survives_a_refresh_without_it(
-    db_session: AsyncSession,
+    client: AsyncClient, db_session: AsyncSession
 ) -> None:
     actor = await make_actor(db_session)
     await _settings(db_session, actor)
@@ -484,12 +503,99 @@ async def test_a_task_linked_row_inside_the_window_survives_a_refresh_without_it
 
     # Contract (J3.7): the read mirror never deletes or unlinks a task-linked row, even
     # when the remote event vanished or was moved out of the window. Those rows belong to
-    # the write path (J3.4/A3.8); a stale row is better than a silently lost link.
-    await _sync(db_session, actor, source=FakeSource([]), now=now)
+    # the write path (J3.4/A3.8); a stale row is better than a silently lost link. The row
+    # is marked `missing` so it is not presented as a current confirmed event.
+    window = await _sync(db_session, actor, source=FakeSource([]), now=now)
     await _sync(db_session, actor, source=FakeSource([]), now=now)
 
     rows = await _mirror(db_session, actor)
-    assert [(row.event_id, row.task_id) for row in rows] == [("linked", task_id)]
+    assert [(row.event_id, row.task_id, row.remote_status) for row in rows] == [
+        ("linked", task_id, "missing")
+    ]
+
+    response = await _get(
+        client, actor, date_from=window.start_date, date_to=window.end_date
+    )
+    body = response.json()
+    assert [(item["event_id"], item["remote_status"]) for item in body["events"]] == [
+        ("linked", "missing")
+    ]
+
+    # If Google returns the event again, the upsert rewrites the status: only rows that
+    # really did not appear stay `missing`.
+    await _sync(
+        db_session,
+        actor,
+        source=FakeSource([_timed("linked", start, title="back")]),
+        now=now,
+    )
+    rows = await _mirror(db_session, actor)
+    assert [(row.event_id, row.task_id, row.remote_status) for row in rows] == [
+        ("linked", task_id, "confirmed")
+    ]
+
+
+async def test_a_cancelled_task_linked_event_is_marked_cancelled_and_keeps_the_link(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await make_actor(db_session)
+    await _settings(db_session, actor)
+    now = datetime.now(UTC)
+    start = now + timedelta(days=2)
+    task_id = uuid.uuid4()
+    db_session.add(
+        CalendarEvent(
+            user_id=actor.user_id,
+            calendar_id=CALENDAR,
+            event_id="linked",
+            title="linked",
+            start_at=start,
+            end_at=start + timedelta(hours=1),
+            last_synced_at=now,
+            task_id=task_id,
+        )
+    )
+    await db_session.flush()
+
+    # Google reports the linked event as cancelled: the row must not keep presenting
+    # `confirmed`. Deleting it would free `calendar_events_one_link`, so the row is kept
+    # and only its `remote_status` is corrected.
+    window = await _sync(
+        db_session,
+        actor,
+        source=FakeSource(
+            cancelled=[RemoteCancelledEvent(calendar_id=CALENDAR, event_id="linked")]
+        ),
+        now=now,
+    )
+
+    rows = await _mirror(db_session, actor)
+    assert [(row.event_id, row.task_id, row.remote_status) for row in rows] == [
+        ("linked", task_id, "cancelled")
+    ]
+
+    response = await _get(
+        client, actor, date_from=window.start_date, date_to=window.end_date
+    )
+    body = response.json()
+    assert body["coverage_ok"] is True
+    assert [(item["event_id"], item["remote_status"]) for item in body["events"]] == [
+        ("linked", "cancelled")
+    ]
+
+    # A later read that simply does not return the event does not downgrade a known
+    # cancellation; a read that returns it again rewrites the status from Google.
+    await _sync(db_session, actor, source=FakeSource([]), now=now)
+    rows = await _mirror(db_session, actor)
+    assert rows[0].remote_status == "cancelled"
+
+    await _sync(
+        db_session, actor, source=FakeSource([_timed("linked", start)]), now=now
+    )
+    rows = await _mirror(db_session, actor)
+    assert [(row.event_id, row.task_id, row.remote_status) for row in rows] == [
+        ("linked", task_id, "confirmed")
+    ]
 
 
 async def test_a_failed_read_publishes_nothing(
