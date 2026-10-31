@@ -309,3 +309,7 @@ webhook. CI counts: `python-unit (api)` 1215 passed and `integration (api)` 489 
 (the job runs against the CI pgvector image, so the local 0.6 failures do not appear). The
 PR is MERGEABLE/CLEAN at `6effb92`; any later commit that only records this run does not
 change the code under test.
+
+The documentation-only head `3ad8de7` repeats the same result: run `41234390117` is green
+in the 16 `quality` jobs plus the Hoplite webhook, and the PR stays MERGEABLE/CLEAN. No
+code changed after `6effb92`.
