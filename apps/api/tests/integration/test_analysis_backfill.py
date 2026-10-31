@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 import pytest
 from arq.connections import ArqRedis
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -351,12 +351,96 @@ async def test_f2_classes_are_left_to_retry_unless_analysis_already_succeeded(
     report = await backfill_classes(db_session, user_id=actor.user_id, apply=True)
 
     statuses = {item.audio_id: item.status for item in report.items}
-    assert statuses[missing_run.id] is BackfillStatus.NOT_F1
+    # F2 without a run already owes analysis: retry is its entry point and the backfill
+    # must say so instead of mislabeling the class as F1.
+    assert statuses[missing_run.id] is BackfillStatus.ALREADY_F2_NO_RUN
     assert statuses[analyzed.id] is BackfillStatus.ALREADY_ANALYZED
     assert await _analysis_runs(
         db_session, user_id=actor.user_id, audio_id=missing_run.id
     ) == []
     assert len(await _analysis_runs(db_session, user_id=actor.user_id, audio_id=analyzed.id)) == 1
+    # Neither class is an F1 candidate, so no stage list was rewritten.
+    assert missing_run.required_stages == ["index", "analyze"]
+    assert analyzed.required_stages == ["index", "analyze"]
+
+
+@pytest.mark.parametrize(
+    ("run_status", "expected"),
+    [
+        ("succeeded", BackfillStatus.ALREADY_ANALYZED),
+        ("pending", BackfillStatus.ALREADY_QUEUED),
+        ("running", BackfillStatus.ALREADY_QUEUED),
+    ],
+)
+async def test_apply_does_not_promote_f1_when_nothing_is_queued(
+    db_session: AsyncSession, run_status: str, expected: BackfillStatus
+) -> None:
+    """The F1 → F2 upgrade must only persist on the branch that really queues a run."""
+    actor = await actors.make_actor(db_session)
+    audio, _attempt, transcript = await actors.make_class_with_transcript(
+        db_session, actor, required_stages=["index"]
+    )
+    db_session.add(
+        ProcessingRun(
+            user_id=actor.user_id,
+            audio_id=audio.id,
+            stage="analyze",
+            transcript_version=transcript.version,
+            config_version=RUN_CONFIG_VERSION,
+            status=run_status,
+        )
+    )
+    await db_session.flush()
+    audio_id = audio.id
+
+    report = await backfill_classes(db_session, user_id=actor.user_id, apply=True)
+
+    assert report.counts[expected] == 1
+    assert await _analysis_events(db_session, user_id=actor.user_id, audio_id=audio_id) == []
+    # The script's `session_scope()` commits after the pass: the committed row must still
+    # prove that no upgrade happened when no run/event was written.
+    await db_session.commit()
+    stages = await db_session.scalar(
+        select(Audio.required_stages).where(Audio.id == audio_id)
+    )
+    assert stages == ["index"]
+
+
+async def test_apply_does_not_promote_f1_on_unknown_run_state(
+    db_session: AsyncSession,
+) -> None:
+    actor = await actors.make_actor(db_session)
+    audio, _attempt, transcript = await actors.make_class_with_transcript(
+        db_session, actor, required_stages=["index"]
+    )
+    # The API CHECK forbids writing corrupt run states; dropping it inside this test
+    # transaction simulates the drift the backfill must fail closed on and is rolled back
+    # with the rest of the test.
+    await db_session.execute(
+        text("ALTER TABLE processing_runs DROP CONSTRAINT ck_processing_runs_status")
+    )
+    db_session.add(
+        ProcessingRun(
+            user_id=actor.user_id,
+            audio_id=audio.id,
+            stage="analyze",
+            transcript_version=transcript.version,
+            config_version=RUN_CONFIG_VERSION,
+            status="paused",
+        )
+    )
+    await db_session.flush()
+    audio_id = audio.id
+
+    report = await backfill_classes(db_session, user_id=actor.user_id, apply=True)
+
+    assert report.counts[BackfillStatus.UNKNOWN_RUN_STATE] == 1
+    assert await _analysis_events(db_session, user_id=actor.user_id, audio_id=audio_id) == []
+    await db_session.commit()
+    stages = await db_session.scalar(
+        select(Audio.required_stages).where(Audio.id == audio_id)
+    )
+    assert stages == ["index"]
 
 
 async def test_detail_shows_the_explicit_queue_state(

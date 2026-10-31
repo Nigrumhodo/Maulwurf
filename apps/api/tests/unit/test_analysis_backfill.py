@@ -15,6 +15,7 @@ from app.services.analysis_backfill import (
     BackfillStatus,
     analysis_backfill_available,
     analysis_required,
+    classify_existing_run,
     with_analysis_stage,
 )
 
@@ -55,6 +56,37 @@ def test_analysis_backfill_available_fails_closed(
             attempt_status=attempt_status,
             cleanup_status=cleanup_status,
             analyze_state=analyze_state,
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("analysis_already_required", "existing_status", "expected"),
+    [
+        # F1 without an analysis run is the only case that may queue (and only on apply).
+        (False, None, None),
+        # F2 without a run already owes analysis; retry is its entry point, not the backfill.
+        (True, None, BackfillStatus.ALREADY_F2_NO_RUN),
+        (False, "succeeded", BackfillStatus.ALREADY_ANALYZED),
+        (True, "succeeded", BackfillStatus.ALREADY_ANALYZED),
+        (False, "pending", BackfillStatus.ALREADY_QUEUED),
+        (False, "running", BackfillStatus.ALREADY_QUEUED),
+        (False, "failed", None),
+        (False, "cancelled", None),
+        (True, "failed", None),
+        # Corrupt data fails closed instead of widening the decision.
+        (False, "paused", BackfillStatus.UNKNOWN_RUN_STATE),
+        (True, "paused", BackfillStatus.UNKNOWN_RUN_STATE),
+    ],
+)
+def test_classify_existing_run_decides_before_any_write(
+    analysis_already_required: bool, existing_status: str | None, expected: BackfillStatus | None
+) -> None:
+    assert (
+        classify_existing_run(
+            analysis_already_required=analysis_already_required,
+            existing_status=existing_status,
         )
         is expected
     )
