@@ -224,9 +224,9 @@ a test gRPC server.
 - [ ] Task/agenda dashboard without duplicating the linked event; reading tools and
   `propose_task`, never direct writing. Time conflict distinct from per-day deadline
   concentration.
-- [ ] Completing/dismissing cancels future reminders; the event is kept unless explicitly
-  deleted. Remote deletion operations survive local purging without losing authorization or
-  the IDs needed.
+- [ ] Completing/dismissing cancels future reminders, increments `tasks.version` so a stale
+  Calendar job is discarded, and keeps the event unless explicitly deleted. Remote deletion
+  operations survive local purging without losing authorization or the IDs needed.
 
 **Exit:** E2E with a Google test account: proposal → review → confirmation → one event;
 reading and confirmed editing. Evidence of no writes before confirmation. Tests for

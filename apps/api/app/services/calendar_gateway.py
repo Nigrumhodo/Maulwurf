@@ -1,8 +1,10 @@
-"""Google Calendar adapter for the idempotent task-event sync (J3.4).
+"""Google Calendar adapter for the idempotent task-event sync (J3.4, J3.6).
 
 Wraps `GoogleCalendarService` so the orchestrator sees "event or None" instead of the
 service's typed `NotFound` error, and never lists or deletes events. A 401 triggers one
-token refresh through the injected callback before the operation is retried.
+token refresh through the injected callback before the operation is retried. Every PATCH
+requires an `If-Match` ETag (J3.6), so an event edited in Google is never overwritten by a
+stale write; an unconditional call is rejected instead of sent.
 """
 
 from collections.abc import Awaitable, Callable, Mapping
@@ -55,8 +57,22 @@ class GoogleCalendarGateway:
             return None
 
     async def update_event(
-        self, calendar_id: str, event_id: str, body: Mapping[str, Any]
+        self,
+        calendar_id: str,
+        event_id: str,
+        body: Mapping[str, Any],
+        *,
+        if_match: str,
     ) -> Mapping[str, Any]:
+        """Patch an event under `If-Match`; a write without an ETag is never issued.
+
+        The precondition covers edits made after the ETag was read: Google answers 412 and
+        the caller decides, instead of the stale body silently replacing the remote edit.
+        Detecting an edit made *before* that read requires the caller's persisted baseline.
+        """
+        if not if_match.strip():
+            # Fail closed: the gateway never issues an unconditional PATCH.
+            raise ValueError("update_event requires a non-empty If-Match ETag")
         payload = dict(body)
         if "description" not in payload:
             # PATCH keeps what is not sent; an empty string clears a removed detail.
@@ -66,6 +82,7 @@ class GoogleCalendarGateway:
             f"/calendars/{_calendar(calendar_id)}/events/{quote(event_id, safe='')}",
             params={"sendUpdates": "none"},
             json=payload,
+            headers={"If-Match": if_match},
         )
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
