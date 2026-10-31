@@ -148,6 +148,35 @@ def _rls_state(url: str) -> dict[str, tuple[bool, bool]]:
     return asyncio.run(read())
 
 
+def _alembic_version_privileges(url: str, role: str) -> dict[str, bool]:
+    """Privileges of a runtime role on `alembic_version`, from the real catalog."""
+
+    async def read() -> dict[str, bool]:
+        engine = create_async_engine(url)
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT "
+                        "has_table_privilege(:role, 'public.alembic_version', 'SELECT'), "
+                        "has_table_privilege(:role, 'public.alembic_version', 'INSERT'), "
+                        "has_table_privilege(:role, 'public.alembic_version', 'UPDATE'), "
+                        "has_table_privilege(:role, 'public.alembic_version', 'DELETE')"
+                    ),
+                    {"role": role},
+                )
+            ).one()
+        await engine.dispose()
+        return {
+            privilege: bool(granted)
+            for privilege, granted in zip(
+                ("select", "insert", "update", "delete"), row, strict=True
+            )
+        }
+
+    return asyncio.run(read())
+
+
 def _processing_run_fencing_token(url: str) -> tuple[str, str, str] | None:
     """Tipo, nulabilidad y default de `processing_runs.fencing_token` (None si no existe)."""
 
@@ -261,11 +290,32 @@ def test_rls_revision_round_trips(empty_schema: str) -> None:
 
     command.upgrade(cfg, "head")
     assert _rls_state(empty_schema) == {"subjects": (True, True), "users": (True, True)}
+    # 0005 grants the runtime roles the data tables, not Alembic's bookkeeping table:
+    # SELECT stays for diagnostics, every write is revoked.
+    assert _alembic_version_privileges(empty_schema, "maulwurf_app") == {
+        "select": True,
+        "insert": False,
+        "update": False,
+        "delete": False,
+    }
 
     command.downgrade(cfg, "0004")
     assert _rls_state(empty_schema) == {"subjects": (False, False), "users": (False, False)}
+    # The downgrade revokes every grant (the roles themselves stay cluster-wide).
+    assert _alembic_version_privileges(empty_schema, "maulwurf_app") == {
+        "select": False,
+        "insert": False,
+        "update": False,
+        "delete": False,
+    }
 
     command.upgrade(cfg, "head")
+    assert _alembic_version_privileges(empty_schema, "maulwurf_app") == {
+        "select": True,
+        "insert": False,
+        "update": False,
+        "delete": False,
+    }
 
 
 def test_run_fencing_revision_round_trips(empty_schema: str) -> None:

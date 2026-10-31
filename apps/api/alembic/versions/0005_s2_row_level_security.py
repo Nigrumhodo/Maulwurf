@@ -24,6 +24,11 @@ The roles are cluster-wide and are intentionally not dropped on ``downgrade``: o
 databases of the same cluster may reference them. Downgrading removes every policy,
 disables RLS and revokes this database's grants.
 
+The blanket grant on every public table also covered ``alembic_version``; the migration
+revokes its write privileges from the runtime roles (SELECT stays for diagnostics) so a
+compromised runtime cannot rewrite the recorded schema revision. ``downgrade`` already
+revokes every table grant.
+
 Revision ID: 0005
 Revises: 0004
 Create Date: 2026-10-31
@@ -214,6 +219,13 @@ def _grant_privileges() -> None:
     tables = ", ".join(_quote(table) for table in INGEST_TABLES)
     op.execute(f"GRANT USAGE ON SCHEMA public TO {roles}, {ingest}")
     op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {roles}")
+    # Why: `alembic_version` is migration bookkeeping. A runtime role that can rewrite it
+    # could make the recorded revision diverge from the real schema. Keep SELECT for
+    # health/diagnostics; revoke only the write privileges granted by the blanket grant.
+    op.execute(
+        f"REVOKE INSERT, UPDATE, DELETE ON TABLE {_quote('alembic_version')} "
+        f"FROM {roles}, {ingest}"
+    )
     op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {tables} TO {ingest}")
     # Future S3/S4 tables created by the migration role get runtime grants; each of
     # those migrations must still add its own policies (A2.17 only covers today's tables).

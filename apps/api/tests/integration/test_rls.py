@@ -13,6 +13,7 @@ Covered:
 - a query without ``app.user_id`` fails closed;
 - ``SET LOCAL`` does not survive the transaction and a pooled connection does not leak it;
 - ``FORCE`` also restricts the table owner;
+- the runtime roles cannot rewrite ``alembic_version`` (write grants are revoked);
 - the bootstrap policies let login/session resolution run before the tenant is known.
 """
 import hashlib
@@ -179,6 +180,13 @@ async def test_every_tenant_table_has_forced_rls_and_a_policy(
     assert "auth_session_lookup" in by_table_policies["sessions"]
     assert {"auth_user_lookup", "auth_user_insert"} <= by_table_policies["users"]
     assert "ingest_attempt_queue" in by_table_policies["ingestion_attempts"]
+    ingest_queue_roles: set[str] = set()
+    for row in policies:
+        if str(row.policyname) == "ingest_attempt_queue":
+            ingest_queue_roles = {str(role) for role in row.roles}
+    # ADR-0006 records this cross-tenant queue policy as an explicit accepted risk; the
+    # catalog locks it to the ingest role instead of silently widening app/jobs.
+    assert ingest_queue_roles == {INGEST_ROLE}
     for table in JOBS_TABLES:
         assert "jobs_cross_tenant" in by_table_policies.get(table, set()), table
         assert "jobs_tenant" in by_table_policies.get(table, set()), table
@@ -189,6 +197,56 @@ async def test_every_tenant_table_has_forced_rls_and_a_policy(
         assert not row.rolsuper, f"{role} is a superuser"
         assert not row.rolbypassrls, f"{role} has BYPASSRLS"
         assert not row.rolcanlogin, f"{role} can log in"
+
+
+async def test_runtime_roles_cannot_write_the_alembic_version(
+    migrated_database_url: str,
+) -> None:
+    """`alembic_version` is migration bookkeeping, never runtime data.
+
+    The blanket grant on every public table also covered it. A runtime role able to rewrite
+    the recorded revision could hide that the real schema diverged, so 0005 revokes
+    INSERT/UPDATE/DELETE and keeps SELECT for diagnostics.
+    """
+    engine = create_async_engine(migrated_database_url, poolclass=NullPool)
+    try:
+        async with engine.connect() as connection:
+            rows = (
+                await connection.execute(
+                    text(
+                        "SELECT r.rolname, "
+                        "has_table_privilege(r.rolname, 'public.alembic_version', "
+                        "'SELECT') AS can_select, "
+                        "has_table_privilege(r.rolname, 'public.alembic_version', "
+                        "'INSERT') AS can_insert, "
+                        "has_table_privilege(r.rolname, 'public.alembic_version', "
+                        "'UPDATE') AS can_update, "
+                        "has_table_privilege(r.rolname, 'public.alembic_version', "
+                        "'DELETE') AS can_delete "
+                        "FROM pg_roles r WHERE r.rolname = ANY(:roles) "
+                        "ORDER BY r.rolname"
+                    ),
+                    {"roles": list(RUNTIME_ROLES)},
+                )
+            ).all()
+    finally:
+        await engine.dispose()
+
+    by_role = {str(row.rolname): row for row in rows}
+    assert set(by_role) == set(RUNTIME_ROLES)
+    # The API may read the revision (health/diagnostics); no runtime role may change it.
+    assert by_role[APP_ROLE].can_select is True
+    for role in RUNTIME_ROLES:
+        row = by_role[role]
+        assert not row.can_insert, f"{role} can INSERT into alembic_version"
+        assert not row.can_update, f"{role} can UPDATE alembic_version"
+        assert not row.can_delete, f"{role} can DELETE rows of alembic_version"
+
+    # Catalog flags and the real privilege must agree: a write is rejected by PostgreSQL.
+    async with _role_connection(migrated_database_url, role=APP_ROLE) as connection:
+        with pytest.raises(DBAPIError) as excinfo:
+            await connection.execute(text("UPDATE alembic_version SET version_num = 'forged'"))
+    assert "permission denied" in str(excinfo.value.orig).lower()
 
 
 async def test_app_role_filters_without_the_application_filter(
