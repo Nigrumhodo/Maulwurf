@@ -41,3 +41,9 @@ $ git diff --stat origin/develop...HEAD
 
 $ git diff --stat origin/develop...HEAD -- apps/web
 (no output: apps/web is untouched)
+
+# Quality CI (GitHub Actions, PR #129)
+
+Run 41216857305 (head 955d1e6): all 16 checks green, including python-static (api),
+python-unit (api), integration (api), python-unit (ingest), integration (ingest), docs,
+web, build-images and e2e-smoke.
