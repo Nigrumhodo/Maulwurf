@@ -45,12 +45,17 @@ _SECRET_FIELDS = (
     "embedding_api_key",
     "llm_api_key",
 )
-# Outside `local`, a forgotten variable must fail at startup. 32 bytes matches the AES-GCM
-# key size used by `crypto.py` and the ingest credential floor (ADR-0008).
-SECRET_MIN_BYTES = 32
+# Policy floor for secrets we generate. HKDF in `crypto.py` derives the AES-256 key, so this
+# is not an AES-GCM requirement. Provider-issued keys are excluded below: their length and
+# format belong to the provider (a 24-character Google client secret is valid).
+BOUNDARY_SECRET_MIN_BYTES = 32
 # These three guard different boundaries (sessions, encrypted data, OAuth state); reusing
 # one value would let a leak in one boundary compromise the others.
-_DISTINCT_SECRET_FIELDS = ("secret_key", "encryption_key", "oauth_state_secret")
+_BOUNDARY_SECRET_FIELDS = ("secret_key", "encryption_key", "oauth_state_secret")
+# One gateway key may serve embeddings and chat; the Google OAuth client secret is a
+# different trust domain and must not alias either gateway key.
+_GATEWAY_SECRET_FIELDS = ("embedding_api_key", "llm_api_key")
+_PROVIDER_SECRET_FIELDS = ("google_client_secret", *_GATEWAY_SECRET_FIELDS)
 # Pinned by `embeddings.vector vector(1536)` in migration 0002 (M6). Changing it requires a
 # migration and a whole new index generation, so startup validates it instead of silently
 # accepting a model with another dimension.
@@ -272,21 +277,61 @@ class Settings(BaseSettings):
             value: SecretStr | None = getattr(self, name)
             if value is None:
                 continue
-            raw = value.get_secret_value().strip()
-            if not raw:
+            # Validate exactly what the runtime uses: a newline injected by a secret file is
+            # an explicit error, not something `.strip()` should hide.
+            raw = value.get_secret_value()
+            if not raw.strip():
                 raise ValueError(f"{name} vacío en env={self.env}")
+            if raw != raw.strip():
+                raise ValueError(
+                    f"{name} tiene espacios o saltos de línea alrededor en env={self.env}"
+                )
             if "change-me" in raw:
                 raise ValueError(f"{name} inseguro en env={self.env}")
-            if len(raw.encode("utf-8")) < SECRET_MIN_BYTES:
+            # Length is our policy only for the secrets we generate, not for provider keys.
+            if (
+                name in _BOUNDARY_SECRET_FIELDS
+                and len(raw.encode("utf-8")) < BOUNDARY_SECRET_MIN_BYTES
+            ):
                 raise ValueError(
-                    f"{name} debe tener al menos {SECRET_MIN_BYTES} bytes en env={self.env}"
+                    f"{name} debe tener al menos {BOUNDARY_SECRET_MIN_BYTES} bytes "
+                    f"en env={self.env}"
                 )
             secret_values[name] = raw
-        distinct = {secret_values[name] for name in _DISTINCT_SECRET_FIELDS}
-        if len(distinct) != len(_DISTINCT_SECRET_FIELDS):
+        missing = [name for name in _BOUNDARY_SECRET_FIELDS if name not in secret_values]
+        if missing:
+            raise ValueError(
+                f"faltan secretos de frontera: {', '.join(missing)} en env={self.env}"
+            )
+        boundary = {secret_values[name] for name in _BOUNDARY_SECRET_FIELDS}
+        if len(boundary) != len(_BOUNDARY_SECRET_FIELDS):
             raise ValueError(
                 "secret_key, encryption_key y oauth_state_secret deben ser distintos "
                 f"en env={self.env}"
+            )
+        for name in _PROVIDER_SECRET_FIELDS:
+            provider_value = secret_values.get(name)
+            if provider_value is not None and provider_value in boundary:
+                raise ValueError(
+                    f"{name} reutiliza secret_key, encryption_key u "
+                    f"oauth_state_secret en env={self.env}"
+                )
+        google_secret = secret_values.get("google_client_secret")
+        gateway = {
+            secret_values[name] for name in _GATEWAY_SECRET_FIELDS if name in secret_values
+        }
+        if google_secret is not None and google_secret in gateway:
+            raise ValueError(
+                "google_client_secret no puede reutilizar embedding_api_key ni "
+                f"llm_api_key en env={self.env}"
+            )
+        ingest_secret = self.ingest_credential_secret
+        if (
+            ingest_secret is not None
+            and ingest_secret.get_secret_value() in secret_values.values()
+        ):
+            raise ValueError(
+                f"ingest_credential_secret reutiliza otro secreto en env={self.env}"
             )
         if self.public_origin.scheme != "https":
             raise ValueError(f"public_origin debe usar https en env={self.env}")
