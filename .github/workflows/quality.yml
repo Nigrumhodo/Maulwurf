@@ -234,6 +234,14 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 scripts/ci/check_compose_ingest_env.py
 
+  # C-S2-JF-13 (J2.10): the Caddy edge limits must stay present and above the API limit.
+  caddy-limits:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/ci/check_caddy_limits.py
+
   # C-S2-JL-13 (L2.11): fail when a backticked repository path does not exist.
   docs:
     runs-on: ubuntu-latest

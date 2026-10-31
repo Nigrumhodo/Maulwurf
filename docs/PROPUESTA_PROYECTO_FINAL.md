@@ -135,7 +135,7 @@ API, the transcription, or the user interface.
 | Language models | Pool of LLMs from free inference providers | RAG chat and structured extraction |
 | Embeddings | Configurable model, subject to future changes | Vector representation of chunks |
 | Integrations | Google OAuth, Google Calendar API, and Gmail API | Authentication, scheduling, and notifications |
-| Infrastructure | ARM server, own domain, Cloudflare Tunnel (`cloudflared`), and Cloudflare bot protection | Deployment, secure access, and service protection |
+| Infrastructure | ARM server, own domain, and Caddy as the only public ingress (TLS termination; ADR-0010). No Cloudflare Tunnel or CDN in front | Deployment and secure access; the edge enforces the upload ceiling and timeouts |
 
 The architecture will be designed so that providers can be swapped through adapters, but
 any model or provider change must be validated with quality, capacity, privacy, and

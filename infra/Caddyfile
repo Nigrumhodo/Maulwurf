@@ -1,8 +1,26 @@
 # J1.3 — Caddy TLS local, mismo origen para web/api/ingest.
 # Reglas: streaming puro en uploads (sin buffers a disco), sin caché, sin
 # captura de bodies en logs, flush inmediato en SSE y sin admin API publicada.
+#
+# J2.10 / ADR-0010: Caddy is the only public ingress (no Cloudflare Tunnel and no
+# HTTP proxy or CDN in front). The values below are the edge envelope; the contract
+# limit stays the one published by GET /ingestion/capabilities and enforced by the
+# API. Keep the upload ceiling above that limit so the API answers with its
+# structured `payload_too_large` envelope instead of Caddy's plain 413.
 {
 	admin off
+
+	# J2.10: no total write deadline (0) because `/audios/*/progress` is SSE and a
+	# finite write timeout would cut long classes. read_body covers the provisional
+	# 15-minute upload window with margin; read_header and idle stay bounded.
+	servers {
+		timeouts {
+			read_body 20m
+			read_header 30s
+			write 0
+			idle 5m
+		}
+	}
 }
 
 https://localhost {
@@ -14,6 +32,13 @@ https://localhost {
 		path /audios/*/content
 	}
 	handle @upload {
+		# J2.10: 220 MB > the provisional 200 MiB API limit (209715200 bytes). The
+		# margin lets the API return its 413 envelope; this ceiling only stops abusive
+		# bodies before they reach the application. Re-check it if D4 publishes a
+		# larger limit.
+		request_body {
+			max_size 220MB
+		}
 		reverse_proxy api:8000
 	}
 
@@ -35,6 +60,10 @@ https://localhost {
 	# 3) API JSON (M1/M2 y /readyz para el smoke I-S1-JF-01).
 	@api path /auth/* /me /me/* /subjects /subjects/* /integrations/* /audios /audios/* /ingestion/* /readyz
 	handle @api {
+		# J2.10: JSON bodies are small; this is an abuse guard, not a contract limit.
+		request_body {
+			max_size 10MB
+		}
 		reverse_proxy api:8000
 	}
 
