@@ -1174,7 +1174,12 @@ def mount_bounded_tmpfs(
 
 
 def unmount_and_remove(point: Path, *, umount_binary: str | None = None) -> tuple[bool, int]:
-    """Unmount a bounded tmpfs and remove its mount point. Returns ``(ok, entries)``."""
+    """Unmount a bounded tmpfs and remove its mount point. Returns ``(ok, entries)``.
+
+    ``ok`` follows the clean ``umount`` only: the lazy detach is best-effort cleanup and
+    never turns a failed unmount into success, so a dirty detach cannot be reported as
+    zero orphan temporaries.
+    """
     entries = directory_entries(point)
     resolved = umount_binary if umount_binary is not None else shutil.which("umount")
     if resolved is None:
@@ -1189,16 +1194,18 @@ def unmount_and_remove(point: Path, *, umount_binary: str | None = None) -> tupl
         )
     except (OSError, subprocess.TimeoutExpired):
         return False, entries
-    if completed.returncode != 0:
-        subprocess.run(  # noqa: S603 - fixed argv, no shell
-            [resolved, "-l", str(point)],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
+    unmounted = completed.returncode == 0
+    if not unmounted:
+        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+            subprocess.run(  # noqa: S603 - fixed argv, no shell
+                [resolved, "-l", str(point)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
     shutil.rmtree(point, ignore_errors=True)
-    return not point.exists(), entries
+    return unmounted and not point.exists(), entries
 
 
 _ISOLATION_ARGV = (
@@ -1559,9 +1566,9 @@ def run_load(
                 )
 
         if full_point is not None:
-            _, full_mount_entries = unmount_and_remove(full_point)
-            full_mount_removed = not full_point.exists()
-            mounted.remove(full_point)
+            full_mount_removed, full_mount_entries = unmount_and_remove(full_point)
+            if full_mount_removed:
+                mounted.remove(full_point)
 
         scoped = audio_absence.sweep(
             extra_roots=[root],
