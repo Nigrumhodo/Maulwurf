@@ -6,12 +6,14 @@ reservation**. The harness is [`scripts/load/g1_load.py`](../../scripts/load/g1_
 the raw capture is
 [`docs/sprints/artifacts/S4.3/g1-load.txt`](../sprints/artifacts/S4.3/g1-load.txt).
 
-> **Status: measured locally on 2026-10-31; G1 load checks pass.** The run used a synthetic
-> tone generated in RAM, no Riva channel, no provider key, no PostgreSQL/Redis and no real
-> class audio. The strict verdict is green because the sandbox could mount a bounded private
-> tmpfs (`CAP_SYS_ADMIN`); the injected-ENOSPC fallback is also demonstrated and labelled.
-> This does not approve 200 MiB or 3 h, does not close G1 by itself, and does not replace the
-> container/reference-environment sweep.
+> **Status: measured locally on the development machine on 2026-10-31; the G1 load checks
+> pass in that environment.** The run used a synthetic tone generated in RAM, no Riva
+> channel, no provider key, no PostgreSQL/Redis and no real class audio. The strict
+> `g1_verified` is green because this sandbox could mount a bounded private tmpfs
+> (`CAP_SYS_ADMIN`); the injected-ENOSPC fallback is also demonstrated and labelled.
+> **This local evidence is not the formal G1 verdict:** that verdict requires the hardened
+> reference environment (the ingest container with a single UID, tmpfs only and `tini` as
+> PID 1). This does not approve 200 MiB or 3 h and does not close G1 by itself.
 
 ## Scope
 
@@ -120,6 +122,20 @@ check was failing closed on a harmless race. The fix skips `Z`/`X` in
 `cleanup.open_descriptors_under`; the regression test is
 `test_a_zombie_is_not_an_unreadable_process` and the pre-fix capture is preserved in the
 artifact. A non-zombie process that cannot be inspected (another UID) still fails closed.
+
+## Review fix 1 — unmount evidence
+
+`unmount_and_remove` used to ignore the exit code of the clean `umount`, run `umount -l` and
+return `not point.exists()`. A failed clean unmount followed by a successful lazy detach was
+therefore reported as `full_mount_removed=true`, which weakened the zero-orphan guarantee
+the report relies on. The result now follows the clean `umount` only
+(`unmounted and not point.exists()`); the lazy detach is best-effort cleanup whose exit code
+never turns a failure into success, and a mount that fails to detach stays in the harness
+cleanup list for one retry. Regressions:
+`test_a_failed_unmount_is_not_masked_by_a_successful_lazy_attempt` (a fake `umount` that
+exits 1 for the clean detach and 0 for `-l` yields `ok=false`) and
+`test_clean_unmount_reports_success`. The harness file is 21 unit cases plus the `load`
+case.
 
 ## Limits and what is not verified
 
