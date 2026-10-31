@@ -35,7 +35,7 @@ full-suite number recorded here is the last clean run.
 == python3 scripts/docs/check_refs.py (repo root)
 OK: 767 documented repository paths exist or are expected.
 
-== GitHub Actions Quality CI (run 41226912792, head 0088401, PR #132)
+== GitHub Actions Quality CI (run 41226912792, code head 0088401; run 41227199150, docs head b71e3af; PR #132)
 All 17 checks green: python-static (api/ingest), python-unit (api) 1182 passed,
 python-unit (ingest) 192 passed (6 skipped), integration (api) 452 passed (includes the
 6 I-S3-JF-04 cases), integration (ingest) 58 passed (11 skipped), web, build-images,
