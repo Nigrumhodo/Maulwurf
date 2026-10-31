@@ -23,7 +23,7 @@ from app.core.config import settings
 from app.core.db import get_session
 from app.main import app
 from app.models import ProcessingRun
-from app.services.runs import RUN_CONFIG_VERSION
+from app.services.runs import INDEX_CONFIG_VERSION
 from tests.integration import actors
 
 pytestmark = pytest.mark.integration
@@ -98,7 +98,7 @@ async def test_detail_reports_per_stage_aggregate_attempt_and_exports(
             audio_id=audio.id,
             stage="index",
             transcript_version=1,
-            config_version=RUN_CONFIG_VERSION,
+            config_version=INDEX_CONFIG_VERSION,
             status="succeeded",
         )
     )

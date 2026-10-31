@@ -23,7 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Chunk, Embedding, IndexGeneration, MessageSource, ProcessingRun
 from app.services.index_job import LEASE, STAGE_INDEX, index_version_for
 from app.services.indexing import INDEX_BUILDING, INDEX_RETIRED
-from app.services.runs import RUN_CONFIG_VERSION
 
 RETIRED_GENERATIONS_KEPT: Final = 1
 
@@ -40,7 +39,6 @@ async def live_index_versions(db: AsyncSession, *, now: datetime) -> set[Generat
                 ProcessingRun.transcript_version,
             ).where(
                 ProcessingRun.stage == STAGE_INDEX,
-                ProcessingRun.config_version == RUN_CONFIG_VERSION,
                 ProcessingRun.status == "running",
                 ProcessingRun.started_at >= now - LEASE,
             )

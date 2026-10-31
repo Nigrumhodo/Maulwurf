@@ -44,7 +44,7 @@ from app.models import (
 from app.services.index_job import index_version_for
 from app.services.outbox import Outcome
 from app.services.reconciliation import close_expired_run
-from app.services.runs import RUN_CONFIG_VERSION
+from app.services.runs import INDEX_CONFIG_VERSION
 from app.workers.dispatcher import dispatch_pending
 from app.workers.index_job import MAX_TRIES, PROVIDERS_KEY, SESSIONS_KEY, index
 from app.workers.reconciler import outbox_job_keys, reconcile_once
@@ -126,7 +126,7 @@ def _run(
         audio_id=audio.id,
         stage="index",
         transcript_version=1,
-        config_version=RUN_CONFIG_VERSION,
+        config_version=INDEX_CONFIG_VERSION,
         status=status,
         started_at=started_at,
         attempt_count=attempt_count,

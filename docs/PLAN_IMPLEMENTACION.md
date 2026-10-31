@@ -199,6 +199,10 @@ a test gRPC server.
 - [ ] Windowed analysis, Pydantic schema, aggregation/dedupe, and atomic active review.
   Extraction based on class date/timezone; Unicode spans per segment and literal evidence
   checking.
+- [ ] Versioned analysis runs: each `processing_runs` row records the transcript,
+  configuration and prompt version it applied; a version change creates a new run while
+  old runs remain queryable, and reanalysis reprocesses only the stages whose version
+  changed.
 - [ ] New classes require independent analysis and index. Explicit backfill over text for F1
   classes; no re-upload. Analysis failure allows chat if the index is valid, and vice versa
   for task review.

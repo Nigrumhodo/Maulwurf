@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Audio, IndexGeneration, ProcessingRun, Transcript, User
 from app.services.indexing import INDEX_ACTIVE, INDEX_RETIRED, activate_generation
-from app.services.runs import RUN_CONFIG_VERSION, latest_attempt
+from app.services.runs import INDEX_CONFIG_VERSION, latest_attempt
 
 STAGE_INDEX = "index"
 # Longer than the job timeout (`workers/index_job.py`), so a live job never looks expired.
@@ -133,7 +133,7 @@ async def claim_run(
             audio_id=audio_id,
             stage=STAGE_INDEX,
             transcript_version=transcript_version,
-            config_version=RUN_CONFIG_VERSION,
+            config_version=INDEX_CONFIG_VERSION,
             status="pending",
         )
         # Columns, not the constraint name: that name is truncated by PostgreSQL (see runs.py).
@@ -149,7 +149,7 @@ async def claim_run(
                 ProcessingRun.audio_id == audio_id,
                 ProcessingRun.stage == STAGE_INDEX,
                 ProcessingRun.transcript_version == transcript_version,
-                ProcessingRun.config_version == RUN_CONFIG_VERSION,
+                ProcessingRun.config_version == INDEX_CONFIG_VERSION,
             )
             .with_for_update()
         )

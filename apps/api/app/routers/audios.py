@@ -76,9 +76,11 @@ from app.services.audios import (
 from app.services.exports import render_srt, render_txt, srt_exportable
 from app.services.ingest_sink import get_reception_sink
 from app.services.runs import (
+    RunHistoryEntry,
     ensure_reupload_allowed,
     open_reupload,
     request_retry,
+    run_history,
 )
 from app.services.tenant import get_owned
 from app.services.uploads import (
@@ -277,6 +279,27 @@ class AudioDetailOut(BaseModel):
     exports: ExportsOut
 
 
+class ProcessingRunOut(BaseModel):
+    """One durable run of the class (S3.4); versions are not secrets."""
+
+    id: str
+    stage: Literal["index", "analyze"]
+    transcript_version: int
+    config_version: str
+    prompt_version: str | None
+    status: Literal["pending", "running", "succeeded", "failed", "cancelled"]
+    attempt_count: int
+    error_code: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime
+    current: bool
+
+
+class ProcessingRunsOut(BaseModel):
+    items: list[ProcessingRunOut]
+
+
 def _subject_out(ref: library.SubjectRef) -> SubjectRefOut:
     return SubjectRefOut(id=str(ref.id), name=ref.name, color=ref.color)
 
@@ -335,6 +358,23 @@ def _detail_out(detail: library.AudioDetail) -> AudioDetailOut:
             else None
         ),
         exports=ExportsOut(txt=detail.transcript is not None, srt=detail.srt_exportable),
+    )
+
+
+def _run_out(entry: RunHistoryEntry) -> ProcessingRunOut:
+    return ProcessingRunOut(
+        id=str(entry.id),
+        stage=entry.stage,
+        transcript_version=entry.transcript_version,
+        config_version=entry.config_version,
+        prompt_version=entry.prompt_version,
+        status=entry.status,
+        attempt_count=entry.attempt_count,
+        error_code=entry.error_code,
+        started_at=entry.started_at,
+        finished_at=entry.finished_at,
+        created_at=entry.created_at,
+        current=entry.current,
     )
 
 
@@ -739,6 +779,36 @@ async def get_audio(
     audio = await _owned_live_audio(db, session.user_id, audio_id)
     detail = await library.get_audio_detail(db, user_id=session.user_id, audio=audio)
     return _detail_out(detail)
+
+
+@router.get(
+    "/audios/{audio_id}/runs",
+    responses={
+        200: {"description": "Historial durable de runs, más recientes primero"},
+        401: {"description": "Sin sesión (auth_required)"},
+        404: {"description": "Audio inexistente, ajeno o tombstoneado (not_found)"},
+    },
+)
+async def audio_runs(
+    audio_id: uuid.UUID,
+    response: Response,
+    session: CurrentSession,
+    db: DbSession,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> ProcessingRunsOut:
+    """S3.4: every run with the transcript/config/prompt version it applied.
+
+    Version bumps create new rows instead of overwriting the previous one, so this ledger
+    answers «which result came from which prompt/config»; `current` marks the run of the
+    active transcript and current versions. Tenant scoping is enforced by the ownership
+    lookup and by the query filter (ADR-0006).
+    """
+    response.headers["Cache-Control"] = "no-store"
+    audio = await _owned_live_audio(db, session.user_id, audio_id)
+    entries = await run_history(
+        db, user_id=session.user_id, audio=audio, limit=limit
+    )
+    return ProcessingRunsOut(items=[_run_out(entry) for entry in entries])
 
 
 @router.get(
