@@ -6,10 +6,10 @@ uv run ruff check .
   All checks passed!
 
 uv run mypy .
-  Success: no issues found in 195 source files
+  Success: no issues found in 198 source files
 
 uv run pytest tests/unit -q
-  With the sandbox proxy environment as-is: 2 failed, 987 passed.
+  With the sandbox proxy environment as-is: 2 failed, 992 passed.
   The two failures are unrelated to J3.2 and reproduce in untouched modules:
     tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured
     tests/unit/test_llm.py::test_shared_http_client_is_bounded_reused_and_closed
@@ -23,7 +23,7 @@ uv run pytest tests/unit -q
         -u https_proxy -u HTTPS_PROXY \
         NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 \
         uv run pytest tests/unit -q
-  Result: 989 passed, 35 warnings in 10.91s
+  Result: 994 passed, 35 warnings in 17.08s
 
 J3.2-specific suite:
   uv run pytest tests/unit/test_google_calendar.py -q
