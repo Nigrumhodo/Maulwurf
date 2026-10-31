@@ -112,6 +112,58 @@ def test_short_or_reused_secrets_remain_usable_in_local() -> None:
     assert settings.env == "local"
 
 
+@pytest.mark.parametrize(
+    ("field", "context"),
+    [
+        ("google_client_secret", {"google_client_id": "client-id"}),
+        (
+            "embedding_api_key",
+            {"embedding_base_url": "https://api.openai.com/v1"},
+        ),
+        (
+            "llm_api_key",
+            {
+                "llm_base_url": "https://api.openai.com/v1",
+                "llm_model_window": 128_000,
+            },
+        ),
+    ],
+)
+def test_short_provider_secret_is_accepted_outside_local(
+    field: str, context: dict[str, Any]
+) -> None:
+    # Provider-issued keys keep the provider format; our 32-byte policy is only for the
+    # boundary secrets we generate.
+    assert _prod(**{**context, field: "short-provider-key"}).env == "prod"
+
+
+def test_provider_key_aliasing_a_boundary_secret_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="proveedor"):
+        _prod(
+            llm_base_url="https://api.openai.com/v1",
+            llm_api_key=SECRETS["secret_key"],
+            llm_model_window=128_000,
+        )
+
+
+def test_provider_keys_may_alias_each_other() -> None:
+    shared = "one-gateway-key-0123456789abcdef"
+    settings = _prod(
+        embedding_base_url="https://api.openai.com/v1",
+        embedding_api_key=shared,
+        llm_base_url="https://api.openai.com/v1",
+        llm_api_key=shared,
+        llm_model_window=128_000,
+    )
+
+    assert settings.env == "prod"
+
+
+def test_surrounding_whitespace_in_a_secret_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="espacios"):
+        _prod(secret_key=" " + "k" * 32)
+
+
 def test_public_origin_requires_https_outside_local() -> None:
     with pytest.raises(ValidationError, match="https"):
         _settings(env="staging", **{**PROD_URLS, "public_origin": "http://maulwurf.example"})
