@@ -1,4 +1,4 @@
-"""U-S3-SG-03: sin offsets del ASR, evidencia textual y cero minutos inventados (S3.3/M4).
+"""U-S3-SG-03: no ASR offsets — textual evidence and zero invented minutes (S3.3/M4).
 
 The evidence layer must resolve the same non-temporal identity the analysis produces —
 segment, Unicode span and verbatim quote — when `timestamp_precision=none` or when a stored
