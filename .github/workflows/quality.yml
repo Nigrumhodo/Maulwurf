@@ -233,13 +233,15 @@ jobs:
   e2e-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    env:
-      E2E_TLS_DIR: ${{ runner.temp }}/e2e-tls
     defaults:
       run:
         working-directory: infra
     steps:
       - uses: actions/checkout@v4
+      # `runner.temp` is not available in a job-level env; persist it for the next steps.
+      - name: Point the smoke at ephemeral TLS material
+        working-directory: ${{ github.workspace }}
+        run: echo "E2E_TLS_DIR=$RUNNER_TEMP/e2e-tls" >> "$GITHUB_ENV"
       # Standard library only: a broken fixture fails in seconds, before compose starts.
       - name: Verify the smoke helpers
         working-directory: ${{ github.workspace }}
