@@ -196,6 +196,28 @@ services:
 The `P-*` (provider) and `load` suites do not run on MRs; they require a protected
 account and budget, and are run separately.
 
+## 6.1 E2E smoke (E-S2-JF-06, J2.6)
+
+The MR smoke runs the whole S2 pipeline against compose with deterministic local doubles
+for Riva, embeddings and the LLM: upload → transcript → verified cleanup → index → question
+with a validated citation. It uses synthetic audio generated in RAM and fixed non-secret CI
+placeholders; no NVIDIA, LLM or Google credential is involved. Details and limitations:
+[scripts/e2e/README.md](../scripts/e2e/README.md).
+
+```bash
+# From the repository root: the override defaults E2E_TLS_DIR to ../.e2e-tls.
+bash scripts/e2e/gen_riva_tls.sh .e2e-tls
+cd infra
+docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
+  up -d --build --wait postgres redis e2e-provider e2e-asr ingest worker scheduler api
+docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
+  exec -T api python - < ../scripts/e2e/smoke_pipeline.py
+docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v
+```
+
+The doubles are not provider-contract evidence and D3-Texto stays open; the smoke only
+indexes its synthetic fixture.
+
 ## 7. Shutting down and cleaning up
 
 ```bash
