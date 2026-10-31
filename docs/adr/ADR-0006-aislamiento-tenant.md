@@ -1,6 +1,7 @@
 # ADR-0006 — Tenant isolation in S1
 
 - Date (UTC): 2026-09-27
+- Updated (UTC): 2026-10-31 (A2.17 implementation and explicit accepted risk)
 - Status: Accepted (merged in #24 with review; A1.5)
 - Ticket: A1.5 (verified by A1.9)
 - Related: [../ESPECIFICACION.md](../ESPECIFICACION.md) §6,

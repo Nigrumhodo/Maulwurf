@@ -578,6 +578,7 @@ async def test_commit_emits_with_the_tenant_already_bound(
 
     event.listen(engine.sync_engine, "commit", _record_committed_tenant)
     factory = async_sessionmaker(engine, expire_on_commit=False)
+    teardown_tenants: list[uuid.UUID | None] = []
 
     async def override() -> AsyncIterator[AsyncSession]:
         async with factory() as session:
@@ -586,6 +587,10 @@ async def test_commit_emits_with_the_tenant_already_bound(
             except Exception:
                 await session.rollback()
                 raise
+            finally:
+                # The dependency teardown must run in the same asyncio context as session
+                # resolution, or the ContextVar (and any later transaction) loses the tenant.
+                teardown_tenants.append(db._current_user.get())
 
     app.dependency_overrides[get_session] = override
     try:
@@ -609,6 +614,7 @@ async def test_commit_emits_with_the_tenant_already_bound(
 
     assert response.status_code == 201
     assert committed_tenants == [str(user_id)]
+    assert teardown_tenants == [user_id]
 
 
 async def test_app_role_bootstraps_a_login_and_then_binds_the_new_user(
