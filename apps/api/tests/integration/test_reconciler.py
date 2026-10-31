@@ -75,7 +75,13 @@ async def _class(db: AsyncSession) -> tuple[Actor, Audio, Transcript]:
 
 
 def _event(
-    actor: Actor, audio: Audio, *, status: str, published_at: datetime | None
+    actor: Actor,
+    audio: Audio,
+    *,
+    status: str,
+    published_at: datetime | None,
+    attempts: int = 0,
+    max_attempts: int = 3,
 ) -> OutboxEvent:
     return OutboxEvent(
         user_id=actor.user_id,
@@ -86,6 +92,8 @@ def _event(
         enabled=True,
         status=status,
         published_at=published_at,
+        attempts=attempts,
+        max_attempts=max_attempts,
     )
 
 
@@ -96,6 +104,7 @@ def _run(
     status: str,
     started_at: datetime | None,
     attempt_count: int = 1,
+    error_code: str | None = None,
 ) -> ProcessingRun:
     return ProcessingRun(
         user_id=actor.user_id,
@@ -106,6 +115,7 @@ def _run(
         status=status,
         started_at=started_at,
         attempt_count=attempt_count,
+        error_code=error_code,
     )
 
 
@@ -132,6 +142,79 @@ async def test_lost_dispatch_is_republished_once(
     jobs = await _queued_index_jobs(pool, queue)
     assert [job.args for job in jobs] == [(str(audio.id), 1)]
     assert jobs[0].job_id == f"outbox:{event.id}"
+
+
+async def test_lost_dispatch_at_the_attempt_limit_is_left_alone(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    # A delivery that legitimately no-ops (D3-Text open) creates no run. The attempt bound
+    # must stop the reconciler from republishing it forever.
+    pool, queue = redis
+    now = datetime.now(UTC)
+    actor, audio, _transcript = await _class(db_session)
+    event = _event(
+        actor,
+        audio,
+        status="dispatched",
+        published_at=now - timedelta(hours=2),
+        attempts=3,
+        max_attempts=3,
+    )
+    db_session.add(event)
+    await db_session.flush()
+
+    report = await reconcile_once(_sessions(db_session), pool, queue_name=queue, now=now)
+
+    assert report["lost_dispatches"] == 0
+    assert event.status == "dispatched"
+    assert await _queued_index_jobs(pool, queue) == []
+
+
+async def test_failed_lease_expired_dispatch_is_republished(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    # If the recovery job is lost after the run was closed, the outbox must regenerate it.
+    pool, queue = redis
+    now = datetime.now(UTC)
+    actor, audio, _transcript = await _class(db_session)
+    event = _event(actor, audio, status="dispatched", published_at=now - timedelta(hours=2))
+    run = _run(
+        actor,
+        audio,
+        status="failed",
+        started_at=now - timedelta(hours=2),
+        error_code="lease_expired",
+    )
+    db_session.add_all([event, run])
+    await db_session.flush()
+
+    report = await reconcile_once(_sessions(db_session), pool, queue_name=queue, now=now)
+
+    assert report["lost_dispatches"] == 1
+    assert event.status == "pending" and event.published_at is None
+
+
+async def test_failed_permanent_dispatch_is_left_alone(
+    db_session: AsyncSession, redis: tuple[ArqRedis, str]
+) -> None:
+    pool, queue = redis
+    now = datetime.now(UTC)
+    actor, audio, _transcript = await _class(db_session)
+    event = _event(actor, audio, status="dispatched", published_at=now - timedelta(hours=2))
+    run = _run(
+        actor,
+        audio,
+        status="failed",
+        started_at=now - timedelta(hours=2),
+        error_code="provider_error",
+    )
+    db_session.add_all([event, run])
+    await db_session.flush()
+
+    report = await reconcile_once(_sessions(db_session), pool, queue_name=queue, now=now)
+
+    assert report["lost_dispatches"] == 0
+    assert event.status == "dispatched"
 
 
 @pytest.mark.parametrize("key_prefix", ["queued", "in-progress", "result"])
