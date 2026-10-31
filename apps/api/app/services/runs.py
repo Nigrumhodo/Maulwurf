@@ -43,6 +43,7 @@ from app.core.errors import ApiError, validation_failed
 from app.models import Audio, IngestionAttempt, OutboxEvent, ProcessingRun, Transcript
 from app.models.ingestion import ACTIVE_INGESTION_STATES
 from app.services import state_machine
+from app.services.analysis_windows import DEFAULT_OVERLAP_TOKENS, DEFAULT_TARGET_TOKENS
 from app.services.audios import UNASSIGNED_OWNER
 
 INDEX_STAGE = "index"
@@ -80,14 +81,17 @@ class RunSpec:
 
 
 def analysis_config_version(prompt_version: str = ANALYSIS_PROMPT_VERSION) -> str:
-    """Config version of the analysis stage for one prompt version.
+    """Config version of the analysis stage for one prompt/window configuration.
 
-    A prompt bump changes this string, so `ensure_stage_run` creates a new run instead of
-    reusing the row of a previous prompt.
+    A prompt or window-configuration change changes this string, so `ensure_stage_run`
+    creates a new run instead of reusing results produced under another configuration.
     """
     if not prompt_version.strip():
         raise ValueError("prompt_version must not be empty")
-    return f"analyze-v1:prompt={prompt_version}"
+    return (
+        f"analyze-v1:prompt={prompt_version}"
+        f":window={DEFAULT_TARGET_TOKENS}/{DEFAULT_OVERLAP_TOKENS}"
+    )
 
 
 ANALYSIS_CONFIG_VERSION = analysis_config_version()

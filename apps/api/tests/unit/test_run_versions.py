@@ -36,7 +36,8 @@ def test_analysis_run_spec_records_the_prompt_version_inside_the_config_key() ->
 
 def test_prompt_bump_changes_the_analysis_run_key() -> None:
     assert analysis_config_version("v2") != analysis_config_version("v1")
-    assert analysis_config_version("v2").endswith("prompt=v2")
+    assert "prompt=v2" in analysis_config_version("v2")
+    assert "window=" in analysis_config_version("v2")
 
 
 @pytest.mark.parametrize("prompt_version", ["", " "])
