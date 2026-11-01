@@ -63,9 +63,6 @@ DAYS_PER_WEEK: Final = 7
 # M8 daily content: today's pending items plus what is due tomorrow.
 DAILY_WINDOW_DAYS: Final = 2
 WEEKLY_WINDOW_DAYS: Final = 7
-# Bounded insert chunk: one tick must not build an unbounded multi-row statement.
-MATERIALIZE_BATCH: Final = 500
-
 # `gmail_opt_in` is part of the schedule gate; `Notification` remains the delivery audit.
 OPT_IN_REQUIRED = "gmail_not_opted_in"
 
@@ -404,22 +401,21 @@ async def _cancel_stale_digests(
     return max(int(cast(CursorResult[Any], result).rowcount or 0), 0)
 
 
-async def _write_occurrences(
-    db: AsyncSession, rows: list[dict[str, Any]]
-) -> int:
-    """Upsert digest occurrences in bounded chunks; return how many rows were written."""
-    written = 0
-    for start in range(0, len(rows), MATERIALIZE_BATCH):
-        chunk = rows[start : start + MATERIALIZE_BATCH]
-        statement = pg_insert(Notification).values(chunk)
-        upsert = statement.on_conflict_do_update(
-            constraint="uq_notifications_dedupe_key",
-            set_=_rearmed_values(statement),
-            where=Notification.status.in_(("pending", "cancelled")),
-        )
-        result = await db.execute(upsert)
-        written += max(int(cast(CursorResult[Any], result).rowcount or 0), 0)
-    return written
+async def _write_occurrences(db: AsyncSession, rows: list[dict[str, Any]]) -> int:
+    """Upsert this user's digest occurrences; the canonical key is the conflict target.
+
+    A pending row keeps its identity and gets the recomputed ``scheduled_at``; a
+    ``cancelled`` row is reopened. ``sending``/``sent``/``failed``/``delivery_unknown``
+    never match the WHERE and keep their delivery history.
+    """
+    statement = pg_insert(Notification).values(rows)
+    upsert = statement.on_conflict_do_update(
+        constraint="uq_notifications_dedupe_key",
+        set_=_rearmed_values(statement),
+        where=Notification.status.in_(("pending", "cancelled")),
+    )
+    result = await db.execute(upsert)
+    return max(int(cast(CursorResult[Any], result).rowcount or 0), 0)
 
 
 async def materialize_due_digests(

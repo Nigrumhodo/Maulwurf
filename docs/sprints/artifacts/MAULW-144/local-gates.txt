@@ -84,7 +84,7 @@ Full API integration suite (same sanitized proxy):
 
 ```text
 $ uv run pytest tests/integration -q
-798 passed, 833 warnings in 154.27s
+798 passed, 833 warnings in 160.65s
 ```
 
 ## apps/ingest regression
@@ -108,7 +108,7 @@ other ingest unit cases are unaffected by this API-only change.
 
 ```text
 $ python3 scripts/docs/check_refs.py
-OK: 973 documented repository paths exist or are expected.
+OK: 974 documented repository paths exist or are expected.
 ```
 
 ## Scope
