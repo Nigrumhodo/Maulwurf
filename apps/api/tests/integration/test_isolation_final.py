@@ -110,6 +110,22 @@ async def client(
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+async def search_quota_cleanup(redis: tuple[Any, str]) -> AsyncIterator[None]:
+    """Remove the per-user search counters this module creates.
+
+    The Redis policy sweep expects only catalogued `arq:`/`mw:` keys. The quota key is not
+    part of that catalog, so the integration run must not leak it into the next module.
+    """
+    client, _queue = redis
+    try:
+        yield
+    finally:
+        keys = [key async for key in client.scan_iter(match="search:quota:*")]
+        if keys:
+            await client.delete(*keys)
+
+
 @dataclass(frozen=True)
 class SeededClass:
     subject_id: uuid.UUID
@@ -531,7 +547,10 @@ async def test_library_subject_and_audio_channels_never_serve_another_tenant(
 
 
 async def test_search_and_chat_channels_never_serve_another_tenant(
-    client: AsyncClient, db_session: AsyncSession, provider: FakeEmbeddingProvider
+    client: AsyncClient,
+    db_session: AsyncSession,
+    provider: FakeEmbeddingProvider,
+    search_quota_cleanup: None,
 ) -> None:
     alice, bob = await actors.make_actor(db_session), await actors.make_actor(db_session)
     a = await _seed_full_class(db_session, alice)
