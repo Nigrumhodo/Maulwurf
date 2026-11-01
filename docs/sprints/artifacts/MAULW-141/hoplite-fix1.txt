@@ -98,3 +98,10 @@ OK: 959 documented repository paths exist or are expected.
 
 Contract notes updated in `docs/ESPECIFICACION.md` (M8 anti-spam), `docs/PLAN_IMPLEMENTACION.md`,
 `docs/DISENO_BD_API_SPRINTS.md` §2.9 and `docs/plan/S4.md` (J4.3/A4.3 status).
+
+## Quality CI
+
+Run `41304408483` (head `7e4d777`, code + this evidence) is green in all 17 PR checks,
+including `python-static (api)`, `python-unit (api)`, `integration (api)`,
+`integration (ingest)`, `e2e-smoke`, `docs`, `web` and `secret-scan`. Base:
+`develop@2d4bc2d`; the PR reports `MERGEABLE` / `CLEAN`.
