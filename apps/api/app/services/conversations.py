@@ -135,10 +135,14 @@ async def create_conversation(
 ) -> Conversation:
     """Create a conversation whose subject/class belongs to the same tenant."""
     mode, subject_id, audio_id = validate_scope(mode, subject_id, audio_id)
-    if subject_id is not None and await get_active(db, user_id, subject_id) is None:
-        raise not_found()
+    # Lock the scope row so a concurrent subject/class deletion either commits before this
+    # check (404) or waits for the conversation, never leaving a live conversation that
+    # points at a tombstoned resource.
+    if subject_id is not None:
+        if await get_active(db, user_id, subject_id, for_update=True) is None:
+            raise not_found()
     if audio_id is not None:
-        audio = await get_owned(db, Audio, user_id, audio_id)
+        audio = await get_owned(db, Audio, user_id, audio_id, lock="share")
         if audio is None or audio.deleted_at is not None:
             raise not_found()
     conversation = Conversation(
