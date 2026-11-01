@@ -402,8 +402,17 @@ ratio, warning and exhausted series appear only when the matching
 dependency-free check for a cron or an operator shell:
 
 ```bash
+# API running standalone on the host:
 python scripts/ops/budget_check.py --url http://127.0.0.1:8000/internal/metrics
+
+# API from the compose stack (the service only exposes its port internally):
+cd infra
+docker compose exec -T api python - < ../scripts/ops/budget_check.py
 ```
+
+From a private-network host that resolves the service name, pass
+`--url http://api:8000/internal/metrics`. The full operator procedure is
+[`runbooks/budget-alerts.md`](runbooks/budget-alerts.md) §3.2.
 
 The Prometheus rules and scrape example are in
 [`infra/alerting/`](../infra/alerting/README.md); the local eight-service stack does not run

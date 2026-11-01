@@ -7,9 +7,15 @@ redacted line per provider and exits non-zero when a configured cap needs attent
 
 Usage::
 
-    python scripts/ops/budget_check.py
+    # Local compose: the API publishes no host port, so run the script inside the
+    # container, feeding it from the host checkout over stdin.
+    cd infra
+    docker compose exec -T api python - < ../scripts/ops/budget_check.py
+
+    # From a host on the private network that resolves the service name:
     python scripts/ops/budget_check.py --url http://api:8000/internal/metrics
-    python scripts/ops/budget_check.py --require-configured --format json
+    python scripts/ops/budget_check.py --url http://api:8000/internal/metrics \
+        --require-configured --format json
 
 Exit codes:
 

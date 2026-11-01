@@ -62,11 +62,33 @@ token, prompt, transcript or user identifier.
 
 ### 3.2 With the dependency-free checker
 
-From a checkout on the private network:
+The checker talks to `/internal/metrics`, but the compose stack publishes no API port: the
+`api` service declares only `expose: ["8000"]` and Caddy answers `404` to `/internal/*`.
+Run it inside the running `api` container, feeding the host checkout's script over stdin
+(`scripts/` is not copied into the image):
+
+```bash
+cd infra
+docker compose exec -T api python - < ../scripts/ops/budget_check.py
+
+# The same route with the strict and JSON options:
+docker compose exec -T api python - --require-configured --format json \
+  < ../scripts/ops/budget_check.py
+```
+
+The script's default URL (`http://127.0.0.1:8000/internal/metrics`) is the loopback address
+inside that container. The command exits with the checker's code (`0`/`1`/`2`) or `3` when
+the endpoint or its text cannot be read.
+
+Only on a host that resolves the private service name (for example the J4.7 Prometheus host)
+can the script run directly:
 
 ```bash
 python scripts/ops/budget_check.py --url http://api:8000/internal/metrics
 ```
+
+Do not use that direct form from a laptop against the local stack: nothing on the host
+publishes API port 8000, so the checker would exit `3`.
 
 Expected output (values are examples):
 

@@ -69,5 +69,12 @@ Interpretation:
 - Values are synthetic and the caps are drill values, not an approved budget. No provider
   was called.
 
+Compose execution path (NOT RUN here): `docs/runbooks/budget-alerts.md` §3.2 runs the
+checker inside the running `api` container because the service declares only
+`expose: ["8000"]` (no host port) and Caddy answers 404 to `/internal/*`. The drill above
+started the API directly on the host, so it exercised the same script and endpoint but not
+the compose `exec` route. This sandbox has no Docker daemon; the route is derived from
+`infra/docker-compose.yml` and `infra/Caddyfile`, not executed here.
+
 Reference-environment step (NOT RUN): real Prometheus/Alertmanager scrape, real billing
 account and an approved cap. J4.7 (reference deployment) is absent.

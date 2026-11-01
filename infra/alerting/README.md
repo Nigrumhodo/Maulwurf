@@ -76,9 +76,20 @@ manual Calendar reads and token refreshes are not durably recorded.
 `scripts/ops/budget_check.py` reads the same endpoint and exits non-zero on warning or
 exhaustion. It is suitable for a cron, a systemd timer or a Uptime Kuma push check:
 
+On the local compose stack the API publishes no host port, so run the checker inside the
+running `api` container (the default URL then points at that container's loopback):
+
+```bash
+cd infra
+docker compose exec -T api python - < ../scripts/ops/budget_check.py
+docker compose exec -T api python - --require-configured --format json \
+  < ../scripts/ops/budget_check.py
+```
+
+From a private-network host that resolves `api` (the J4.7 Prometheus host), run it directly:
+
 ```bash
 python scripts/ops/budget_check.py --url http://api:8000/internal/metrics
-python scripts/ops/budget_check.py --require-configured --format json
 ```
 
 ## Verification
