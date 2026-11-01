@@ -15,7 +15,8 @@ a mutable "last notification" per task. The frozen shape is DISENO §2.9 / ESPEC
   lower-snake-case token so a provider payload, an address or a message body can never be
   persisted by accident (`services.notifications` maps an unknown value to `unknown`).
 - Dedupe is persistent and lives in the database. `dedupe_key` is the canonical rendering of
-  `(user_id, type, task_id, due_version, occurrence)` and has its own UNIQUE constraint; the
+  `(user_id, type, task_id, due_version, occurrence)` — plus `|n:<seq>` for a manual
+  repetition — and has its own UNIQUE constraint; the
   natural tuple keeps the frozen `UNIQUE NULLS NOT DISTINCT` rule, so a repeated occurrence
   cannot be inserted even if a caller formatted the text differently. Digests and test sends
   have no task, which is why the tuple uses NULLS NOT DISTINCT rather than the default

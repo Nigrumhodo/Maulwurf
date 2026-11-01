@@ -70,7 +70,11 @@ class NotificationPreferencesPatch(BaseModel):
     @field_validator("digest_daily_time")
     @classmethod
     def _minute_precision(cls, value: time | None) -> time | None:
-        if value is not None and (value.second or value.microsecond):
+        if value is None:
+            return None
+        if value.tzinfo is not None:
+            raise ValueError("la hora del digest es local y no admite zona horaria")
+        if value.second or value.microsecond:
             raise ValueError("la hora del digest usa precisión de minutos (HH:MM)")
         return value
 
@@ -131,6 +135,7 @@ class NotificationWarningOut(BaseModel):
     message: str
 
 
-class NotificationActionOut(BaseModel):
-    notification: NotificationOut
+class NotificationWithWarningOut(NotificationOut):
+    """A manual action result: the audited occurrence plus its delivery warning."""
+
     warning: NotificationWarningOut

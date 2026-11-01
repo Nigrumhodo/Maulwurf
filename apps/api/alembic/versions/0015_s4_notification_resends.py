@@ -15,7 +15,9 @@ This revision adds `occurrence_seq`:
   manual rows can never collide while the automatic one still dedupes by construction.
 
 No table is recreated, no policy changes and no row is rewritten: existing rows default to
-`0`, which is exactly the A4.1 meaning they already had.
+`0`, which is exactly the A4.1 meaning they already had. Downgrade is only safe while no
+manual repetition exists: the old five-column key cannot represent two rows of the same
+occurrence, so a populated `occurrence_seq > 0` fails loudly instead of deleting audit data.
 
 Revision ID: 0015
 Revises: 0014

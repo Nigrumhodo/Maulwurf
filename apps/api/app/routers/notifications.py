@@ -31,12 +31,12 @@ from app.core.errors import (
 )
 from app.models import Notification, User
 from app.schemas.notifications import (
-    NotificationActionOut,
     NotificationListOut,
     NotificationOut,
     NotificationStatus,
     NotificationType,
     NotificationWarningOut,
+    NotificationWithWarningOut,
 )
 from app.services import notification_center
 from app.services.notifications import NotificationNotResendable
@@ -120,7 +120,7 @@ async def list_notifications(
 )
 async def send_test_notification(
     session: MutationSession, db: DbSession, response: Response
-) -> NotificationActionOut:
+) -> NotificationWithWarningOut:
     """Record the audited test occurrence; the recipient is always the verified email."""
     response.headers["Cache-Control"] = "no-store"
     user = await db.get(User, session.user_id)
@@ -134,8 +134,8 @@ async def send_test_notification(
     row = await notification_center.create_test_occurrence(db, user)
     out = _out(row)
     await db.commit()
-    return NotificationActionOut(
-        notification=out,
+    return NotificationWithWarningOut(
+        **out.model_dump(),
         warning=NotificationWarningOut(
             code="delivery_uncertain",
             message=(
@@ -164,7 +164,7 @@ async def resend_notification(
     session: MutationSession,
     db: DbSession,
     response: Response,
-) -> NotificationActionOut:
+) -> NotificationWithWarningOut:
     """Create a new audited occurrence after the duplicate risk is acknowledged."""
     response.headers["Cache-Control"] = "no-store"
     if not body.acknowledge_duplicate_risk:
@@ -179,8 +179,8 @@ async def resend_notification(
         raise not_found()
     out = _out(row)
     await db.commit()
-    return NotificationActionOut(
-        notification=out,
+    return NotificationWithWarningOut(
+        **out.model_dump(),
         warning=NotificationWarningOut(
             code="duplicate_risk_acknowledged",
             message=(

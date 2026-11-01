@@ -350,7 +350,7 @@ async def test_test_send_records_an_audited_pending_occurrence(
 
     assert response.status_code == 202
     body = response.json()
-    notification = body["notification"]
+    notification = body
     assert notification["type"] == "test"
     assert notification["status"] == "pending"
     assert notification["occurrence"] == today.isoformat()
@@ -384,7 +384,7 @@ async def test_a_second_test_send_is_a_new_audited_occurrence(
     second = await client.post(TEST_SEND, cookies=actor.cookies, headers=actor.headers)
 
     assert first.status_code == second.status_code == 202
-    one, two = first.json()["notification"], second.json()["notification"]
+    one, two = first.json(), second.json()
     assert one["id"] != two["id"]
     assert (one["occurrence_seq"], two["occurrence_seq"]) == (1, 2)
     assert await _count(db_session) == 2
@@ -396,7 +396,7 @@ async def test_the_controlled_pipeline_marks_a_test_send_sent(
     actor = await _verified_actor(db_session)
     await _opt_in(db_session, actor)
     created = await client.post(TEST_SEND, cookies=actor.cookies, headers=actor.headers)
-    notification_id = uuid.UUID(created.json()["notification"]["id"])
+    notification_id = uuid.UUID(created.json()["id"])
     stored = await db_session.get(Notification, notification_id)
     assert stored is not None
 
@@ -420,7 +420,7 @@ async def test_a_lost_response_is_delivery_unknown_and_is_never_retried(
     actor = await _verified_actor(db_session)
     await _opt_in(db_session, actor)
     created = await client.post(TEST_SEND, cookies=actor.cookies, headers=actor.headers)
-    notification_id = uuid.UUID(created.json()["notification"]["id"])
+    notification_id = uuid.UUID(created.json()["id"])
     stored = await db_session.get(Notification, notification_id)
     assert stored is not None
 
@@ -542,6 +542,17 @@ async def test_listing_filters_by_status_and_window(
         "delivery_unknown"
     }
 
+    both = await client.get(
+        NOTIFICATIONS,
+        params=[("status", "sent"), ("status", "delivery_unknown")],
+        cookies=actor.cookies,
+    )
+    assert both.status_code == 200
+    assert {item["status"] for item in both.json()["items"]} == {
+        "sent",
+        "delivery_unknown",
+    }
+
     window = await client.get(
         NOTIFICATIONS,
         params={
@@ -557,6 +568,44 @@ async def test_listing_filters_by_status_and_window(
         (NOW - timedelta(hours=3)) <= datetime.fromisoformat(item) < (NOW - timedelta(hours=1))
         for item in scheduled
     )
+
+
+async def test_listing_breaks_equal_scheduled_at_ties_by_id(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await _verified_actor(db_session)
+    seeded = []
+    for sequence in range(1, 4):
+        seeded.append(
+            await _store(
+                db_session,
+                _notification(
+                    actor,
+                    status="sent",
+                    scheduled_at=NOW,
+                    sequence=sequence,
+                    sent_at=NOW,
+                ),
+            )
+        )
+    seeded_ids = {str(row.id) for row in seeded}
+
+    seen: list[str] = []
+    cursor: str | None = None
+    while True:
+        params: dict[str, Any] = {"limit": 1}
+        if cursor is not None:
+            params["cursor"] = cursor
+        page = await client.get(NOTIFICATIONS, params=params, cookies=actor.cookies)
+        assert page.status_code == 200
+        body = page.json()
+        seen.extend(item["id"] for item in body["items"])
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+
+    assert len(seen) == len(set(seen)) == 3
+    assert set(seen) == seeded_ids
 
 
 @pytest.mark.parametrize(
@@ -663,7 +712,7 @@ async def test_resend_creates_a_new_audited_occurrence_and_keeps_the_original_in
 
     assert response.status_code == 202
     body = response.json()
-    created = body["notification"]
+    created = body
     assert created["id"] != str(original_id)
     assert created["status"] == "pending"
     assert created["occurrence_seq"] == 1
@@ -711,8 +760,8 @@ async def test_each_resend_gets_the_next_sequence(
     )
 
     assert first.status_code == second.status_code == 202
-    assert first.json()["notification"]["occurrence_seq"] == 1
-    assert second.json()["notification"]["occurrence_seq"] == 2
+    assert first.json()["occurrence_seq"] == 1
+    assert second.json()["occurrence_seq"] == 2
     assert await _count(db_session) == 3
 
 
@@ -771,7 +820,7 @@ async def test_resending_a_failed_delivery_is_allowed(
     )
 
     assert response.status_code == 202
-    assert response.json()["notification"]["status"] == "pending"
+    assert response.json()["status"] == "pending"
     await db_session.refresh(row)
     assert row.status == "failed"
     assert row.last_error_code == "provider_rejected"
@@ -802,7 +851,7 @@ async def test_resending_a_sent_delivery_is_allowed_with_the_duplicate_warning(
     )
 
     assert response.status_code == 202
-    assert response.json()["notification"]["occurrence_seq"] == 1
+    assert response.json()["occurrence_seq"] == 1
     await db_session.refresh(row)
     assert row.status == "sent"
     assert row.provider_message_id == "gmail-original"

@@ -10,18 +10,27 @@ No provider is called and no mail is sent from these values.
 """
 
 from datetime import time
+from typing import get_args
 
 import pytest
 from pydantic import ValidationError
 
+from app.models.notification import NOTIFICATION_STATUSES, NOTIFICATION_TYPES
 from app.schemas.notifications import (
     MAX_OFFSET_DAYS,
     MAX_OFFSET_HOURS,
     MAX_THRESHOLDS,
     NotificationPreferencesOut,
     NotificationPreferencesPatch,
+    NotificationStatus,
+    NotificationType,
     format_digest_time,
 )
+
+
+def test_the_api_literals_match_the_frozen_notification_vocabularies() -> None:
+    assert set(get_args(NotificationStatus)) == set(NOTIFICATION_STATUSES)
+    assert set(get_args(NotificationType)) == set(NOTIFICATION_TYPES)
 
 
 def test_a_partial_update_only_carries_the_fields_the_user_changed() -> None:
@@ -66,6 +75,11 @@ def test_a_digest_time_with_seconds_or_fractions_is_rejected() -> None:
         NotificationPreferencesPatch(digest_daily_time="07:30:15")
     with pytest.raises(ValidationError):
         NotificationPreferencesPatch(digest_daily_time="07:30:00.500")
+
+
+def test_the_digest_time_is_local_and_rejects_a_timezone() -> None:
+    with pytest.raises(ValidationError):
+        NotificationPreferencesPatch(digest_daily_time="07:30:00+00:00")
 
 
 @pytest.mark.parametrize("weekday", [-1, 7, 8])
