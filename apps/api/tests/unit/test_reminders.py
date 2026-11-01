@@ -24,6 +24,7 @@ from app.services.notifications import dedupe_key, scheduled_reminder_types
 from app.services.reminders import (
     DEFAULT_REMINDER_LOCAL_TIME,
     DEFAULT_REMINDER_PREFERENCES,
+    ReminderOccurrence,
     ReminderPreferences,
     ReminderScheduleError,
     ReminderTask,
@@ -64,7 +65,7 @@ def _all_day(**overrides: Any) -> ReminderTask:
     return _task(**values)
 
 
-def _rows(plan: tuple[Any, ...]) -> list[tuple[str, datetime, date]]:
+def _rows(plan: tuple[ReminderOccurrence, ...]) -> list[tuple[str, datetime, date]]:
     return [(row.type, row.scheduled_at, row.occurrence) for row in plan]
 
 
