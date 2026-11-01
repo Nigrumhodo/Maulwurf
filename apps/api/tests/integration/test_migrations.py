@@ -597,6 +597,44 @@ def test_notifications_revision_round_trips(empty_schema: str) -> None:
     command.upgrade(cfg, "head")
 
 
+def test_notification_manual_occurrences_revision_round_trips(empty_schema: str) -> None:
+    """A4.2: `0015` adds the audit sequence that makes manual repetitions insertable."""
+    cfg = alembic_config(empty_schema)
+    command.upgrade(cfg, "0014")
+    assert "occurrence_seq" not in _table_columns(empty_schema, "notifications")
+
+    command.upgrade(cfg, "head")
+    assert "occurrence_seq" in _table_columns(empty_schema, "notifications")
+
+    async def manual_key_shape() -> tuple[str, str]:
+        engine = create_async_engine(empty_schema)
+        async with engine.connect() as conn:
+            definition = await conn.scalar(
+                text(
+                    "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                    "WHERE conname = 'uq_notifications_occurrence'"
+                )
+            )
+            default = await conn.scalar(
+                text(
+                    "SELECT column_default FROM information_schema.columns "
+                    "WHERE table_name = 'notifications' AND column_name = 'occurrence_seq'"
+                )
+            )
+        await engine.dispose()
+        return str(definition), str(default)
+
+    definition, default = asyncio.run(manual_key_shape())
+    assert "(user_id, type, task_id, due_version, occurrence, occurrence_seq)" in definition
+    assert "NULLS NOT DISTINCT" in definition
+    assert default == "0"
+
+    command.downgrade(cfg, "0014")
+    assert "occurrence_seq" not in _table_columns(empty_schema, "notifications")
+
+    command.upgrade(cfg, "head")
+
+
 def test_calendar_task_link_revision_round_trips(empty_schema: str) -> None:
     """A3.8: the mirror gains its tenant-pinned task link and checks in `0013`."""
     cfg = alembic_config(empty_schema)
