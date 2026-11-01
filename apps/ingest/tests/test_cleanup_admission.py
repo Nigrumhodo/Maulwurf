@@ -26,11 +26,11 @@ from test_supervisor import (  # noqa: E402
     tmpfs_dir,
 )
 
-from maulwurf_ingest import admission, cleanup, lease, metrics, rls, supervisor
+from maulwurf_ingest import admission, cancel, cleanup, lease, metrics, reconciler, rls, supervisor
 from maulwurf_ingest.asr_job import ORIGINAL
 from maulwurf_ingest.prometheus_text import Sample
 from maulwurf_ingest.receiver import iter_bytes
-from maulwurf_ingest.reconciler import sweep_stranded
+from maulwurf_ingest.reconciler import ReconcileAction, ReconcileResult, sweep_stranded
 from maulwurf_ingest.supervisor import Outcome, run_attempt
 
 _ = (audio, tmpfs_dir)
@@ -116,6 +116,168 @@ def _cleanup_metric(samples: list[Sample]) -> float:
         ):
             return float(sample.value)
     return 0.0
+
+
+def _verified_evidence() -> cleanup.CleanupEvidence:
+    return cleanup.CleanupEvidence(
+        workdir_absent=True, tmp_is_tmpfs=True, live_processes=0,
+        open_descriptors=0, mounts_under_workdir=0, unreadable_processes=0,
+    )
+
+
+async def _reconcile_unrecorded(
+    monkeypatch: pytest.MonkeyPatch, *, cleanup_status: str, destroy: object,
+    record: object, workdir: Path,
+) -> tuple[ReconcileResult, ...]:
+    attempt_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    owned = lease.Lease(attempt_id, user_id, "ingest:test", 3, timedelta(seconds=30))
+
+    async def fake_fetch(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+        return [{"id": attempt_id, "user_id": user_id, "cleanup_status": cleanup_status}]
+
+    async def fake_reclaim(*_args: object, **_kwargs: object) -> lease.Lease:
+        return owned
+
+    monkeypatch.setattr(rls, "fetch", fake_fetch)
+    monkeypatch.setattr(lease, "reclaim_committed", fake_reclaim)
+    monkeypatch.setattr(reconciler, "local_workdirs", lambda *_args: [workdir])
+    monkeypatch.setattr(reconciler, "_destroy", destroy)
+    monkeypatch.setattr(lease, "record_cleanup", record)
+    return await reconciler.reconcile_committed(
+        _unused_pool(), instance="ingest:test", tmp_dir=str(workdir),
+    )
+
+
+async def test_reconciler_alerts_a_cleanup_exception_that_cannot_be_recorded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Hoplite fix3 1: a driver error must not leave the row pending with only a log."""
+
+    async def destroy_boom(*_args: object, **_kwargs: object) -> cleanup.CleanupEvidence:
+        raise OSError("rmtree")
+
+    async def record_boom(*_args: object, **_kwargs: object) -> bool:
+        raise OSError("record")
+
+    metrics.reset()
+    results = await _reconcile_unrecorded(
+        monkeypatch, cleanup_status="pending", destroy=destroy_boom,
+        record=record_boom, workdir=tmp_path,
+    )
+    samples = metrics.collect_samples(
+        tmp_dir=str(tmp_path), slots_in_use=0, slots_total=1, admission_open=True,
+    )
+
+    attempt_id = results[0].attempt_id
+    assert results == (ReconcileResult(attempt_id, ReconcileAction.CLEANUP_FAILED),)
+    assert admission.uploads_admitted() is True
+    assert admission.alerts() == (admission.Alert("cleanup_unrecorded", attempt_id),)
+    assert _cleanup_metric(list(samples)) == 1.0
+
+
+async def test_reconciler_alerts_unverified_evidence_that_cannot_be_recorded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Hoplite fix3 1: a False write on the evidence path is observable too."""
+
+    async def unverified(*_args: object, **_kwargs: object) -> cleanup.CleanupEvidence:
+        return _unverified_evidence()
+
+    async def record_false(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    metrics.reset()
+    results = await _reconcile_unrecorded(
+        monkeypatch, cleanup_status="pending", destroy=unverified,
+        record=record_false, workdir=tmp_path,
+    )
+    samples = metrics.collect_samples(
+        tmp_dir=str(tmp_path), slots_in_use=0, slots_total=1, admission_open=True,
+    )
+
+    attempt_id = results[0].attempt_id
+    assert results == (ReconcileResult(attempt_id, ReconcileAction.CLEANUP_FAILED),)
+    assert admission.uploads_admitted() is True
+    assert admission.alerts() == (admission.Alert("cleanup_unrecorded", attempt_id),)
+    assert _cleanup_metric(list(samples)) == 1.0
+
+
+async def test_reconciler_alerts_verified_evidence_that_cannot_be_recorded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Hoplite fix3 1: even verified evidence is not silent when the write fails."""
+
+    async def verified(*_args: object, **_kwargs: object) -> cleanup.CleanupEvidence:
+        return _verified_evidence()
+
+    async def record_false(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    metrics.reset()
+    results = await _reconcile_unrecorded(
+        monkeypatch, cleanup_status="pending", destroy=verified,
+        record=record_false, workdir=tmp_path,
+    )
+    samples = metrics.collect_samples(
+        tmp_dir=str(tmp_path), slots_in_use=0, slots_total=1, admission_open=True,
+    )
+
+    attempt_id = results[0].attempt_id
+    assert results == (ReconcileResult(attempt_id, ReconcileAction.LOST),)
+    assert admission.uploads_admitted() is True
+    assert admission.alerts() == (admission.Alert("cleanup_unrecorded", attempt_id),)
+    assert _cleanup_metric(list(samples)) == 1.0
+
+
+async def test_cancelled_cleanup_that_cannot_be_recorded_alerts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hoplite fix3 1: the cancelled path has the same explicit alert."""
+    owned = lease.Lease(uuid.uuid4(), uuid.uuid4(), "ingest:test", 3, timedelta(seconds=30))
+
+    async def record_false(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    monkeypatch.setattr(cancel, "record_cancelled_cleanup", record_false)
+    metrics.reset()
+    result = supervisor.RunResult(Outcome.CANCELLED)
+    await supervisor._note_cancelled_cleanup(
+        _unused_pool(), owned, owned.attempt_id, evidence=_verified_evidence(),
+        exc=None, result=result,
+    )
+
+    assert admission.uploads_admitted() is True
+    assert admission.alerts() == (admission.Alert("cleanup_unrecorded", owned.attempt_id),)
+
+
+async def test_a_malformed_failed_latch_keeps_admission_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hoplite fix3 3: an unusable ``id`` must fail closed, never reopen admission."""
+
+    async def malformed(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {"id": "not-a-uuid"}
+
+    monkeypatch.setattr(rls, "fetchrow", malformed)
+    await admission.restore_from_database(_unused_pool())
+
+    assert admission.uploads_admitted() is False
+
+
+def test_the_alert_buffer_is_bounded() -> None:
+    """Hoplite fix3 4: the observable buffer cannot grow with every affected attempt."""
+    assert admission.MAX_ALERTS > 0
+
+    first = uuid.uuid4()
+    admission.halt(first)
+    for _ in range(admission.MAX_ALERTS + 4):
+        admission.halt(uuid.uuid4())
+
+    assert len(admission.alerts()) == admission.MAX_ALERTS
+    assert admission.alerts()[-1].attempt_id != first
+    assert all(alert.code == "cleanup_failed" for alert in admission.alerts())
+
 
 
 async def test_unrecorded_unverified_evidence_alerts_without_closing_admission(

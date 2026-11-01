@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import asyncpg
@@ -34,6 +35,10 @@ import asyncpg
 from maulwurf_ingest import rls
 
 logger = logging.getLogger(__name__)
+
+# The alert buffer is observable state, not an audit log: it only keeps the most
+# recent attempts so a long-lived instance does not grow with every affected one.
+MAX_ALERTS = 256
 
 
 @dataclass(frozen=True)
@@ -44,7 +49,19 @@ class Alert:
 
 _halted = False
 _transient_closed = False
-_alerts: list[Alert] = []
+_alerts: OrderedDict[tuple[str, uuid.UUID], Alert] = OrderedDict()
+
+
+def _remember_alert(code: str, attempt_id: uuid.UUID) -> bool:
+    """Append one alert once; False when it was already recorded. Oldest is evicted."""
+    key = (code, attempt_id)
+    if key in _alerts:
+        return False
+    _alerts[key] = Alert(code, attempt_id)
+    if len(_alerts) > MAX_ALERTS:
+        _alerts.popitem(last=False)
+    return True
+
 
 
 def uploads_admitted() -> bool:
@@ -53,7 +70,7 @@ def uploads_admitted() -> bool:
 
 
 def alerts() -> tuple[Alert, ...]:
-    return tuple(_alerts)
+    return tuple(_alerts.values())
 
 
 def halt(attempt_id: uuid.UUID) -> None:
@@ -64,12 +81,8 @@ def halt(attempt_id: uuid.UUID) -> None:
     """
     global _halted
     _halted = True
-    if any(
-        alert.code == "cleanup_failed" and alert.attempt_id == attempt_id
-        for alert in _alerts
-    ):
+    if not _remember_alert("cleanup_failed", attempt_id):
         return
-    _alerts.append(Alert("cleanup_failed", attempt_id))
     logger.error("ingest.alert code=cleanup_failed attempt_id=%s", attempt_id)
 
 
@@ -83,13 +96,10 @@ def flag_unrecorded_cleanup(attempt_id: uuid.UUID) -> None:
     failure counter exposed by ``/internal/metrics``; the case no longer leaves only
     a warning. Idempotent per attempt and code.
     """
-    if any(
-        alert.code == "cleanup_unrecorded" and alert.attempt_id == attempt_id
-        for alert in _alerts
-    ):
+    if not _remember_alert("cleanup_unrecorded", attempt_id):
         return
-    _alerts.append(Alert("cleanup_unrecorded", attempt_id))
     logger.error("ingest.alert code=cleanup_unrecorded attempt_id=%s", attempt_id)
+
 
 
 def close() -> None:
@@ -129,10 +139,16 @@ async def restore_from_database(pool: asyncpg.Pool) -> None:
         logger.error("admission.restore_failed")
         close()
         return
-    if row is not None and isinstance(row["id"], uuid.UUID):
-        halt(row["id"])
+    if row is None:
+        reopen()
         return
-    reopen()
+    attempt_id = row["id"]
+    if not isinstance(attempt_id, uuid.UUID):
+        # A latch row we cannot identify is still a failed cleanup: fail closed.
+        logger.error("admission.restore_malformed")
+        close()
+        return
+    halt(attempt_id)
 
 
 def reset() -> None:

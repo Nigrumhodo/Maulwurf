@@ -494,7 +494,9 @@ async def _note_cancelled_cleanup(
     if not verified:
         cleanup.log_cleanup_failed(str(attempt_id), evidence, error_type=_error_name(exc))
         metrics.record_failure("cleanup", "verification_failed")
-    if recorded and not verified:
+    if not recorded:
+        _note_unrecorded_cleanup(attempt_id)
+    elif not verified:
         admission.halt(attempt_id)
     result.outcome = Outcome.CANCELLED
 

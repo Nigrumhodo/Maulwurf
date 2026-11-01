@@ -20,7 +20,7 @@ from pathlib import Path
 
 import asyncpg
 
-from maulwurf_ingest import admission, cleanup, persistence, rls
+from maulwurf_ingest import admission, cleanup, metrics, persistence, rls
 from maulwurf_ingest import lease as leases
 from maulwurf_ingest.cleanup import CleanupEvidence
 
@@ -132,6 +132,17 @@ async def _record_cleanup(
         return None
 
 
+def _note_unrecorded_cleanup(attempt_id: uuid.UUID) -> None:
+    """Make a cleanup this pass could not persist explicitly visible.
+
+    The row stays ``pending`` (no durable ``failed`` latch exists), so admission
+    stays open, but neither a driver error nor a moved fencing token may leave
+    only a log line: the alert and the failure metric are the observable record.
+    """
+    admission.flag_unrecorded_cleanup(attempt_id)
+    metrics.record_failure("cleanup", "cleanup_unrecorded")
+
+
 async def reconcile_committed(
     pool: asyncpg.Pool, *, instance: str, tmp_dir: str | None = None,
     lease_ttl: timedelta = DEFAULT_LEASE_TTL,
@@ -187,6 +198,8 @@ async def reconcile_committed(
                 )
                 if recorded:
                     admission.halt(attempt_id)
+                else:
+                    _note_unrecorded_cleanup(attempt_id)
                 results.append(ReconcileResult(attempt_id, ReconcileAction.CLEANUP_FAILED))
                 continue
             recorded = await _record_cleanup(
@@ -195,10 +208,13 @@ async def reconcile_committed(
             if not evidence.verified:
                 if recorded:
                     admission.halt(attempt_id)
+                else:
+                    _note_unrecorded_cleanup(attempt_id)
                 logger.error("reconciler.cleanup_failed attempt_id=%s", attempt_id)
                 results.append(ReconcileResult(attempt_id, ReconcileAction.CLEANUP_FAILED))
                 continue
             if not recorded:
+                _note_unrecorded_cleanup(attempt_id)
                 results.append(ReconcileResult(attempt_id, ReconcileAction.LOST))
                 continue
         results.append(ReconcileResult(attempt_id, await _enable(pool, lease)))
