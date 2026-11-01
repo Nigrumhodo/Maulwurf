@@ -92,5 +92,12 @@ belongs to that case's teardown. No migration or RLS file is changed by this bra
 
 ```text
 $ python3 scripts/docs/check_refs.py
-OK: 958 documented repository paths exist or are expected.
+OK: 959 documented repository paths exist or are expected.
 ```
+
+## Quality CI
+
+Run `41302436817` (head `95c7f1d`, the last code change) is green in all 17 PR checks,
+including `python-static (api)`, `python-unit (api)`, `integration (api)`,
+`integration (ingest)`, `e2e-smoke`, `docs` and `secret-scan`. Later commits are
+documentation only.
