@@ -848,7 +848,8 @@ CREATE TABLE calendar_events (
   event_id           text NOT NULL,              -- remote Google ID
   source             text NOT NULL CHECK (source IN ('google','maulwurf')),
   task_id            uuid,                       -- nullable: most events have no task
-  FOREIGN KEY (user_id, task_id) REFERENCES tasks (user_id, id),
+  FOREIGN KEY (user_id, task_id) REFERENCES tasks (user_id, id)
+    ON DELETE SET NULL (task_id),                -- class purge unlinks, keeps the event
   title              text NOT NULL,
   start_at           timestamptz,                -- pairs with end_at: events with time
   end_at             timestamptz,

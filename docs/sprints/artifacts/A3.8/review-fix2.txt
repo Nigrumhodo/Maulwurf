@@ -1,0 +1,157 @@
+# A3.8 (MAULW-106) — hoplite review fix2 evidence
+
+Captured: 2026-11-01 on branch `task/MAULW-106` (review fix on top of `e041055`).
+Host: Linux 7.0.0-39-generic x86_64 | Python 3.12.3 | uv 0.13.1 | PostgreSQL 16.15
+(`16.15-1.pgdg24.04+2`) | Redis 7.0.15. No Google/provider call, no audio upload, no
+credential and no secret are involved.
+
+This review closes the confirmed medium finding and the three low findings on `e041055`:
+
+1. **`E'\v'` is not a vertical tab in PostgreSQL.** In an escape string, `\v` is not a
+   recognized escape; it is the letter `v`. The previous
+   `btrim(value, E' \t\n\r\f\v')` therefore:
+   - treated `'v'` and `'vvv'` (valid base32hex Google event ids) as blank, so the CHECKs
+     rejected them and the `0013` cleanup would drop or reject them; and
+   - let a real vertical tab (`chr(11)`) pass every CHECK and survive the cleanup, contrary
+     to the documented "ASCII whitespace including vertical tabs" criterion.
+
+   Reproduced on PostgreSQL 16.15 before the fix:
+
+   ```
+   SELECT btrim(E'\v', E' \t\n\r\f\v') = '';    -- true (E'\v' is the letter v)
+   SELECT btrim(E'\x0b', E' \t\n\r\f\v') = '';  -- false (real VT not stripped)
+   SELECT encode(convert_to(E'\v', 'UTF8'), 'hex'); -- 76 = 'v'
+   ```
+
+   The helper now uses an explicit, escape-independent character set:
+   `btrim(value, E' \t\n\r\f' || chr(11)) = ''`. `chr(11)` is IMMUTABLE (`pg_proc`), so the
+   SQL function stays eligible for use in CHECKs. After the fix:
+
+   ```
+   SELECT btrim(E'\x0b', E' \t\n\r\f' || chr(11)) = ''; -- true
+   SELECT btrim('v', E' \t\n\r\f' || chr(11)) = '';     -- false
+   SELECT btrim(E'\u000b', E' \t\n\r\f' || chr(11)) = ''; -- true
+   ```
+
+   The `0013` module docstring, `_create_blank_helpers` docstring, `app/models/settings.py`
+   and `app/models/calendar_event.py` now describe the real criterion (space, tab, newline,
+   carriage return, form feed and vertical tab) and explain why `chr(11)` is used.
+
+2. **Python and database criteria agree on the vertical tab.** `parse_remote_event` uses
+   `str.strip()`, which already removes `\x0b`; the SQL helper now does the same. The ETag,
+   remote-status and event-id paths share the criterion, and the code notes that
+   `str.strip()` covers the SQL helper's ASCII set.
+
+3. **The `settings.py` docstring is correct.** It no longer claims that blank is plain
+   `btrim(value)` (which only strips spaces); it states the explicit ASCII whitespace set
+   and the exact SQL expression.
+
+4. **Regression tests.** `tests/unit/test_calendar_read.py` now covers a vertical-tab ETag,
+   status and event id, accepts `'v'`/`'vvv'` as non-blank identity/status/ETag, and asserts
+   that a padded event id is stored trimmed.
+   `tests/integration/test_calendar_settings_mirror.py` adds `chr(11)` (alone and padded) to
+   the blank rejection matrices for the settings columns and the mirror fields, plus two
+   positive cases proving that `'v'`/`'vvv'` are accepted and persisted in the write/read/
+   coverage calendars and in `calendar_id`/`event_id`/`remote_status`/`etag`.
+   `tests/integration/test_migrations.py`:
+   - the legacy round trip seeds an ETag made only of `\x0b` (becomes NULL) and an event
+     whose `calendar_id`/`event_id` are `'vvv'`/`'v'` (survives the upgrade and the CHECKs),
+     while `'v'` array elements are kept and a `chr(11)` array element is removed;
+   - the rejection matrix adds `chr(11)` for `calendar_id`, `event_id` and `remote_status`.
+
+5. **The event id is persisted exactly as validated.** `parse_remote_event` now assigns
+   `raw_id.strip()` to `event_id` and uses it for both the normal and the cancelled key, so
+   a padded remote id cannot create a second mirror row when Google later returns the
+   canonical id.
+
+## TDD: red before the change
+
+The new cases were executed against the pre-fix `0013`:
+
+```
+$ uv run pytest tests/integration/test_calendar_settings_mirror.py -q
+FAILED test_settings_accepts_calendar_ids_made_only_of_the_letter_v
+FAILED test_settings_rejects_blank_write_and_invalid_read_calendars
+FAILED test_mirror_rejects_blank_identity_and_remote_status
+FAILED test_mirror_accepts_identity_and_status_made_only_of_the_letter_v
+4 failed, 9 passed
+
+$ uv run pytest tests/integration/test_migrations.py -q -k calendar_task_link
+FAILED test_calendar_task_link_revision_normalizes_legacy_rows
+FAILED test_calendar_task_link_revision_rejects_blank_event_identity[calendar_id-\x0b]
+FAILED test_calendar_task_link_revision_rejects_blank_event_identity[event_id-\x0b]
+FAILED test_calendar_task_link_revision_rejects_blank_event_identity[remote_status-\x0b]
+4 failed, 7 passed, 1 error
+
+$ uv run pytest tests/unit/test_calendar_read.py -q
+FAILED test_a_padded_event_id_is_trimmed_before_storage
+1 failed, 42 passed
+```
+
+The failures are exactly the reported behaviors: `'v'` rejected as blank, `chr(11)`
+accepted, the legacy vertical-tab ETag kept, and the padded id stored with its padding.
+
+## Static gates
+
+```
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 251 source files
+```
+
+## Unit (no PostgreSQL)
+
+```
+$ NO_PROXY="localhost,127.0.0.1" no_proxy="localhost,127.0.0.1" uv run pytest tests/unit -q
+1382 passed, 35 warnings in 11.60s
+```
+
+The raw sandbox `NO_PROXY` still adds the two pre-existing bracketed-IPv6 `httpx` failures
+documented in the previous captures (`test_ingest_sink.py`, `test_llm.py`): 1380 passed +
+2 failed. Neither module is touched by this diff.
+
+## Integration against PostgreSQL 16.15 + Redis 7.0.15
+
+The two changed modules:
+
+```
+$ uv run pytest tests/integration/test_calendar_settings_mirror.py -q
+13 passed
+
+$ uv run pytest tests/integration/test_migrations.py -q -k calendar_task_link
+11 passed, 14 deselected
+```
+
+Targeted Calendar/migration/RLS/isolation modules:
+
+```
+$ NO_PROXY="localhost,127.0.0.1" no_proxy="localhost,127.0.0.1" uv run pytest \
+    tests/integration/test_calendar_settings_mirror.py \
+    tests/integration/test_calendar_read.py \
+    tests/integration/test_calendar_conflicts.py \
+    tests/integration/test_calendar_connect.py \
+    tests/integration/test_calendar_sync_job.py \
+    tests/integration/test_calendar_revision_patch.py \
+    tests/integration/test_migrations.py \
+    tests/integration/test_rls.py \
+    tests/integration/test_isolation.py \
+    tests/integration/test_delete_audio.py \
+    tests/integration/test_s3_tasks_schema.py -q
+255 passed, 248 warnings in 79.15s
+```
+
+Full API integration suite:
+
+```
+$ NO_PROXY="localhost,127.0.0.1" no_proxy="localhost,127.0.0.1" uv run pytest -m integration -q
+637 passed, 1383 deselected, 665 warnings in 175.37s
+```
+
+## Scope
+
+- `apps/api` only for code/tests; `docs/sprints/CLAIMS.md` and this artifact record the
+  evidence. `apps/web` and `apps/ingest` are untouched.
+- No endpoint, no provider call, no audio, no credential and no secret.
+- The PR stays open; nothing is merged.
