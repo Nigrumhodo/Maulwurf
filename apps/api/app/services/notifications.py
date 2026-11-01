@@ -11,7 +11,11 @@ words directly:
   error code for a delivery that is known not to have happened; ``delivery_unknown`` covers
   a lost response or an expired lease.
 - ``pending → cancelled`` removes an obsolete future occurrence (A4.3) and ``pending →
-  failed`` records a definitive local failure before any provider call.
+  failed`` records a definitive local failure before any provider call. A4.3's cancellation
+  core below decides *which* pending rows are obsolete: an older ``due_version`` of the
+  task, or a reminder/digest type no longer enabled by the preferences. ``sending`` (it may
+  already be leaving through Gmail) and every terminal state stay untouched, and a stale
+  occurrence whose instant already passed is cancelled instead of being delivered late.
 - ``sent``, ``failed``, ``delivery_unknown`` and ``cancelled`` are terminal and absorbing.
   In particular ``delivery_unknown`` never returns to ``pending`` or ``sending``: Gmail does
   not offer exactly-once delivery, so the system never retries it automatically. A manual
@@ -29,6 +33,7 @@ mapped to ``unknown`` before it reaches the database, whose CHECK also rejects f
 """
 
 import uuid
+from collections.abc import Iterable
 from datetime import date, datetime
 from typing import Final, Protocol
 
@@ -69,6 +74,28 @@ NOTIFICATION_ERROR_CODES: Final = (
 LEASE_EXPIRED = "lease_expired"
 RESPONSE_LOST = "response_lost"
 
+# A4.3: the frozen reminder vocabulary maps one type to one threshold. The preferences are
+# JSON arrays on `settings` (A4.1); only these offsets have a schedulable type, so a value
+# without a frozen type enables nothing instead of inventing a new `reminder_t*` spelling.
+TIMED_REMINDER_OFFSETS: Final[dict[str, int]] = {
+    "reminder_t48": 48,
+    "reminder_t24": 24,
+    "reminder_t2": 2,
+}
+ALLDAY_REMINDER_OFFSETS: Final[dict[str, int]] = {
+    "reminder_t3d": 3,
+    "reminder_t1d": 1,
+}
+# Types a preference change can disable. An explicit `test` send is an audited one-shot and
+# is deliberately absent: changing preferences must not cancel it.
+PREFERENCE_NOTIFICATION_TYPES: Final[frozenset[str]] = frozenset(
+    (
+        *TIMED_REMINDER_OFFSETS,
+        *ALLDAY_REMINDER_OFFSETS,
+        *DIGEST_TYPES,
+    )
+)
+
 
 class NotificationRow(Protocol):
     """Minimal view of a `notifications` row; the helpers write only these fields."""
@@ -76,6 +103,7 @@ class NotificationRow(Protocol):
     status: str
     type: str
     task_id: uuid.UUID | None
+    due_version: int | None
     scheduled_at: datetime
     attempts: int
     lease_expires_at: datetime | None
@@ -261,6 +289,125 @@ def cancel(notification: NotificationRow) -> str:
     if notification.status != "pending":
         raise NotificationTransitionError(notification.status, "cancelled")
     return _set_status(notification, "cancelled")
+
+
+
+def _offset_set(values: Iterable[int], *, field: str) -> set[int]:
+    """Validate one preference array; a malformed value must not mean "cancel all"."""
+    if isinstance(values, (str, bytes)):
+        raise ValueError(f"{field} must be an iterable of integers")
+    try:
+        items = list(values)
+    except TypeError as error:
+        raise ValueError(f"{field} must be an iterable of integers") from error
+    offsets: set[int] = set()
+    for value in items:
+        # bool is an int subclass; a JSON `true` is not a threshold.
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{field} must contain non-negative integers")
+        offsets.add(value)
+    return offsets
+
+
+def enabled_preference_types(
+    *,
+    reminder_offsets_hours: Iterable[int],
+    reminder_allday_offsets_days: Iterable[int],
+    digest_daily_enabled: bool,
+    digest_weekly_enabled: bool,
+) -> frozenset[str]:
+    """Return the occurrence types the current preferences would schedule today.
+
+    The result is the complete set a preference-driven cancellation compares against: it
+    includes both reminder families (timed and all-day) and both digest types, so a caller
+    never has to decide which family a stored row belongs to. An offset without a frozen
+    type (for example ``12`` hours) enables nothing; it does not invent a new type.
+    """
+    hours = _offset_set(reminder_offsets_hours, field="reminder_offsets_hours")
+    days = _offset_set(reminder_allday_offsets_days, field="reminder_allday_offsets_days")
+    enabled = {
+        type_ for type_, offset in TIMED_REMINDER_OFFSETS.items() if offset in hours
+    }
+    enabled.update(
+        type_ for type_, offset in ALLDAY_REMINDER_OFFSETS.items() if offset in days
+    )
+    if digest_daily_enabled:
+        enabled.add("digest_daily")
+    if digest_weekly_enabled:
+        enabled.add("digest_weekly")
+    return frozenset(enabled)
+
+
+def obsolete_pending[RowT: NotificationRow](
+    notifications: Iterable[RowT],
+    *,
+    task_id: uuid.UUID | None = None,
+    due_version: int | None = None,
+    enabled_types: frozenset[str] | None = None,
+) -> tuple[RowT, ...]:
+    """Select the pending occurrences a due-date or preference change made obsolete.
+
+    ``due_version`` is the task's current generation and requires ``task_id``: only the
+    reminders of that task in another generation are superseded. ``enabled_types`` is the
+    complete set returned by :func:`enabled_preference_types`; a pending reminder or digest
+    whose type is absent is obsolete. An explicit ``test`` send is not preference-driven and
+    is never selected.
+
+    Only ``pending`` rows are selected: ``sending`` may already be leaving through Gmail and
+    every terminal state is delivery history. A pending row is selected even when its
+    instant already passed, because delivering it late would be the retrospective burst M8
+    forbids. At least one rule is required so an empty call cannot cancel a whole user.
+    """
+    if due_version is None and enabled_types is None:
+        raise ValueError("at least one cancellation rule is required")
+    if due_version is not None:
+        if task_id is None:
+            raise ValueError("a due_version rule must be scoped to its task")
+        if due_version < 1:
+            raise ValueError("due_version must be positive")
+    selected: list[RowT] = []
+    for notification in notifications:
+        if notification.status != "pending":
+            continue
+        if task_id is not None and notification.task_id != task_id:
+            continue
+        if notification.type in REMINDER_TYPES:
+            superseded = (
+                due_version is not None and notification.due_version != due_version
+            )
+            disabled = (
+                enabled_types is not None and notification.type not in enabled_types
+            )
+            if superseded or disabled:
+                selected.append(notification)
+        elif notification.type in DIGEST_TYPES:
+            if enabled_types is not None and notification.type not in enabled_types:
+                selected.append(notification)
+    return tuple(selected)
+
+
+def cancel_obsolete[RowT: NotificationRow](
+    notifications: Iterable[RowT],
+    *,
+    task_id: uuid.UUID | None = None,
+    due_version: int | None = None,
+    enabled_types: frozenset[str] | None = None,
+) -> tuple[RowT, ...]:
+    """Cancel and return the obsolete pending occurrences (A4.3).
+
+    The decision lives in :func:`obsolete_pending`; this helper only applies the frozen
+    ``pending → cancelled`` transition to the selection. It is idempotent: a second call
+    selects nothing because the rows are already terminal.
+    """
+    obsolete = obsolete_pending(
+        notifications,
+        task_id=task_id,
+        due_version=due_version,
+        enabled_types=enabled_types,
+    )
+    for notification in obsolete:
+        cancel(notification)
+    return obsolete
 
 
 def redact_error_code(value: str | None) -> str | None:
