@@ -93,3 +93,52 @@ including `python-static (api)`, `python-unit (api)`, `integration (api)` with t
 I-S4-AN-05 case, `integration (ingest)`, `e2e-smoke`, `docs`, `secret-scan` and
 `build-images`. The isolated service containers remove the shared-cluster contention
 described above. No merge was performed; the claim stays `in progress` until review.
+
+Hoplite review fix1 (2026-11-01, findings 1-6 on head 2a98998)
+--------------------------------------------------------------
+Full mapping and rationale: `docs/sprints/artifacts/A4.5/hoplite-fix1.txt`.
+
+Commands (2026-11-01, same host, PostgreSQL 16.15, GPG 2.4):
+
+1. bash -n scripts/ops/backup_restore.sh
+   -> OK
+
+2. cd apps/api && uv run ruff check .
+   -> All checks passed!
+
+3. cd apps/api && uv run mypy .
+   -> Success: no issues found in 263 source files
+
+4. cd apps/api && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 \
+       uv run pytest -m "not integration and not provider and not load" -q
+   -> 1483 passed, 678 deselected
+
+5. cd apps/api && uv run pytest tests/integration/test_backup_restore.py -q
+   -> 2 passed (19.53 s)
+
+6. python3 scripts/docs/check_refs.py
+   -> OK: 920 documented repository paths exist or are expected.
+
+7. bash scripts/ci/check_no_secrets.sh
+   -> secret-scan: 776 tracked files, 0 findings
+
+8. git diff --check
+   -> no whitespace errors
+
+What the new I-S4-AN-05 cases prove
+-----------------------------------
+- Restore without a log and without the opt-in stops before pg_restore; the target keeps
+  zero application tables.
+- Restore with `--allow-missing-deletion-log` emits a WARNING on stderr and the success
+  line says that no deletion log was replayed.
+- A valid deletion log taken from another backup is rejected by checksum before anything is
+  decrypted or written; the target keeps zero application tables.
+- `verify` fails with a WARNING when the manifest pins a log that is not next to the dump;
+  the opt-in keeps the warning and verifies the dump alone.
+- The default restore uses the paired log, and an explicit copy of the pinned log also
+  works.
+- Carol, tombstoned with a bare `users.status` change and no `account_deletions` row, is
+  purged by the log's `users` array: `deleted` placeholders, zero tenant rows, no text.
+- A post-deletion log is attached with `export-deletions --refresh-backup`, which replaces
+  the paired log and re-pins `deletion_log_sha256`; the restore of the older dump then
+  re-applies the later deletions.

@@ -1,0 +1,101 @@
+# A4.5 Hoplite review fix1 — 2026-11-01
+
+Review: Hoplite over head `2a98998`, 2026-11-01T09:31–09:34Z. Verdict: do not merge until
+findings 1 and 2 are closed. This file maps every finding to the change and the test that
+pins it.
+
+## Findings and code changes
+
+1. [Alto] `restore` without `--deletion-log` used `{"version":1}` and claimed it had replayed
+   the log, so deletions made after the backup could reappear and pending purges stayed
+   incomplete.
+   - `cmd_restore` now defaults to the log paired with the backup
+     (`<dump>.deletions.json.gpg`). If that file is missing it stops before `pg_restore`
+     unless `--allow-missing-deletion-log` is passed explicitly; that flag prints a
+     `WARNING` on stderr, still runs the replay against the tombstones already inside the
+     dump, and the success line says that no deletion log was replayed. The silent
+     `{"version":1}` fallback no longer exists.
+   - Tests: `test_i_s4_an_05_restore_rejects_a_missing_or_foreign_deletion_log` checks the
+     refusal and that the target has zero application tables, then the explicit opt-in and
+     its warning.
+
+2. [Alto] An explicit `--deletion-log` was decrypted and replayed without being tied to the
+   manifest, so any file could change the replay.
+   - `cmd_restore` now requires the log's SHA-256 to equal `deletion_log_sha256` from the
+     manifest before decrypting anything. A missing pin or a mismatch is an error, and the
+     target is untouched.
+   - Because the post-deletion log necessarily differs from the backup-time log, a
+     supported attachment path was added: `export-deletions --refresh-backup DUMP` writes
+     the paired log atomically and re-pins its hash in the manifest. The restore then uses
+     the pinned post-deletion log; the runbook documents this as the only way to replay a
+     later log against an older dump.
+   - Tests: the foreign-log case asserts the checksum error and an empty target; the main
+     case performs the refresh and restores with the default paired log.
+
+3. [Medio] `verify` passed when the manifest pinned a deletion log that was not next to the
+   dump.
+   - `verify_archive` now fails with an explicit `WARNING` when the pinned log is missing.
+     `--allow-missing-deletion-log` keeps the warning and verifies the dump alone; it does
+     not make a restore safe. The runbook says so.
+   - Test: the missing-log case asserts the warning plus non-zero exit, and the opt-in
+     warning plus `backup OK`.
+
+4. [Medio] A replay failure left a partially restored database (pg_restore had already
+   written rows, including deleted ones) and the operator was not told to discard it.
+   - Both the `pg_restore` failure path and the replay failure path now exit with an
+     explicit instruction to discard the target and restore into a clean database. The
+     runbook's failure table no longer claims the rolled-back replay leaves the target
+     usable.
+
+5. [Medio] The connection URL with its password was passed in argv to `pg_dump` and `psql`.
+   - The URL is parsed once into `PGHOST`/`PGPORT`/`PGUSER`/`PGDATABASE`/`PGSSLMODE`; the
+     password goes to a `0600` `PGPASSFILE` in a private temporary directory. `psql` and
+     `pg_dump` receive no URL; `pg_restore` receives only the database name (it requires an
+     explicit target) while user, host and password stay in the environment.
+
+6. [Medio] `payload -> 'users'` from the log was never consumed.
+   - `restore_reapply.sql` unions the log's non-active `users` entries into
+     `restore_deleted_users`, so a user tombstoned without an `account_deletions` residual
+     row is purged and scrubbed.
+   - Test: Carol is tombstoned with a bare `users.status` change after the backup and before
+     the log export. The restored database must show her as `deleted` with opaque
+     placeholders, no tenant rows and no text; without consuming the array she would return
+     active with her class.
+
+## Local gates (2026-11-01, PostgreSQL 16.15, GPG 2.4, Linux)
+
+```text
+$ bash -n scripts/ops/backup_restore.sh
+(no output; syntax OK)
+
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ cd apps/api && uv run mypy .
+Success: no issues found in 263 source files
+
+$ cd apps/api && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 \
+    uv run pytest -m "not integration and not provider and not load" -q
+1483 passed, 678 deselected
+
+$ cd apps/api && uv run pytest tests/integration/test_backup_restore.py -q
+2 passed
+
+$ python3 scripts/docs/check_refs.py
+OK: 920 documented repository paths exist or are expected.
+
+$ bash scripts/ci/check_no_secrets.sh
+secret-scan: 776 tracked files, 0 findings
+
+$ git diff --check
+(no output)
+```
+
+## Scope and security notes
+
+- The smoke and integration runs used only synthetic text rows; no audio, Riva/LLM/Google
+  call, credential or real transcript was involved.
+- Both the dump and the deletion log stay GPG-encrypted at rest; the only plaintext copy of
+  the log is the private temporary file removed by the exit trap.
+- `apps/web` was not touched.
+- No merge was performed; the claim stays `in progress` until review.
