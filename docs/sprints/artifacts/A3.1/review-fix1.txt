@@ -1,0 +1,95 @@
+# A3.1 (MAULW-99) — hoplite review fix1 evidence
+
+Captured: 2026-11-01T02:51Z on code head `0cd775a` (after `e1d6d00`).
+Host: Linux x86_64 | Python 3.12.3 | PostgreSQL 16.15 | Redis 7.0.15 | uv 0.13.1.
+No provider call, no audio upload, no Google credential and no secret are involved.
+
+This review closes the three hoplite findings on `e1d6d00`:
+
+1. **H1 (critical):** `task_sources` could cite a segment of another transcript of the same
+   user, and neither `audio_id` nor `transcript_version` was tied to the cited transcript.
+   New migration `0011_s3_task_source_membership` (not an edit of `0002`/`0010`, both already
+   applied in the chain) adds `segments (user_id, transcript_id, id)` and
+   `transcripts (user_id, audio_id, id)`, and replaces the two 2-column FKs with
+   `(user_id, audio_id, transcript_id)`, `(user_id, transcript_id, transcript_version)` and
+   `(user_id, transcript_id, segment_id)`. Real-database cases: a source that mixes
+   transcript A with segment B, a wrong `audio_id` and a wrong `transcript_version` are each
+   rejected with `IntegrityError`.
+2. **H2 (contract decision):** `UNIQUE (task_id, base_task_version, revision_type, run_id)`
+   stays NULL-distinct. Several pending `edit_of_confirmed` proposals may share a base
+   version; only the explicit confirm promotes one and bumps `tasks.version`, so the rest
+   answer `409 version_conflict`. The decision and the `NULLS NOT DISTINCT` alternative are
+   recorded in `docs/ESPECIFICACION.md` §M4 and `docs/DISENO_BD_API_SPRINTS.md` §2.8; a
+   repeated reanalysis of the same run is still rejected (existing integration case).
+3. **H3 (inbox + purge):** `tasks_inbox_status (user_id, status)` serves the
+   `ambiguous`/`missing` tray (both due columns are NULL, so the partial due indexes cannot).
+   The class tombstone now deletes `task_revisions`, `task_sources` and `tasks` before
+   `segments`/`transcripts`, and the `202` body reports `tasks_deleted`,
+   `task_sources_deleted` and `task_revisions_deleted`. Before this fix the purge failed with
+   `Key (user_id, id)=… is still referenced from table "task_sources"`; the new regression
+   seeds a task, a source and a revision in the class and asserts every count in
+   `test_delete_purges_every_derivative_and_keeps_google_by_default`.
+
+## Static gates
+
+```
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 244 source files
+```
+
+## Unit (no PostgreSQL)
+
+```
+$ SANITIZED_PROXY=localhost,127.0.0.1,::1,198.19.0.1,198.19.0.2
+$ NO_PROXY="$SANITIZED_PROXY" no_proxy="$SANITIZED_PROXY" uv run pytest tests/unit -q
+1351 passed, 35 warnings in 9.54s
+```
+
+U-S3-AN-01 (`tests/unit/test_task_schema.py`) is now 26 cases: the new check asserts the
+exact parent columns of the three provenance FKs and the parent unique keys they need. The
+two new SQL cases live in the integration module below.
+
+The unsanitized sandbox environment still adds the two pre-existing failures documented in
+the previous capture (`test_ingest_sink.py` and `test_llm.py`, bracketed IPv6 entries in
+`NO_PROXY`); they do not touch this diff.
+
+## Integration against PostgreSQL 16.15
+
+The test session creates its own database and runs Alembic from empty through
+`0010_s3_tasks` and `0011_s3_task_source_membership`.
+
+```
+$ uv run pytest tests/integration/test_s3_tasks_schema.py \
+    tests/integration/test_migrations.py \
+    tests/integration/test_rls.py \
+    tests/integration/test_delete_audio.py -q
+92 passed, 75 warnings in 22.84s
+```
+
+Included:
+
+- `test_a_task_source_cannot_cite_a_segment_from_another_transcript` (the case hoplite
+  requested) and `test_a_task_source_cannot_mismatch_the_cited_transcript[audio_id|
+  transcript_version]`.
+- `test_the_unresolved_tray_has_a_plain_status_index` (catalog + `pg_indexes`).
+- The `0010 -> 0011` round trip and the linear-chain assertion in
+  `test_downgrade_and_upgrade_again`; `test_every_foreign_key_has_a_non_partial_covering_index`
+  covers the three new FKs; `test_alembic_check_reports_no_schema_drift` is green.
+- `test_delete_purges_every_derivative_and_keeps_google_by_default` now proves that the
+  task, its source and its revision are gone before the corpus tables.
+
+Full suite at the code head (same working tree, before the documentation-only commits):
+
+```
+$ uv run pytest tests/integration -q -m "not provider and not load"
+590 passed, 1 deselected, 540 warnings in 107.45s
+```
+
+## Quality CI
+
+Pending on the final head after the evidence/claim commits; the run id is recorded in the
+A3.1 claim row once GitHub Actions finishes. `apps/web` is untouched and no real Google or
+NVIDIA call was made.
