@@ -67,6 +67,8 @@ A31_TABLES = S3_TABLES | {"tasks", "task_sources", "task_revisions"}
 S4_TABLES = A31_TABLES | {"notifications"}
 # A4.4 adds the residual account-deletion record and the surviving remote operations.
 A44_TABLES = S4_TABLES | {"account_deletions", "google_remote_operations"}
+# J4.2 adds the global scheduler election row (no tenant and no RLS by design).
+J42_TABLES = A44_TABLES | {"scheduler_leases"}
 
 S2_COMPOSITE_FOREIGN_KEYS = {
     "variant_confirmation_tokens": {
@@ -309,7 +311,7 @@ def test_upgrade_from_empty_reaches_head(empty_schema: str) -> None:
 
     command.upgrade(alembic_config(empty_schema), "head")
 
-    assert _state(empty_schema) == (A44_TABLES, [_head(empty_schema)])
+    assert _state(empty_schema) == (J42_TABLES, [_head(empty_schema)])
 
 
 def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
@@ -317,9 +319,10 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     revision = ScriptDirectory.from_config(cfg).get_revision(_head(empty_schema))
     assert revision is not None
     parent = revision.down_revision
-    assert parent == "0015"  # this chain is linear
+    assert parent == "0016"  # this chain is linear
     command.upgrade(cfg, "head")
 
+    # `0017` only adds the global scheduler lease (no tenant and no RLS by design);
     # `0016` only adds the manual-occurrence sequence and swaps the natural unique key;
     # `0015` only adds the deletion/remote-operation tables and the session link; `0014`
     # adds `notifications` and the Gmail/digest columns; `0013` only adds the
@@ -331,6 +334,9 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     # `settings`; `0005` only changes roles, policies and RLS flags; `0003` only backfills
     # `chunks.tsv` (data, not schema) and `0004` only adds the run fencing token, so the
     # steps back stay on the previous schemas and only remove those additions.
+    command.downgrade(cfg, "-1")
+    assert _state(empty_schema) == (A44_TABLES, ["0016"])
+
     command.downgrade(cfg, "-1")
     assert _state(empty_schema) == (A44_TABLES, ["0015"])
 
@@ -383,7 +389,7 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     assert _state(empty_schema) == (S1_TABLES, ["0001"])
 
     command.upgrade(cfg, "head")
-    assert _state(empty_schema)[0] == A44_TABLES
+    assert _state(empty_schema)[0] == J42_TABLES
 
 
 def test_rls_revision_round_trips(empty_schema: str) -> None:
@@ -659,6 +665,73 @@ def test_notification_manual_occurrences_revision_round_trips(empty_schema: str)
 
     command.downgrade(cfg, "0015")
     assert "occurrence_seq" not in _table_columns(empty_schema, "notifications")
+
+    command.upgrade(cfg, "head")
+
+
+def test_scheduler_lease_revision_round_trips(empty_schema: str) -> None:
+    """J4.2: `0017` adds the global election row and keeps the API role out of it."""
+    cfg = alembic_config(empty_schema)
+    command.upgrade(cfg, "0016")
+    assert "scheduler_leases" not in _state(empty_schema)[0]
+
+    command.upgrade(cfg, "head")
+    assert "scheduler_leases" in _state(empty_schema)[0]
+
+    async def lease_shape() -> tuple[str, set[str], bool, bool]:
+        engine = create_async_engine(empty_schema)
+        try:
+            async with engine.connect() as conn:
+                default = await conn.scalar(
+                    text(
+                        "SELECT column_default FROM information_schema.columns "
+                        "WHERE table_name = 'scheduler_leases' "
+                        "AND column_name = 'fencing_token'"
+                    )
+                )
+                columns = set(
+                    (
+                        await conn.execute(
+                            text(
+                                "SELECT column_name FROM information_schema.columns "
+                                "WHERE table_schema = 'public' "
+                                "AND table_name = 'scheduler_leases'"
+                            )
+                        )
+                    ).scalars()
+                )
+                app_select, jobs_select = (
+                    await conn.execute(
+                        text(
+                            "SELECT "
+                            "has_table_privilege('maulwurf_app', "
+                            "'public.scheduler_leases', 'SELECT'), "
+                            "has_table_privilege('maulwurf_jobs', "
+                            "'public.scheduler_leases', 'SELECT')"
+                        )
+                    )
+                ).one()
+        finally:
+            await engine.dispose()
+        return str(default), columns, bool(app_select), bool(jobs_select)
+
+    default, columns, app_select, jobs_select = asyncio.run(lease_shape())
+    assert default.startswith("'1'")
+    assert {
+        "name",
+        "holder",
+        "fencing_token",
+        "lease_expires_at",
+        "heartbeat_at",
+        "created_at",
+        "updated_at",
+    } <= columns
+    # Scheduling belongs to the worker/scheduler role; the API never reads the election.
+    assert app_select is False
+    assert jobs_select is True
+
+    command.downgrade(cfg, "0016")
+    assert "scheduler_leases" not in _state(empty_schema)[0]
 
     command.upgrade(cfg, "head")
 
@@ -1228,4 +1301,4 @@ def test_concurrent_upgrades_serialize_without_errors(empty_schema: str) -> None
             raise
         assert replica.returncode == 0, stderr.decode()[-500:]
 
-    assert _state(empty_schema) == (A44_TABLES, [_head(empty_schema)])
+    assert _state(empty_schema) == (J42_TABLES, [_head(empty_schema)])

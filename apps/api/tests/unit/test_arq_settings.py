@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 import pytest
 from arq.worker import Function
 
+from app.services.scheduler_lease import SchedulerReport
 from app.workers import arq_app
 from app.workers.arq_app import (
     HEALTH_CHECK_INTERVAL_S,
@@ -17,6 +18,7 @@ from app.workers.arq_app import (
     dispatch_outbox,
     purge_residuals,
     reconcile,
+    schedule_notifications,
 )
 from app.workers.index_job import MAX_TRIES, index
 from app.workers.jobs.calendar_sync import JOB_TIMEOUT_S as CALENDAR_SYNC_TIMEOUT_S
@@ -52,10 +54,11 @@ def test_worker_registers_index_analyze_and_calendar_sync_with_their_budgets() -
     assert calendar_function.timeout_s == CALENDAR_SYNC_TIMEOUT_S
 
 
-def test_scheduler_runs_only_the_outbox_reconciler_and_retention_crons() -> None:
+def test_scheduler_runs_only_the_outbox_notification_reconciler_and_retention_crons() -> None:
     assert not hasattr(SchedulerSettings, "functions")
     assert [job.coroutine for job in SchedulerSettings.cron_jobs] == [
         dispatch_outbox,
+        schedule_notifications,
         reconcile,
         purge_residuals,
     ]
@@ -86,20 +89,75 @@ async def test_dispatch_cron_survives_a_database_failure(
     assert "CANARIO-7f3a9c" not in caplog.text
 
 
+async def test_notification_scheduler_cron_survives_a_database_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    @asynccontextmanager
+    async def broken_scope() -> AsyncIterator[None]:
+        raise ConnectionRefusedError("connect to db failed: CANARIO-4c1e8d user=maulwurf")
+        yield
+
+    monkeypatch.setattr(arq_app, "session_scope", broken_scope)
+
+    await schedule_notifications({})
+
+    assert "schedule_notifications.failed error=ConnectionRefusedError" in caplog.text
+    assert "CANARIO-4c1e8d" not in caplog.text
+
+
+async def test_notification_scheduler_cron_uses_the_cross_tenant_jobs_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[object] = []
+    token = object()
+
+    def _bind() -> object:
+        events.append("bind")
+        return token
+
+    def _reset(value: object) -> None:
+        events.append(value is token)
+
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[object]:
+        yield object()
+
+    async def fake_run(db: object) -> SchedulerReport:
+        del db
+        events.append("run")
+        return SchedulerReport(active=True, claimed=1)
+
+    monkeypatch.setattr(arq_app, "bind_cross_tenant", _bind)
+    monkeypatch.setattr(arq_app, "reset_cross_tenant", _reset)
+    monkeypatch.setattr(arq_app, "session_scope", scope)
+    monkeypatch.setattr(arq_app, "run_notification_scheduler", fake_run)
+
+    await schedule_notifications({})
+
+    assert events == ["bind", "run", True]
+
+
 def test_dispatch_cron_runs_every_minute_at_second_zero() -> None:
-    dispatch, _reconcile, _retention = SchedulerSettings.cron_jobs
+    dispatch, _schedule, _reconcile, _retention = SchedulerSettings.cron_jobs
     assert dispatch.second == 0
     assert dispatch.minute is None and dispatch.run_at_startup
 
 
+def test_notification_scheduler_cron_runs_every_minute_and_at_startup() -> None:
+    _dispatch, schedule, _reconcile, _retention = SchedulerSettings.cron_jobs
+    assert schedule.coroutine is schedule_notifications
+    assert schedule.second == 0
+    assert schedule.minute is None and schedule.run_at_startup
+
+
 def test_reconciler_cron_runs_on_a_fixed_minute_grid_off_the_dispatcher_second() -> None:
-    _dispatch, reconciler, _retention = SchedulerSettings.cron_jobs
+    _dispatch, _schedule, reconciler, _retention = SchedulerSettings.cron_jobs
     assert reconciler.second != 0
     assert reconciler.minute == set(range(0, 60, RECONCILE_EVERY_MINUTES))
 
 
 def test_retention_cron_runs_hourly_off_the_other_crons() -> None:
-    _dispatch, _reconcile, retention = SchedulerSettings.cron_jobs
+    _dispatch, _schedule, _reconcile, retention = SchedulerSettings.cron_jobs
     assert retention.second == RETENTION_SECOND
     assert retention.minute == RETENTION_MINUTE
     assert retention.second not in {0, 30}

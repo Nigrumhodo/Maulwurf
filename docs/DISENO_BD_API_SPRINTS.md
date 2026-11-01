@@ -1007,6 +1007,30 @@ CREATE INDEX notifications_due ON notifications (status, scheduled_at) WHERE sta
   → `delivery_unknown`, **no automatic retry**; visible in the panel; manual resending
   warns about the risk.
 
+J4.2 elects the scheduler role with a global row:
+
+```sql
+CREATE TABLE scheduler_leases (
+  name              text PRIMARY KEY,          -- notification_scheduler
+  holder            text NOT NULL,             -- host:pid:nonce
+  fencing_token     bigint NOT NULL DEFAULT 1, -- grows on takeover
+  lease_expires_at  timestamptz NOT NULL,
+  heartbeat_at      timestamptz NOT NULL DEFAULT now(),
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  CHECK (lease_expires_at > heartbeat_at),
+  CHECK (fencing_token >= 1)
+);
+```
+
+- There is no tenant column and no RLS: the row is infrastructure state, never user data.
+  The `maulwurf_jobs` role owns access; the API and ingest roles cannot read or rewrite the
+  election.
+- The same holder renews in place and keeps the fence; only an expired row can be taken
+  over, and a takeover increments the fence. The cron runs every minute and at startup.
+- The claim keeps the occurrence's `dedupe_key` unique and adds a bounded delivery lease;
+  `FOR UPDATE SKIP LOCKED` lets multiple workers drain a backlog without claiming twice.
+
 ### 2.10 State machines (frozen contracts)
 
 ```mermaid
