@@ -49,9 +49,13 @@ SET status = EXCLUDED.status,
     expires_at = GREATEST(target.expires_at, EXCLUDED.expires_at),
     completed_at = COALESCE(EXCLUDED.completed_at, target.completed_at);
 
--- 2. Deleted accounts: the residual row and the user tombstone both mean "purge now".
---    Keeping the two sources covers an operation whose residual row already expired while
---    the user tombstone (which has no expiry) still proves the account was deleted.
+-- 2. Deleted accounts: the residual row, the restored user row and the log's `users` array
+--    all mean "purge now". Keeping the three sources covers an operation whose residual row
+--    already expired while the user tombstone (which has no expiry) still proves the account
+--    was deleted, and a `deleted` user whose tombstone was written without an
+--    `account_deletions` residual row (for example, a row that predates A4.4 or a manual
+--    status change). The log entry supplies the identifier only; the scrub below re-derives
+--    the opaque placeholders from the row itself.
 CREATE TEMP TABLE restore_deleted_users (
   user_id uuid PRIMARY KEY
 ) ON COMMIT DROP;
@@ -61,6 +65,13 @@ FROM (
   SELECT former_user_id AS user_id FROM account_deletions
   UNION
   SELECT id AS user_id FROM users WHERE status <> 'active'
+  UNION
+  SELECT (entry ->> 'id')::uuid AS user_id
+  FROM jsonb_array_elements(
+    COALESCE((SELECT payload -> 'users' FROM restore_log LIMIT 1), '[]'::jsonb)
+  ) AS entry
+  WHERE entry ->> 'id' IS NOT NULL
+    AND COALESCE(entry ->> 'status', 'deleted') <> 'active'
 ) AS deleted
 ON CONFLICT DO NOTHING;
 
