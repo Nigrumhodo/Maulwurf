@@ -594,8 +594,8 @@ VERIFIED**. The local compose drill is the only executable equivalent in this re
 | Ruff | `cd apps/ingest && uv run ruff check .` | pass |
 | Mypy | `cd apps/ingest && uv run mypy .` | pass |
 | Documentation paths | `python3 scripts/docs/check_refs.py` | pass |
-| I-S4-SG-03 integration | `cd apps/ingest && uv run pytest -m integration -q tests/test_cleanup_recovery.py` | Local dispatch smoke with PostgreSQL 16.15: 8 passed (the host-mismatch and missing-host cases included). Quality CI run `41257113125`, job `integration (ingest)`: **66 passed**, 11 skipped, 1 xfailed; the 8 cases in that run are included |
-| Quality CI | all jobs in `.github/workflows/quality.yml` | Runs `41257113125` (head `22e9ad9`) and `41257417783` (evidence head `ce4a3cf`): all 16 jobs and 17/17 PR checks green, including `python-unit (ingest)` 239 passed and `integration (ingest)` 66 passed. See section 8.1 |
+| I-S4-SG-03 integration | `cd apps/ingest && uv run pytest -m integration -q tests/test_cleanup_recovery.py` | Local dispatch smoke with PostgreSQL 16.15: 8 passed (the host-mismatch and missing-host cases included). Quality CI runs `41257113125`, `41257417783` and `41258428740`, job `integration (ingest)`: **66 passed**, 11 skipped, 1 xfailed; the 8 cases in those runs are included |
+| Quality CI | all jobs in `.github/workflows/quality.yml` | Runs `41257113125` (head `22e9ad9`), `41257417783` (evidence head `ce4a3cf`) and `41258428740` (head `06bf15f`, after merging `develop@9c48ce2`): all 16 jobs and 17/17 PR checks green, including `python-unit (ingest)` 239 passed and `integration (ingest)` 66 passed. See section 8.1 |
 | Compose detection/recovery drill | steps 4–6 | **NOT RUN HERE**: this sandbox has no `docker`, `podman`, `docker-compose` or `/var/run/docker.sock`; the reviewer must execute it on the reference stack |
 | Host-loss restoration | section 7 | **NOT RUN HERE**: needs J4.7 provider evidence and a real host; the reviewer records it |
 
@@ -612,7 +612,10 @@ Run `41257113125` (workflow `quality`, head `22e9ad9`, created 2026-11-01T00:31:
 the fix2 code and runbook changes) is green in all 16 jobs and 17/17 PR checks (the external
 QA webhook is the extra check), including `python-unit (ingest)` **239 passed**, 6 skipped
 and `integration (ingest)` **66 passed**, 11 skipped, 1 xfailed; the 8 I-S4-SG-03 cases are
-included. The evidence head `ce4a3cf` repeats the same counts in run `41257417783`. The local commands and the environment check are captured in
+included. The evidence head `ce4a3cf` repeats the same counts in run `41257417783`, and
+after merging `develop@9c48ce2` (#137, A2.18 schema integrity) run `41258428740` on head
+`06bf15f` is green in all 16 jobs and 17/17 checks with the same counts. The local
+commands and the environment check are captured in
 `docs/sprints/artifacts/S4.1/local-gates.txt` and
 `docs/sprints/artifacts/S4.1/drill-environment.txt`. The only later commit is this evidence
 update; PR #135 records the `quality` run on the final evidence-only head and no code
