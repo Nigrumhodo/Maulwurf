@@ -82,10 +82,12 @@ Commands and results
 9. git diff --check
    -> no whitespace errors.
 
-10. PR #154 Quality CI run 41304868503 (head 34eab72; base develop 2d4bc2d)
+10. PR #154 Quality CI run 41305333305 (head bb6eb0b; base develop 2d4bc2d)
     -> all 17 checks green: python-static (api/ingest), python-unit (api/ingest),
        integration (api/ingest), e2e-smoke, web, docs, build-images, compose-ingest-env,
        caddy-limits, secret-scan, the three license reports and send-webhook.
+    The previous code head 34eab72 was also green in run 41304868503; the commits after
+    bb6eb0b only update this evidence/claim text.
 
 What the new evidence proves
 ----------------------------
