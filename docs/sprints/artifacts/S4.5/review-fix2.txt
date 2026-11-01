@@ -1,0 +1,129 @@
+S4.5 — review fix2 evidence (Hoplite findings on head df39464)
+Date (UTC): 2026-11-01
+Host: Linux 7.0.0-39-generic x86_64 · Python 3.12.3 · ffmpeg 8.1.2 · espeak-ng 1.51
+Branch: task/MAULW-153 · PR #143 · no merge performed
+
+## Synchronization
+
+$ git fetch origin develop
+$ git log --oneline -1 origin/develop
+fd623b1 Merge pull request #142 from Nigrumhodo/task/MAULW-99
+
+$ git merge --no-ff origin/develop -m "[MAULW-153] wip: sync develop into the S4.5 branch"
+Merge made by the 'ort' strategy. No conflicts.
+
+The old base did not contain docs/sprints/artifacts/A3.1/, so a two-dot diff against the
+old develop showed those files as deleted. After the sync both checks are empty and the
+files exist:
+
+$ git diff --name-status origin/develop...HEAD -- docs/sprints/artifacts/A3.1
+$ git diff --name-status origin/develop HEAD -- docs/sprints/artifacts/A3.1
+$ ls docs/sprints/artifacts/A3.1
+local-gates.txt
+review-fix1.txt
+
+No unrelated deletion was forced: `git diff --name-status origin/develop HEAD | grep '^D'`
+returns no line. `apps/web` is untouched.
+
+## Finding 1 — strict mypy on the new script
+
+Before the fix, from apps/ingest:
+
+$ uv run mypy --strict ../../scripts/load/cost_table.py ../../scripts/load/asr_cost.py
+../../scripts/load/cost_table.py:314: error: Module "asr_cost" does not explicitly export attribute "PROVISIONAL_SLOTS"  [attr-defined]
+../../scripts/load/cost_table.py:385: error: Module "asr_cost" does not explicitly export attribute "PROVISIONAL_SLOTS"  [attr-defined]
+../../scripts/load/cost_table.py:386: error: Module "asr_cost" does not explicitly export attribute "PROVISIONAL_SLOTS"  [attr-defined]
+Found 3 errors in 1 file (checked 2 source files)
+
+Fix: cost_table.py imports PROVISIONAL_SLOTS directly from maulwurf_ingest.capacity
+instead of relying on the implicit re-export through asr_cost. After the fix:
+
+$ uv run mypy --strict ../../scripts/load/cost_table.py ../../scripts/load/asr_cost.py
+Success: no issues found in 2 source files
+
+$ uv run mypy .
+Success: no issues found in 83 source files
+
+$ uv run ruff check . && uv run ruff check ../../scripts/load/asr_cost.py ../../scripts/load/cost_table.py
+All checks passed!
+
+## Finding 2 — the default reproduces the published clip basis
+
+The tests were written first and failed on the old default:
+
+$ uv run pytest tests/test_cost_table.py -q -m "not load" -k defaults_to_the_published
+2 failed, 16 deselected
+E       assert 60.0 == 300.0
+
+After the fix (DEFAULT_CLIP_SECONDS = 300.0 in cost_table.py; asr_cost.py keeps its own
+60 s default for the S3.5 fixed-overhead check):
+
+$ uv run pytest tests/test_cost_table.py -q -m "not load" -k defaults_to_the_published
+2 passed, 16 deselected
+
+The no-argument CLI now selects the 300 s basis:
+
+$ cd apps/ingest && uv run python ../../scripts/load/cost_table.py
+S4.5 real cost per class hour (basis for C-S4-SG-04)
+Environment: python=3.12.3, system=Linux 7.0.0-39-generic, ffmpeg=ffmpeg version 8.1.2, espeak_ng=eSpeak NG text-to-speech: 1.51, riva_call=none
+Load: 2 concurrent slot(s), 300.0 s synthetic clip, fragment cap 30 s, overlap 0.25 s
+Measured: ASR 60.500 effective minutes/class-hour; ffmpeg CPU 23.166 s/class-hour (0.648 cores); peak working set 48.52 MiB; wall 38.377 s/class-hour; RAM 0.000505068 GiB-hours/class-hour
+Cleanup verified: yes; no Riva call, no key, no audio kept
+
+term            quantity/class-hour unit                                           rate      cost/class-hour
+asr                    60.499975000 ASR minute                            NO VERIFICADO        NO VERIFICADO
+cpu                     0.006434880 vCPU-hour                             NO VERIFICADO        NO VERIFICADO
+ram                     0.000505068 GiB-hour                              NO VERIFICADO        NO VERIFICADO
+total                                                                                          NO VERIFICADO
+Rates are operator inputs, not provider measurements. NO VERIFICADO means no number was invented.
+200 MiB and 3 h are not approved; D4 stays blocked and this table does not close G8.
+
+Two JSON repeats of the same default command measured ffmpeg CPU 22.195/24.493 s and RAM
+0.000444/0.000522 GiB-hours per class hour (the lowest observed default run was 0.000444).
+The ASR term is 60.5 effective minutes in every run, the same as the published table. The
+first documented command (`--slots 2 --clip-seconds 300`) selected the same 300 s load and
+measured 24.009 CPU s, 42.171 wall s and 0.000554 RAM GiB-hours per class hour.
+
+Host note: this shared host was slower than during the original captures (the same 300 s
+harness measured 22.2–24.8 ffmpeg CPU seconds and 33.7–39.0 wall seconds per class hour,
+against 14.79–17.32 CPU and 23.19–29.00 wall in the published four-run range). The clip
+basis is now identical to the published one; the remaining spread is host speed, not the
+60 s fixed-overhead distortion that Hoplite reported (0.001281). The published range was
+not re-baselined here.
+
+## Area gates
+
+$ cd apps/ingest && uv run ruff check .
+All checks passed!
+
+$ cd apps/ingest && uv run mypy .
+Success: no issues found in 83 source files
+
+$ cd apps/ingest && uv run mypy --strict ../../scripts/load/asr_cost.py ../../scripts/load/cost_table.py
+Success: no issues found in 2 source files
+
+$ cd apps/ingest && uv run pytest tests -q -m 'not integration and not provider and not load'
+306 passed, 93 deselected, 2 warnings
+
+$ cd apps/ingest && uv run pytest tests/test_cost_table.py tests/test_asr_cost.py -q -m 'not load'
+38 passed, 2 deselected
+
+$ cd apps/ingest && uv run pytest tests/test_asr_cost.py tests/test_cost_table.py -q -m load
+2 passed, 38 deselected
+
+$ cd apps/api && uv run ruff check . && uv run mypy .
+All checks passed!
+Success: no issues found in 249 source files
+
+$ cd apps/api && NO_PROXY='localhost,127.0.0.1,::1' no_proxy='localhost,127.0.0.1,::1' \
+    uv run pytest tests/unit -q
+1376 passed, 35 warnings
+
+Without the sanitized proxy the same two pre-existing bracketed-IPv6 httpx failures from
+S3.6/J3.6 reappear (test_ingest_sink, test_llm); they are outside this diff.
+
+$ python3 scripts/docs/check_refs.py
+OK: 887 documented repository paths exist or are expected.
+
+No Riva/LLM/Google call, no real class audio, no PostgreSQL/Redis dependency for this
+harness and no apps/web change.

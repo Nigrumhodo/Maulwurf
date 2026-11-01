@@ -288,6 +288,37 @@ def test_table_names_the_three_terms_and_the_unverified_rates(
     assert "Cleanup verified: yes" in rendered
 
 
+def test_the_cli_defaults_to_the_published_300s_basis(
+    harness: tuple[ModuleType, ModuleType],
+) -> None:
+    _, cost = harness
+
+    args = cost.build_parser().parse_args([])
+
+    assert cost.DEFAULT_CLIP_SECONDS == 300.0
+    assert args.clip_seconds == 300.0
+    assert args.slots == 2
+
+
+def test_run_cost_table_defaults_to_the_published_300s_basis(
+    harness: tuple[ModuleType, ModuleType], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asr, cost = harness
+    captured: dict[str, Any] = {}
+
+    def fake_run_load(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _report(asr)
+
+    monkeypatch.setattr(asr, "run_load", fake_run_load)
+
+    costs = cost.run_cost_table()
+
+    assert captured["clip_seconds"] == 300.0
+    assert captured["slots"] == 2
+    assert costs.clip_seconds == 300.0
+
+
 def test_the_cli_rejects_a_bad_rate(
     harness: tuple[ModuleType, ModuleType], capsys: pytest.CaptureFixture[str]
 ) -> None:

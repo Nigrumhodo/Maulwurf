@@ -25,8 +25,10 @@ Run from the repository root with the ingest environment::
         --asr-rate-usd-per-minute 0.01 --cpu-rate-usd-per-vcpu-hour 0.05 \
         --ram-rate-usd-per-gib-hour 0.005
 
-Every rate is an operator input, never a provider measurement. The script refuses to run
-without a writable tmpfs, never prints audio and keeps no WAV after the run.
+The default clip is 300 s, the published basis; the S3.5 harness keeps its own 60 s
+default for the fixed-overhead check. Every rate is an operator input, never a provider
+measurement. The script refuses to run without a writable tmpfs, never prints audio and
+keeps no WAV after the run.
 """
 
 from __future__ import annotations
@@ -45,10 +47,14 @@ sys.path.insert(0, str(_SCRIPT.parent))
 
 import asr_cost  # noqa: E402
 
+from maulwurf_ingest.capacity import PROVISIONAL_SLOTS  # noqa: E402
+
 TICKET: Final = "S4.5"
 TEST_BASIS: Final = "C-S4-SG-04"
 NOT_VERIFIED: Final = asr_cost.NOT_VERIFIED
 SECONDS_PER_HOUR: Final = 3600.0
+# The published captures use 300 s; shorter clips inflate the fixed overhead.
+DEFAULT_CLIP_SECONDS: Final = 300.0
 
 
 @dataclass(frozen=True)
@@ -311,8 +317,8 @@ def build_cost_table(
 
 def run_cost_table(
     *,
-    slots: int = asr_cost.PROVISIONAL_SLOTS,
-    clip_seconds: float = asr_cost.DEFAULT_CLIP_SECONDS,
+    slots: int = PROVISIONAL_SLOTS,
+    clip_seconds: float = DEFAULT_CLIP_SECONDS,
     fragment_seconds: int | None = None,
     asr_rate_usd_per_minute: float | None = None,
     cpu_rate_usd_per_vcpu_hour: float | None = None,
@@ -382,16 +388,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--slots",
         type=_bounded_int(1, asr_cost.MAX_SLOTS),
-        default=asr_cost.PROVISIONAL_SLOTS,
-        help=f"concurrent slots (default: {asr_cost.PROVISIONAL_SLOTS})",
+        default=PROVISIONAL_SLOTS,
+        help=f"concurrent slots (default: {PROVISIONAL_SLOTS})",
     )
     parser.add_argument(
         "--clip-seconds",
         type=_bounded_float(
             asr_cost.MIN_CLIP_SECONDS, asr_cost.MAX_CLIP_SECONDS
         ),
-        default=asr_cost.DEFAULT_CLIP_SECONDS,
-        help=f"synthetic clip seconds (default: {asr_cost.DEFAULT_CLIP_SECONDS})",
+        default=DEFAULT_CLIP_SECONDS,
+        help=f"synthetic clip seconds (default: {DEFAULT_CLIP_SECONDS})",
     )
     parser.add_argument(
         "--fragment-seconds",
