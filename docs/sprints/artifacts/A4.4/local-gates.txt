@@ -51,6 +51,12 @@ Commands and results
 9. git diff --check
    -> no whitespace errors
 
+10. PR #145 Quality CI run 41281941129 (head a5dda83, 2026-11-01T06:43Z;
+    based on develop 747ad74)
+    -> all 17 checks green: python-static (api/ingest), python-unit (api/ingest),
+       integration (api/ingest), e2e-smoke, web, docs, build-images,
+       compose-ingest-env, caddy-limits, secret-scan, license reports and send-webhook.
+
 What the new evidence proves
 ----------------------------
 - A purge exception after the durable tombstone: the router logs only the operation id and
