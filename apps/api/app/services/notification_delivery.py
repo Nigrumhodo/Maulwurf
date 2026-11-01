@@ -19,7 +19,9 @@ The caller owns the transaction. The occurrence row is locked for the whole sett
 duplicate worker cannot send the same claim concurrently, and a retried settlement of a
 terminal row is reported as `skipped` without calling the sender. If the process dies while
 holding the lock, PostgreSQL releases it and the scheduler's delivery lease expires the row
-as uncertain instead of retrying it.
+as uncertain instead of retrying it. The caller must not retry the function after a database
+or commit failure: the sender may already have been called, so the row must be left to the
+delivery lease, which closes it as `delivery_unknown` and never as `pending`.
 """
 
 import uuid
