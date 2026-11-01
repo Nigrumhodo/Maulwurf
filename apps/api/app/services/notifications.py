@@ -26,6 +26,10 @@ words directly:
   a manual resend of a cancelled row stays rejected.
 - A ``sending`` row without a lease cannot prove a live owner, so it fails closed as
   ``delivery_unknown`` (uncertain), never as a retryable state.
+- A delivery adapter classifies its failure explicitly (J4.5): only a proven rejection is
+  ``failed``; a lost response, a timeout or any unexpected sender exception may already have
+  reached the provider and is terminal ``delivery_unknown``. The settlement boundary lives
+  in ``app.services.notification_delivery``; nothing here retries an uncertain delivery.
 
 ``dedupe_key`` is the canonical text rendering of
 ``(user_id, type, task_id, due_version, occurrence)``; the database holds both its UNIQUE
@@ -43,7 +47,7 @@ mapped to ``unknown`` before it reaches the database, whose CHECK also rejects f
 import uuid
 from collections.abc import Iterable
 from datetime import date, datetime
-from typing import Final, Protocol
+from typing import Final, Literal, Protocol
 
 from app.models.notification import (
     DIGEST_TYPES,
@@ -81,6 +85,13 @@ NOTIFICATION_ERROR_CODES: Final = (
 
 LEASE_EXPIRED = "lease_expired"
 RESPONSE_LOST = "response_lost"
+PROVIDER_REJECTED = "provider_rejected"
+
+# Outcomes of one sender attempt (J4.5). Only a proven rejection is a known non-delivery;
+# everything else is uncertain because the provider may already have accepted the message.
+DeliveryErrorStatus = Literal["failed", "delivery_unknown"]
+DELIVERY_FAILED: Final[DeliveryErrorStatus] = "failed"
+DELIVERY_UNKNOWN: Final[DeliveryErrorStatus] = "delivery_unknown"
 
 # A4.3: the frozen reminder vocabulary maps one type to one threshold. The preferences are
 # JSON arrays on `settings` (A4.1); only these offsets have a schedulable type, so a value
@@ -139,6 +150,32 @@ class NotificationLeaseInvalid(ValueError):
 
 class NotificationUnlinked(ValueError):
     """A reminder has no task link (stale/detached row) and must not be delivered."""
+
+
+class NotificationDeliveryRejected(Exception):
+    """The sender proved the provider did not accept the message.
+
+    This is the only failure a delivery adapter may classify as a known non-delivery: a
+    provider rejection or a local pre-flight failure before any request was sent. It is
+    safe to record ``failed``.
+    """
+
+    def __init__(self, error_code: str = PROVIDER_REJECTED) -> None:
+        super().__init__(error_code)
+        self.error_code = error_code
+
+
+class NotificationDeliveryAmbiguous(Exception):
+    """The sender cannot prove whether the provider accepted the message.
+
+    A timeout, a connection reset after the request, or a lost response belongs here. The
+    occurrence must end ``delivery_unknown`` and is never retried automatically: Gmail
+    offers no exactly-once delivery, so a blind retry could send the email twice.
+    """
+
+    def __init__(self, error_code: str = RESPONSE_LOST) -> None:
+        super().__init__(error_code)
+        self.error_code = error_code
 
 
 def ensure_transition(current: str, target: str) -> str:
@@ -456,6 +493,23 @@ def redact_error_code(value: str | None) -> str | None:
         return None
     candidate = value.strip().lower()
     return candidate if candidate in NOTIFICATION_ERROR_CODES else "unknown"
+
+
+def delivery_error_outcome(error: Exception) -> tuple[DeliveryErrorStatus, str]:
+    """Map a sender failure to ``(status, redacted error code)`` (J4.5).
+
+    A delivery adapter has two explicit options: :class:`NotificationDeliveryRejected`
+    when it knows no message was accepted, and :class:`NotificationDeliveryAmbiguous` when
+    the response was lost or the outcome cannot be proven. Any other exception is treated
+    as ambiguous: the request may have reached the provider (for example a timeout after
+    the POST), and a blind retry could duplicate the email. The persisted code is always
+    redacted, so an adapter cannot write an address or a message body into the column.
+    """
+    if isinstance(error, NotificationDeliveryRejected):
+        return (DELIVERY_FAILED, redact_error_code(error.error_code) or "unknown")
+    if isinstance(error, NotificationDeliveryAmbiguous):
+        return (DELIVERY_UNKNOWN, redact_error_code(error.error_code) or RESPONSE_LOST)
+    return (DELIVERY_UNKNOWN, RESPONSE_LOST)
 
 
 # Only an occurrence that did not provably reach the provider can be manually repeated:
