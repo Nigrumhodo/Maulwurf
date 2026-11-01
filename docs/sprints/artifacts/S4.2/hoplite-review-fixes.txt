@@ -138,3 +138,69 @@ Quality CI run `41249178989` (code head `1d1663f`) is green in all 17 checks:
 **69 passed / 11 skipped / 1 xfailed**, including the four new integration cases
 (the sweeper pool retry, the moved-token unrecorded cleanup, and the two
 `record_cleanup` failure paths). No provider or Riva call.
+
+## Fix3 — hoplite review on `d03168d` (2026-11-01T00:40:52Z)
+
+Sync first: merged `origin/develop@7ce32ea` (after #135) into the branch. The only
+conflict was `docs/sprints/CLAIMS.md`; the resolution keeps the S4.1, S4.2 and S4.3
+rows. The PR is `MERGEABLE` again and `apps/web` is untouched.
+
+1. `reconciler.reconcile_committed` did not alert when `_record_cleanup` returned
+   `None` (driver error) or `False` in its exception, unverified-evidence and
+   verified-evidence branches. Each non-`True` write now calls
+   `admission.flag_unrecorded_cleanup(attempt_id)` and
+   `metrics.record_failure("cleanup", "cleanup_unrecorded")`. The row stays
+   `pending`, admission stays open (no durable `failed` row exists) and the case is
+   observable. `supervisor._note_cancelled_cleanup` does the same when
+   `cancel.record_cancelled_cleanup` cannot persist.
+   - Tests: `tests/test_cleanup_admission.py::test_reconciler_alerts_a_cleanup_exception_that_cannot_be_recorded`,
+     `test_reconciler_alerts_unverified_evidence_that_cannot_be_recorded`,
+     `test_reconciler_alerts_verified_evidence_that_cannot_be_recorded` and
+     `test_cancelled_cleanup_that_cannot_be_recorded_alerts`.
+2. Contract documents updated in the same revision:
+   `docs/ESPECIFICACION.md` (60 s pass from the lifespan, per-pass durable-latch
+   read, 30 s lease / 10 s heartbeat with three renewals, absence proof for
+   `verified`, durable `failed` latch vs transient close, fail-closed
+   unreadable/malformed latch, `cleanup_unrecorded` alert and metric) and
+   `docs/PLAN_IMPLEMENTACION.md` (F0.2 checklist and §9).
+3. A row with `cleanup_status=failed` whose `id` is not a `UUID` now fails closed in
+   `admission.restore_from_database` (`admission.restore_malformed` + `close()`)
+   instead of reopening admission.
+   - Test: `test_a_malformed_failed_latch_keeps_admission_closed`.
+4. `admission._alerts` is bounded to `MAX_ALERTS=256` through an `OrderedDict`
+   keyed by `(code, attempt_id)`: O(1) dedupe and the oldest entry is evicted.
+   - Test: `test_the_alert_buffer_is_bounded`.
+5. Follow-up (not claimed here): a live run whose heartbeat is delayed beyond the
+   30 s lease can end as `technical_loss`. The live 60 s sweeper risk is validated by
+   S4.3 / `L-S4-SG-01`; the three-heartbeats-per-lease construction guard is covered
+   by unit tests.
+6. Follow-up (not changed here): long docstrings in `admission.py`, `supervisor.py`
+   and `lease.py`, and the Spanish/English mix in `lease.py`, remain as documented
+   debt because the Spanish comments predate this branch and the repo rules forbid
+   rewriting them in bulk.
+
+### Fix3 local gates (apps/ingest)
+
+environment: Linux, Python 3.12.3; no PostgreSQL/Redis/Docker; `espeak-ng` absent.
+
+```text
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 81 source files
+
+$ uv run pytest tests -q -m "not integration" \
+    --ignore=tests/test_synthetic_audio.py --ignore=tests/test_asr_cost.py
+249 passed, 89 deselected, 2 warnings
+```
+
+Without the two ignores the only failures are the pre-existing `espeak-ng`
+environment cases in `tests/test_synthetic_audio.py` and `tests/test_asr_cost.py`;
+CI installs `espeak-ng`.
+
+Quality CI run `41259864534` (head final `6b7969b`, `develop@7ce32ea` included) is
+green in all 17 checks: `python-unit (ingest)` **268 passed / 6 skipped** and
+`integration (ingest)` **77 passed / 11 skipped / 1 xfailed**, plus `docs`, `web`,
+`e2e-smoke`, `integration (api)`, `build-images`, `secret-scan` and the compose/Caddy
+checks. No provider/Riva call, no secret and no `apps/web` change.
