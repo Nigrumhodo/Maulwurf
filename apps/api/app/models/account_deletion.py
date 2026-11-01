@@ -33,7 +33,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, created_at, uuid_pk
 
-DELETION_STATUSES = ("pending", "completed", "completed_with_remote_failures")
+# `running` is the atomic claim between two executions; `claimed_at` bounds that claim so a
+# crashed process can be resumed instead of leaving the operation stuck.
+DELETION_STATUSES = ("pending", "running", "completed", "completed_with_remote_failures")
 REMOTE_KINDS = ("delete_event", "delete_calendar", "account_cleanup")
 REMOTE_STATUSES = ("pending", "running", "succeeded", "failed")
 
@@ -63,6 +65,10 @@ class AccountDeletion(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = created_at()
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Execution claim: one caller runs the remote step and the purge; a stale claim is
+    # reclaimable after the lease expires so a crash does not strand the operation.
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
 
 class GoogleRemoteOperation(Base):
@@ -79,6 +85,8 @@ class GoogleRemoteOperation(Base):
         CheckConstraint(_in("kind", REMOTE_KINDS), name="kind"),
         CheckConstraint(_in("status", REMOTE_STATUSES), name="status"),
         Index("google_remote_operations_by_user", "user_id", "status"),
+        # The identifiers are purged after the same residual window as `account_deletions`.
+        Index("google_remote_operations_expiry", "expires_at"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -95,3 +103,5 @@ class GoogleRemoteOperation(Base):
     error_code: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = created_at()
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # A remote id must not outlive the residual window: the retention job deletes the row.
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

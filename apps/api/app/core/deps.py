@@ -145,7 +145,8 @@ MutationSession = Annotated[Session, Depends(require_mutation)]
 async def require_mutation_any(request: Request, session: DeletionSession) -> Session:
     """Same CSRF/Origin rule, but also accepts the restricted deletion session.
 
-    A4.4 allows exactly one mutation from that session: logout. The status route is a GET.
+    A4.4 allows exactly two mutations from that session: logout and an authorized resume of
+    its own deletion. The status route is a GET.
     """
     if request.method not in MUTATING_METHODS:
         return session

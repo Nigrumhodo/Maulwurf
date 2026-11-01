@@ -698,9 +698,9 @@ operation and `GET /me/deletion/{id}` reports it). The Web client flows are D4.x
 
 | Aspect | Contract |
 |---|---|
-| Google events | No third-party events are deleted, nor deletions without authorization; without permissions deletion in Google is not guaranteed |
-| Residual record | `account_deletions` keeps only what is needed to report the result, without profile or text |
-| Operation states | `pending`, `completed` and `completed_with_remote_failures` |
+| Google events | No third-party events are deleted, nor deletions without authorization; without permissions deletion in Google is not guaranteed. `delete_maulwurf_events=false` (default) keeps Maulwurf-created events and only purges local tasks/links |
+| Residual record | `account_deletions` keeps only what is needed to report the result, without profile or text; expired rows in it and `google_remote_operations` are deleted by the scheduled retention job |
+| Operation states | `pending`, `running`, `completed` and `completed_with_remote_failures`; a post-tombstone failure is resumable via `POST /me/deletion/{id}/resume` |
 | Backups | Encrypted text and metadata only; deletions are reapplied on restore (validated in F3) |
 
 ## 11. P8 · Team Process: Sprint, Claim, PR and Definition of Done

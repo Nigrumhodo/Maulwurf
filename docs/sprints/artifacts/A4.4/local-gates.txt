@@ -1,7 +1,9 @@
-A4.4 — local gate evidence (MAULW-134)
+A4.4 — local gate evidence (MAULW-134), review fix1
 Date: 2026-11-01 (UTC)
 Host: Linux sandbox, PostgreSQL 16.15 (localhost:5432), Redis 7.0.15
 Worktree: task/MAULW-134
+Scope: fix hoplite findings 1–3 and 5 on head 1286130 (resumable operation, atomic claim,
+residual retention, explicit delete_maulwurf_events default). apps/web untouched.
 
 Commands and results
 --------------------
@@ -12,7 +14,7 @@ Commands and results
    -> Success: no issues found in 255 source files
 
 3. cd apps/api && uv run pytest tests/unit -q
-   -> 2 failed, 1380 passed, 35 warnings in 29.84s
+   -> 2 failed, 1383 passed, 35 warnings in 17.05s
    The two failures are the pre-existing bracketed-IPv6 NO_PROXY parsing failures also
    recorded for A3.8/S4.5:
      tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured
@@ -20,34 +22,62 @@ Commands and results
 
 4. cd apps/api && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 \
        uv run pytest tests/unit -q
-   -> 1382 passed, 35 warnings in 14.39s
+   -> 1385 passed, 35 warnings in 11.53s
    (The sanitized proxy environment removes the pre-existing httpx failures; no test or
    production code was changed to hide them.)
 
-5. cd apps/api && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 \
-       uv run pytest -m integration -q
-   -> 647 passed, 1383 deselected, 693 warnings in 139.96s (0:02:19)
-   Includes the 9 I-S4-AN-04/RLS cases (8 in tests/integration/test_account_deletion.py
-   plus the app-role deletion case in test_rls.py), the migration round-trip/drift suite,
-   the FK-covering-index guard and test_rls.py.
-   One intermediate run hit the pre-existing shared-Redis `search:quota:` leftover
-   (37 s TTL) when test_redis_policy scanned DB 0; after that key expired the full suite
-   passed. No code was changed for it.
+5. cd apps/api && uv run pytest tests/integration/test_account_deletion.py -q
+   -> 13 passed, 25 warnings in 4.97s
+   The 5 new cases are:
+     test_purge_failure_keeps_202_and_the_restricted_session_can_resume
+     test_resume_reclaims_an_operation_stranded_in_running
+     test_resume_requires_csrf_and_owners_the_operation
+     test_concurrent_executions_claim_once_and_call_google_once
+     test_retention_purge_deletes_expired_residuals_in_batches
 
-6. python3 scripts/docs/check_refs.py
+6. cd apps/api && uv run pytest tests/integration/test_migrations.py \
+       tests/integration/test_rls.py -q
+   -> 39 passed, 134 warnings in 44.05s
+   Includes the app-role account-deletion case, the migration round-trip, the schema-drift
+   guard and the forced-RLS catalog assertions.
+
+7. cd apps/api && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 \
+       uv run pytest -m integration -q
+   -> 652 passed, 1386 deselected, 699 warnings in 145.35s (0:02:25)
+
+8. python3 scripts/docs/check_refs.py
    -> OK: 897 documented repository paths exist or are expected.
 
-7. PR #145 Quality CI run 41280150478 (head 8963d22)
-   -> all 17 checks green, including python-unit (api), integration (api),
-      integration (ingest), e2e-smoke, docs and secret-scan.
+9. git diff --check
+   -> no whitespace errors
+
+What the new evidence proves
+----------------------------
+- A purge exception after the durable tombstone: the router logs only the operation id and
+  returns 202; the operation is left `pending` with `claimed_at = NULL`. The resume route
+  (restricted initiator cookie + Origin/CSRF, owner-scoped) completes it, and the fake
+  Calendar transport receives no second DELETE for the already-succeeded event.
+- A process crash after the atomic claim: a stale `running` row with `claimed_at` older than
+  the 1 h lease is reclaimed by the same resume route and reaches `completed`.
+- Concurrent executions on independent PostgreSQL connections: the second caller returns
+  `running` without running the purge or the remote step; the operation ends `completed`
+  with `attempts = 1` and each `google_remote_operations` row keeps `attempts = 1`.
+- Retention: expired rows of `account_deletions` and `google_remote_operations` are deleted
+  in batches of one (1/1, 1/1, 0/0) while the unexpired row survives, executed as
+  `maulwurf_jobs` with `app.cross_tenant = on` under forced RLS.
+- `google_remote_operations.expires_at` equals the owning `account_deletions.expires_at`.
+- Docs: the spec and implementation plan record the applied retention and the
+  `delete_maulwurf_events=false` default (Maulwurf-created Google events stay unless the user
+  opts in).
 
 Scope/security notes
 --------------------
 - No real Google/Riva/LLM call: the Calendar leg uses httpx.MockTransport with a synthetic
   encrypted credential; no secret or token is printed or persisted.
 - apps/web was not touched.
-- The remote deletion is executed inline before the token purge; the integration cases
-  assert the Calendar DELETE calls carry the bearer token and that the credential row is
-  gone afterwards.
-- No migration was applied to the shared development database; the integration fixture
-  migrates an isolated database from empty to head (0014).
+- Migration 0014 was edited in place (no second 0014, no new revision); no migration was
+  applied to the shared development database. The integration fixture migrates an isolated
+  database from empty to head (0014).
+- Latency finding 4 is documented, not hidden: the remote phase still runs inline after the
+  tombstone and `202`; the resume route is the explicit recovery path. Moving it to a worker
+  remains out of this fix's scope.

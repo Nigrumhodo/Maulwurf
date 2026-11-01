@@ -5,19 +5,23 @@ afecta a digests futuros y no a las fechas de clases ya registradas (snapshot en
 Settings de Calendar llegan en S3 y preferencias Gmail/digests en S4.
 
 A4.4 adds `DELETE /me` and `GET /me/deletion/{id}`. The first call applies the tombstone,
-revokes the other sessions and runs the operation; the initiating session enters restricted
-mode, so from then on only the deletion status and logout are reachable with its cookie.
+revokes the other sessions and starts the operation; the initiating session enters restricted
+mode, so from then on only the deletion status, the authorized resume and logout are reachable
+with its cookie. `POST /me/deletion/{id}/resume` retries a `pending`/`running` operation with
+the same CSRF/Origin checks.
 """
+import logging
 import uuid
 from datetime import datetime
 from typing import Annotated, Literal, cast
 
 import httpx
-from fastapi import APIRouter, Body, Depends, Request, Response
+from fastapi import APIRouter, Body, Depends, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.deps import (
     COOKIE_NAME,
+    AnyMutationSession,
     CurrentSession,
     DbSession,
     DeletionSession,
@@ -29,6 +33,8 @@ from app.models import AccountDeletion, User
 from app.models import Session as SessionRow
 from app.services import deletion
 from app.services.sessions import csrf_token_for
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["me"])
 
@@ -67,7 +73,9 @@ class AccountDeletionAccepted(BaseModel):
 
 class AccountDeletionStatus(BaseModel):
     id: str
-    status: Literal["pending", "completed", "completed_with_remote_failures"]
+    status: Literal[
+        "pending", "running", "completed", "completed_with_remote_failures"
+    ]
     delete_maulwurf_events: bool
     created_at: datetime
     completed_at: datetime | None
@@ -146,8 +154,10 @@ async def delete_me(
     """Start account deletion (A4.4): tombstone, operation, then purge.
 
     The tombstone transaction is committed before the remote work, so a provider failure
-    cannot leave the account active. The restricted session returned here can only read
-    `GET /me/deletion/{id}` and log out; every other session was revoked.
+    cannot leave the account active. Once the tombstone is durable the contract is `202
+    accepted`: an exception in the purge is logged by operation id and the operation stays
+    resumable through `POST /me/deletion/{id}/resume`. The remote phase runs inline (see the
+    PR note on latency); a retry never repeats an already-succeeded Google deletion.
     """
     request_body = body or AccountDeletionRequest()
     operation = await deletion.create_account_deletion(
@@ -158,7 +168,14 @@ async def delete_me(
     )
     deletion_id = operation.id
     await db.commit()
-    await deletion.execute_account_deletion(db, deletion_id, transport=transport)
+    try:
+        await deletion.execute_account_deletion(db, deletion_id, transport=transport)
+    except Exception:
+        # Why: the tombstone is already durable, so returning 500 would misstate the
+        # contract and leave the client without the operation id. Log only the id: an
+        # exception message may contain profile or provider payloads.
+        logger.error("account_deletion.left_pending deletion_id=%s", deletion_id)
+        await db.rollback()
     response.headers["Cache-Control"] = "no-store"
     return AccountDeletionAccepted(deletion_operation_id=str(deletion_id))
 
@@ -167,7 +184,9 @@ def _status(operation: AccountDeletion) -> AccountDeletionStatus:
     return AccountDeletionStatus(
         id=str(operation.id),
         status=cast(
-            Literal["pending", "completed", "completed_with_remote_failures"],
+            Literal[
+                "pending", "running", "completed", "completed_with_remote_failures"
+            ],
             operation.status,
         ),
         delete_maulwurf_events=operation.delete_events,
@@ -178,11 +197,72 @@ def _status(operation: AccountDeletion) -> AccountDeletionStatus:
     )
 
 
+@router.post(
+    "/me/deletion/{deletion_id}/resume",
+    status_code=202,
+    response_model=AccountDeletionStatus,
+    responses={
+        200: {"description": "La operación ya estaba cerrada; reintento idempotente"},
+        202: {"description": "Reanudada; la operación sigue pendiente o en ejecución"},
+        401: {"description": "Sin sesión o sesión restringida de otra operación"},
+        403: {"description": "CSRF u Origin inválido (csrf_invalid)"},
+        404: {"description": "Operación inexistente, ajena o expirada (not_found)"},
+    },
+)
+async def resume_deletion(
+    deletion_id: uuid.UUID,
+    response: Response,
+    session: AnyMutationSession,
+    db: DbSession,
+    transport: DeletionGoogleTransport,
+) -> AccountDeletionStatus:
+    """Resume a deletion whose execution failed after the tombstone.
+
+    The restricted initiator session is the only credential the account still has, so it is
+    allowed here (with the usual Origin/CSRF check) while every other route rejects it. The
+    operation must belong to that user and, for a restricted session, be exactly its own
+    operation. A completed operation is a no-op that returns its final status.
+    """
+    operation = await deletion.get_account_deletion(
+        db,
+        deletion_id=deletion_id,
+        user_id=session.user_id,
+        session_deletion_id=session.deletion_operation_id,
+    )
+    if operation.status in {"pending", "running"}:
+        # Capture plain values before executing: the claim commits and may expire the ORM
+        # session object, and the re-read must not reload it outside an await.
+        user_id = session.user_id
+        session_deletion_id = session.deletion_operation_id
+        try:
+            await deletion.execute_account_deletion(db, deletion_id, transport=transport)
+        except Exception:
+            logger.error("account_deletion.resume_left_pending deletion_id=%s", deletion_id)
+            await db.rollback()
+        operation = await deletion.get_account_deletion(
+            db,
+            deletion_id=deletion_id,
+            user_id=user_id,
+            session_deletion_id=session_deletion_id,
+        )
+    response.headers["Cache-Control"] = "no-store"
+    response.status_code = (
+        status.HTTP_202_ACCEPTED
+        if operation.status in {"pending", "running"}
+        else status.HTTP_200_OK
+    )
+    return _status(operation)
+
+
 @router.get(
     "/me/deletion/{deletion_id}",
     response_model=AccountDeletionStatus,
     responses={
-        200: {"description": "Estado pendiente, completado o completado con fallos remotos"},
+        200: {
+            "description": (
+                "Estado pendiente, en ejecución, completado o completado con fallos remotos"
+            )
+        },
         401: {"description": "Sin sesión o sesión restringida de otra operación"},
         404: {"description": "Operación inexistente, ajena o expirada (not_found)"},
     },

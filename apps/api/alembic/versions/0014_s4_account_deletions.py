@@ -95,8 +95,12 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("claimed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "attempts", sa.Integer(), server_default=sa.text("0"), nullable=False
+        ),
         sa.CheckConstraint(
-            "status IN ('pending','completed','completed_with_remote_failures')",
+            "status IN ('pending','running','completed','completed_with_remote_failures')",
             name="ck_account_deletions_status",
         ),
         sa.PrimaryKeyConstraint("id", name="pk_account_deletions"),
@@ -140,6 +144,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
             "kind IN ('delete_event','delete_calendar','account_cleanup')",
             name="ck_google_remote_operations_kind",
@@ -163,12 +168,20 @@ def upgrade() -> None:
         "google_remote_operations",
         ["user_id", "status"],
     )
+    op.create_index(
+        "google_remote_operations_expiry",
+        "google_remote_operations",
+        ["expires_at"],
+    )
 
     _policy("account_deletions", "former_user_id")
     _policy("google_remote_operations", "user_id")
 
 
 def downgrade() -> None:
+    op.drop_index(
+        "google_remote_operations_expiry", table_name="google_remote_operations"
+    )
     op.drop_index(
         "google_remote_operations_by_user", table_name="google_remote_operations"
     )

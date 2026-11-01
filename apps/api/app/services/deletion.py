@@ -6,24 +6,39 @@ The operation is intentionally observable and resumable:
    (sessions, pending jobs, active ingestion attempts) and creates the residual
    `account_deletions` row. The initiating session is kept in restricted mode; every other
    session is revoked. Calling it twice returns the same operation id.
-2. `execute_account_deletion` runs the authorized Google deletions **while the encrypted
-   credential still exists**, records each remote id/status/redacted error, and only then
-   purges the tenant data, the profile and the tokens. A failure in one remote operation
-   never cancels the purge: the operation ends `completed_with_remote_failures` so the user
-   can see why. Running it again after completion is a no-op; a partially executed operation
-   resumes without duplicating remote rows.
+2. `execute_account_deletion` claims the operation atomically (`pending -> running`, with a
+   bounded lease) and runs the authorized Google deletions **while the encrypted credential
+   still exists**, records each remote id/status/redacted error, and only then purges the
+   tenant data, the profile and the tokens. A failure in one remote operation never cancels
+   the purge: the operation ends `completed_with_remote_failures` so the user can see why.
+   A caller that loses the claim is a no-op; an exception in the purge releases the claim so
+   `POST /me/deletion/{id}/resume` can run it again. Running it again after completion is a
+   no-op, and already-succeeded remote operations are not sent to Google twice.
+3. `purge_expired_residuals` deletes expired `account_deletions` and
+   `google_remote_operations` rows in bounded batches. It is the retention promise, not just
+   a read filter: the scheduled scheduler job runs it as the cross-tenant jobs role.
 
 No profile, transcript text, prompt or token is copied to the residual rows. The redacted
 error summary is a comma-separated list of closed provider codes.
 """
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 from urllib.parse import quote
 
 import httpx
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import (
+    CursorResult,
+    Result,
+    and_,
+    delete,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -64,10 +79,17 @@ from app.services.google_calendar import (
 )
 from app.services.google_tokens import GoogleTokenError, fresh_access_token
 
+logger = logging.getLogger(__name__)
+
 # Provisional retention of the residual operation. It mirrors the proposed 30-day maximum
 # for encrypted backups (ESPECIFICACION, privacy section); A4.5/D8 must confirm it before
-# it is presented as a retention guarantee. The status route answers 404 after it.
+# it is presented as a retention guarantee. The status route answers 404 after it, and the
+# scheduled purge deletes both residual tables once it passes.
 RESIDUAL_RETENTION_DAYS = 30
+# A live execution keeps this claim; a crash releases it only after the lease, never while
+# another caller could still be running the same remote deletes.
+EXECUTION_LEASE = timedelta(hours=1)
+PURGE_BATCH_SIZE = 500
 MAX_ERROR_SUMMARY = 250
 
 
@@ -80,6 +102,12 @@ class RemoteTarget:
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _rowcount(result: Result[Any]) -> int:
+    # A DML returns `CursorResult` at runtime; the claim/close decisions depend on the rows
+    # actually changed, never on the object's in-memory state.
+    return int(cast("CursorResult[Any]", result).rowcount or 0)
 
 
 def _remote_targets(
@@ -201,53 +229,204 @@ async def execute_account_deletion(
     *,
     transport: httpx.BaseTransport | None = None,
 ) -> str:
-    """Run the remote step, purge, and close the operation; safe to call twice."""
-    row = (
+    """Claim, run the remote step and purge, then close the operation; safe to call twice.
+
+    Only the caller that wins the atomic `pending -> running` claim performs the remote
+    deletes and the purge. Any other caller returns the current status, so a double click or
+    a concurrent retry cannot duplicate Google requests or corrupt `attempts`.
+    """
+    claim = await _claim_operation(db, deletion_id)
+    if claim is None:
+        return await _current_status(db, deletion_id)
+    former_user_id, delete_events, claimed_at, expires_at = claim
+
+    try:
+        if delete_events:
+            await _execute_remote(
+                db,
+                user_id=former_user_id,
+                transport=transport,
+                expires_at=expires_at,
+            )
+
+        await _purge_user_data(db, user_id=former_user_id, deletion_id=deletion_id)
+        error_codes = (
+            await db.scalars(
+                select(GoogleRemoteOperation.error_code)
+                .where(
+                    GoogleRemoteOperation.user_id == former_user_id,
+                    GoogleRemoteOperation.status == "failed",
+                    GoogleRemoteOperation.error_code.is_not(None),
+                )
+                .distinct()
+            )
+        ).all()
+        errors = sorted({str(code) for code in error_codes if code})
+        status = "completed_with_remote_failures" if errors else "completed"
+        closed = await db.execute(
+            update(AccountDeletion)
+            .where(
+                AccountDeletion.id == deletion_id,
+                AccountDeletion.status == "running",
+                # Fencing: never close a lease that another caller has since reclaimed.
+                AccountDeletion.claimed_at == claimed_at,
+            )
+            .values(
+                status=status,
+                completed_at=_now(),
+                claimed_at=None,
+                error_summary=", ".join(errors)[:MAX_ERROR_SUMMARY] if errors else None,
+            )
+        )
+        await db.commit()
+        if _rowcount(closed) != 1:
+            return await _current_status(db, deletion_id)
+        return status
+    except Exception:
+        # The 202 contract already accepted the deletion. Release the claim so the restricted
+        # session can resume immediately; if this release fails, the lease allows a retry.
+        await _release_claim(db, deletion_id, claimed_at=claimed_at)
+        raise
+
+
+async def _claim_operation(
+    db: AsyncSession, deletion_id: uuid.UUID
+) -> tuple[uuid.UUID, bool, datetime, datetime] | None:
+    """Atomically take ownership of a pending or lease-expired operation.
+
+    The `UPDATE ... RETURNING` both serializes concurrent callers and releases the row lock
+    at the commit, before any network call. `claimed_at` is the fence the caller must present
+    when closing or releasing the operation.
+    """
+    now = _now()
+    claim = (
         await db.execute(
-            select(
+            update(AccountDeletion)
+            .where(
+                AccountDeletion.id == deletion_id,
+                AccountDeletion.expires_at > now,
+                or_(
+                    AccountDeletion.status == "pending",
+                    and_(
+                        AccountDeletion.status == "running",
+                        or_(
+                            AccountDeletion.claimed_at.is_(None),
+                            AccountDeletion.claimed_at <= now - EXECUTION_LEASE,
+                        ),
+                    ),
+                ),
+            )
+            .values(
+                status="running",
+                claimed_at=now,
+                attempts=AccountDeletion.attempts + 1,
+            )
+            .returning(
                 AccountDeletion.former_user_id,
-                AccountDeletion.status,
                 AccountDeletion.delete_events,
-            ).where(AccountDeletion.id == deletion_id)
+                AccountDeletion.claimed_at,
+                AccountDeletion.expires_at,
+            )
         )
     ).one_or_none()
-    if row is None:
-        raise not_found()
-    if row.status != "pending":
-        return str(row.status)
-
-    if row.delete_events:
-        await _execute_remote(
-            db, user_id=row.former_user_id, transport=transport
-        )
-
-    await _purge_user_data(
-        db, user_id=row.former_user_id, deletion_id=deletion_id
-    )
-    error_codes = (
-        await db.scalars(
-            select(GoogleRemoteOperation.error_code)
-            .where(
-                GoogleRemoteOperation.user_id == row.former_user_id,
-                GoogleRemoteOperation.status == "failed",
-                GoogleRemoteOperation.error_code.is_not(None),
-            )
-            .distinct()
-        )
-    ).all()
-    errors = sorted({str(code) for code in error_codes if code})
-    status = "completed_with_remote_failures" if errors else "completed"
-    await db.execute(
-        update(AccountDeletion)
-        .where(AccountDeletion.id == deletion_id)
-        .values(
-            status=status,
-            completed_at=_now(),
-            error_summary=", ".join(errors)[:MAX_ERROR_SUMMARY] if errors else None,
-        )
-    )
+    # The lock is held until commit; drop it before the remote step so other callers can
+    # observe `running` instead of blocking on the row.
     await db.commit()
-    return status
+    if claim is None:
+        return None
+    return (
+        claim.former_user_id,
+        claim.delete_events,
+        claim.claimed_at,
+        claim.expires_at,
+    )
+
+
+async def _current_status(db: AsyncSession, deletion_id: uuid.UUID) -> str:
+    status = await db.scalar(
+        select(AccountDeletion.status).where(AccountDeletion.id == deletion_id)
+    )
+    if status is None:
+        raise not_found()
+    return str(status)
+
+
+async def _release_claim(
+    db: AsyncSession, deletion_id: uuid.UUID, *, claimed_at: datetime
+) -> None:
+    """Best-effort `running -> pending`, fenced by the caller's claim; then re-raise."""
+    try:
+        await db.rollback()
+    except Exception as exc:
+        logger.warning(
+            "account_deletion.rollback_failed deletion_id=%s error=%s",
+            deletion_id,
+            type(exc).__name__,
+        )
+    try:
+        await db.execute(
+            update(AccountDeletion)
+            .where(
+                AccountDeletion.id == deletion_id,
+                AccountDeletion.status == "running",
+                AccountDeletion.claimed_at == claimed_at,
+            )
+            .values(status="pending", claimed_at=None)
+        )
+        await db.commit()
+    except Exception as exc:
+        # The lease still allows a later resume; do not mask the original failure.
+        logger.warning(
+            "account_deletion.claim_release_failed deletion_id=%s error=%s",
+            deletion_id,
+            type(exc).__name__,
+        )
+        await db.rollback()
+
+
+async def purge_expired_residuals(
+    db: AsyncSession,
+    *,
+    now: datetime | None = None,
+    limit: int = PURGE_BATCH_SIZE,
+) -> dict[str, int]:
+    """Delete expired residual rows in bounded batches; idempotent.
+
+    Both tables are purged: `account_deletions` (former opaque id, status, expiry) and
+    `google_remote_operations` (remote calendar/event ids). The caller owns the transaction;
+    the scheduler runs it hourly as `maulwurf_jobs` with `app.cross_tenant = on`, because
+    forced RLS otherwise limits the job to one tenant.
+    """
+    if limit < 1:
+        raise ValueError("limit must be positive")
+    clock = now or _now()
+
+    expired_operations = (
+        select(GoogleRemoteOperation.id)
+        .where(GoogleRemoteOperation.expires_at <= clock)
+        .order_by(GoogleRemoteOperation.expires_at, GoogleRemoteOperation.id)
+        .limit(limit)
+    )
+    operations = await db.execute(
+        delete(GoogleRemoteOperation).where(
+            GoogleRemoteOperation.id.in_(expired_operations)
+        )
+    )
+
+    expired_deletions = (
+        select(AccountDeletion.id)
+        .where(AccountDeletion.expires_at <= clock)
+        .order_by(AccountDeletion.expires_at, AccountDeletion.id)
+        .limit(limit)
+    )
+    deletions = await db.execute(
+        delete(AccountDeletion).where(AccountDeletion.id.in_(expired_deletions))
+    )
+
+    return {
+        "google_remote_operations": _rowcount(operations),
+        "account_deletions": _rowcount(deletions),
+    }
 
 
 async def get_account_deletion(
@@ -278,6 +457,7 @@ async def _execute_remote(
     *,
     user_id: uuid.UUID,
     transport: httpx.BaseTransport | None,
+    expires_at: datetime,
 ) -> None:
     """Delete the authorized Google resources; record every outcome in the residual table."""
     task_rows = [
@@ -337,6 +517,7 @@ async def _execute_remote(
             kind=target.kind,
             calendar_id=target.calendar_id,
             event_id=target.event_id,
+            expires_at=expires_at,
         )
         operations.append(operation)
     operation_ids = [operation.id for operation in operations]
@@ -358,6 +539,8 @@ async def _execute_remote(
 
     if credential_error is not None:
         for operation in operations:
+            if operation.status == "succeeded":
+                continue
             operation.status = "failed"
             operation.error_code = credential_error
             operation.finished_at = _now()
@@ -368,6 +551,8 @@ async def _execute_remote(
         # `fresh_access_token` either returns a token or raises; this is a fail-closed guard
         # for a future adapter change, never a path that calls Google without a token.
         for operation in operations:
+            if operation.status == "succeeded":
+                continue
             operation.status = "failed"
             operation.error_code = "credential_unreadable"
             operation.finished_at = _now()
@@ -377,6 +562,9 @@ async def _execute_remote(
     service = GoogleCalendarService(access_token=access_token, transport=transport)
     invalid_grant = False
     for operation in operations:
+        # A resumed operation must not repeat an already-acknowledged remote DELETE.
+        if operation.status == "succeeded":
+            continue
         if invalid_grant:
             operation.status = "failed"
             operation.error_code = "google_calendar_invalid_grant"
@@ -419,6 +607,7 @@ async def _ensure_operation(
     kind: str,
     calendar_id: str,
     event_id: str | None,
+    expires_at: datetime,
 ) -> GoogleRemoteOperation:
     inserted = await db.scalar(
         pg_insert(GoogleRemoteOperation)
@@ -429,6 +618,8 @@ async def _ensure_operation(
             event_id=event_id,
             authorized=True,
             status="pending",
+            # Same window as the operation that authorized this remote id.
+            expires_at=expires_at,
         )
         # A concurrent retry may have created the same identity row; the unique constraint
         # with NULLS NOT DISTINCT makes "insert or reuse" atomic instead of a race.

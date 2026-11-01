@@ -1,4 +1,4 @@
-"""I-S4-AN-04 (A4.4): account deletion with an observable, idempotent operation.
+"""I-S4-AN-04 (A4.4): account deletion with an observable, resumable operation.
 
 The suite runs the real HTTP router against PostgreSQL. Google Calendar is a deterministic
 `httpx.MockTransport` double: no request leaves the process, no real credential is used, and
@@ -9,14 +9,20 @@ Covered:
   initiating session, revokes the others and stops jobs.
 - The purge removes profile, text, derivatives and tokens; the residual operation keeps only
   status, authorization and a redacted error.
-- `GET /me/deletion/{id}` exposes `pending|completed|completed_with_remote_failures`, only to
-  the former owner, with `Cache-Control: no-store`, and expires.
-- Authorized Google deletion runs before the tokens disappear; a failure is reported as
-  `completed_with_remote_failures` instead of pretending success.
+- A purge failure after the tombstone keeps the `202` contract, leaves the operation
+  `pending`, logs only the id, and `POST /me/deletion/{id}/resume` completes it without
+  repeating an already-succeeded Google DELETE.
+- Concurrent executions are serialized by an atomic claim: one runs the remote step and the
+  purge, the other observes `running`.
+- The scheduled retention purge deletes expired `account_deletions` and
+  `google_remote_operations` rows in batches under the cross-tenant jobs role.
+- `GET /me/deletion/{id}` exposes `pending|running|completed|completed_with_remote_failures`,
+  only to the former owner, with `Cache-Control: no-store`, and expires.
 - A second execution is a no-op, and a second `DELETE /me` cannot be issued by the restricted
   session.
 """
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -27,8 +33,14 @@ import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select, text, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.pool import NullPool
 
+from app.core import db as core_db
 from app.core.config import settings
 from app.core.db import get_session
 from app.core.deps import COOKIE_NAME
@@ -63,6 +75,7 @@ pytestmark = pytest.mark.integration
 
 CALENDAR_ID = "maulwurf@group.calendar.example"
 EVENT_ID = "maulmaulmaulmaulmaulmaulmaulmaul"
+JOBS_ROLE = "maulwurf_jobs"
 TENANT_TABLES = (
     "subjects",
     "audios",
@@ -145,6 +158,20 @@ async def _delete_me(
         "DELETE",
         "/me",
         json=payload,
+        cookies=actor.cookies,
+        headers=headers if headers is not None else actor.headers,
+    )
+
+
+async def _resume_deletion(
+    client: AsyncClient,
+    actor: Actor,
+    deletion_id: uuid.UUID,
+    *,
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
+    return await client.post(
+        f"/me/deletion/{deletion_id}/resume",
         cookies=actor.cookies,
         headers=headers if headers is not None else actor.headers,
     )
@@ -336,6 +363,7 @@ async def test_delete_me_runs_authorized_google_deletion_before_tokens_are_remov
     assert operation is not None
     assert operation.status == "completed"
     assert operation.delete_events is True
+    assert all(op.expires_at == operation.expires_at for op in operations)
 
 
 async def test_remote_failure_is_reported_and_still_purges(
@@ -542,3 +570,305 @@ async def test_missing_csrf_does_not_create_a_deletion(
         .where(AccountDeletion.former_user_id == actor.user_id)
     )
     assert count == 0
+
+
+async def test_purge_failure_keeps_202_and_the_restricted_session_can_resume(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    actor = await make_actor(db_session)
+    task = await make_task(db_session, actor)
+    task.calendar_sync_status = "synced"
+    task.calendar_id = CALENDAR_ID
+    task.calendar_event_id = EVENT_ID
+    await make_google_credential(db_session, actor)
+    await db_session.flush()
+
+    real_purge = deletion._purge_user_data
+    calls = {"purge": 0}
+
+    async def flaky_purge(
+        db: AsyncSession, *, user_id: uuid.UUID, deletion_id: uuid.UUID
+    ) -> None:
+        calls["purge"] += 1
+        if calls["purge"] == 1:
+            # Canaries: neither the exception text nor a profile value may reach logs.
+            raise RuntimeError("CANARIO-7f3a9c user@example.test")
+        await real_purge(db, user_id=user_id, deletion_id=deletion_id)
+
+    monkeypatch.setattr(deletion, "_purge_user_data", flaky_purge)
+    google = FakeGoogle()
+    _use_google(google.transport)
+
+    with caplog.at_level("ERROR", logger="app"):
+        response = await _delete_me(client, actor, delete_events=True)
+
+    # The tombstone is durable: the 202 is "accepted" even when the purge failed.
+    assert response.status_code == 202
+    deletion_id = uuid.UUID(response.json()["deletion_operation_id"])
+    assert response.json() == {"deletion_operation_id": str(deletion_id)}
+    assert "CANARIO-7f3a9c" not in caplog.text
+    assert "user@example.test" not in caplog.text
+    assert str(deletion_id) in caplog.text
+
+    db_session.expire_all()
+    operation = await db_session.get(AccountDeletion, deletion_id)
+    assert operation is not None
+    assert operation.status == "pending"
+    assert operation.attempts == 1
+    assert operation.claimed_at is None
+
+    # Remote DELETEs already succeeded; the resume must not send them again.
+    remote_paths = google.delete_paths()
+    assert remote_paths
+    pending = await client.get(f"/me/deletion/{deletion_id}", cookies=actor.cookies)
+    assert pending.status_code == 200
+    assert pending.json()["status"] == "pending"
+
+    resumed = await _resume_deletion(client, actor, deletion_id)
+
+    assert resumed.status_code == 200
+    assert resumed.headers["cache-control"] == "no-store"
+    assert resumed.json()["status"] == "completed"
+    assert google.delete_paths() == remote_paths
+    assert await _count(db_session, "tasks", actor.user_id) == 0
+    assert await db_session.get(GoogleCredential, actor.user_id) is None
+
+
+async def test_resume_reclaims_an_operation_stranded_in_running(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await make_actor(db_session)
+    await make_attempt(db_session, actor)
+    operation = await deletion.create_account_deletion(
+        db_session,
+        user_id=actor.user_id,
+        session_id=actor.session.id,
+        delete_events=False,
+    )
+    deletion_id = operation.id
+    await db_session.commit()
+
+    # Simulates a process crash after the claim: no release ran, so only the lease expires.
+    await db_session.execute(
+        update(AccountDeletion)
+        .where(AccountDeletion.id == deletion_id)
+        .values(
+            status="running",
+            claimed_at=datetime.now(UTC) - deletion.EXECUTION_LEASE - timedelta(seconds=1),
+            attempts=1,
+        )
+    )
+    await db_session.commit()
+
+    resumed = await _resume_deletion(client, actor, deletion_id)
+
+    assert resumed.status_code == 200
+    assert resumed.json()["status"] == "completed"
+    db_session.expire_all()
+    stored = await db_session.get(AccountDeletion, deletion_id)
+    assert stored is not None
+    assert stored.status == "completed"
+    assert stored.attempts == 2
+    assert stored.claimed_at is None
+
+
+async def test_resume_requires_csrf_and_owners_the_operation(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await make_actor(db_session)
+    other = await make_actor(db_session)
+    operation = await deletion.create_account_deletion(
+        db_session,
+        user_id=actor.user_id,
+        session_id=actor.session.id,
+        delete_events=False,
+    )
+    deletion_id = operation.id
+    await db_session.commit()
+
+    no_csrf = await _resume_deletion(client, actor, deletion_id, headers={})
+    assert no_csrf.status_code == 403
+    assert no_csrf.json()["error"]["code"] == "csrf_invalid"
+
+    foreign = await _resume_deletion(client, other, deletion_id)
+    assert foreign.status_code == 404
+
+
+async def test_concurrent_executions_claim_once_and_call_google_once(
+    migrated_database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two executions with independent connections: one claims, the other observes running."""
+    engine = create_async_engine(migrated_database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    user_id: uuid.UUID | None = None
+
+    try:
+        async with factory() as db:
+            actor = await make_actor(db)
+            user_id = actor.user_id
+            task = await make_task(db, actor)
+            task.calendar_sync_status = "synced"
+            task.calendar_id = CALENDAR_ID
+            task.calendar_event_id = EVENT_ID
+            await make_google_credential(db, actor)
+            await db.flush()
+            operation = await deletion.create_account_deletion(
+                db,
+                user_id=actor.user_id,
+                session_id=actor.session.id,
+                delete_events=True,
+            )
+            deletion_id = operation.id
+            await db.commit()
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+        real_purge = deletion._purge_user_data
+        purge_calls = 0
+
+        async def gated_purge(
+            db: AsyncSession, *, user_id: uuid.UUID, deletion_id: uuid.UUID
+        ) -> None:
+            nonlocal purge_calls
+            purge_calls += 1
+            started.set()
+            await release.wait()
+            await real_purge(db, user_id=user_id, deletion_id=deletion_id)
+
+        monkeypatch.setattr(deletion, "_purge_user_data", gated_purge)
+        google = FakeGoogle()
+
+        async def run_execution() -> str:
+            async with factory() as db:
+                return await deletion.execute_account_deletion(
+                    db, deletion_id, transport=google.transport
+                )
+
+        first = asyncio.create_task(run_execution())
+        await asyncio.wait_for(started.wait(), timeout=10)
+
+        # The second caller sees the fresh claim and must not run the remote step/purge.
+        second_status = await asyncio.wait_for(run_execution(), timeout=10)
+        assert second_status == "running"
+        assert purge_calls == 1
+        assert len(google.delete_paths()) == 1
+
+        release.set()
+        assert await asyncio.wait_for(first, timeout=10) == "completed"
+        assert purge_calls == 1
+        assert len(google.delete_paths()) == 1
+
+        async with factory() as db:
+            stored = await db.get(AccountDeletion, deletion_id)
+            assert stored is not None
+            assert stored.status == "completed"
+            assert stored.attempts == 1
+            operations = (
+                await db.scalars(
+                    select(GoogleRemoteOperation).where(
+                        GoogleRemoteOperation.user_id == user_id
+                    )
+                )
+            ).all()
+            assert [operation.attempts for operation in operations] == [1]
+    finally:
+        core_db.clear_user()
+        if user_id is not None:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "DELETE FROM google_remote_operations WHERE user_id = :user_id"
+                    ),
+                    {"user_id": user_id},
+                )
+                await connection.execute(
+                    text(
+                        "DELETE FROM account_deletions WHERE former_user_id = :user_id"
+                    ),
+                    {"user_id": user_id},
+                )
+                await connection.execute(
+                    text("DELETE FROM users WHERE id = :user_id"), {"user_id": user_id}
+                )
+        await engine.dispose()
+
+
+async def test_retention_purge_deletes_expired_residuals_in_batches(
+    migrated_database_url: str,
+) -> None:
+    """The A4.4 window is applied by the job role with the explicit cross-tenant switch."""
+    now = datetime.now(UTC)
+    expired = now - timedelta(minutes=5)
+    alive = now + timedelta(days=1)
+    ids = {"expired_a": uuid.uuid4(), "expired_b": uuid.uuid4(), "alive": uuid.uuid4()}
+    engine = create_async_engine(migrated_database_url, poolclass=NullPool)
+
+    try:
+        async with engine.connect() as connection:
+            transaction = await connection.begin()
+            try:
+                for user_id, expiry in (
+                    (ids["expired_a"], expired),
+                    (ids["expired_b"], expired),
+                    (ids["alive"], alive),
+                ):
+                    await connection.execute(
+                        text(
+                            "INSERT INTO account_deletions (former_user_id, expires_at) "
+                            "VALUES (:user_id, :expires_at)"
+                        ),
+                        {"user_id": user_id, "expires_at": expiry},
+                    )
+                    await connection.execute(
+                        text(
+                            "INSERT INTO google_remote_operations "
+                            "(user_id, kind, expires_at) "
+                            "VALUES (:user_id, 'delete_event', :expires_at)"
+                        ),
+                        {"user_id": user_id, "expires_at": expiry},
+                    )
+
+                # The scheduler runs this cron as the worker role; RLS is forced.
+                await connection.execute(text(f'SET LOCAL ROLE "{JOBS_ROLE}"'))
+                await connection.execute(
+                    text("SELECT set_config('app.cross_tenant', 'on', true)")
+                )
+                db = AsyncSession(bind=connection, join_transaction_mode="create_savepoint")
+                try:
+                    first = await deletion.purge_expired_residuals(db, now=now, limit=1)
+                    second = await deletion.purge_expired_residuals(db, now=now, limit=1)
+                    third = await deletion.purge_expired_residuals(db, now=now, limit=1)
+                    # Release the savepoint so the deletes are visible in the outer
+                    # transaction (which the test rolls back at the end).
+                    await db.commit()
+                finally:
+                    await db.close()
+
+                remaining_deletions = await connection.scalar(
+                    text("SELECT count(*) FROM account_deletions")
+                )
+                remaining_operations = await connection.scalar(
+                    text("SELECT count(*) FROM google_remote_operations")
+                )
+                remaining_user = await connection.scalar(
+                    text(
+                        "SELECT former_user_id FROM account_deletions "
+                        "WHERE former_user_id = :user_id"
+                    ),
+                    {"user_id": ids["alive"]},
+                )
+            finally:
+                if transaction.is_active:
+                    await transaction.rollback()
+    finally:
+        await engine.dispose()
+
+    assert first == {"google_remote_operations": 1, "account_deletions": 1}
+    assert second == {"google_remote_operations": 1, "account_deletions": 1}
+    assert third == {"google_remote_operations": 0, "account_deletions": 0}
+    assert remaining_deletions == 1
+    assert remaining_operations == 1
+    assert remaining_user == ids["alive"]
