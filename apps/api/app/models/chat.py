@@ -32,6 +32,9 @@ class Conversation(TenantOwned, Base):
         ),
         CheckConstraint("mode <> 'subject' OR subject_id IS NOT NULL", name="subject_scope"),
         CheckConstraint("mode <> 'class' OR audio_id IS NOT NULL", name="class_scope"),
+        # Supporting indexes for the composite FKs (DISENO §2.1.8).
+        Index("conversations_by_subject", "user_id", "subject_id"),
+        Index("conversations_by_audio", "user_id", "audio_id"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -64,6 +67,7 @@ class Message(TenantOwned, Base):
             unique=True,
             postgresql_where=text("client_message_id IS NOT NULL"),
         ),
+        Index("messages_by_conversation", "user_id", "conversation_id"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -87,8 +91,12 @@ class MessageSource(TenantOwned, Base):
             ["user_id", "message_id"], ["messages.user_id", "messages.id"], ondelete="CASCADE"
         ),
         ForeignKeyConstraint(["user_id", "audio_id"], ["audios.user_id", "audios.id"]),
+        # The cited transcript version is part of the FK: a delivered source names the exact
+        # version it saw, not whichever version the transcript row has today.
         ForeignKeyConstraint(
-            ["user_id", "transcript_id"], ["transcripts.user_id", "transcripts.id"]
+            ["user_id", "transcript_id", "transcript_version"],
+            ["transcripts.user_id", "transcripts.id", "transcripts.version"],
+            name="fk_message_sources_transcript_version",
         ),
         ForeignKeyConstraint(["user_id", "chunk_id"], ["chunks.user_id", "chunks.id"]),
         ForeignKeyConstraint(["user_id", "segment_id"], ["segments.user_id", "segments.id"]),
@@ -100,6 +108,14 @@ class MessageSource(TenantOwned, Base):
         ),
         Index("message_sources_by_audio", "user_id", "audio_id"),
         Index("message_sources_by_message", "user_id", "message_id"),
+        Index(
+            "message_sources_by_transcript",
+            "user_id",
+            "transcript_id",
+            "transcript_version",
+        ),
+        Index("message_sources_by_chunk", "user_id", "chunk_id"),
+        Index("message_sources_by_segment", "user_id", "segment_id"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
