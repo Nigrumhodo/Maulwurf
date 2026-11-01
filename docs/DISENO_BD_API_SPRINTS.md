@@ -196,7 +196,9 @@ CREATE TABLE sessions (
   created_at   timestamptz NOT NULL DEFAULT now(),
   expires_at   timestamptz NOT NULL,
   revoked_at   timestamptz,
-  last_seen_at timestamptz
+  last_seen_at timestamptz,
+  deletion_operation_id uuid                     -- A4.4: restricted initiator only
+    REFERENCES account_deletions(id) ON DELETE SET NULL
 );
 CREATE INDEX sessions_user ON sessions (user_id, expires_at);
 
@@ -875,7 +877,7 @@ CREATE UNIQUE INDEX calendar_events_one_link
 
 CREATE TABLE google_remote_operations (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id     uuid NOT NULL,                     -- no FK: survives the purge (A4.4)
   kind        text NOT NULL CHECK (kind IN ('delete_event','delete_calendar','account_cleanup')),
   calendar_id text,
   event_id    text,
@@ -884,21 +886,25 @@ CREATE TABLE google_remote_operations (
   attempts    integer NOT NULL DEFAULT 0,
   error_code  text,
   created_at  timestamptz NOT NULL DEFAULT now(),
-  finished_at timestamptz
+  finished_at timestamptz,
+  expires_at  timestamptz NOT NULL               -- deleted by the retention job
 );
+CREATE INDEX google_remote_operations_expiry ON google_remote_operations (expires_at);
 
 -- Residual record without FK: it survives the purge to report the outcome without retaining
--- profile/text.
+-- profile/text. `claimed_at` is the execution lease; a crashed process is reclaimable.
 CREATE TABLE account_deletions (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   former_user_id uuid NOT NULL,
   status        text NOT NULL
-    CHECK (status IN ('pending','completed','completed_with_remote_failures')),
+    CHECK (status IN ('pending','running','completed','completed_with_remote_failures')),
   delete_events boolean NOT NULL DEFAULT false,
   error_summary text,
   expires_at    timestamptz NOT NULL,
   created_at    timestamptz NOT NULL DEFAULT now(),
-  completed_at  timestamptz
+  completed_at  timestamptz,
+  claimed_at    timestamptz,
+  attempts      integer NOT NULL DEFAULT 0
 );
 CREATE INDEX account_deletions_expiry ON account_deletions (expires_at);
 ```
@@ -912,9 +918,17 @@ CREATE INDEX account_deletions_expiry ON account_deletions (expires_at);
   receives `revision_id` and `expected_version`, activates exactly that revision, bumps the
   version, and creates/reuses the Calendar outbox in a single transaction.
 - Remote class/task deletion lives in `google_remote_operations` and **survives** its purge
-  until resolved. Account deletion creates `account_deletions`, which keeps only the former
-  ID, status, redacted error, and expiry; it allows `GET /me/deletion/{id}` after profile
-  and tokens are purged.
+  until resolved (A4.4 resolves the illustrative `ON DELETE CASCADE` by keeping `user_id` as
+  an opaque UUID without a FK). Account deletion creates `account_deletions`, which keeps only
+  the former ID, status, redacted error, and expiry; it allows `GET /me/deletion/{id}` after
+  profile and tokens are purged. The initiating session is linked through
+  `sessions.deletion_operation_id` and stays in restricted mode (status, authorized resume,
+  and logout only). Execution uses an atomic `pending -> running` claim with a bounded lease;
+  a purge failure after the tombstone leaves a resumable `pending` operation and still answers
+  `202`. An hourly scheduled job runs as the cross-tenant jobs role and deletes both residual
+  tables once `expires_at` passes; the window is a provisional 30 days pending D8.
+  `delete_maulwurf_events` defaults to `false`, so Maulwurf-created Google events stay in the
+  user's calendar unless the deletion explicitly opts in (the UI must say so; A4.5).
 - Complete/dismiss cancels future reminders but keeps the event with a notice, unless
   remote deletion is explicitly requested.
 
@@ -1177,11 +1191,13 @@ itself `retryable=false` in `details`: the header is the retry signal (A2.19).
 | `GET` | `/me/notifications` | S4 | Current M8 preferences (read companion of the PATCH) | `200` |
 | `PATCH` | `/me/notifications` | S4 | M8 preferences (Gmail opt-in, digests, thresholds) | `200` |
 | `POST` | `/notifications/test` | S4 | Test send to the verified email | `202` |
-| `DELETE` | `/me` | S4 | Account deletion; accepts explicit `delete_maulwurf_events`, creates the operation, and requests remote deletions before revoking tokens | `202 {deletion_operation_id}` |
-| `GET` | `/me/deletion/{id}` | S4 | Non-sensitive deletion status; accepts the restricted initiator session | `pending\|completed\|completed_with_remote_failures` |
+| `DELETE` | `/me` | S4 | Account deletion; accepts explicit `delete_maulwurf_events` (default `false` keeps Maulwurf-created Google events), creates the operation, claims it atomically, and requests remote deletions before revoking tokens; a post-tombstone failure still answers `202` and stays resumable | `202 {deletion_operation_id}` |
+| `GET` | `/me/deletion/{id}` | S4 | Non-sensitive deletion status; accepts the restricted initiator session | `pending\|running\|completed\|completed_with_remote_failures` |
+| `POST` | `/me/deletion/{id}/resume` | S4 | Authorized retry of a `pending`/`running` operation; accepts the restricted initiator session with Origin/CSRF; an already-closed operation is a no-op | `202` (still open) · `200` (closed) · `403` · `404` |
 
 After `DELETE /me`, the session that started the operation enters **restricted mode**: only
-`GET /me/deletion/{id}` and `POST /auth/logout`; every other session is revoked. This way
+`GET /me/deletion/{id}`, `POST /me/deletion/{id}/resume` and `POST /auth/logout`; every other
+session is revoked. This way
 the client can show the deletion status without keeping access to the rest of the account.
 
 `GET /me` example:
@@ -1708,7 +1724,7 @@ no new endpoints in the MVP.
 | `/calendar/*` (M5) | — | — | ✓ | — |
 | `/integrations/google/connect\|reconnect` | — | — | ✓ | — |
 | `GET/PATCH /me/notifications`, `POST /notifications/test`, `GET /notifications`, `POST /notifications/{id}/resend` | — | — | — | ✓ |
-| `DELETE /me`, `GET /me/deletion/{id}` | — | — | — | ✓ |
+| `DELETE /me`, `GET /me/deletion/{id}`, `POST /me/deletion/{id}/resume` | — | — | — | ✓ |
 
 ---
 

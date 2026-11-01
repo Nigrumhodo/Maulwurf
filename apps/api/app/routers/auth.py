@@ -32,8 +32,8 @@ from fastapi.responses import RedirectResponse
 from app.core.deps import (
     COOKIE_NAME,
     OAUTH_COOKIE_NAME,
+    AnyMutationSession,
     DbSession,
-    MutationSession,
     clear_oauth_state_cookie,
     clear_session_cookie,
     set_oauth_state_cookie,
@@ -82,9 +82,10 @@ def _calendar_result(result: str, *, reason: str | None = None) -> RedirectRespo
 
 
 @router.post("/auth/logout", status_code=204, response_model=None)
-async def logout(response: Response, session: MutationSession, db: DbSession) -> Response:
+async def logout(response: Response, session: AnyMutationSession, db: DbSession) -> Response:
     # Revocación inmediata: la cookie deja de valer en la siguiente petición. Un segundo
-    # logout con esa cookie ya no tiene sesión y recibe 401 (fail closed).
+    # logout con esa cookie ya no tiene sesión y recibe 401 (fail closed). A4.4: the
+    # restricted deletion session may use this same logout to end itself.
     await sessions.revoke_session(db, session)
     await db.commit()
     response.status_code = 204

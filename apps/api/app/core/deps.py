@@ -65,9 +65,13 @@ async def resolve_authenticated_session(db: AsyncSession, request: Request) -> S
     on a SHORT-LIVED session it closes itself, instead of depending on the request-scoped
     `get_session` yield generator, which FastAPI keeps open for the whole `StreamingResponse`
     (A2.9 pool-exhaustion fix). `401 auth_required` when the cookie is missing/expired.
+
+    A4.4: a session restricted to the deletion status is not an account session, so every
+    normal route rejects it here even though `services.sessions.resolve_session` can still
+    recognize it for `GET /me/deletion/{id}` and logout.
     """
     session = await sessions.resolve_session(db, request.cookies.get(COOKIE_NAME))
-    if session is None:
+    if session is None or session.deletion_operation_id is not None:
         raise auth_required()
     return session
 
@@ -77,6 +81,21 @@ async def current_session(request: Request, db: DbSession) -> Session:
 
 
 CurrentSession = Annotated[Session, Depends(current_session)]
+
+
+async def deletion_session(request: Request, db: DbSession) -> Session:
+    """Session that may read the deletion status: normal or restricted initiator.
+
+    The route still verifies that the operation belongs to `session.user_id` and, for a
+    restricted session, that it is exactly the operation bound to that session.
+    """
+    session = await sessions.resolve_session(db, request.cookies.get(COOKIE_NAME))
+    if session is None:
+        raise auth_required()
+    return session
+
+
+DeletionSession = Annotated[Session, Depends(deletion_session)]
 
 
 def _origin_allowed(request: Request) -> bool:
@@ -104,19 +123,39 @@ async def resolve_mutation_session(db: AsyncSession, request: Request) -> Sessio
     return session
 
 
+def _mutation_rejected(request: Request, session: Session) -> bool:
+    cookie_token = request.cookies.get(COOKIE_NAME, "")
+    return not _origin_allowed(request) or not sessions.csrf_matches(
+        session, cookie_token, request.headers.get(CSRF_HEADER)
+    )
+
+
 async def require_mutation(request: Request, session: CurrentSession) -> Session:
     """Sesión válida + Origin same-origin + `X-CSRF-Token` de esa sesión; si no, 401/403."""
     if request.method not in MUTATING_METHODS:
         return session
-    cookie_token = request.cookies.get(COOKIE_NAME, "")
-    if not _origin_allowed(request) or not sessions.csrf_matches(
-        session, cookie_token, request.headers.get(CSRF_HEADER)
-    ):
+    if _mutation_rejected(request, session):
         raise csrf_invalid()
     return session
 
 
 MutationSession = Annotated[Session, Depends(require_mutation)]
+
+
+async def require_mutation_any(request: Request, session: DeletionSession) -> Session:
+    """Same CSRF/Origin rule, but also accepts the restricted deletion session.
+
+    A4.4 allows exactly two mutations from that session: logout and an authorized resume of
+    its own deletion. The status route is a GET.
+    """
+    if request.method not in MUTATING_METHODS:
+        return session
+    if _mutation_rejected(request, session):
+        raise csrf_invalid()
+    return session
+
+
+AnyMutationSession = Annotated[Session, Depends(require_mutation_any)]
 
 
 def progress_session_factory() -> async_sessionmaker[AsyncSession]:

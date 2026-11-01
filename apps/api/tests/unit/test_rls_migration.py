@@ -3,8 +3,9 @@
 I-S2-AN-16 reads the real catalog; this guard catches the cheaper mistake of adding a
 `TenantOwned` model without extending `0005` (or a later migration) while the integration
 suite cannot run. `0006` (J3.3) adds `settings` and `0007` (J3.7) adds `calendar_events`,
-each with their own policies; `0011` (A3.1) adds the three M4 task tables and `0014` (A4.1)
-adds the M8 `notifications` table.
+each with their own policies; `0011` (A3.1) adds the three M4 task tables, `0014` (A4.1)
+adds the M8 `notifications` table and `0015` (A4.4) adds the residual deletion and
+remote-operation tables.
 """
 import importlib.util
 from pathlib import Path
@@ -18,6 +19,7 @@ MIGRATION_0006 = VERSIONS / "0006_s3_calendar_settings.py"
 MIGRATION_0007 = VERSIONS / "0007_s3_calendar_mirror.py"
 MIGRATION_0011 = VERSIONS / "0011_s3_tasks.py"
 MIGRATION_0014 = VERSIONS / "0014_s4_notifications.py"
+MIGRATION_0015 = VERSIONS / "0015_s4_account_deletions.py"
 
 
 def _migration(path: Path, name: str) -> ModuleType:
@@ -34,16 +36,23 @@ def test_every_tenant_model_has_a_policy_in_the_migrations() -> None:
     calendar = _migration(MIGRATION_0007, "rls_0007")
     tasks = _migration(MIGRATION_0011, "rls_0011")
     notifications = _migration(MIGRATION_0014, "rls_0014")
+    deletion = _migration(MIGRATION_0015, "rls_0015")
     # `TenantOwned` is a mixin, but a few tenant tables (chunk_segments, embeddings,
     # google_credentials, settings) declare `user_id` directly; the `user_id` column is the
-    # contract every RLS migration follows.
-    models = {name for name, table in Base.metadata.tables.items() if "user_id" in table.c}
+    # contract every RLS migration follows. A4.4's `account_deletions` keys on
+    # `former_user_id` because it must survive the account purge.
+    models = {
+        name
+        for name, table in Base.metadata.tables.items()
+        if "user_id" in table.c or "former_user_id" in table.c
+    }
     covered = (
         set(base.TENANT_TABLES)
         | set(settings.TENANT_TABLES)
         | set(calendar.TABLES)
         | set(tasks.TABLES)
         | {notifications.TABLE}
+        | set(deletion.TABLES)
     )
     assert models == covered
     assert set(base.RLS_TABLES) == set(base.TENANT_TABLES) | {"users"}
@@ -51,6 +60,7 @@ def test_every_tenant_model_has_a_policy_in_the_migrations() -> None:
     assert set(calendar.TABLES) == {"calendar_events"}
     assert set(tasks.TABLES) == {"tasks", "task_sources", "task_revisions"}
     assert notifications.TABLE == "notifications"
+    assert set(deletion.TABLES) == {"account_deletions", "google_remote_operations"}
 
 
 def test_role_scoped_exceptions_stay_narrow() -> None:
