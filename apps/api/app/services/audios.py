@@ -115,17 +115,16 @@ def allowed_languages() -> tuple[str, ...]:
 
 
 def _effective_ttl_minutes() -> tuple[int, int | None, int | None]:
-    """(upload, receive, asr) minutes: the publication wins, S1 has only the upload window.
+    """(upload, receive, asr) minutes: the benchmarked publication wins.
 
-    `limits_validated=true` requires all three TTLs (`schemas/ingestion.py`), so the published
-    branch always returns them; without a publication the S1 provisional `upload_ttl_minutes`
-    applies and no receive/ASR deadline is invented (D4/D6 stay blocked).
+    S4.4 publishes the three TTLs independently of the size/duration limits, so they are
+    effective even while `limits_validated` is false. Only an explicit no-TTL publication
+    (all three null) falls back to the S1 provisional `upload_ttl_minutes`; in that case no
+    receive/ASR deadline is invented.
     """
-    capabilities = settings.ingestion_capabilities
-    if capabilities.limits_validated:
-        ttl = capabilities.ttl
-        if ttl.upload_start_minutes and ttl.receive_minutes and ttl.asr_minutes:
-            return ttl.upload_start_minutes, ttl.receive_minutes, ttl.asr_minutes
+    ttl = settings.ingestion_capabilities.ttl
+    if ttl.upload_start_minutes and ttl.receive_minutes and ttl.asr_minutes:
+        return ttl.upload_start_minutes, ttl.receive_minutes, ttl.asr_minutes
     return settings.upload_ttl_minutes, None, None
 
 

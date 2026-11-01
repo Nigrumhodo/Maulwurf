@@ -375,8 +375,9 @@ Design notes ([ESPECIFICACION.md](ESPECIFICACION.md) §6.2):
   not exposed as success. An expired lease does not prove deletion: without evidence,
   `cleanup_status` stays `pending` and only the index/analyze outbox remains blocked.
   `cleanup_status='failed'` stops local admission and raises an alert.
-- Candidate TTLs are set only after the F0 benchmark; until then
-  `GET /ingestion/capabilities` returns `null` and `limits_validated=false`.
+- The effective TTLs (10/30/60 min) are published only with the S4.4 benchmark behind
+  them; the size/duration limits stay `null` and `limits_validated=false` while D4 is
+  blocked.
 - Class purge order, fixed by `DELETE /audios/{id}` (A2.7, one transaction, always explicit
   deletes and never the FK cascade, so every count in the `202` body is verifiable):
   conditional `audios.deleted_at` (a second concurrent DELETE loses and gets `404`) →
@@ -1189,8 +1190,9 @@ spaces; deleting a subject frees its name.
 
 ### 3.5 M2b — Ingestion and audios (S1 skeleton; S2 full)
 
-`GET /ingestion/capabilities` publishes only values observed by the spike. Before F0 the
-shape does not claim to prove limits or languages:
+`GET /ingestion/capabilities` publishes only measured values. The size/duration limits stay
+hidden while D4 is blocked, but S4.4 publishes the effective TTLs with their own benchmark
+source:
 
 ```json
 {
@@ -1199,7 +1201,9 @@ shape does not claim to prove limits or languages:
   "accepted_input_formats": [],
   "languages": [],
   "language_policy": "explicit_select_required_no_multi",
-  "ttl": {"upload_start_minutes": null, "receive_minutes": null, "asr_minutes": null},
+  "ttl": {"upload_start_minutes": 10, "receive_minutes": 30, "asr_minutes": 60},
+  "ttl_source_report": "docs/eval/ttl-benchmark.md",
+  "ttl_source_version": "2026-11-01",
   "asr": {"provider": "nvidia-riva", "model": "whisper-large-v3",
            "timestamp_precision": null},
   "active_slots": null,
@@ -1208,15 +1212,18 @@ shape does not claim to prove limits or languages:
 }
 ```
 
-After F0, non-null fields must link to the versioned report that measured them.
+After F0, non-null size/duration fields must link to the versioned report that measured
+them. A TTL publication with only one or two phases is rejected; an explicit all-null TTL
+publication is the only way to fall back to the provisional window.
 
 The reservation deadlines are derived from the published TTL, never from an invented
 number: `upload_expires_at = now + ttl.upload_start_minutes`, `receive_deadline =
 upload_expires_at + ttl.receive_minutes` and `asr_deadline = receive_deadline +
 ttl.asr_minutes` (chained, so each ephemeral phase has its own budget and the three values
-are monotonic). While no publication is validated, the API keeps the provisional
-`MAULWURF_UPLOAD_TTL_MINUTES` window and leaves `receive_deadline`/`asr_deadline` null. The
-size limit has ONE value: the API reads `INGEST_MAX_UPLOAD_BYTES` from the shared
+are monotonic). The TTL publication is independent of `limits_validated`: the effective
+10/30/60 min apply while D4 is blocked. The API keeps `MAULWURF_UPLOAD_TTL_MINUTES` only for
+an explicit all-null TTL publication and then leaves `receive_deadline`/`asr_deadline` null.
+The size limit has ONE value: the API reads `INGEST_MAX_UPLOAD_BYTES` from the shared
 configuration and refuses to start when it disagrees with `MAULWURF_UPLOAD_MAX_BYTES`;
 `GET /ingestion/capabilities` publishes the effective limit once F0 validates it.
 
