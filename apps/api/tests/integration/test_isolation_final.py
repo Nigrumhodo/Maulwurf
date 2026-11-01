@@ -9,6 +9,9 @@ so a foreign resource is indistinguishable from a missing one (ADR-0006).
 The second half runs the A4.7 read-only sweep. A live class is clean; marking it deleted
 without purging its derivatives must make every check fire; the real ``DELETE /audios``
 purge and account deletion must leave zero chunks, embeddings or other derived rows.
+
+The suite also deletes the ephemeral ``search:quota:*`` counters that its ``GET /search``
+calls create, so the ADR-0005 Redis sweep that runs later only sees catalogued keys.
 """
 
 import uuid
@@ -58,6 +61,7 @@ from app.services.indexing import chunk_tsvector
 from app.services.notifications import dedupe_key
 from app.services.orphan_sweep import ORPHAN_CHECKS, sweep_orphans
 from app.services.runs import INDEX_CONFIG_VERSION
+from app.services.search_quota import SEARCH_QUOTA_KEY_PREFIX
 from app.services.tenant import get_owned, owned_by
 from tests.integration import actors
 from tests.integration.actors import FACTORIES, Actor
@@ -110,18 +114,22 @@ async def client(
     app.dependency_overrides.clear()
 
 
-@pytest.fixture
-async def search_quota_cleanup(redis: tuple[Any, str]) -> AsyncIterator[None]:
+@pytest.fixture(autouse=True)
+async def purge_search_quota(redis: tuple[Any, str]) -> AsyncIterator[None]:
     """Remove the per-user search counters this module creates.
 
-    The Redis policy sweep expects only catalogued `arq:`/`mw:` keys. The quota key is not
-    part of that catalog, so the integration run must not leak it into the next module.
+    ``GET /search`` writes ``search:quota:<user>:<window>`` counters (A2.11). This module
+    sorts before ``test_redis_policy``, whose ADR-0005 sweep only accepts the catalogued
+    ``arq:``/``mw:`` prefixes, so the suite deletes its own keys instead of widening the
+    catalog from a test.
     """
     client, _queue = redis
     try:
         yield
     finally:
-        keys = [key async for key in client.scan_iter(match="search:quota:*")]
+        keys = [
+            key async for key in client.scan_iter(match=f"{SEARCH_QUOTA_KEY_PREFIX}:*")
+        ]
         if keys:
             await client.delete(*keys)
 
@@ -547,10 +555,7 @@ async def test_library_subject_and_audio_channels_never_serve_another_tenant(
 
 
 async def test_search_and_chat_channels_never_serve_another_tenant(
-    client: AsyncClient,
-    db_session: AsyncSession,
-    provider: FakeEmbeddingProvider,
-    search_quota_cleanup: None,
+    client: AsyncClient, db_session: AsyncSession, provider: FakeEmbeddingProvider
 ) -> None:
     alice, bob = await actors.make_actor(db_session), await actors.make_actor(db_session)
     a = await _seed_full_class(db_session, alice)
@@ -807,6 +812,29 @@ async def test_sweep_is_clean_on_live_data_and_detects_every_failed_purge(
     assert {finding.name for finding in broken.findings if finding.count} == {
         check.name for check in ORPHAN_CHECKS
     }
+
+
+async def test_sweep_does_not_flag_a_transcript_source_without_an_optional_segment(
+    db_session: AsyncSession,
+) -> None:
+    """`segment_id` is optional; a live citation without it is not an orphan."""
+    alice = await actors.make_actor(db_session)
+    seeded = await _seed_full_class(db_session, alice)
+    db_session.add(
+        MessageSource(
+            user_id=alice.user_id,
+            message_id=seeded.message_id,
+            kind="transcript",
+            audio_id=seeded.audio_id,
+            transcript_id=seeded.transcript_id,
+            transcript_version=1,
+            chunk_id=seeded.chunk_id,
+        )
+    )
+    await db_session.flush()
+
+    report = await sweep_orphans(db_session, user_ids=[alice.user_id])
+    assert report.clean is True, report.as_dict()
 
 
 async def test_class_deletion_purges_every_derived_row_and_the_sweep_stays_clean(

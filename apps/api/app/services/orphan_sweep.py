@@ -155,9 +155,12 @@ ORPHAN_CHECKS: tuple[OrphanCheck, ...] = (
           AND {_scope("cs")}
         """,
     ),
+    # `message_sources.segment_id` is optional: `transcript_source_complete` requires the
+    # class/transcript/chunk ids, so the segment join is enforced only when present.
     OrphanCheck(
         "message_sources_without_live_source",
-        "Validated transcript citation whose message or source is missing or tombstoned",
+        "Validated transcript citation whose message, class, transcript or chunk is "
+        "missing or tombstoned; an optional segment must belong to the same transcript",
         f"""
         SELECT count(*) FROM message_sources ms
         LEFT JOIN messages m ON m.user_id = ms.user_id AND m.id = ms.message_id
@@ -170,10 +173,11 @@ ORPHAN_CHECKS: tuple[OrphanCheck, ...] = (
         LEFT JOIN segments s ON s.user_id = ms.user_id AND s.id = ms.segment_id
         WHERE ms.kind = 'transcript'
           AND (m.id IS NULL OR a.id IS NULL OR a.deleted_at IS NOT NULL
-               OR t.id IS NULL OR c.id IS NULL OR s.id IS NULL
+               OR t.id IS NULL OR c.id IS NULL
                OR t.audio_id <> ms.audio_id
                OR c.audio_id <> ms.audio_id
-               OR s.transcript_id <> ms.transcript_id)
+               OR (ms.segment_id IS NOT NULL
+                   AND (s.id IS NULL OR s.transcript_id <> ms.transcript_id)))
           AND {_scope("ms")}
         """,
     ),
