@@ -26,6 +26,7 @@ from app.models import (
     IngestionAttempt,
     Message,
     MessageSource,
+    Notification,
     OutboxEvent,
     ProcessingRun,
     Segment,
@@ -39,6 +40,7 @@ from app.models import (
 )
 from app.models.base import TenantOwned
 from app.services import sessions
+from app.services.notifications import dedupe_key
 
 # Scopes de ejemplo: el test comprueba que nunca aparecen en respuestas de otro usuario.
 GOOGLE_SCOPES = ["openid", "https://www.googleapis.com/auth/calendar.events"]
@@ -542,6 +544,30 @@ async def make_task(db: AsyncSession, actor: Actor) -> Task:
     return task
 
 
+async def make_notification(db: AsyncSession, actor: Actor) -> Notification:
+    """One audited T-24 reminder for the actor's task; the dedupe key is canonical (A4.1)."""
+    task = await make_task(db, actor)
+    occurrence = date(2026, 11, 9)
+    notification = Notification(
+        user_id=actor.user_id,
+        task_id=task.id,
+        type="reminder_t24",
+        occurrence=occurrence,
+        due_version=task.due_version,
+        scheduled_at=datetime(2026, 11, 8, 10, 0, tzinfo=UTC),
+        dedupe_key=dedupe_key(
+            user_id=actor.user_id,
+            type="reminder_t24",
+            task_id=task.id,
+            due_version=task.due_version,
+            occurrence=occurrence,
+        ),
+    )
+    db.add(notification)
+    await db.flush()
+    return notification
+
+
 async def make_task_revision(db: AsyncSession, actor: Actor) -> TaskRevision:
     """Pending edit of the actor's manual task; the active row is not touched."""
     task = await make_task(db, actor)
@@ -577,4 +603,5 @@ FACTORIES: dict[type[TenantOwned], Factory] = {
     CalendarEvent: make_calendar_event,
     Task: make_task,
     TaskRevision: make_task_revision,
+    Notification: make_notification,
 }

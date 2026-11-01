@@ -4,9 +4,10 @@ Gate: G7-CAL / M5. The ARQ entry point and the lifecycle adapter run against Pos
 a deterministic Google Calendar double at the HTTP boundary; no real Google call, credential
 or secret is involved.
 
-A3.1 (`tasks`), A3.7 (task endpoints) and the S4 `notifications` table are not in `develop`.
-This suite creates the frozen §2.8/§2.9 projections in the isolated test database and drops
-them afterwards, exactly like I-S3-JF-03 does for `tasks`.
+A3.1 (`tasks`) and A3.7 (task endpoints) were not in `develop` when J3.6 landed; this suite
+created the frozen §2.8/§2.9 projections then. `tasks` and the S4 `notifications` table now
+exist, so the fixture only creates a missing table and the helper writes the real shape
+(dedupe key, occurrence and due generation included).
 """
 
 import asyncio
@@ -26,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from app.core.errors import ApiError
 from app.services.calendar_gateway import GoogleCalendarGateway
 from app.services.google_calendar import GoogleCalendarService
+from app.services.notifications import dedupe_key
 from app.services.task_event_store import TASKS, SqlTaskEventStore
 from app.services.task_event_sync import (
     CalendarGateway,
@@ -448,14 +450,31 @@ async def _insert_notification(
     scheduled_at: datetime,
 ) -> uuid.UUID:
     notification_id = uuid.uuid4()
+    # The real A4.1 table requires the persistent dedupe identity. The existing cases model
+    # the T-24 reminder of one task, so the local date of the scheduled instant is enough to
+    # keep its occurrences distinct (`reminder_t24`, due generation 1).
+    occurrence = scheduled_at.date()
+    if task_id is None:
+        raise AssertionError("the existing lifecycle cases always attach a reminder to a task")
     await db.execute(
         NOTIFICATIONS.insert().values(
             id=notification_id,
             user_id=user_id,
             task_id=task_id,
             type="reminder_t24",
+            occurrence=occurrence,
+            due_version=1,
             scheduled_at=scheduled_at,
+            dedupe_key=dedupe_key(
+                user_id=user_id,
+                type="reminder_t24",
+                task_id=task_id,
+                due_version=1,
+                occurrence=occurrence,
+            ),
             status=status,
+            sent_at=scheduled_at if status == "sent" else None,
+            provider_message_id="test-message" if status == "sent" else None,
             updated_at=START,
         )
     )

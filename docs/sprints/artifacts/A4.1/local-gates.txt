@@ -1,0 +1,75 @@
+A4.1 (MAULW-131) local gates — 2026-11-01 06:29:32 UTC
+branch: task/MAULW-131
+head: 9a7137f7ccc0e58adec044e8af2b247eb2843767
+host: Linux 7.0.0-39-generic x86_64
+python: Python 3.12.3 | uv 0.13.1 (x86_64-unknown-linux-gnu)
+postgres: PostgreSQL 16.15 (Ubuntu 16.15-1.pgdg24.04+2) on x86_64-pc-linux-gnu
+redis: redis-cli 7.0.15
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 258 source files
+
+$ env -u no_proxy -u NO_PROXY uv run pytest tests/unit -q
+1480 passed, 35 warnings in 12.32s
+
+Note: the raw sandbox environment sets no_proxy/NO_PROXY with bracketed IPv6 entries;
+without the workaround the same unit suite has the two pre-existing bracketed-IPv6
+failures in test_ingest_sink and test_llm (not related to A4.1).
+
+$ env -u no_proxy -u NO_PROXY uv run pytest tests/integration/test_migrations.py tests/integration/test_rls.py tests/integration/test_isolation.py tests/integration/test_s4_notifications_schema.py tests/integration/test_calendar_revision_patch.py tests/integration/test_calendar_settings_mirror.py -q
+133 passed, 152 warnings in 56.67s
+
+$ env -u no_proxy -u NO_PROXY uv run pytest -m integration -q
+17 failed, 643 passed, 1481 deselected, 666 warnings in 590.00s (0:09:50)
+All 17 failures are the pre-existing test_ingest_reception.py cases: the default ingest
+sink answers 503 capacity_unavailable in this sandbox (no MAULWURF_INGEST_URL/credential).
+They are unrelated to A4.1 and fail the same way on develop here:
+FAILED tests/integration/test_ingest_reception.py::test_case_01_chunked_8_mib_is_202_and_admitted_once
+FAILED tests/integration/test_ingest_reception.py::test_case_02_exact_duplicate_discards_before_absorbing
+FAILED tests/integration/test_ingest_reception.py::test_case_03_variant_is_409_after_a_verified_discard
+FAILED tests/integration/test_ingest_reception.py::test_case_04_ingest_415_is_unsupported_format_and_writes_no_identity
+FAILED tests/integration/test_ingest_reception.py::test_case_05_early_413_stops_reading_the_browser_stream
+FAILED tests/integration/test_ingest_reception.py::test_case_07_ingest_409_attempt_not_active_is_passed_through
+FAILED tests/integration/test_ingest_reception.py::test_case_08_wrong_hash_from_ingest_is_500_and_discarded
+FAILED tests/integration/test_ingest_reception.py::test_case_09_browser_disconnect_closes_the_hop_and_writes_no_status
+FAILED tests/integration/test_ingest_reception.py::test_case_10_failed_discard_is_500_never_a_duplicate_answer
+FAILED tests/integration/test_ingest_reception.py::test_case_11_admit_unavailable_restores_identity_and_discards_api_error
+FAILED tests/integration/test_ingest_reception.py::test_case_12_internal_requests_carry_no_browser_material
+FAILED tests/integration/test_ingest_reception.py::test_case_12a_forged_receive_tokens_change_no_state
+FAILED tests/integration/test_ingest_reception.py::test_case_12a_forged_admit_and_discard_tokens_change_no_held_state
+FAILED tests/integration/test_ingest_reception.py::test_case_12b_replayed_receive_token_is_409
+FAILED tests/integration/test_ingest_reception.py::test_case_12c_admit_with_wrong_hash_is_public_500_and_compensated
+FAILED tests/integration/test_ingest_reception.py::test_case_12d_discard_and_admit_are_idempotent_at_the_sink
+FAILED tests/integration/test_ingest_reception.py::test_case_13_backpressure_keeps_api_memory_flat_with_a_slow_ingest
+
+$ python3 scripts/docs/check_refs.py
+OK: 871 documented repository paths exist or are expected.
+
+Post-merge sync with develop (develop@747ad74, merge commit 22e6a06):
+The merge only brought S4.5's `apps/ingest` tests/scripts and docs; no API production code
+changed. Re-ran the gates on the merged tree.
+
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ cd apps/api && uv run mypy .
+Success: no issues found in 258 source files
+
+$ cd apps/api && env -u no_proxy -u NO_PROXY uv run pytest tests/unit -q
+1480 passed, 35 warnings in 11.03s
+
+$ cd apps/api && env -u no_proxy -u NO_PROXY uv run pytest tests/integration/test_migrations.py tests/integration/test_rls.py tests/integration/test_isolation.py tests/integration/test_s4_notifications_schema.py tests/integration/test_calendar_revision_patch.py tests/integration/test_calendar_settings_mirror.py -q
+133 passed, 152 warnings in 53.66s
+
+$ cd apps/ingest && uv run ruff check . && uv run mypy .
+All checks passed!
+Success: no issues found in 83 source files
+
+$ cd apps/ingest && env -u no_proxy -u NO_PROXY uv run pytest tests -m "not integration and not provider and not load" -q
+306 passed, 93 deselected, 2 warnings in 10.72s
+
+$ python3 scripts/docs/check_refs.py
+OK: 898 documented repository paths exist or are expected.
