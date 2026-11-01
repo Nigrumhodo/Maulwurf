@@ -189,7 +189,7 @@ These associations complete the backlog references without changing the stable I
 | U-S2-AN-14 | U | 404, 405 and an injected unhandled exception use `{"error": {code, message, details}}` and the 500 body carries no exception text | §3.2 |
 | U-S2-AN-15 | U | Startup without `MAULWURF_ENV` fails; weak or mutually equal secrets are rejected outside `local` | M1/security |
 | I-S2-AN-16 | I | RLS enabled: the A1.9 suite passes, a query without `app.user_id` fails (fail-closed), the table owner is also subject to the policies (`FORCE`), pooled connections do not leak the setting, one test shows the barrier works without the application filter, runtime roles cannot write `alembic_version`, the committing transaction runs with the tenant bound, and the cross-tenant ingest queue policy is scoped to `maulwurf_ingest` | G3/ADR-0006 |
-| I-S2-AN-17 | I | Every composite FK has a non-partial covering index; `index_version` and dimension invariants rejected by the database; blank transcript text rejected (if confirmed by the lead); `alembic check` drift test; `0003` upgrades and downgrades | G3/§2.1.8 |
+| I-S2-AN-17 | I | Every FK has a non-partial covering index (from `pg_index`); `index_version`, transcript-version and dimension invariants rejected by the database; blank transcript text rejected (confirmed safe by S2.10); `alembic check` drift test fails on a model change without a migration; revision `0009` upgrades and downgrades; a stale build batch after the run was closed is fenced | G3/§2.1.8 |
 | U-S2-AN-18 | U | One contract test per conformance item: capabilities TTL, language normalization, variant-token codes, `GET`/`PATCH /me`, single upload-limit source, consistent `503` headers | M1/M2 |
 
 ### 2.3 Retrieval/RAG — chunking, index and chat

@@ -201,6 +201,34 @@ async def finish_run(
     return RunFenceOutcome.APPLIED
 
 
+async def require_build_fence(
+    db: AsyncSession, *, run_id: uuid.UUID, fencing_token: int
+) -> None:
+    """Takes a shared lock on the live run for the batch that is about to commit.
+
+    The `FOR SHARE` is the build-phase fence ADR-0009 left to A2.18. It serializes with the
+    reconciler's closing UPDATE: while a batch holds the shared lock, the run cannot be closed;
+    once the batch commits, a stale worker's next fence sees the terminal row and raises
+    `RunFenced` before its own commit. No write can therefore land after orphan cleanup closed
+    the run, and the next build cannot adopt a stale batch under the same `index_version`.
+
+    Autoflush is disabled on purpose: the fence must run before the pending chunks/embeddings
+    are sent, otherwise a failed fence would already have written the batch it is rejecting.
+    """
+    with db.no_autoflush:
+        locked = await db.scalar(
+            select(ProcessingRun.id)
+            .where(
+                ProcessingRun.id == run_id,
+                ProcessingRun.fencing_token == fencing_token,
+                ProcessingRun.status == "running",
+            )
+            .with_for_update(read=True)
+        )
+    if locked is None:
+        raise RunFenced(f"run {run_id} is not owned by fencing token {fencing_token}")
+
+
 async def require_run_fence(
     db: AsyncSession, *, run_id: uuid.UUID, fencing_token: int
 ) -> None:
