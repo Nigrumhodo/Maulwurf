@@ -64,7 +64,8 @@ The command writes three files and prints only their names:
 
 The command fails closed when the passphrase is missing or short, the role cannot see every
 tenant, a `bytea` column outside `google_credentials.access_token_enc` and
-`google_credentials.refresh_token_enc` exists, or a half-written archive would remain.
+`google_credentials.refresh_token_enc` exists, the database contains large objects, or a
+half-written archive would remain.
 
 ## 4. Deletion log after a deletion
 
@@ -111,6 +112,7 @@ scripts/ops/backup_restore.sh restore \
 
 - the manifest is expired or the encrypted dump checksum differs;
 - the target has application tables or a non-default extension;
+- the target cluster is missing `maulwurf_app`, `maulwurf_jobs` or `maulwurf_ingest`;
 - `--confirm-clean` is missing.
 
 It decrypts straight into `pg_restore`, applies
@@ -163,10 +165,11 @@ uv run pytest tests/integration/test_backup_restore.py -q
 ```
 
 It creates a source database, seeds text/metadata, takes the encrypted backup, deletes an
-account, tombstones a class and a conversation, exports the log, restores into a second empty
-database, and asserts that nothing deleted reappears while retained rows survive. It also
-checks retention, pruning, the expired-backup refusal and the fail-closed binary-column
-guard. Local result on 2026-11-01 (PostgreSQL 16.15, GPG 2.4): **1 passed**.
+account, tombstones a class, a subject and a conversation, exports the log, restores into a
+second empty database, and asserts that nothing deleted reappears while retained rows
+survive. It also checks retention, pruning, the expired/tampered-archive refusals and the
+fail-closed binary-column guard. Local result on 2026-11-01 (PostgreSQL 16.15, GPG 2.4):
+**1 passed**.
 
 The reference-environment drill (J4.8) must repeat this procedure against the real backup
 volume and secret store and record the command, result and redacted evidence. Until that

@@ -89,8 +89,9 @@ explicit Definition of Done. See "Sprint Model" below.
   `README.scaffold.md`); `scripts/ci/` holds the CI guards, `scripts/docs/` the
   documentation checks and diagram export, `scripts/provider/` the Riva spike scripts
   (protected `P-*` provider runs), `scripts/e2e/` the synthetic class helper, the J2.6
-  pipeline smoke and its deterministic provider/Riva doubles, and
-  `scripts/load/` the proxy no-buffering and load helpers.
+  pipeline smoke and its deterministic provider/Riva doubles, `scripts/load/` the proxy
+  no-buffering and load helpers, and `scripts/ops/` the A4.5 D8 backup/restore driver
+  (`backup_restore.sh`) with its tombstone replay SQL (`restore_reapply.sql`).
 - `.env.example` — Template for `MAULWURF_*`, Google OAuth, NVIDIA, and provisional ingest
   limit variables; copy to `.env` (never commit `.env`).
 - `.gitignore`, `AGENTS.md`, `LICENSE` (AGPL-3.0), `README.md`, `README.scaffold.md`

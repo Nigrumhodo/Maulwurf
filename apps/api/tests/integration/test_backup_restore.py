@@ -437,6 +437,19 @@ async def test_i_s4_an_05_restore_reapplies_tombstones_on_a_clean_database(
         )
         assert restored.returncode == 0, restored.stderr + restored.stdout
 
+        # The destructive path is guarded: a second restore into the now-populated target is
+        # refused, so an operator cannot overwrite a database by mistake.
+        dirty = _run(
+            "restore",
+            "--database-url",
+            _sync_url(target_url),
+            "--backup",
+            str(dump),
+            "--confirm-clean",
+        )
+        assert dirty.returncode != 0
+        assert "not clean" in dirty.stderr
+
         engine = create_async_engine(target_url)
         async with engine.connect() as connection:
             # Alice's account keeps only the opaque tombstone and the residual operation;

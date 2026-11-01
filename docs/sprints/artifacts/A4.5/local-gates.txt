@@ -26,7 +26,8 @@ Commands and results
       no production or test code was changed to hide them)
 
 5. cd apps/api && uv run pytest tests/integration/test_backup_restore.py -q
-   -> 1 passed
+   -> 1 passed (also green after the sandbox restart, 31.62 s while other sessions were
+      active)
 
 6. bash -n scripts/ops/backup_restore.sh
    -> OK (no output)
@@ -55,6 +56,10 @@ What I-S4-AN-05 proves
     * the retained class, transcript, chunk, message and active user survive unchanged.
 - The manifest pins the D8 30-day retention, which equals `RESIDUAL_RETENTION_DAYS`; a
   manifest older than 30 days is refused, and `prune` removes only the stale file.
+- `verify` accepts the intact dump+deletion-log pair and refuses a tampered deletion log
+  (the manifest carries both SHA-256 values).
+- A second restore into the already-populated target is refused (`not clean`), so the
+  destructive path cannot overwrite a database by mistake.
 - A new `bytea` column outside the Google token blobs aborts the backup, pinning the
   no-audio contract as a fail-closed schema check.
 - The only `bytea` columns in the restored schema are
@@ -62,15 +67,16 @@ What I-S4-AN-05 proves
 
 Full integration note
 ---------------------
-The full `pytest -m integration` run was attempted while two other agent sessions were
-running their own full integration suites against the same PostgreSQL cluster
+The full `pytest -m integration` run could not be completed locally because other agent
+sessions were running their own full integration suites against the same PostgreSQL cluster
 (`/tmp/opencode/maulw132-integration-merged.log` and
 `/tmp/opencode/maulw-133-integration.log`). Migration round-trip tests then failed with
 PostgreSQL `tuple concurrently updated` on `ALTER ROLE "maulwurf_app" ...`, and the failing
-subset changed between runs. The same suite with only that shared contention removed
-(`--ignore=tests/integration/test_backup_restore.py`) passed 675 tests, and the new module
-plus `test_migrations.py` passes 28/28 in isolation. A clean full run is recorded below once
-the concurrent sessions finish; the failures are not attributed to this diff.
+subset changed between runs; a later attempt timed out after 15 min while those sessions
+restarted. The same suite with only the new module excluded passed 675 tests, the new module
+plus `test_migrations.py` passes 28/28 in isolation, and the new module passes on its own
+before and after the restart. The migration failures are shared-cluster contention, not this
+diff; the PR Quality CI runs `integration (api)` on an isolated service container.
 
 Scope/security notes
 --------------------
