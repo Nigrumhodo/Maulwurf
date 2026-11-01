@@ -1,5 +1,6 @@
 """Modelos ORM. Importar este paquete registra todas las tablas en `Base.metadata`."""
 
+from app.models.account_deletion import AccountDeletion, GoogleRemoteOperation
 from app.models.base import Base
 from app.models.calendar_event import CalendarEvent
 from app.models.chat import Conversation, Message, MessageSource
@@ -12,6 +13,7 @@ from app.models.task import Task, TaskRevision, TaskSource
 from app.models.transcript import Segment, Transcript
 
 __all__ = [
+    "AccountDeletion",
     "Audio",
     "Base",
     "CalendarEvent",
@@ -21,6 +23,7 @@ __all__ = [
     "Conversation",
     "Embedding",
     "GoogleCredential",
+    "GoogleRemoteOperation",
     "IngestionAttempt",
     "IndexGeneration",
     "Message",

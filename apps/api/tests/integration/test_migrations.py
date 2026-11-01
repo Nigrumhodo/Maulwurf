@@ -63,6 +63,8 @@ S2_TABLES = S1_TABLES | {
 # linear, so the head of the graph includes all of them.
 S3_TABLES = S2_TABLES | {"settings", "calendar_events"}
 A31_TABLES = S3_TABLES | {"tasks", "task_sources", "task_revisions"}
+# A4.4 adds the residual account-deletion record and the surviving remote operations.
+A44_TABLES = A31_TABLES | {"account_deletions", "google_remote_operations"}
 
 S2_COMPOSITE_FOREIGN_KEYS = {
     "variant_confirmation_tokens": {
@@ -286,7 +288,7 @@ def test_upgrade_from_empty_reaches_head(empty_schema: str) -> None:
 
     command.upgrade(alembic_config(empty_schema), "head")
 
-    assert _state(empty_schema) == (A31_TABLES, [_head(empty_schema)])
+    assert _state(empty_schema) == (A44_TABLES, [_head(empty_schema)])
 
 
 def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
@@ -294,17 +296,21 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     revision = ScriptDirectory.from_config(cfg).get_revision(_head(empty_schema))
     assert revision is not None
     parent = revision.down_revision
-    assert parent == "0012"  # this chain is linear
+    assert parent == "0013"  # this chain is linear
     command.upgrade(cfg, "head")
 
-    # `0013` only adds the Calendar task-link FK/index/CHECKs (no table/column change);
-    # `0012` only adds constraints and indexes (no table/column change); `0011` only adds
-    # the M4 task tables; `0010` only swaps one index on `messages` (no table/column change);
-    # `0009` only adds indexes, FKs and CHECKs (no table/column change); `0008` only adds the
-    # manual-sync cooldown column; `0007` only adds the mirror and the coverage columns;
-    # `0006` only adds `settings`; `0005` only changes roles, policies and RLS flags; `0003`
-    # only backfills `chunks.tsv` (data, not schema) and `0004` only adds the run fencing
-    # token, so the steps back stay on the previous schemas and only remove those additions.
+    # `0014` only adds the deletion/remote-operation tables and the session link; `0013` only
+    # adds the Calendar task-link FK/index/CHECKs (no table/column change); `0012` only adds
+    # constraints and indexes (no table/column change); `0011` only adds the M4 task tables;
+    # `0010` only swaps one index on `messages` (no table/column change); `0009` only adds
+    # indexes, FKs and CHECKs (no table/column change); `0008` only adds the manual-sync
+    # cooldown column; `0007` only adds the mirror and the coverage columns; `0006` only adds
+    # `settings`; `0005` only changes roles, policies and RLS flags; `0003` only backfills
+    # `chunks.tsv` (data, not schema) and `0004` only adds the run fencing token, so the steps
+    # back stay on the previous schemas and only remove those additions.
+    command.downgrade(cfg, "-1")
+    assert _state(empty_schema) == (A31_TABLES, ["0013"])
+
     command.downgrade(cfg, "-1")
     assert _state(empty_schema) == (A31_TABLES, ["0012"])
 
@@ -348,7 +354,7 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     assert _state(empty_schema) == (S1_TABLES, ["0001"])
 
     command.upgrade(cfg, "head")
-    assert _state(empty_schema)[0] == A31_TABLES
+    assert _state(empty_schema)[0] == A44_TABLES
 
 
 def test_rls_revision_round_trips(empty_schema: str) -> None:
@@ -477,6 +483,27 @@ def test_tasks_revision_round_trips(empty_schema: str) -> None:
     assert task_tables.isdisjoint(_state(empty_schema)[0])
     assert _rls_state(empty_schema, ordered) == {}
 
+    command.upgrade(cfg, "head")
+
+
+def test_account_deletion_revision_round_trips(empty_schema: str) -> None:
+    """A4.4 adds the residual operation, the remote-work record and the session link."""
+    cfg = alembic_config(empty_schema)
+    command.upgrade(cfg, "0013")
+    assert "account_deletions" not in _state(empty_schema)[0]
+    assert "google_remote_operations" not in _state(empty_schema)[0]
+
+    command.upgrade(cfg, "head")
+    tables = _state(empty_schema)[0]
+    assert {"account_deletions", "google_remote_operations"} <= tables
+    assert _rls_state(empty_schema, ("account_deletions", "google_remote_operations")) == {
+        "account_deletions": (True, True),
+        "google_remote_operations": (True, True),
+    }
+
+    command.downgrade(cfg, "0013")
+    assert "account_deletions" not in _state(empty_schema)[0]
+    assert "google_remote_operations" not in _state(empty_schema)[0]
     command.upgrade(cfg, "head")
 
 
@@ -1045,4 +1072,4 @@ def test_concurrent_upgrades_serialize_without_errors(empty_schema: str) -> None
             raise
         assert replica.returncode == 0, stderr.decode()[-500:]
 
-    assert _state(empty_schema) == (A31_TABLES, [_head(empty_schema)])
+    assert _state(empty_schema) == (A44_TABLES, [_head(empty_schema)])

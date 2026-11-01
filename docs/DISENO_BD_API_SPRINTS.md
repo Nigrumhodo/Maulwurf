@@ -196,7 +196,9 @@ CREATE TABLE sessions (
   created_at   timestamptz NOT NULL DEFAULT now(),
   expires_at   timestamptz NOT NULL,
   revoked_at   timestamptz,
-  last_seen_at timestamptz
+  last_seen_at timestamptz,
+  deletion_operation_id uuid                     -- A4.4: restricted initiator only
+    REFERENCES account_deletions(id) ON DELETE SET NULL
 );
 CREATE INDEX sessions_user ON sessions (user_id, expires_at);
 
@@ -875,7 +877,7 @@ CREATE UNIQUE INDEX calendar_events_one_link
 
 CREATE TABLE google_remote_operations (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id     uuid NOT NULL,                     -- no FK: survives the purge (A4.4)
   kind        text NOT NULL CHECK (kind IN ('delete_event','delete_calendar','account_cleanup')),
   calendar_id text,
   event_id    text,
@@ -912,9 +914,11 @@ CREATE INDEX account_deletions_expiry ON account_deletions (expires_at);
   receives `revision_id` and `expected_version`, activates exactly that revision, bumps the
   version, and creates/reuses the Calendar outbox in a single transaction.
 - Remote class/task deletion lives in `google_remote_operations` and **survives** its purge
-  until resolved. Account deletion creates `account_deletions`, which keeps only the former
-  ID, status, redacted error, and expiry; it allows `GET /me/deletion/{id}` after profile
-  and tokens are purged.
+  until resolved (A4.4 resolves the illustrative `ON DELETE CASCADE` by keeping `user_id` as
+  an opaque UUID without a FK). Account deletion creates `account_deletions`, which keeps only
+  the former ID, status, redacted error, and expiry; it allows `GET /me/deletion/{id}` after
+  profile and tokens are purged. The initiating session is linked through
+  `sessions.deletion_operation_id` and stays in restricted mode (status + logout only).
 - Complete/dismiss cancels future reminders but keeps the event with a notice, unless
   remote deletion is explicitly requested.
 
