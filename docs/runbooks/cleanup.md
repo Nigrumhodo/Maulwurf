@@ -539,8 +539,8 @@ VERIFIED**. The local compose drill is the only executable equivalent in this re
 | Ruff | `cd apps/ingest && uv run ruff check .` | pass |
 | Mypy | `cd apps/ingest && uv run mypy .` | pass |
 | Documentation paths | `python3 scripts/docs/check_refs.py` | pass |
-| I-S4-SG-03 integration | `cd apps/ingest && uv run pytest -m integration -q tests/test_cleanup_recovery.py` | Local sandbox: 6 skipped (no PostgreSQL). Quality CI run `41253988189`, job `integration (ingest)`: **64 passed**, 11 skipped, 1 xfailed; the 6 cases in this file are included |
-| Quality CI | all jobs in `.github/workflows/quality.yml` | Run `41253988189` (head `af0f2a6`): all 17 checks green, including `python-unit (ingest)` 233 passed and `integration (ingest)` 64 passed. See section 8.1 |
+| I-S4-SG-03 integration | `cd apps/ingest && uv run pytest -m integration -q tests/test_cleanup_recovery.py` | Local sandbox: 6 skipped (no PostgreSQL). Quality CI run `41255292952`, job `integration (ingest)`: **64 passed**, 11 skipped, 1 xfailed; the 6 cases in this file are included |
+| Quality CI | all jobs in `.github/workflows/quality.yml` | Run `41255292952` (head `8f9676c`): all 17 checks green, including `python-unit (ingest)` 233 passed and `integration (ingest)` 64 passed. See section 8.1 |
 | Compose detection/recovery drill | steps 4–6 | **NOT RUN HERE**: this sandbox has no `docker`, `podman`, `docker-compose` or `/var/run/docker.sock`; the reviewer must execute it on the reference stack |
 | Host-loss restoration | section 7 | **NOT RUN HERE**: needs J4.7 provider evidence and a real host; the reviewer records it |
 
@@ -553,7 +553,7 @@ The reviewer's reference-environment drill is the remaining evidence for the tic
 
 ### 8.1 Quality CI on the fix head
 
-Run `41253988189` (workflow `quality`, head `af0f2a6`, after the ADR-0004 reword and the
+Run `41255292952` (workflow `quality`, head `8f9676c`, after the ADR-0004 reword and the
 develop sync) is green in all 17 checks, including `python-unit (ingest)` **233 passed**
 and `integration (ingest)` **64 passed** with the 6 I-S4-SG-03 cases. The local commands and the environment check are captured in
 `docs/sprints/artifacts/S4.1/local-gates.txt` and
