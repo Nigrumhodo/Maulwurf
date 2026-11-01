@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.models import Notification, SchedulerLease, User
+from app.services import scheduler_lease
 from app.services.notifications import dedupe_key
 from app.services.scheduler_lease import (
     DEFAULT_LEASE_TTL,
@@ -40,6 +41,7 @@ from app.services.scheduler_lease import (
     SchedulerReport,
     acquire_scheduler_lease,
     claim_due_notifications,
+    expire_delivery_leases,
     run_notification_scheduler,
 )
 from tests.integration.actors import Actor, make_actor
@@ -231,6 +233,47 @@ async def test_a_live_lease_stops_the_scheduler_tick_before_any_claim(
     assert stored[notification_id].status == "sending"
 
 
+class _HostClockAhead:
+    """Stand-in for the module's `datetime` whose host clock is far ahead of the database."""
+
+    @staticmethod
+    def now(tz: object = None) -> datetime:
+        return datetime(2035, 1, 1, tzinfo=UTC if tz is None else tz)  # type: ignore[arg-type]
+
+
+async def test_the_election_uses_the_database_clock_not_the_host_clock(
+    committed_db: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live lease must stay live even when this host's clock is far ahead.
+
+    With the application clock the row would look expired and a second scheduler would take
+    it over. The comparison lives in the `ON CONFLICT ... WHERE` and uses PostgreSQL's
+    `now()`, so the database remains the only authority for expiry.
+    """
+    _engine, factory = committed_db
+    role = _role()
+    live_since = datetime.now(UTC)
+    async with factory() as db:
+        db.add(
+            SchedulerLease(
+                name=role,
+                holder="live-host",
+                fencing_token=3,
+                lease_expires_at=live_since + timedelta(minutes=5),
+                heartbeat_at=live_since - timedelta(minutes=1),
+            )
+        )
+        await db.commit()
+
+    monkeypatch.setattr(scheduler_lease, "datetime", _HostClockAhead)
+
+    async with factory() as db:
+        claim = await acquire_scheduler_lease(db, holder="host-b", role=role)
+        await db.commit()
+    assert claim is None
+
+
 async def test_only_one_candidate_takes_over_an_expired_lease(
     committed_db: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
 ) -> None:
@@ -324,6 +367,32 @@ async def test_the_elected_scheduler_claims_a_due_row_once(
     assert NOW - claimed.scheduled_at <= DELIVERY_SLA
 
 
+async def test_the_claim_uses_the_database_clock_not_the_host_clock(
+    committed_db: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+    actor: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An occurrence that is not due in PostgreSQL must stay `pending`.
+
+    A host clock far ahead would claim it early under the old application-clock comparison.
+    """
+    _engine, factory = committed_db
+    future = _notification(
+        actor,
+        scheduled_at=datetime.now(UTC) + timedelta(minutes=5),
+        sequence=0,
+    )
+    (notification_id,) = await _store(factory, future)
+    monkeypatch.setattr(scheduler_lease, "datetime", _HostClockAhead)
+
+    async with factory() as db:
+        claimed = await claim_due_notifications(db, limit=10)
+        await db.commit()
+    assert claimed == []
+    stored = await _get(factory, notification_id)
+    assert stored[notification_id].status == "pending"
+
+
 async def test_two_workers_claim_disjoint_due_rows_with_skip_locked(
     committed_db: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
     actor: Actor,
@@ -415,6 +484,31 @@ async def test_the_claim_is_ordered_by_due_instant_and_bounded(
 
 
 # --- Leases ----------------------------------------------------------------------------
+
+
+async def test_the_expiry_sweep_uses_the_database_clock_not_the_host_clock(
+    committed_db: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+    actor: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live delivery lease must not become uncertain because a host clock is far ahead."""
+    _engine, factory = committed_db
+    live = _notification(
+        actor,
+        status="sending",
+        sequence=0,
+        attempts=1,
+        lease_expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    (notification_id,) = await _store(factory, live)
+    monkeypatch.setattr(scheduler_lease, "datetime", _HostClockAhead)
+
+    async with factory() as db:
+        expired = await expire_delivery_leases(db)
+        await db.commit()
+    assert expired == 0
+    stored = await _get(factory, notification_id)
+    assert stored[notification_id].status == "sending"
 
 
 async def test_an_expired_sending_lease_becomes_uncertain_and_is_never_retried(

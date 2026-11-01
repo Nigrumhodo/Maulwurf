@@ -14,6 +14,11 @@ same `fencing_token` while it renews, and the token grows whenever the role chan
 acquire and the claim run in the same transaction, so another scheduler cannot take the lease
 between them and two schedulers never claim in parallel under the same elected role.
 
+Lease expiry, the lease window, the due comparison and the delivery lease all use
+PostgreSQL's transaction clock (`now()`), not the wall clock of each scheduler host. Two
+hosts with a clock skew can therefore not both consider the same live lease expired: the
+database is the single authority for time, as it is for the row itself.
+
 Claiming
 --------
 `claim_due_notifications` selects pending rows whose `scheduled_at` is already due, locks them
@@ -37,12 +42,24 @@ import os
 import socket
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any, Final, cast
 
-from sqlalchemy import CursorResult, case, or_, select, update
+from sqlalchemy import (
+    CursorResult,
+    DateTime,
+    Interval,
+    case,
+    func,
+    literal,
+    or_,
+    select,
+    update,
+)
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models import Notification, SchedulerLease
 from app.services.notifications import LEASE_EXPIRED
@@ -122,6 +139,27 @@ def _validate_text(value: str, field: str) -> str:
     return value
 
 
+def _instant_expression(now: datetime | None) -> ColumnElement[datetime]:
+    """The tick instant: PostgreSQL's transaction clock unless a caller freezes it.
+
+    Lease expiry and the due comparison must not depend on each host's wall clock: two
+    schedulers with a clock skew could otherwise both consider the same lease expired (or
+    disagree on which occurrence is due). `now()` is stable for the whole transaction, so
+    the election, the expiry and the claim of one tick share one instant. The explicit
+    `now` exists for deterministic tests and is rendered as a bound parameter, never
+    interpolated.
+    """
+    if now is None:
+        return func.now()
+    return literal(_require_instant(now), DateTime(timezone=True))
+
+
+def _interval_expression(delta: timedelta) -> ColumnElement[Any]:
+    # PostgreSQL has no implicit timestamp + unknown-parameter rule under every driver;
+    # the explicit CAST keeps the interval unambiguous for asyncpg.
+    return sql_cast(literal(delta, Interval()), Interval())
+
+
 async def acquire_scheduler_lease(
     db: AsyncSession,
     *,
@@ -134,13 +172,14 @@ async def acquire_scheduler_lease(
 
     The update and its `WHERE` are one statement, so two candidates cannot both see an
     expired row and both increment the fence. The row lock lasts until the caller commits,
-    which is exactly the window in which the claim must remain exclusive.
+    which is exactly the window in which the claim must remain exclusive. The comparison
+    and the new expiry use PostgreSQL's clock (`now()`), never the caller host's.
     """
-    instant = _require_instant(now or datetime.now(UTC))
+    clock = _instant_expression(now)
     _validate_ttl(ttl)
     _validate_text(role, "role")
     _validate_text(holder, "holder")
-    expires_at = instant + ttl
+    expires_at = clock + _interval_expression(ttl)
 
     statement = (
         pg_insert(SchedulerLease)
@@ -149,7 +188,8 @@ async def acquire_scheduler_lease(
             holder=holder,
             fencing_token=1,
             lease_expires_at=expires_at,
-            heartbeat_at=instant,
+            heartbeat_at=clock,
+            updated_at=clock,
         )
         .on_conflict_do_update(
             index_elements=[SchedulerLease.name],
@@ -165,12 +205,12 @@ async def acquire_scheduler_lease(
                     else_=SchedulerLease.fencing_token + 1,
                 ),
                 "lease_expires_at": expires_at,
-                "heartbeat_at": instant,
-                "updated_at": instant,
+                "heartbeat_at": clock,
+                "updated_at": clock,
             },
             where=or_(
                 SchedulerLease.holder == holder,
-                SchedulerLease.lease_expires_at <= instant,
+                SchedulerLease.lease_expires_at <= clock,
             ),
         )
         .returning(
@@ -195,21 +235,24 @@ async def acquire_scheduler_lease(
 async def expire_delivery_leases(
     db: AsyncSession, *, now: datetime | None = None
 ) -> int:
-    """Close expired `sending` leases as `delivery_unknown`; never back to `pending`."""
-    instant = _require_instant(now or datetime.now(UTC))
+    """Close expired `sending` leases as `delivery_unknown`; never back to `pending`.
+
+    Expiry is decided by PostgreSQL's clock, not by the process that runs the sweep.
+    """
+    clock = _instant_expression(now)
     statement = (
         update(Notification)
         .where(
             Notification.status == "sending",
             or_(
                 Notification.lease_expires_at.is_(None),
-                Notification.lease_expires_at <= instant,
+                Notification.lease_expires_at <= clock,
             ),
         )
         .values(
             status="delivery_unknown",
             last_error_code=LEASE_EXPIRED,
-            updated_at=instant,
+            updated_at=clock,
         )
     )
     result = await db.execute(statement)
@@ -227,9 +270,10 @@ async def claim_due_notifications(
 
     `FOR UPDATE SKIP LOCKED` is what makes multiple workers safe: each row is claimed by one
     statement, and a concurrent worker skips it instead of duplicating the send. Rows are
-    taken in due order so a backlog drains fairly.
+    taken in due order so a backlog drains fairly. Both the due comparison and the delivery
+    lease use PostgreSQL's clock, so a host clock skew cannot claim a row early.
     """
-    instant = _require_instant(now or datetime.now(UTC))
+    clock = _instant_expression(now)
     _validate_ttl(delivery_lease)
     if limit < 1:
         raise ValueError("the claim batch must contain at least one row")
@@ -238,7 +282,7 @@ async def claim_due_notifications(
         select(Notification.id)
         .where(
             Notification.status == "pending",
-            Notification.scheduled_at <= instant,
+            Notification.scheduled_at <= clock,
         )
         .order_by(Notification.scheduled_at.asc(), Notification.id.asc())
         .limit(limit)
@@ -250,9 +294,9 @@ async def claim_due_notifications(
         .where(Notification.id == due.c.id)
         .values(
             status="sending",
-            lease_expires_at=instant + delivery_lease,
+            lease_expires_at=clock + _interval_expression(delivery_lease),
             attempts=Notification.attempts + 1,
-            updated_at=instant,
+            updated_at=clock,
         )
         .returning(
             Notification.id,
@@ -296,23 +340,25 @@ async def run_notification_scheduler(
     Disabled by default (`MAULWURF_NOTIFICATION_SCHEDULER_ENABLED`): J4.1 owns the Gmail
     consumer of `sending`, and claiming before it exists would expire every claim into a
     false `delivery_unknown`. A disabled tick touches neither the election nor any row.
+
+    When `now` is omitted every step uses PostgreSQL's transaction clock, so the election,
+    the expiry sweep and the claim of this tick share one database instant.
     """
     if not enabled:
         return SchedulerReport(active=False)
-    instant = _require_instant(now or datetime.now(UTC))
     lease = await acquire_scheduler_lease(
         db,
         holder=holder or process_holder(),
         role=role,
-        now=instant,
+        now=now,
         ttl=ttl,
     )
     if lease is None:
         return SchedulerReport(active=False)
-    expired = await expire_delivery_leases(db, now=instant)
+    expired = await expire_delivery_leases(db, now=now)
     claimed = await claim_due_notifications(
         db,
-        now=instant,
+        now=now,
         limit=batch_size,
         delivery_lease=delivery_lease,
     )
