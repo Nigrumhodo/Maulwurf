@@ -56,3 +56,12 @@ $ uv run pytest -q --deselect tests/test_asr_cost.py::test_concurrent_audio_path
 
 $ cd ../.. && python3 scripts/docs/check_refs.py
 OK: 831 documented repository paths exist or are expected.
+
+## Quality CI (PR #139)
+
+Run 41261621535 (head 6fa7538): all 17 checks green, including
+`python-unit (api)`, `integration (api)`, `integration (ingest)`, `e2e-smoke`,
+`docs`, `web`, `build-images` and `secret-scan`. The PR is open and not merged.
+
+$ python3 scripts/docs/check_refs.py   # final evidence head
+OK: 841 documented repository paths exist or are expected.
