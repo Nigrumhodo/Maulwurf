@@ -1,8 +1,9 @@
 A4.3 — local gate evidence (MAULW-133)
 Date: 2026-11-01 (UTC)
-Host: Linux 7.0.0-39-generic sandbox, PostgreSQL 16.15 (localhost:5432), Redis 7.0.15
+Host: Linux 7.0.0-39-generic sandbox; PostgreSQL 16.15 with pgvector 0.8.0 (isolated
+cluster on :5434) and Redis 7.0.15 (isolated instance on :6381, no persistence)
 Worktree: task/MAULW-133
-Head: feed05c (gates 1–6 on 7d5603d; step 7 after the adapter rename)
+Head: feed05c for gates 1–7; full-suite capture on 22cb76f (evidence-only commit)
 Scope: U-S4-AN-03 cancellation core, PostgreSQL persistence adapter, documentation.
 apps/web untouched; no route, migration, provider, Gmail or credential involved.
 
@@ -15,7 +16,7 @@ Commands and results
    -> Success: no issues found in 265 source files
 
 3. cd apps/api && env -u no_proxy -u NO_PROXY uv run pytest tests/unit -q
-   -> 1513 passed, 35 warnings in 25.64s
+   -> 1513 passed, 35 warnings in 60.30s
    (the sanitized proxy removes the two pre-existing bracketed-IPv6 httpx failures of
    test_ingest_sink/test_llm; no test or production code was changed to hide them)
 
@@ -47,13 +48,28 @@ Commands and results
    - pytest tests/integration/test_s4_notification_cancellation.py -q
                                           -> 6 passed, 1 warning in 4.53s
 
-Shared-environment note
------------------------
-This host runs several Maulwurf worktrees at the same time. A full `pytest -m integration`
-run overlapped with other worktrees that were also running `alembic upgrade head`; those
-migrations execute `ALTER ROLE "maulwurf_app" ...` and PostgreSQL answered
-`tuple concurrently updated`, failing the session-scoped migration fixture before any A4.3
-test ran. The same collisions hit `test_migrations.py`/`test_rls.py` when run together.
-The A4.3-specific integration module and the notification schema/lifecycle modules pass in
-isolation once the other suites release the shared database; the full-suite result is
-recorded in the PR body with that contention, not presented as an A4.3 failure.
+8. Full API integration suite on the isolated PostgreSQL 16.15 + pgvector 0.8.0 and
+   Redis 7.0.15 instances:
+     cd apps/api && env -u no_proxy -u NO_PROXY \
+       MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@localhost:5434/maulwurf \
+       MAULWURF_REDIS_URL=redis://localhost:6381/0 \
+       uv run pytest -m integration -q
+   -> 664 passed, 17 failed, 1514 deselected, 699 warnings in 573.33s
+   All 17 failures are tests/integration/test_ingest_reception.py::test_case_*; the
+   default ingest sink answers 503 capacity_unavailable because MAULWURF_INGEST_URL and
+   the ingest credential are not configured in this sandbox. This is the same pre-existing
+   environment limitation recorded for A4.1, not an A4.3 regression: the A4.3 modules,
+   the notification schema/lifecycle modules, RLS and the rest of the suite pass.
+
+Environment note
+----------------
+The sandbox restarted into an image without PostgreSQL or Redis, so both were installed
+locally for this capture. Other Maulwurf worktrees share the original :5432/:6379
+services and run `alembic upgrade head` at the same time; those migrations execute
+`ALTER ROLE "maulwurf_app" ...` and PostgreSQL can answer `tuple concurrently updated`,
+failing a session-scoped migration fixture before any test runs. The final suite therefore
+ran on an isolated cluster (:5434, UTF8) and an isolated Redis (:6381) to avoid measuring
+another worktree's contention. A first attempt on the shared services also exposed a
+distro pgvector 0.6 without `hnsw.iterative_scan`; pgvector 0.8.0 was built from the
+v0.8.0 tag to match CI. No test or production code was changed to accommodate either
+environment limitation.
