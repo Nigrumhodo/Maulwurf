@@ -1,0 +1,100 @@
+# J4.3 / MAULW-141 hoplite fix1 gates
+
+Date (UTC): 2026-11-01
+Environment: Linux (Ubuntu 24.04), Python 3.12.3, uv 0.13.1, PostgreSQL 16.15 with
+pgvector 0.8.0, Redis 7.0.15. Deterministic tests only: no Riva, LLM, Google, Gmail, real
+class audio, credential or secret. `apps/web` is untouched.
+
+Base: `origin/develop@2d4bc2d`; review head `95c7f1d`. Findings addressed: the cancelled-row
+upsert, the database statement clock and the explicit conflict target.
+
+## apps/api static
+
+```text
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 286 source files
+```
+
+## apps/api unit
+
+Raw sandbox environment (the two failures are the pre-existing bracketed-IPv6 `httpx` cases
+in `test_ingest_sink`/`test_llm`, unrelated to this diff):
+
+```text
+$ uv run pytest tests/unit -q
+2 failed, 1620 passed, 35 warnings
+
+FAILED tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured
+FAILED tests/unit/test_llm.py::test_shared_http_client_is_bounded_reused_and_closed
+```
+
+With `NO_PROXY`/`no_proxy` sanitized to `localhost,127.0.0.1,::1`:
+
+```text
+$ NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 \
+    uv run pytest tests/unit -q
+1622 passed, 35 warnings
+```
+
+## The three fixes
+
+1. `schedule_task_reminders` now upserts with `ON CONFLICT ON CONSTRAINT
+   uq_notifications_dedupe_key DO UPDATE ... WHERE notifications.status = 'cancelled'`.
+   A repeated confirmation of the same `due_version` leaves `pending` rows untouched and
+   re-arms only rows A4.3 cancelled, resetting `lease_expires_at`, `attempts`,
+   `claimed_by_fence`, `sent_at`, `provider_message_id` and `last_error_code`. `sending`,
+   `sent`, `failed` and `delivery_unknown` never match the reopen condition. `inserted`
+   counts rows armed by the attempt (new rows plus reopened cancelled rows).
+2. `_database_clock` uses `func.clock_timestamp()` (the statement instant) instead of
+   `func.now()` (transaction start). J4.2's scheduler keeps `now()` on purpose: its bounded
+   tick needs one shared instant for election, expiry and claim, and both expressions are
+   the same database server clock.
+3. The conflict target is explicit (`uq_notifications_dedupe_key`); any other unique
+   violation now surfaces instead of being absorbed.
+
+## PostgreSQL adapter
+
+```text
+$ uv run pytest tests/integration/test_reminders_schedule.py -q
+12 passed
+```
+
+The three new cases are:
+
+- `test_a_preference_cancelled_reminder_is_rearmed_by_the_same_confirmation`: disable T-48,
+  re-enable it, confirm the same `due_version`; the same row returns to `pending` with its
+  delivery fields cleared and the other two thresholds stay untouched.
+- `test_a_delivered_or_in_flight_occurrence_is_never_rearmed`: a `sent` T-48 and a `sending`
+  T-24 are not rewritten by the repeated confirmation; only the still-pending T-2 stays.
+- `test_the_adapter_clock_is_the_statement_instant_not_the_transaction_start`: a 250 ms
+  `pg_sleep` plus a T-48 threshold placed 50 ms before the statement instant proves that a
+  stale `now()` would arm the occurrence and `clock_timestamp()` skips it.
+
+## Integration regressions
+
+```text
+$ uv run pytest tests/integration/test_reminders_schedule.py \
+    tests/integration/test_s4_notification_cancellation.py \
+    tests/integration/test_notification_scheduler.py \
+    tests/integration/test_notifications_endpoints.py \
+    tests/integration/test_s4_notifications_schema.py -q
+91 passed
+```
+
+The shared host runs other worktrees' integration suites. One setup attempt collided with
+their concurrent `ALTER ROLE` migration DDL (`tuple concurrently updated`); the same command
+passed on retry and no repository file was changed for it. This is host contention, not a
+test or product failure.
+
+## Documentation
+
+```text
+$ python3 scripts/docs/check_refs.py
+OK: 959 documented repository paths exist or are expected.
+```
+
+Contract notes updated in `docs/ESPECIFICACION.md` (M8 anti-spam), `docs/PLAN_IMPLEMENTACION.md`,
+`docs/DISENO_BD_API_SPRINTS.md` §2.9 and `docs/plan/S4.md` (J4.3/A4.3 status).
