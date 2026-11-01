@@ -82,6 +82,11 @@ Commands and results
 9. git diff --check
    -> no whitespace errors.
 
+10. PR #154 Quality CI run 41304868503 (head 34eab72; base develop 2d4bc2d)
+    -> all 17 checks green: python-static (api/ingest), python-unit (api/ingest),
+       integration (api/ingest), e2e-smoke, web, docs, build-images, compose-ingest-env,
+       caddy-limits, secret-scan, the three license reports and send-webhook.
+
 What the new evidence proves
 ----------------------------
 - `NoStoreMiddleware` rewrites the header on every HTTP response, including a route that
