@@ -94,9 +94,12 @@ No sandbox failure appeared in this run (PostgreSQL 16.15 + Redis 7.0.15).
 
 ```text
 $ python3 scripts/docs/check_refs.py
-OK: 963 documented repository paths exist or are expected.
+OK: 967 documented repository paths exist or are expected.
 ```
 
-The full local integration run and the Quality CI run are recorded in the claim row once
-the PR is open; no migration, route, provider call or `apps/web` change is part of this
-branch.
+## Quality CI
+
+Run `41307155722` (head `58fcd78`, the last code+evidence commit) is green in all 17 PR
+checks, including `python-static (api)`, `python-unit (api)`, `integration (api)`,
+`integration (ingest)`, `e2e-smoke`, `docs` and `secret-scan`. Later commits are
+documentation only. No merge was performed.
