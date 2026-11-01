@@ -306,6 +306,24 @@ def test_check_against_keeps_whitespace_verbatim() -> None:
         item.check_against({UUID(SEGMENT): "  hola! "})
 
 
+def test_check_against_is_literal_not_normalization_insensitive() -> None:
+    # The quote must be the exact code-point slice, not an NFC/NFD equivalent.
+    item = ProposedItem.model_validate(_item(fuente=_source(_quote(SEGMENT, "café"))))
+
+    with pytest.raises(ValueError, match="no coincide"):
+        item.check_against({UUID(SEGMENT): "cafe\u0301"})
+
+
+def test_check_against_errors_do_not_echo_the_transcript() -> None:
+    item = ProposedItem.model_validate(_item(fuente=_source(_quote(SEGMENT, "día "))))
+
+    with pytest.raises(ValueError) as exc:
+        item.check_against({UUID(SEGMENT): "Día "})
+
+    assert "Día" not in str(exc.value)
+    assert "día" not in str(exc.value)
+
+
 def test_analysis_result_checks_every_item() -> None:
     result = AnalysisResult.model_validate(SPEC_EXAMPLE)
 
