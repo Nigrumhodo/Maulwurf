@@ -1,0 +1,143 @@
+S4.5 — real cost per class hour (basis for C-S4-SG-04)
+Date (UTC): 2026-11-01T02:24:03Z
+Host: Linux 7.0.0-39-generic x86_64 · Python 3.12.3 · ffmpeg 8.1.2 · espeak-ng 1.51
+Riva call: none. Synthetic audio generated in RAM, written only to a private tmpfs and deleted.
+
+Command (300 s, table): cd apps/ingest && uv run python ../../scripts/load/cost_table.py --slots 2 --clip-seconds 300
+S4.5 real cost per class hour (basis for C-S4-SG-04)
+Environment: python=3.12.3, system=Linux 7.0.0-39-generic, ffmpeg=ffmpeg version 8.1.2, espeak_ng=eSpeak NG text-to-speech: 1.51, riva_call=none
+Load: 2 concurrent slot(s), 300.0 s synthetic clip, fragment cap 30 s, overlap 0.25 s
+Measured: ASR 60.500 effective minutes/class-hour; ffmpeg CPU 16.499 s/class-hour (0.612 cores); peak working set 48.84 MiB; wall 27.580 s/class-hour; RAM 0.000365418 GiB-hours/class-hour
+Cleanup verified: yes; no Riva call, no key, no audio kept
+
+term            quantity/class-hour unit                                           rate      cost/class-hour
+asr                    60.499975000 ASR minute                            NO VERIFICADO        NO VERIFICADO
+cpu                     0.004583063 vCPU-hour                             NO VERIFICADO        NO VERIFICADO
+ram                     0.000365418 GiB-hour                              NO VERIFICADO        NO VERIFICADO
+total                                                                                          NO VERIFICADO
+Rates are operator inputs, not provider measurements. NO VERIFICADO means no number was invented.
+200 MiB and 3 h are not approved; D4 stays blocked and this table does not close G8.
+
+Command (300 s, JSON): cd apps/ingest && uv run python ../../scripts/load/cost_table.py --slots 2 --clip-seconds 300 --format json
+{
+  "ticket": "S4.5",
+  "test_basis": "C-S4-SG-04",
+  "environment": {
+    "python": "3.12.3",
+    "system": "Linux 7.0.0-39-generic",
+    "ffmpeg": "ffmpeg version 8.1.2",
+    "espeak_ng": "eSpeak NG text-to-speech: 1.51",
+    "riva_call": "none"
+  },
+  "load": {
+    "slots": 2,
+    "clip_seconds": 300.0,
+    "fragment_cap_seconds": 30,
+    "overlap_seconds": 0.25,
+    "cleanup_verified": true
+  },
+  "measured": {
+    "asr_effective_minutes_per_class_hour": 60.499975,
+    "ffmpeg_cpu_seconds_per_class_hour": 15.256992,
+    "cpu_ratio": 0.684864,
+    "wall_seconds_per_class_hour": 23.18784,
+    "worker_rss_peak_bytes": 36954112,
+    "tmpfs_peak_bytes": 14122484,
+    "peak_working_set_bytes": 51076596,
+    "ram_gib_hours_per_class_hour": 0.000306394
+  },
+  "cost": {
+    "terms": [
+      {
+        "key": "asr",
+        "label": "ASR effective minutes",
+        "quantity_per_class_hour": 60.499975,
+        "unit": "ASR minute",
+        "rate_usd_per_unit": null,
+        "rate_status": "NO VERIFICADO",
+        "cost_per_class_hour_usd": "NO VERIFICADO"
+      },
+      {
+        "key": "cpu",
+        "label": "ffmpeg CPU",
+        "quantity_per_class_hour": 0.004238053,
+        "unit": "vCPU-hour",
+        "rate_usd_per_unit": null,
+        "rate_status": "NO VERIFICADO",
+        "cost_per_class_hour_usd": "NO VERIFICADO"
+      },
+      {
+        "key": "ram",
+        "label": "RAM (RSS + tmpfs)",
+        "quantity_per_class_hour": 0.000306394,
+        "unit": "GiB-hour",
+        "rate_usd_per_unit": null,
+        "rate_status": "NO VERIFICADO",
+        "cost_per_class_hour_usd": "NO VERIFICADO"
+      }
+    ],
+    "total_cost_per_class_hour_usd": "NO VERIFICADO",
+    "all_rates_provided": false,
+    "rates_source": "operator-provided; the F0.1 spike did not measure an ASR price"
+  },
+  "notes": [
+    "ASR effective minutes are measured; the provider rate is an input.",
+    "ffmpeg CPU is the user+system time of the ffprobe/ffmpeg children.",
+    "RAM GiB-hours are a local lower bound (RSS + tmpfs x wall time).",
+    "No Riva call, no key and no audio kept; G8 is not closed by this table."
+  ]
+}
+
+Command (60 s, table, run-to-run/fixed-overhead check): cd apps/ingest && uv run python ../../scripts/load/cost_table.py --slots 2 --clip-seconds 60
+S4.5 real cost per class hour (basis for C-S4-SG-04)
+Environment: python=3.12.3, system=Linux 7.0.0-39-generic, ffmpeg=ffmpeg version 8.1.2, espeak_ng=eSpeak NG text-to-speech: 1.51, riva_call=none
+Load: 2 concurrent slot(s), 60.0 s synthetic clip, fragment cap 30 s, overlap 0.25 s
+Measured: ASR 60.500 effective minutes/class-hour; ffmpeg CPU 26.705 s/class-hour (0.683 cores); peak working set 38.61 MiB; wall 43.832 s/class-hour; RAM 0.000459122 GiB-hours/class-hour
+Cleanup verified: yes; no Riva call, no key, no audio kept
+
+term            quantity/class-hour unit                                           rate      cost/class-hour
+asr                    60.500000000 ASR minute                            NO VERIFICADO        NO VERIFICADO
+cpu                     0.007418067 vCPU-hour                             NO VERIFICADO        NO VERIFICADO
+ram                     0.000459122 GiB-hour                              NO VERIFICADO        NO VERIFICADO
+total                                                                                          NO VERIFICADO
+Rates are operator inputs, not provider measurements. NO VERIFICADO means no number was invented.
+200 MiB and 3 h are not approved; D4 stays blocked and this table does not close G8.
+
+Command (300 s, example operator rates, NOT a quote): cd apps/ingest && uv run python ../../scripts/load/cost_table.py --slots 2 --clip-seconds 300 --asr-rate-usd-per-minute 0.01 --cpu-rate-usd-per-vcpu-hour 0.05 --ram-rate-usd-per-gib-hour 0.005
+S4.5 real cost per class hour (basis for C-S4-SG-04)
+Environment: python=3.12.3, system=Linux 7.0.0-39-generic, ffmpeg=ffmpeg version 8.1.2, espeak_ng=eSpeak NG text-to-speech: 1.51, riva_call=none
+Load: 2 concurrent slot(s), 300.0 s synthetic clip, fragment cap 30 s, overlap 0.25 s
+Measured: ASR 60.500 effective minutes/class-hour; ffmpeg CPU 17.317 s/class-hour (0.600 cores); peak working set 48.64 MiB; wall 28.997 s/class-hour; RAM 0.000382632 GiB-hours/class-hour
+Cleanup verified: yes; no Riva call, no key, no audio kept
+
+term            quantity/class-hour unit                                           rate      cost/class-hour
+asr                    60.499975000 ASR minute                      0.01 USD/ASR minute      0.604999750 USD
+cpu                     0.004810227 vCPU-hour                        0.05 USD/vCPU-hour      0.000240511 USD
+ram                     0.000382632 GiB-hour                         0.005 USD/GiB-hour      0.000001913 USD
+total                                                                                        0.605242174 USD
+Rates are operator inputs, not provider measurements. NO VERIFICADO means no number was invented.
+200 MiB and 3 h are not approved; D4 stays blocked and this table does not close G8.
+
+Command (S3.5 harness with the new CPU rows): cd apps/ingest && uv run python ../../scripts/load/asr_cost.py --slots 2 --clip-seconds 300
+S3.5 ASR cost and RAM/tmpfs under load (basis for C-S4-SG-04)
+Environment: python=3.12.3, system=Linux 7.0.0-39-generic, ffmpeg=ffmpeg version 8.1.2, espeak_ng=eSpeak NG text-to-speech: 1.51, riva_call=none
+Load: 2 concurrent slot(s), 300.0 s synthetic clip, fragment cap 30 s, overlap 0.25 s
+slot  frags  billed_s   wall_s   tmpfs_peak  tmpfs_after  rss_before   rss_peak  rss_delta
+   0     11   302.500    1.871    13.47 MiB    12.62 MiB   34.76 MiB  35.14 MiB   0.38 MiB
+   1     11   302.500    1.939    13.47 MiB    12.62 MiB   34.37 MiB  34.76 MiB   0.39 MiB
+Cleanup: all slot dirs removed by their worker=yes; harness tmpfs root emptied=yes
+ASR usage per slot: 11 fragments, 302.500 billed s, overlap 2.500 s, amplification 1.008333
+ASR effective minutes per class hour: 60.500
+ASR rate: NO VERIFICADO
+ASR cost per class hour: NO VERIFICADO
+RAM/tmpfs: tmpfs peak (sum of slot maxima) 26.94 MiB <= provisional 256.00 MiB: yes
+           sampled concurrent tmpfs peak: 26.94 MiB
+           worker RSS peak (sum) 69.90 MiB <= provisional 1024.00 MiB: yes
+           ffmpeg child max RSS (max of children, not additive): 47.73 MiB
+ffmpeg CPU (children): user 1.593895 s, system 0.839524 s, total 2.433419 s for the 2-slot run
+ffmpeg CPU per class hour (max slot): 14.790072 s, ratio 0.641858 cores
+peak working set (worker RSS + tmpfs, max slot): 48.61 MiB
+wall per class hour (max slot): 23.267 s; RAM 0.000306797 GiB-hours per class hour
+Limits: 200 MiB and 3 h are not approved; D4 is blocked. No Riva call, no key and no audio kept.
+
+Note: 200 MiB and 3 h remain unapproved; D4 stays blocked and this table does not close G8.
