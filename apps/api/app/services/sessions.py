@@ -101,7 +101,14 @@ async def resolve_session(db: AsyncSession, cookie_token: str | None) -> Session
     # The join with `users` used to reject an account in deletion in the same query. RLS
     # needs the user_id first, so the status check is a second, equally fail-closed read.
     status = await db.scalar(select(User.status).where(User.id == session.user_id))
-    return session if status == "active" else None
+    if status == "active":
+        return session
+    # A4.4: the session that started the deletion stays alive in restricted mode so its
+    # owner can read GET /me/deletion/{id} and log out. Callers that serve the rest of the
+    # account reject it explicitly in `core.deps`.
+    if status in {"deleting", "deleted"} and session.deletion_operation_id is not None:
+        return session
+    return None
 
 
 async def revoke_session(db: AsyncSession, session: Session) -> bool:
