@@ -91,9 +91,20 @@ helpers carry the required M4 columns (`source`, `tipo`, `titulo`, `timezone`, `
 correctly rejected them with `null value in column "tipo"`; those 25 failures were fixture
 incompleteness, not a service change.
 
+## Quality CI
+
+Run `41264684829` (head `35ee035`, after merging `develop@3e3706b`) is green in all 18
+reported checks, including `python-static (api)`, `python-unit (api)` **1349 passed**,
+`integration (api)` **587 passed** (the full suite against `pgvector/pgvector:pg16`, so the
+A3.1 schema and the adapted J3 fixtures are validated there), `integration (ingest)` 77
+passed / 11 skipped / 1 xfailed, `e2e-smoke`, `docs`, `web`, `build-images`, `secret-scan`,
+`license-report` and `caddy-limits`. Later commits on the branch are documentation-only
+claims/evidence.
+
 ## Not run
 
-- Full `tests/integration` suite in the restarted image: PostgreSQL/Redis are absent.
-- `apps/ingest` gates: the diff does not touch `apps/ingest`.
-- `apps/web`: untouched, as required by the ticket area.
+- Full `tests/integration` suite **in the restarted local image**: PostgreSQL/Redis are
+  absent. The Quality CI `integration (api)` job above runs it against service containers.
+- `apps/ingest` gates locally: the diff does not touch `apps/ingest`; CI runs them.
+- `apps/web`: untouched, as required by the ticket area; CI runs its lint/typecheck/tests.
 - No provider-contract (`P-*`) test: this ticket has no cloud call.
