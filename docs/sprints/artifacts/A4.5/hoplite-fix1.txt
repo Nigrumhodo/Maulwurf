@@ -62,7 +62,7 @@ pins it.
      placeholders, no tenant rows and no text; without consuming the array she would return
      active with her class.
 
-## Local gates (2026-11-01, PostgreSQL 16.15, GPG 2.4, Linux)
+## Local gates (2026-11-01, after merging `develop@c9635ee`; PostgreSQL 16.15, GPG 2.4)
 
 ```text
 $ bash -n scripts/ops/backup_restore.sh
@@ -72,20 +72,20 @@ $ cd apps/api && uv run ruff check .
 All checks passed!
 
 $ cd apps/api && uv run mypy .
-Success: no issues found in 263 source files
+Success: no issues found in 270 source files
 
 $ cd apps/api && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 \
     uv run pytest -m "not integration and not provider and not load" -q
-1483 passed, 678 deselected
+1532 passed, 719 deselected
 
 $ cd apps/api && uv run pytest tests/integration/test_backup_restore.py -q
 2 passed
 
 $ python3 scripts/docs/check_refs.py
-OK: 920 documented repository paths exist or are expected.
+OK: 931 documented repository paths exist or are expected.
 
 $ bash scripts/ci/check_no_secrets.sh
-secret-scan: 776 tracked files, 0 findings
+secret-scan: 785 tracked files, 0 findings
 
 $ git diff --check
 (no output)

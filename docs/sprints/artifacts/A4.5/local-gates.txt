@@ -98,7 +98,8 @@ Hoplite review fix1 (2026-11-01, findings 1-6 on head 2a98998)
 --------------------------------------------------------------
 Full mapping and rationale: `docs/sprints/artifacts/A4.5/hoplite-fix1.txt`.
 
-Commands (2026-11-01, same host, PostgreSQL 16.15, GPG 2.4):
+Commands (2026-11-01, same host, PostgreSQL 16.15, GPG 2.4; re-run after merging
+`develop@c9635ee` into the branch):
 
 1. bash -n scripts/ops/backup_restore.sh
    -> OK
@@ -107,20 +108,20 @@ Commands (2026-11-01, same host, PostgreSQL 16.15, GPG 2.4):
    -> All checks passed!
 
 3. cd apps/api && uv run mypy .
-   -> Success: no issues found in 263 source files
+   -> Success: no issues found in 270 source files
 
 4. cd apps/api && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 \
        uv run pytest -m "not integration and not provider and not load" -q
-   -> 1483 passed, 678 deselected
+   -> 1532 passed, 719 deselected
 
 5. cd apps/api && uv run pytest tests/integration/test_backup_restore.py -q
-   -> 2 passed (19.53 s)
+   -> 2 passed (21.37 s)
 
 6. python3 scripts/docs/check_refs.py
-   -> OK: 920 documented repository paths exist or are expected.
+   -> OK: 931 documented repository paths exist or are expected.
 
 7. bash scripts/ci/check_no_secrets.sh
-   -> secret-scan: 776 tracked files, 0 findings
+   -> secret-scan: 785 tracked files, 0 findings
 
 8. git diff --check
    -> no whitespace errors
