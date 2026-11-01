@@ -38,10 +38,15 @@ NOW = datetime(2026, 11, 2, 15, 0, tzinfo=UTC)
 DAY = date(2026, 11, 3)
 
 
-async def _reject(db: AsyncSession, row: object) -> None:
+async def _reject(db: AsyncSession, row: object, *, constraint: str | None = None) -> None:
+    """Insert one row inside a savepoint and assert PostgreSQL refuses it.
+
+    `constraint` pins *which* CHECK fired: a rejection caused by an unrelated constraint
+    would let a weaker blank rule pass unnoticed.
+    """
     async with db.begin_nested():
         db.add(row)
-        with pytest.raises(IntegrityError):
+        with pytest.raises(IntegrityError, match=constraint):
             await db.flush()
 
 
@@ -123,16 +128,58 @@ async def test_settings_rejects_blank_write_and_invalid_read_calendars(
 ) -> None:
     actor = await make_actor(db_session)
 
-    for value in ("", "   "):
-        await _reject(db_session, _settings(actor, calendar_write_calendar_id=value))
+    # "Blank" is the whitespace-aware `btrim` criterion, not just the empty string: spaces
+    # and tabs are unusable calendar ids and must not pass the CHECK. Each case names the
+    # expected constraint, so a rejection by an unrelated CHECK cannot hide a weaker blank
+    # rule. The coverage cases carry a complete window: only the blank-element rule can fail.
+    complete_window = {
+        "calendar_coverage_from": NOW,
+        "calendar_coverage_to": NOW + timedelta(days=1),
+        "calendar_last_synced_at": NOW,
+    }
+    for value in ("", "   ", "\t", " \t "):
+        await _reject(
+            db_session,
+            _settings(actor, calendar_write_calendar_id=value),
+            constraint="ck_settings_write_calendar_not_blank",
+        )
+        await _reject(
+            db_session,
+            _settings(actor, calendar_read_calendar_ids=[value]),
+            constraint="ck_settings_read_calendars_no_blank",
+        )
+        await _reject(
+            db_session,
+            _settings(actor, calendar_read_calendar_ids=[CALENDAR, value]),
+            constraint="ck_settings_read_calendars_no_blank",
+        )
+        await _reject(
+            db_session,
+            _settings(
+                actor, calendar_coverage_calendar_ids=[value], **complete_window
+            ),
+            constraint="ck_settings_coverage_calendars_no_blank",
+        )
+        await _reject(
+            db_session,
+            _settings(
+                actor, calendar_coverage_calendar_ids=[ARCHIVE, value], **complete_window
+            ),
+            constraint="ck_settings_coverage_calendars_no_blank",
+        )
     await _reject(
         db_session,
         _settings(actor, calendar_read_calendar_ids=cast("list[str]", [CALENDAR, None])),
+        constraint="ck_settings_read_calendars_no_null",
     )
-    await _reject(db_session, _settings(actor, calendar_read_calendar_ids=[""]))
     await _reject(
         db_session,
-        _settings(actor, calendar_coverage_calendar_ids=cast("list[str]", [None])),
+        _settings(
+            actor,
+            calendar_coverage_calendar_ids=cast("list[str]", [None]),
+            **complete_window,
+        ),
+        constraint="ck_settings_coverage_calendars_no_null",
     )
 
 
@@ -198,9 +245,30 @@ async def test_mirror_rejects_blank_identity_and_remote_status(
 ) -> None:
     actor = await make_actor(db_session)
 
-    await _reject(db_session, await _event(actor, calendar_id=""))
-    await _reject(db_session, await _event(actor, event_id=""))
-    await _reject(db_session, await _event(actor, remote_status=""))
+    # Every identity/status field shares the whitespace-aware `btrim` criterion, including
+    # the ETag: a whitespace-only ETag would otherwise become a bogus write baseline. Each
+    # case names the expected constraint, proving the blank rule itself fired.
+    for value in ("", "   ", "\t", " \t "):
+        await _reject(
+            db_session,
+            await _event(actor, calendar_id=value),
+            constraint="ck_calendar_events_calendar_id_not_blank",
+        )
+        await _reject(
+            db_session,
+            await _event(actor, event_id=value),
+            constraint="ck_calendar_events_event_id_not_blank",
+        )
+        await _reject(
+            db_session,
+            await _event(actor, remote_status=value),
+            constraint="ck_calendar_events_remote_status_not_blank",
+        )
+        await _reject(
+            db_session,
+            await _event(actor, etag=value),
+            constraint="ck_calendar_events_etag_not_blank",
+        )
 
     event = await _created_event(db_session, actor, etag='"etag-1"')
     assert event.etag == '"etag-1"'

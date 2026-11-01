@@ -398,15 +398,19 @@ def parse_remote_event(
     one. Every other item must carry a valid block or the whole read fails.
     """
     raw_id = item.get("id")
-    if not isinstance(raw_id, str) or not raw_id:
+    if not isinstance(raw_id, str) or not raw_id.strip():
         raise CalendarEventInvalid("event_id_invalid")
-    status = item.get("status")
-    remote_status = status if isinstance(status, str) and status else "confirmed"
+    raw_status = item.get("status")
+    # Blank and whitespace-only both mean "Google did not report a status": a returned
+    # event is `confirmed`. The mirror CHECK rejects any blank value.
+    status = raw_status.strip() if isinstance(raw_status, str) else ""
+    remote_status = status or "confirmed"
     if remote_status == CANCELLED:
         return RemoteCancelledEvent(calendar_id=calendar_id, event_id=raw_id)
     summary = item.get("summary")
     title = summary if isinstance(summary, str) else ""
-    etag = item.get("etag")
+    raw_etag = item.get("etag")
+    etag = raw_etag.strip() if isinstance(raw_etag, str) else ""
     start = item.get("start")
     end = item.get("end")
     if not isinstance(start, Mapping) or not isinstance(end, Mapping):
@@ -438,7 +442,9 @@ def parse_remote_event(
         start_date=start_date,
         end_date_exclusive=end_date,
         timezone=timezone,
-        etag=etag if isinstance(etag, str) and etag else None,
+        # An ETag is an opaque token: strip HTTP field whitespace, and treat a blank token
+        # as unknown (NULL) instead of storing a whitespace-only conditional-write baseline.
+        etag=etag or None,
         remote_status=remote_status,
     )
 

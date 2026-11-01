@@ -347,7 +347,8 @@ def test_timed_and_all_day_events_are_normalized_to_utc_and_exclusive_dates() ->
 def test_a_blank_etag_is_stored_as_unknown() -> None:
     # The mirror CHECK rejects an empty ETag: it is not a conditional-write baseline, so the
     # parser stores the honest NULL instead of failing the whole read on provider noise.
-    for raw in ("", 0):
+    # Whitespace-only is blank under the same `btrim` criterion the database uses.
+    for raw in ("", "   ", "\t", " \t ", 0):
         parsed = parse_remote_event(
             "primary",
             {
@@ -359,6 +360,56 @@ def test_a_blank_etag_is_stored_as_unknown() -> None:
         )
         assert isinstance(parsed, RemoteCalendarEvent)
         assert parsed.etag is None
+
+
+def test_a_valid_etag_is_trimmed_before_storage() -> None:
+    # HTTP field values tolerate surrounding whitespace; the stored baseline must be the
+    # token itself, never `' "abc" '`.
+    parsed = parse_remote_event(
+        "primary",
+        {
+            "id": "g1",
+            "etag": '  "abc"  ',
+            "start": {"date": "2026-10-06"},
+            "end": {"date": "2026-10-07"},
+        },
+    )
+
+    assert isinstance(parsed, RemoteCalendarEvent)
+    assert parsed.etag == '"abc"'
+
+
+def test_a_blank_remote_status_falls_back_to_confirmed() -> None:
+    # `remote_status` is NOT NULL and non-blank: Google omitting the status (or sending
+    # whitespace) means the event was returned, which is `confirmed`, never a blank value.
+    for raw in ("", "   ", "\t"):
+        parsed = parse_remote_event(
+            "primary",
+            {
+                "id": "g1",
+                "status": raw,
+                "start": {"date": "2026-10-06"},
+                "end": {"date": "2026-10-07"},
+            },
+        )
+        assert isinstance(parsed, RemoteCalendarEvent)
+        assert parsed.remote_status == "confirmed"
+
+
+def test_a_whitespace_only_event_id_fails_the_read() -> None:
+    # The mirror rejects a blank event id; failing here reports the provider contract code
+    # instead of letting an integrity error abort the publication later.
+    for raw_id in ("", "   ", "\t"):
+        with pytest.raises(CalendarEventInvalid) as error:
+            parse_remote_event(
+                "primary",
+                {
+                    "id": raw_id,
+                    "start": {"date": "2026-10-06"},
+                    "end": {"date": "2026-10-07"},
+                },
+            )
+        assert error.value.code == "event_id_invalid"
 
 
 def test_cancelled_event_is_exposed_as_a_key_not_a_row() -> None:

@@ -15,7 +15,9 @@ forced row-level security for the API and worker roles (migration `0006`).
 A3.8 closes the shape with CHECKs: selected and coverage calendar ids are never NULL or blank
 inside the arrays, the write calendar is never blank, and coverage is either empty or one
 complete window (`from < to`, at least one calendar, `last_synced_at` present). A partial
-publication can therefore never be presented as covered.
+publication can therefore never be presented as covered. "Blank" is `btrim(value)` over
+ASCII whitespace, so spaces and tabs are rejected too; the array checks call the `IMMUTABLE`
+helpers created by migration `0013` because a CHECK cannot contain `unnest()`.
 """
 
 import uuid
@@ -34,7 +36,8 @@ class CalendarSettings(Base):
     __tablename__ = "settings"
     __table_args__ = (
         CheckConstraint(
-            "calendar_write_calendar_id IS NULL OR btrim(calendar_write_calendar_id) <> ''",
+            "calendar_write_calendar_id IS NULL "
+            "OR NOT public.maulwurf_text_is_blank(calendar_write_calendar_id)",
             name="write_calendar_not_blank",
         ),
         CheckConstraint(
@@ -42,7 +45,7 @@ class CalendarSettings(Base):
             name="read_calendars_no_null",
         ),
         CheckConstraint(
-            "array_position(calendar_read_calendar_ids, '') IS NULL",
+            "NOT public.maulwurf_text_array_has_blank(calendar_read_calendar_ids)",
             name="read_calendars_no_blank",
         ),
         CheckConstraint(
@@ -50,7 +53,7 @@ class CalendarSettings(Base):
             name="coverage_calendars_no_null",
         ),
         CheckConstraint(
-            "array_position(calendar_coverage_calendar_ids, '') IS NULL",
+            "NOT public.maulwurf_text_array_has_blank(calendar_coverage_calendar_ids)",
             name="coverage_calendars_no_blank",
         ),
         CheckConstraint(

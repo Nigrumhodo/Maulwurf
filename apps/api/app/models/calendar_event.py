@@ -15,7 +15,9 @@ event per task, and `calendar_events_by_task` gives the composite FK a non-parti
 `tentative`, …) for a returned event, `missing` for a task-linked row the read did not
 return, and `cancelled` for a task-linked row Google reported cancelled. The two local values
 are only written on linked rows; a later read that returns the event rewrites the status.
-An empty ETag is unknown, never a conditional-write baseline (`etag_not_blank`).
+A blank ETag (empty or whitespace-only) is unknown, never a conditional-write baseline
+(`etag_not_blank`); the same whitespace-aware `btrim` criterion applies to `calendar_id`,
+`event_id` and `remote_status` through the `IMMUTABLE` helper created by migration `0013`.
 """
 
 import uuid
@@ -42,10 +44,21 @@ class CalendarEvent(TenantOwned, Base):
     __table_args__ = (
         UniqueConstraint("user_id", "calendar_id", "event_id"),
         CheckConstraint("source IN ('google', 'maulwurf')", name="source"),
-        CheckConstraint("calendar_id <> ''", name="calendar_id_not_blank"),
-        CheckConstraint("event_id <> ''", name="event_id_not_blank"),
-        CheckConstraint("remote_status <> ''", name="remote_status_not_blank"),
-        CheckConstraint("etag IS NULL OR etag <> ''", name="etag_not_blank"),
+        CheckConstraint(
+            "NOT public.maulwurf_text_is_blank(calendar_id)",
+            name="calendar_id_not_blank",
+        ),
+        CheckConstraint(
+            "NOT public.maulwurf_text_is_blank(event_id)", name="event_id_not_blank"
+        ),
+        CheckConstraint(
+            "NOT public.maulwurf_text_is_blank(remote_status)",
+            name="remote_status_not_blank",
+        ),
+        CheckConstraint(
+            "etag IS NULL OR NOT public.maulwurf_text_is_blank(etag)",
+            name="etag_not_blank",
+        ),
         CheckConstraint(
             "(start_at IS NOT NULL AND end_at IS NOT NULL "
             "AND start_date IS NULL AND end_date_exclusive IS NULL) "
