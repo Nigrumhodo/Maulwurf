@@ -19,13 +19,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError, not_found, validation_failed
 from app.models import Audio, Conversation, Message, MessageSource
+from app.services.chat_order import ROLE_RANK, message_role_rank, role_rank
 from app.services.subjects import get_active
 from app.services.tenant import get_owned
 
 CHAT_MODES = ("all", "subject", "class")
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 100
-CURSOR_VERSION = 1
+CURSOR_VERSION = 2
+CONVERSATION_CURSOR_VERSION = 1
 MAX_CURSOR_LENGTH = 512
 _CURSOR_INVALID = "cursor inválido o malformado"
 _CURSOR_STALE = "el cursor pertenece a otra conversación"
@@ -33,11 +35,24 @@ _CURSOR_STALE = "el cursor pertenece a otra conversación"
 
 @dataclass(frozen=True)
 class HistoryCursor:
-    """Position of the oldest message already returned to the client."""
+    """Position of the oldest message already returned to the client.
+
+    `role` is part of the position because a user row and its assistant row can share the
+    transaction timestamp; the role rank keeps that legacy tie deterministic.
+    """
 
     conversation_id: uuid.UUID
     created_at: datetime
+    role: str
     message_id: uuid.UUID
+
+
+@dataclass(frozen=True)
+class ConversationCursor:
+    """Position of the last conversation already returned to the client."""
+
+    last_activity_at: datetime
+    conversation_id: uuid.UUID
 
 
 @dataclass(frozen=True)
@@ -91,6 +106,7 @@ def encode_cursor(cursor: HistoryCursor) -> str:
             "v": CURSOR_VERSION,
             "c": str(cursor.conversation_id),
             "t": cursor.created_at.astimezone(UTC).isoformat(),
+            "r": cursor.role,
             "m": str(cursor.message_id),
         },
         separators=(",", ":"),
@@ -98,20 +114,33 @@ def encode_cursor(cursor: HistoryCursor) -> str:
     return base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
 
 
-def decode_cursor(value: str, conversation_id: uuid.UUID) -> HistoryCursor:
-    """Validate the opaque cursor; malformed, stale or foreign positions are a typed 422."""
+def _decode_payload(value: str) -> dict[str, Any]:
     if not value or len(value) > MAX_CURSOR_LENGTH:
         raise validation_failed({"cursor": _CURSOR_INVALID})
     try:
         padded = value + "=" * (-len(value) % 4)
         raw = base64.urlsafe_b64decode(padded.encode("ascii"))
         data = json.loads(raw)
-        if not isinstance(data, dict) or data.get("v") != CURSOR_VERSION:
+    except (ValueError, TypeError, binascii.Error, UnicodeError) as exc:
+        raise validation_failed({"cursor": _CURSOR_INVALID}) from exc
+    if not isinstance(data, dict):
+        raise validation_failed({"cursor": _CURSOR_INVALID})
+    return data
+
+
+def decode_cursor(value: str, conversation_id: uuid.UUID) -> HistoryCursor:
+    """Validate the opaque cursor; malformed, stale or foreign positions are a typed 422."""
+    data = _decode_payload(value)
+    try:
+        if data.get("v") != CURSOR_VERSION:
             raise ValueError("unsupported cursor")
         cursor_conversation = uuid.UUID(str(data["c"]))
         created_at = datetime.fromisoformat(str(data["t"]))
+        role = str(data["r"])
+        if role not in ROLE_RANK:
+            raise ValueError("unsupported role")
         message_id = uuid.UUID(str(data["m"]))
-    except (ValueError, TypeError, KeyError, binascii.Error, UnicodeError) as exc:
+    except (ValueError, TypeError, KeyError) as exc:
         raise validation_failed({"cursor": _CURSOR_INVALID}) from exc
     if created_at.tzinfo is None:
         raise validation_failed({"cursor": _CURSOR_INVALID})
@@ -120,7 +149,38 @@ def decode_cursor(value: str, conversation_id: uuid.UUID) -> HistoryCursor:
     return HistoryCursor(
         conversation_id=cursor_conversation,
         created_at=created_at.astimezone(UTC),
+        role=role,
         message_id=message_id,
+    )
+
+
+def encode_conversation_cursor(cursor: ConversationCursor) -> str:
+    """Opaque cursor for the tenant listing; the query still filters by `user_id`."""
+    payload = json.dumps(
+        {
+            "v": CONVERSATION_CURSOR_VERSION,
+            "t": cursor.last_activity_at.astimezone(UTC).isoformat(),
+            "c": str(cursor.conversation_id),
+        },
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
+
+
+def decode_conversation_cursor(value: str) -> ConversationCursor:
+    data = _decode_payload(value)
+    try:
+        if data.get("v") != CONVERSATION_CURSOR_VERSION:
+            raise ValueError("unsupported cursor")
+        last_activity_at = datetime.fromisoformat(str(data["t"]))
+        conversation_id = uuid.UUID(str(data["c"]))
+    except (ValueError, TypeError, KeyError) as exc:
+        raise validation_failed({"cursor": _CURSOR_INVALID}) from exc
+    if last_activity_at.tzinfo is None:
+        raise validation_failed({"cursor": _CURSOR_INVALID})
+    return ConversationCursor(
+        last_activity_at=last_activity_at.astimezone(UTC),
+        conversation_id=conversation_id,
     )
 
 
@@ -172,11 +232,19 @@ async def get_active_conversation(
     return conversation
 
 
-async def list_conversations(db: AsyncSession, user_id: uuid.UUID) -> list[ConversationListItem]:
-    """Active conversations of the tenant, most recently used first.
+async def list_conversations(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    *,
+    limit: int = DEFAULT_PAGE_SIZE,
+    cursor: str | None = None,
+) -> tuple[list[ConversationListItem], str | None]:
+    """One bounded page of active conversations, most recently used first.
 
     `last_message_at` comes from one grouped subquery, so the listing order does not require
     `conversations.updated_at` to be written by the streaming path (L2.5 does not touch it).
+    The keyset cursor walks older pages; without it the response would grow with the tenant
+    forever. `messages_by_conversation_order` also serves this aggregate.
     """
     last_message = (
         select(
@@ -187,21 +255,46 @@ async def list_conversations(db: AsyncSession, user_id: uuid.UUID) -> list[Conve
         .group_by(Message.conversation_id)
         .subquery()
     )
-    rows = (
-        await db.execute(
-            select(Conversation, last_message.c.last_message_at)
-            .outerjoin(last_message, last_message.c.conversation_id == Conversation.id)
-            .where(Conversation.user_id == user_id, Conversation.deleted_at.is_(None))
-            .order_by(
-                func.coalesce(last_message.c.last_message_at, Conversation.created_at).desc(),
-                Conversation.id.desc(),
+    last_activity = func.coalesce(last_message.c.last_message_at, Conversation.created_at)
+    query = (
+        select(Conversation, last_message.c.last_message_at, last_activity.label("last_activity"))
+        .outerjoin(last_message, last_message.c.conversation_id == Conversation.id)
+        .where(Conversation.user_id == user_id, Conversation.deleted_at.is_(None))
+    )
+    position = decode_conversation_cursor(cursor) if cursor is not None else None
+    if position is not None:
+        query = query.where(
+            or_(
+                last_activity < position.last_activity_at,
+                and_(
+                    last_activity == position.last_activity_at,
+                    Conversation.id < position.conversation_id,
+                ),
             )
         )
+    rows = (
+        await db.execute(
+            query.order_by(last_activity.desc(), Conversation.id.desc()).limit(limit + 1)
+        )
     ).all()
-    return [
-        ConversationListItem(conversation=conversation, last_message_at=last_message_at)
-        for conversation, last_message_at in rows
-    ]
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    next_cursor = None
+    if has_more and page:
+        oldest = page[-1]
+        next_cursor = encode_conversation_cursor(
+            ConversationCursor(
+                last_activity_at=cast(datetime, oldest[2]),
+                conversation_id=oldest[0].id,
+            )
+        )
+    return (
+        [
+            ConversationListItem(conversation=row[0], last_message_at=row[1])
+            for row in page
+        ],
+        next_cursor,
+    )
 
 
 async def page_messages(
@@ -212,19 +305,31 @@ async def page_messages(
     limit: int,
     cursor: str | None,
 ) -> tuple[list[Message], str | None]:
-    """Newest page returned oldest-first; `next_cursor` walks towards older messages."""
+    """Newest page returned oldest-first; `next_cursor` walks towards older messages.
+
+    The total order is `(created_at, role rank, id)`. `prepare` writes the assistant one
+    microsecond after its question, and the rank keeps legacy rows with the same timestamp
+    user-before-assistant even when the random UUID would sort them the other way.
+    """
     await get_active_conversation(db, user_id, conversation_id)
     position = decode_cursor(cursor, conversation_id) if cursor is not None else None
+    rank = message_role_rank()
     query = select(Message).where(
         Message.user_id == user_id,
         Message.conversation_id == conversation_id,
     )
     if position is not None:
+        position_rank = role_rank(position.role)
         query = query.where(
             or_(
                 Message.created_at < position.created_at,
                 and_(
                     Message.created_at == position.created_at,
+                    rank < position_rank,
+                ),
+                and_(
+                    Message.created_at == position.created_at,
+                    rank == position_rank,
                     Message.id < position.message_id,
                 ),
             )
@@ -232,7 +337,9 @@ async def page_messages(
     rows = list(
         (
             await db.execute(
-                query.order_by(Message.created_at.desc(), Message.id.desc()).limit(limit + 1)
+                query.order_by(
+                    Message.created_at.desc(), rank.desc(), Message.id.desc()
+                ).limit(limit + 1)
             )
         )
         .scalars()
@@ -247,6 +354,7 @@ async def page_messages(
             HistoryCursor(
                 conversation_id=conversation_id,
                 created_at=oldest.created_at,
+                role=oldest.role,
                 message_id=oldest.id,
             )
         )

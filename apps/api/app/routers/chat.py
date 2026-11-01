@@ -175,18 +175,30 @@ async def create_conversation(
 @router.get(
     "/chat/conversations",
     responses={
-        200: {"description": "Conversaciones activas del tenant, más recientes primero"},
+        200: {"description": "Página de conversaciones activas, más recientes primero"},
         401: {"description": "Sin sesión (auth_required)"},
+        422: {"description": "validation_failed: limit o cursor inválidos"},
     },
 )
 async def list_conversations(
-    session: CurrentSession, db: DbSession, response: Response
+    session: CurrentSession,
+    db: DbSession,
+    response: Response,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+    cursor: Annotated[str | None, Query(max_length=MAX_CURSOR_LENGTH)] = None,
 ) -> ConversationListOut:
-    """List the authenticated user's conversations; other tenants are never visible."""
+    """List the authenticated user's conversations; other tenants are never visible.
+
+    At most `limit` conversations are returned. `next_cursor` walks towards older activity
+    and `null` means the listing is complete.
+    """
     response.headers["Cache-Control"] = "no-store"
-    rows = await conversations.list_conversations(db, session.user_id)
+    rows, next_cursor = await conversations.list_conversations(
+        db, session.user_id, limit=limit, cursor=cursor
+    )
     return ConversationListOut(
-        items=[_conversation_out(row.conversation, row.last_message_at) for row in rows]
+        items=[_conversation_out(row.conversation, row.last_message_at) for row in rows],
+        next_cursor=next_cursor,
     )
 
 

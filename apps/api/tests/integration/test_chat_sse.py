@@ -7,6 +7,7 @@ iterate `RAGService.stream_events` directly, as the progress SSE suite does.
 
 import asyncio
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
@@ -436,6 +437,50 @@ async def test_chat_stream_emits_ordered_deltas_citations_and_one_done(
     assert done["status"] == "completed"
     assert done["conversation_id"] == str(conversation.id)
     assert done["sources"] == [{"kind": "transcript", "audio_id": str(citation["audio_id"])}]
+
+
+async def test_chat_history_returns_the_real_turn_user_before_assistant(
+    chat_sse: Harness,
+) -> None:
+    actor, conversation, _, _ = await _setup_corpus(chat_sse.factory)
+    question = "¿Qué hace la integral?"
+    response = await _post(chat_sse, actor, conversation.id, content=question)
+    assert response.status_code == 200
+
+    history = await chat_sse.client.get(
+        f"/chat/conversations/{conversation.id}/messages", cookies=actor.cookies
+    )
+    assert history.status_code == 200
+    items = history.json()["items"]
+    assert [item["role"] for item in items] == ["user", "assistant"]
+    assert items[0]["content"] == question
+    # The turn was persisted in one transaction; the explicit marks still order the pair.
+    assert items[0]["created_at"] < items[1]["created_at"]
+
+    pages: list[list[uuid.UUID]] = []
+    cursor: str | None = None
+    while True:
+        params: dict[str, str | int] = {"limit": 1}
+        if cursor is not None:
+            params["cursor"] = cursor
+        page = await chat_sse.client.get(
+            f"/chat/conversations/{conversation.id}/messages",
+            params=params,
+            cookies=actor.cookies,
+        )
+        assert page.status_code == 200
+        body = page.json()
+        pages.append([uuid.UUID(item["id"]) for item in body["items"]])
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+    assert pages == [
+        [uuid.UUID(items[1]["id"])],
+        [uuid.UUID(items[0]["id"])],
+    ]
+    assert sorted(page[0] for page in pages) == sorted(
+        uuid.UUID(item["id"]) for item in items
+    )
 
 
 async def test_chat_rejects_a_third_stream_before_any_work(chat_sse: Harness) -> None:
@@ -1221,6 +1266,88 @@ async def test_chat_client_disconnect_leaves_partial_cancelled(chat_sse: Harness
         assert row is not None
         assert row.status == "cancelled"
         assert row.content == "parcial"
+
+
+async def test_chat_delete_during_stream_ignores_checkpoints_and_does_not_resurrect(
+    chat_sse: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.ERROR)
+    actor, conversation, _, _ = await _setup_corpus(chat_sse.factory)
+    blocking = BlockingLLM()
+    service = RAGService(
+        session_factory=chat_sse.factory,
+        embedding_provider=chat_sse.embeddings,
+        llm_provider=blocking,
+        cancel_poll_seconds=30.0,
+        heartbeat_seconds=10.0,
+        checkpoint_seconds=0.01,
+    )
+    prepared = await service.prepare(
+        user_id=actor.user_id,
+        conversation_id=conversation.id,
+        content="¿Qué hace la integral?",
+        client_message_id="delete-in-flight",
+    )
+    stream = service.stream_events(prepared)
+    assert _event_name(await anext(stream)) == "snapshot"
+    assert _event_data(await anext(stream))["text"] == "parcial"
+    await blocking.started.wait()
+
+    # DELETE purges the user message, the streaming assistant and its sources while the
+    # generator is still producing text.
+    deleted = await chat_sse.client.delete(
+        f"/chat/conversations/{conversation.id}",
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+    assert deleted.status_code == 204
+    async with chat_sse.factory() as db:
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(Message)
+                .where(Message.conversation_id == conversation.id)
+            )
+            == 0
+        )
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(MessageSource)
+                .where(MessageSource.message_id == prepared.assistant_message_id)
+            )
+            == 0
+        )
+        tombstone = await db.get(Conversation, conversation.id)
+        assert tombstone is not None
+        assert tombstone.deleted_at is not None
+
+    # The generator is suspended at the delta yield. Resuming it runs the next checkpoint
+    # against the purged row; the zero-row UPDATE is tolerated and closes the stream.
+    done = await anext(stream)
+    blocking.release.set()
+    assert _event_name(done) == "done"
+    assert _event_data(done)["status"] == "cancelled"
+    await stream.aclose()
+
+    assert [record for record in caplog.records if record.levelno >= logging.ERROR] == []
+    async with chat_sse.factory() as db:
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(Message)
+                .where(Message.conversation_id == conversation.id)
+            )
+            == 0
+        )
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(MessageSource)
+                .where(MessageSource.message_id == prepared.assistant_message_id)
+            )
+            == 0
+        )
 
 
 async def test_chat_does_not_log_question_content(

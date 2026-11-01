@@ -23,7 +23,7 @@ import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.db import bind_user
 from app.models.chat import Conversation, Message, MessageSource
 from app.models.chunk import Chunk
+from app.services.chat_order import ASSISTANT_CREATED_AT_OFFSET, message_role_rank
 from app.services.chunking import count_tokens_default, tokenizer_is_exact
 from app.services.citations import (
     CitationBuffer,
@@ -594,6 +595,11 @@ class RAGService:
                     return await self._replay_prepared(db, existing)
 
             model = self._llm.model if self._llm is not None else None
+            # The turn is persisted under the conversation row lock (see
+            # `_owned_conversation`), so taking the clock here orders turns by insertion.
+            # The assistant is marked one microsecond later: both rows otherwise share the
+            # transaction `now()` and the random UUID would decide question-vs-answer order.
+            turn_created_at = datetime.now(UTC)
             user_message = Message(
                 user_id=user_id,
                 conversation_id=conversation_id,
@@ -601,6 +607,7 @@ class RAGService:
                 content=question,
                 status="completed",
                 citas=[],
+                created_at=turn_created_at,
             )
             assistant = Message(
                 user_id=user_id,
@@ -614,6 +621,7 @@ class RAGService:
                 prompt_version=PROMPT_VERSION,
                 input_tokens=0,
                 output_tokens=0,
+                created_at=turn_created_at + ASSISTANT_CREATED_AT_OFFSET,
             )
             db.add_all([user_message, assistant])
             try:
@@ -1191,7 +1199,11 @@ class RAGService:
                         Message.status == "completed",
                         Message.role.in_(("user", "assistant")),
                     )
-                    .order_by(Message.created_at.desc(), Message.id.desc())
+                    .order_by(
+                        Message.created_at.desc(),
+                        message_role_rank().desc(),
+                        Message.id.desc(),
+                    )
                     .limit(self._history_max_messages)
                 )
             )

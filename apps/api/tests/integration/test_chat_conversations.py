@@ -71,6 +71,7 @@ async def _message(
     status: str = "completed",
     created_at: datetime | None = None,
     client_message_id: str | None = None,
+    message_id: uuid.UUID | None = None,
 ) -> Message:
     message = Message(
         user_id=actor.user_id,
@@ -80,6 +81,7 @@ async def _message(
         status=status,
         client_message_id=client_message_id,
         created_at=created_at,
+        id=message_id,
     )
     db.add(message)
     await db.flush()
@@ -278,7 +280,64 @@ async def test_i_s2_an_11_listing_is_empty_without_conversations(
     response = await client.get("/chat/conversations", cookies=actor.cookies)
 
     assert response.status_code == 200
-    assert response.json() == {"items": []}
+    assert response.json() == {"items": [], "next_cursor": None}
+
+
+async def test_i_s2_an_11_listing_is_keyset_paginated(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    base = datetime(2026, 11, 1, 10, 0, tzinfo=UTC)
+    conversations = [await _conversation(db_session, actor) for _ in range(4)]
+    for index, conversation in enumerate(conversations):
+        await _message(
+            db_session,
+            actor,
+            conversation,
+            content=f"mensaje {index}",
+            created_at=base + timedelta(minutes=index),
+        )
+    await db_session.flush()
+
+    first = await client.get(
+        "/chat/conversations", params={"limit": 2}, cookies=actor.cookies
+    )
+    assert first.status_code == 200
+    first_body = first.json()
+    assert [uuid.UUID(item["id"]) for item in first_body["items"]] == [
+        conversations[3].id,
+        conversations[2].id,
+    ]
+    assert first_body["next_cursor"]
+
+    second = await client.get(
+        "/chat/conversations",
+        params={"limit": 2, "cursor": first_body["next_cursor"]},
+        cookies=actor.cookies,
+    )
+    assert second.status_code == 200
+    second_body = second.json()
+    assert [uuid.UUID(item["id"]) for item in second_body["items"]] == [
+        conversations[1].id,
+        conversations[0].id,
+    ]
+    assert second_body["next_cursor"] is None
+
+    collected = [
+        uuid.UUID(item["id"]) for item in first_body["items"] + second_body["items"]
+    ]
+    assert sorted(collected) == sorted(conversation.id for conversation in conversations)
+
+    for limit in (0, 101):
+        invalid = await client.get(
+            "/chat/conversations", params={"limit": limit}, cookies=actor.cookies
+        )
+        assert invalid.status_code == 422
+    malformed = await client.get(
+        "/chat/conversations", params={"cursor": "***"}, cookies=actor.cookies
+    )
+    assert malformed.status_code == 422
+    assert malformed.json()["error"]["code"] == "validation_failed"
 
 
 # --- GET /chat/conversations/{id}/messages ----------------------------------------------
@@ -372,6 +431,70 @@ async def test_i_s2_an_11_history_is_paginated_oldest_first_and_tenant_scoped(
 
     no_session = await client.get(f"/chat/conversations/{conversation.id}/messages")
     assert no_session.status_code == 401
+
+
+async def test_i_s2_an_11_history_orders_a_same_timestamp_turn_user_first(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    conversation = await _conversation(db_session, actor)
+    base = datetime(2026, 11, 1, 10, 0, tzinfo=UTC)
+    # The assistant UUID sorts before the question, so only the role tie-break can keep
+    # the pair in question-then-answer order. Both rows share one transaction timestamp,
+    # as legacy L2.5 turns did before `prepare` wrote an explicit microsecond offset.
+    question_id = uuid.UUID("ffffffff-ffff-4fff-bfff-ffffffffffff")
+    answer_id = uuid.UUID("00000000-0000-4000-8000-000000000001")
+    await _message(
+        db_session,
+        actor,
+        conversation,
+        role="user",
+        content="pregunta",
+        created_at=base,
+        message_id=question_id,
+    )
+    await _message(
+        db_session,
+        actor,
+        conversation,
+        role="assistant",
+        content="respuesta",
+        created_at=base,
+        message_id=answer_id,
+    )
+
+    response = await client.get(
+        f"/chat/conversations/{conversation.id}/messages", cookies=actor.cookies
+    )
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert [(item["role"], uuid.UUID(item["id"])) for item in items] == [
+        ("user", question_id),
+        ("assistant", answer_id),
+    ]
+
+    # Keyset pagination visits the same total order: each row appears exactly once even
+    # when the page boundary falls between the question and its answer.
+    pages: list[list[uuid.UUID]] = []
+    cursor: str | None = None
+    while True:
+        params: dict[str, str | int] = {"limit": 1}
+        if cursor is not None:
+            params["cursor"] = cursor
+        page = await client.get(
+            f"/chat/conversations/{conversation.id}/messages",
+            params=params,
+            cookies=actor.cookies,
+        )
+        assert page.status_code == 200
+        body = page.json()
+        pages.append([uuid.UUID(item["id"]) for item in body["items"]])
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+    assert pages == [[answer_id], [question_id]]
+    assert sorted(page[0] for page in pages) == sorted([question_id, answer_id])
 
 
 async def test_i_s2_an_11_history_keeps_the_partial_cancelled_content(
@@ -512,7 +635,7 @@ async def test_i_s2_an_11_delete_tombstones_and_purges_messages_and_sources(
     )
     assert history.status_code == 404
     listing = await client.get("/chat/conversations", cookies=alice.cookies)
-    assert listing.json() == {"items": []}
+    assert listing.json() == {"items": [], "next_cursor": None}
     second = await client.delete(
         f"/chat/conversations/{conversation_id}",
         cookies=alice.cookies,

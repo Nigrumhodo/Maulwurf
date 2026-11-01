@@ -37,6 +37,7 @@ class ConversationOut(BaseModel):
 
 class ConversationListOut(BaseModel):
     items: list[ConversationOut]
+    next_cursor: str | None = None
 
 
 class MessageOut(BaseModel):
