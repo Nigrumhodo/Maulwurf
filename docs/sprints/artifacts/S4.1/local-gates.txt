@@ -1,0 +1,85 @@
+S4.1 / MAULW-149 fix1 local gates
+Date (UTC): 2026-10-31
+Environment: development sandbox, Linux 7.0.0-39-generic, Python 3.12, uv from ~/.local/bin
+Head before this capture: 20f4e40 (task/MAULW-149 after merging origin/develop f7c3f03)
+
+$ cd apps/ingest && uv run ruff check .
+All checks passed!
+
+$ cd apps/ingest && uv run mypy .
+Success: no issues found in 80 source files
+
+$ cd apps/ingest && uv run pytest tests/test_cleanup_recovery.py -m "not integration" -q
+19 passed, 6 deselected
+
+$ cd apps/ingest && uv run pytest -m "not integration and not provider and not load" -q --ignore=tests/test_synthetic_audio.py
+230 passed, 78 deselected
+
+The same suite without --ignore runs 8 failures, all in tests/test_synthetic_audio.py:
+each one raises "espeak-ng is required for synthetic audio (S1.A1)". espeak-ng is absent
+from this sandbox; the runbook already documents this environment gap and CI installs it.
+
+$ python3 scripts/docs/check_refs.py
+OK: 813 documented repository paths exist or are expected.
+
+Integration cases (I-S4-SG-03) were not executed locally: this sandbox has no PostgreSQL
+(MAULWURF_DATABASE_URL unset, no psql/pg_isready). The final Quality CI run is recorded in
+docs/runbooks/cleanup.md section 8.1 and in the PR body.
+
+S4.1 / MAULW-149 fix2 local gates
+Date (UTC): 2026-11-01
+Environment: development sandbox, Linux, Python 3.12, uv 0.13.1, PostgreSQL 16.15
+(scratch role `mwt149`, database `maulwurf`; the integration fixture creates and drops its
+own `maulwurf_ingest_test_*` database), `MAULWURF_ENV=local`.
+Head before this capture: 7f675fc (task/MAULW-149)
+
+$ cd apps/ingest && uv run ruff check .
+All checks passed!
+
+$ cd apps/ingest && uv run mypy .
+Success: no issues found in 80 source files
+
+$ cd apps/ingest && uv run pytest tests/test_cleanup_recovery.py -m "not integration" -q
+25 passed, 8 deselected
+
+$ cd apps/ingest && uv run pytest -m "not integration and not provider and not load" -q --ignore=tests/test_synthetic_audio.py
+236 passed, 80 deselected
+
+# Integration with a real migrated PostgreSQL (the 8 I-S4-SG-03 cases):
+$ MAULWURF_DATABASE_URL='postgresql+asyncpg://mwt149:<local-only>@127.0.0.1:5432/maulwurf' \
+  MAULWURF_ENV=local uv run pytest -m integration -q tests/test_cleanup_recovery.py
+8 passed, 25 deselected
+
+# Whole runbook file (unit + integration):
+$ MAULWURF_DATABASE_URL='postgresql+asyncpg://mwt149:<local-only>@127.0.0.1:5432/maulwurf' \
+  MAULWURF_ENV=local uv run pytest tests/test_cleanup_recovery.py -q
+33 passed in 12.17s
+
+$ python3 scripts/docs/check_refs.py
+OK: 816 documented repository paths exist or are expected.
+
+The 8 synthetic-audio cases still fail only because `espeak-ng` is absent from this sandbox;
+CI installs it. The compose and reference-host drills remain NOT RUN for the environment
+reasons recorded in drill-environment.txt.
+
+Quality CI after the fix2 push (GitHub Actions):
+Run 41257113125 (workflow `quality`, head 22e9ad9, created 2026-11-01T00:31:23Z)
+- 16/16 quality jobs and 17/17 PR checks green, including e2e-smoke, docs and
+  compose-ingest-env.
+- python-unit (ingest): 239 passed, 6 skipped, 80 deselected.
+- integration (ingest): 66 passed, 11 skipped, 247 deselected, 1 xfailed (the 8
+  I-S4-SG-03 cases included).
+
+Quality CI on the evidence head:
+Run 41257417783 (workflow `quality`, head ce4a3cf) repeats 16/16 jobs and 17/17 PR
+checks green, with `python-unit (ingest)` 239 passed, 6 skipped and
+`integration (ingest)` 66 passed, 11 skipped, 1 xfailed.
+
+Develop sync after the fix2 evidence:
+Merged origin/develop 9c48ce2 (#137, A2.18 schema integrity, migration 0009) into the
+branch without conflicts. Local gates on the merge: ruff/mypy clean, 25 runbook unit,
+236 ingest unit, 8 I-S4-SG-03 integration (33 with unit) against PostgreSQL 16.15 with
+migration 0009 applied.
+Quality CI run 41258428740 (head 06bf15f, after the develop merge): 16/16 jobs and
+17/17 PR checks green, python-unit (ingest) 239 passed, 6 skipped; integration (ingest)
+66 passed, 11 skipped, 1 xfailed.

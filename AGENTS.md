@@ -77,6 +77,8 @@ explicit Definition of Done. See "Sprint Model" below.
   - `docs/NVIDIA_RIVA.md` — Audited Riva client parameters and reference invocation.
   - `docs/RUNBOOK-dev.md` — Canonical local development runbook (stack, healthchecks,
     migrations, tests, lint).
+  - `docs/runbooks/cleanup.md` — S4.1 executable cleanup/recovery runbook (failed
+    cleanup, 60 s operator sweeper, host-loss attestation).
 - `infra/` — Local development stack (area `J-`, merged): `docker-compose.yml` (8 services
   with healthchecks, images pinned by digest) and `Caddyfile` (local TLS proxy without
   buffering, with the J2.10 edge body/timeout limits; [ADR-0010](docs/adr/ADR-0010-ingress.md)
@@ -414,6 +416,7 @@ versioned or retained as a CI artifact. Persist only non-sensitive metrics and e
   contract, and day-by-day ticket detail.
 - [`docs/RUNBOOK-dev.md`](docs/RUNBOOK-dev.md) — Development runbook: local stack,
   healthchecks, migrations, tests, and lint.
+- [`docs/runbooks/cleanup.md`](docs/runbooks/cleanup.md) — S4.1 cleanup/recovery runbook.
 - [`docs/sprints/CLAIMS.md`](docs/sprints/CLAIMS.md) — Canonical claim registry (S1–S4).
 - [`docs/sprints/README.md`](docs/sprints/README.md) — Claiming rules and logbook template;
   one logbook per member in that directory.
@@ -424,6 +427,7 @@ versioned or retained as a CI artifact. Persist only non-sensitive metrics and e
 - [`docs/spike/F0.1-protocolo.md`](docs/spike/F0.1-protocolo.md) — F0.1 contract-spike
   protocol (unique format for the S1.A8 report).
 - [`LICENSE`](LICENSE) — GNU Affero General Public License, version 3.
-- `> TODO:` add `docs/ARCH.md` and production runbooks when tickets S4.1 and J4.8 land;
-  the development runbook is [`docs/RUNBOOK-dev.md`](docs/RUNBOOK-dev.md); L1.2 ADRs are
-  in `docs/adr/`.
+- `> TODO:` add `docs/ARCH.md` and the production runbooks J4.8 owns (provider outage,
+  tokens, restore, account deletion); S4.1's cleanup runbook is
+  [`docs/runbooks/cleanup.md`](docs/runbooks/cleanup.md). The development runbook is
+  [`docs/RUNBOOK-dev.md`](docs/RUNBOOK-dev.md); L1.2 ADRs are in `docs/adr/`.
