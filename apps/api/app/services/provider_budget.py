@@ -3,9 +3,12 @@
 The budget is a monthly cap over a unit the application already measures:
 
 - ``llm`` — input + output tokens persisted on assistant messages;
-- ``asr`` — source audio minutes of classes whose transcript was committed in the month
-  (the S3.5 measurement recorded a 1.00833 overlap factor, so billed provider minutes are
-  slightly higher and this value is a lower bound);
+- ``asr`` — source audio minutes of classes whose transcript was committed in the month.
+  The month is defined by ``transcripts.created_at``: an audio uploaded on the last day of
+  the previous month counts when its transcript is committed in the current one, and an
+  audio uploaded this month does not count until its transcript exists. The S3.5
+  measurement recorded a 1.00833 overlap factor, so billed provider minutes are slightly
+  higher and this value is a lower bound;
 - ``google`` — recorded Google operations: sent notifications, Calendar task-event writes
   and authorized remote deletions. Manual Calendar reads and token refreshes are not
   durably recorded, so this is also a lower bound.
@@ -22,7 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final, Literal
 
-from sqlalchemy import exists, func, select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
@@ -258,18 +261,22 @@ async def collect_usage(
         ).where(Message.created_at >= start, Message.created_at < end)
     )
 
+    # The month belongs to the committed transcript, not to the upload: a class uploaded
+    # on the last day of the previous month still counts here when its transcript is
+    # committed in the current one. Driving the read from `transcripts` also keeps each
+    # class counted once when several transcript versions land in the same month, and it
+    # lets the planner start from the month range instead of scanning every audio row.
+    committed_audio_ids = (
+        select(Transcript.audio_id)
+        .where(Transcript.created_at >= start, Transcript.created_at < end)
+        .distinct()
+        .subquery()
+    )
     asr_seconds = await db.scalar(
-        select(func.coalesce(func.sum(Audio.duration_seconds), 0.0)).where(
-            Audio.duration_seconds.is_not(None),
-            Audio.created_at >= start,
-            Audio.created_at < end,
-            exists().where(
-                Transcript.user_id == Audio.user_id,
-                Transcript.audio_id == Audio.id,
-                Transcript.created_at >= start,
-                Transcript.created_at < end,
-            ),
-        )
+        select(func.coalesce(func.sum(Audio.duration_seconds), 0.0))
+        .select_from(Audio)
+        .join(committed_audio_ids, committed_audio_ids.c.audio_id == Audio.id)
+        .where(Audio.duration_seconds.is_not(None))
     )
 
     sent_notifications = await db.scalar(

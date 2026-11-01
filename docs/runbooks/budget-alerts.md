@@ -16,11 +16,14 @@
 | Provider | Series unit | Source in the database | Known lower bound |
 |---|---|---|---|
 | `llm` | `tokens` | `messages.input_tokens + messages.output_tokens` for the UTC month | Only persisted assistant turns; a provider retry after a visible delta is not billed here |
-| `asr` | `minutes` | `audios.duration_seconds` for classes whose transcript was committed in the month | Source duration, not provider billing. S3.5 measured 60.5 effective minutes per class hour, a ≈0.833% local overlap, so billed minutes are slightly higher |
+| `asr` | `minutes` | `audios.duration_seconds` for classes whose transcript was committed in the month (`transcripts.created_at`, never the upload date) | Source duration, not provider billing. S3.5 measured 60.5 effective minutes per class hour, a ≈0.833% local overlap, so billed minutes are slightly higher |
 | `google` | `operations` | Sent `notifications`, `sync_task_event` outbox rows and `google_remote_operations` created in the month | Manual `POST /calendar/sync` reads and token refreshes are not durably recorded |
 
 The window is the **UTC calendar month**. At 00:00 UTC on day 1 the usage resets; a
-continuous month is never approximated by a rolling 30-day window.
+continuous month is never approximated by a rolling 30-day window. For ASR, the month is
+the transcript's commit time: an audio uploaded on 31 October whose transcript is committed
+on 1 November counts in November, never nowhere, and an audio uploaded in November does not
+count until its transcript exists.
 
 ## 2. Configuration
 

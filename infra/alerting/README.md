@@ -52,8 +52,10 @@ Do not copy a number from this file into a deployment without the provider contr
 approved budget. The F0/F1 evidence published no price, quota or capacity limit, so inventing
 one would violate guardrail 10. The ASR usage is a lower bound: S3.5 measured 60.5 effective
 minutes per class hour including the local overlap, while the metric sums source duration.
-Google usage counts sent notifications, Calendar task-event writes and authorized remote
-deletions; manual Calendar reads and token refreshes are not durably recorded.
+The ASR month is the transcript commit (`transcripts.created_at`), not the upload date, so a
+class uploaded on the last day of a month counts when its transcript is committed. Google
+usage counts sent notifications, Calendar task-event writes and authorized remote deletions;
+manual Calendar reads and token refreshes are not durably recorded.
 
 ## Alert response
 

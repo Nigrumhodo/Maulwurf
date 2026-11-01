@@ -49,7 +49,12 @@ async def _user(db: AsyncSession) -> User:
 
 
 async def _audio_with_transcript(
-    db: AsyncSession, user: User, *, created_at: datetime, duration_seconds: float
+    db: AsyncSession,
+    user: User,
+    *,
+    created_at: datetime,
+    duration_seconds: float,
+    transcript_created_at: datetime | None = None,
 ) -> Audio:
     subject = Subject(user_id=user.id, name=f"Materia {uuid.uuid4().hex[:6]}")
     db.add(subject)
@@ -77,7 +82,7 @@ async def _audio_with_transcript(
             text="texto de clase",
             char_count=14,
             fts_config="spanish",
-            created_at=created_at,
+            created_at=transcript_created_at or created_at,
         )
     )
     await db.flush()
@@ -181,6 +186,34 @@ async def test_usage_counts_only_the_current_month(db_session: AsyncSession) -> 
     usage = await collect_usage(db_session, now=NOW)
 
     assert usage == {"llm": 1_000.0, "asr": 5.0, "google": 3.0}
+
+
+async def test_a_transcript_committed_this_month_counts_an_audio_uploaded_last_month(
+    db_session: AsyncSession,
+) -> None:
+    user = await _user(db_session)
+    # Uploaded on the last day of October, committed just after midnight on 1 November:
+    # the usage belongs to the November budget, not to either side of a gap.
+    await _audio_with_transcript(
+        db_session,
+        user,
+        created_at=datetime(2099, 10, 31, 23, 30, tzinfo=UTC),
+        transcript_created_at=datetime(2099, 11, 1, 0, 15, tzinfo=UTC),
+        duration_seconds=120.0,
+    )
+    # The reverse direction: an audio uploaded this month whose only transcript was
+    # committed last month is not current-month usage yet.
+    await _audio_with_transcript(
+        db_session,
+        user,
+        created_at=IN_MONTH,
+        transcript_created_at=LAST_MONTH,
+        duration_seconds=300.0,
+    )
+
+    usage = await collect_usage(db_session, now=NOW)
+
+    assert usage["asr"] == 2.0
 
 
 async def test_usage_is_readable_through_the_cross_tenant_jobs_role(
