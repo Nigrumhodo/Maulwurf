@@ -198,6 +198,9 @@ class TombstonePurged(BaseModel):
     attempts_cancelled: int
     outbox_events_skipped: int
     processing_runs_cancelled: int
+    tasks_deleted: int
+    task_sources_deleted: int
+    task_revisions_deleted: int
     message_sources_deleted: int
     messages_tombstoned: int
     embeddings_deleted: int
@@ -635,6 +638,9 @@ async def delete_audio(
             attempts_cancelled=result.attempts_cancelled,
             outbox_events_skipped=result.outbox_events_skipped,
             processing_runs_cancelled=result.processing_runs_cancelled,
+            tasks_deleted=result.tasks_deleted,
+            task_sources_deleted=result.task_sources_deleted,
+            task_revisions_deleted=result.task_revisions_deleted,
             message_sources_deleted=result.message_sources_deleted,
             messages_tombstoned=result.messages_tombstoned,
             embeddings_deleted=result.embeddings_deleted,

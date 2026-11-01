@@ -152,6 +152,9 @@ class Task(TenantOwned, Base):
             "due_date",
             postgresql_where=text("due_date IS NOT NULL"),
         ),
+        # The partial due indexes cannot serve `ambiguous`/`missing` rows (both due columns
+        # are NULL), so the unresolved tray still needs the plain status lookup.
+        Index("tasks_inbox_status", "user_id", "status"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -205,6 +208,14 @@ class TaskSource(Base):
     persist at least one before it is published (A3.2 validates that rule). The span uses
     Unicode code points, like `task_evidence`, and is tenant-pinned through the composite
     FKs.
+
+    A citation is self-consistent, not just same-tenant: the segment must belong to the
+    cited transcript (`(user_id, transcript_id, segment_id)`), the transcript must belong
+    to the cited class (`(user_id, audio_id, transcript_id)`) and `transcript_version` must
+    be that transcript's version (`(user_id, transcript_id, transcript_version)`, whose
+    parent key comes from A2.18/0009). Independent two-column FKs would accept a segment
+    from another transcript of the same user and a class/version that never produced the
+    cited transcript.
     """
 
     __tablename__ = "task_sources"
@@ -217,17 +228,23 @@ class TaskSource(Base):
             ["user_id", "audio_id"], ["audios.user_id", "audios.id"], ondelete="CASCADE"
         ),
         ForeignKeyConstraint(
-            ["user_id", "transcript_id"], ["transcripts.user_id", "transcripts.id"]
+            ["user_id", "audio_id", "transcript_id"],
+            ["transcripts.user_id", "transcripts.audio_id", "transcripts.id"],
         ),
         ForeignKeyConstraint(
-            ["user_id", "segment_id"], ["segments.user_id", "segments.id"]
+            ["user_id", "transcript_id", "transcript_version"],
+            ["transcripts.user_id", "transcripts.id", "transcripts.version"],
+        ),
+        ForeignKeyConstraint(
+            ["user_id", "transcript_id", "segment_id"],
+            ["segments.user_id", "segments.transcript_id", "segments.id"],
         ),
         CheckConstraint("char_start >= 0 AND char_start < char_end", name="char_range"),
-        # Supporting index for every composite FK (DISENO §2.1.8); the primary key cannot
-        # serve transcript/segment lookups.
-        Index("task_sources_by_audio", "user_id", "audio_id"),
-        Index("task_sources_by_transcript", "user_id", "transcript_id"),
-        Index("task_sources_by_segment", "user_id", "segment_id"),
+        # Supporting indexes for the three composite FKs (DISENO §2.1.8); each keeps the
+        # 2-column lookup it had before as its prefix.
+        Index("task_sources_by_audio", "user_id", "audio_id", "transcript_id"),
+        Index("task_sources_by_transcript", "user_id", "transcript_id", "transcript_version"),
+        Index("task_sources_by_segment", "user_id", "transcript_id", "segment_id"),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
@@ -249,8 +266,12 @@ class TaskRevision(TenantOwned, Base):
     was computed from, so a stale revision is rejected instead of silently winning.
 
     The unique key includes `run_id`; it is NULL for `edit_of_confirmed`, and PostgreSQL's
-    default NULL-distinct semantics let a user edit twice at the same base version while a
-    repeated reanalysis of the same run cannot duplicate the revision.
+    default NULL-distinct semantics deliberately let a user keep several pending edits of
+    the same base version while a repeated reanalysis of the same run cannot duplicate the
+    revision. This is the contract recorded in ESPECIFICACION §M4: only an explicit confirm
+    promotes one revision and bumps `tasks.version`, so the stale ones answer
+    `409 version_conflict`. A future "one edit per base version" rule would require
+    `NULLS NOT DISTINCT` (PG 15+) and a spec revision, not a silent constraint change here.
     """
 
     __tablename__ = "task_revisions"

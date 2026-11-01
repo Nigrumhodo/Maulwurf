@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Segment, Task, TaskRevision, TaskSource
+from app.models import Segment, Task, TaskRevision, TaskSource, Transcript
 from tests.integration.actors import (
     Actor,
     make_actor,
@@ -335,6 +335,78 @@ async def test_a_manual_task_has_zero_sources(db_session: AsyncSession) -> None:
     ) == 0
 
 
+# --- Provenance membership (review fix H1) ---------------------------------------------
+
+
+async def _transcript_with_segment(
+    db_session: AsyncSession, actor: Actor
+) -> tuple[Transcript, Segment]:
+    transcript = await make_transcript(db_session, actor)
+    segment = Segment(
+        user_id=actor.user_id,
+        transcript_id=transcript.id,
+        ordinal=0,
+        text=transcript.text,
+        char_start=0,
+        char_end=transcript.char_count,
+    )
+    db_session.add(segment)
+    await db_session.flush()
+    return transcript, segment
+
+
+async def test_a_task_source_cannot_cite_a_segment_from_another_transcript(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    task = await make_task(db_session, actor)
+    transcript, _segment = await _transcript_with_segment(db_session, actor)
+    _other_transcript, other_segment = await _transcript_with_segment(db_session, actor)
+
+    # Same tenant, a valid audio/transcript pair and a valid version: the only lie is the
+    # segment, which belongs to another transcript of the same user.
+    await _expect_integrity_error(
+        db_session,
+        TaskSource(
+            user_id=actor.user_id,
+            task_id=task.id,
+            audio_id=transcript.audio_id,
+            transcript_id=transcript.id,
+            transcript_version=transcript.version,
+            segment_id=other_segment.id,
+            char_start=0,
+            char_end=5,
+        ),
+    )
+
+
+@pytest.mark.parametrize("field", ["audio_id", "transcript_version"])
+async def test_a_task_source_cannot_mismatch_the_cited_transcript(
+    db_session: AsyncSession, field: str
+) -> None:
+    actor = await make_actor(db_session)
+    task = await make_task(db_session, actor)
+    transcript, segment = await _transcript_with_segment(db_session, actor)
+    other_transcript, _other_segment = await _transcript_with_segment(db_session, actor)
+
+    values: dict[str, Any] = {
+        "user_id": actor.user_id,
+        "task_id": task.id,
+        "audio_id": transcript.audio_id,
+        "transcript_id": transcript.id,
+        "transcript_version": transcript.version,
+        "segment_id": segment.id,
+        "char_start": 0,
+        "char_end": 5,
+    }
+    values[field] = (
+        other_transcript.audio_id
+        if field == "audio_id"
+        else transcript.version + 1
+    )
+    await _expect_integrity_error(db_session, TaskSource(**values))
+
+
 # --- Pending revisions -----------------------------------------------------------------
 
 
@@ -423,7 +495,8 @@ async def test_a_repeated_reanalysis_run_cannot_duplicate_the_revision(
     await _expect_integrity_error(db_session, _revision(actor, task, run_id=run.id))
 
     # `edit_of_confirmed` has no run: two successive edits at the same base version are
-    # legitimate pending proposals (PostgreSQL's default NULL-distinct unique semantics).
+    # legitimate pending proposals (the documented NULL-distinct contract, ESPECIFICACION
+    # §M4). Only one can win at confirm time; the stale one answers `409 version_conflict`.
     db_session.add(_revision(actor, task, revision_type="edit_of_confirmed"))
     await db_session.flush()
     db_session.add(_revision(actor, task, revision_type="edit_of_confirmed"))
@@ -447,13 +520,21 @@ async def test_the_inbox_indexes_are_partial_over_one_due_representation_each(
     ).all()
     definitions = {str(name): str(definition) for name, definition in rows}
 
-    assert set(definitions) == {"tasks_inbox_due_at", "tasks_inbox_due_date"}
+    assert set(definitions) == {
+        "tasks_inbox_due_at",
+        "tasks_inbox_due_date",
+        "tasks_inbox_status",
+    }
     assert "(user_id, status, due_at) WHERE (due_at IS NOT NULL)" in definitions[
         "tasks_inbox_due_at"
     ]
     assert "(user_id, status, due_date) WHERE (due_date IS NOT NULL)" in definitions[
         "tasks_inbox_due_date"
     ]
+    # The unresolved tray (ambiguous/missing) has no due column, so it needs the plain key.
+    assert definitions["tasks_inbox_status"] == (
+        "CREATE INDEX tasks_inbox_status ON public.tasks USING btree (user_id, status)"
+    )
     for definition in definitions.values():
         assert "COALESCE" not in definition
 

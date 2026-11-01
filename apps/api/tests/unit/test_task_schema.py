@@ -30,11 +30,14 @@ from app.models.task import (
     TaskRevision,
     TaskSource,
 )
+from app.models.transcript import Segment, Transcript
 from app.schemas.analysis import ActivityType, DateStatus
 
 TASKS = cast(Table, Task.__table__)
 SOURCES = cast(Table, TaskSource.__table__)
 REVISIONS = cast(Table, TaskRevision.__table__)
+SEGMENTS = cast(Table, Segment.__table__)
+TRANSCRIPTS = cast(Table, Transcript.__table__)
 
 
 def _check(table: Table, name: str) -> str:
@@ -193,6 +196,12 @@ def test_inbox_indexes_use_one_due_representation_each() -> None:
         assert "::" not in where
 
 
+def test_the_unresolved_tray_has_a_plain_status_index() -> None:
+    # `ambiguous`/`missing` rows have both due columns NULL, so the two partial indexes
+    # cannot serve their tray query.
+    assert _index(TASKS, "tasks_inbox_status") == (("user_id", "status"), None)
+
+
 # --- Tenant-aware foreign keys ----------------------------------------------------------
 
 
@@ -215,8 +224,9 @@ def test_task_sources_pin_task_audio_transcript_and_segment_to_the_tenant() -> N
     assert _foreign_keys(SOURCES) == {
         ("user_id", "task_id"),
         ("user_id", "audio_id"),
-        ("user_id", "transcript_id"),
-        ("user_id", "segment_id"),
+        ("user_id", "audio_id", "transcript_id"),
+        ("user_id", "transcript_id", "transcript_version"),
+        ("user_id", "transcript_id", "segment_id"),
     }
     assert _check(SOURCES, "char_range") == "char_start >= 0 AND char_start < char_end"
     # The natural key allows one row per span and class; a manual task has no rows.
@@ -227,6 +237,57 @@ def test_task_sources_pin_task_audio_transcript_and_segment_to_the_tenant() -> N
         "char_start",
         "char_end",
     ]
+
+
+def _foreign_key_targets(table: Table) -> set[tuple[tuple[str, ...], str, tuple[str, ...]]]:
+    """(child columns, parent table, parent columns) for every composite FK."""
+    return {
+        (
+            tuple(constraint.column_keys),
+            str(next(iter(constraint.elements)).target_fullname).split(".")[0],
+            tuple(str(element.target_fullname).split(".", 1)[1] for element in constraint.elements),
+        )
+        for constraint in table.foreign_key_constraints
+        if len(constraint.column_keys) > 1
+    }
+
+
+def test_task_sources_cannot_cite_another_transcripts_segment_or_version() -> None:
+    # A same-tenant segment is not enough: the parent keys include the transcript, so the
+    # segment must belong to the cited transcript and the version must be that transcript's.
+    assert _foreign_key_targets(SOURCES) == {
+        (("user_id", "task_id"), "tasks", ("user_id", "id")),
+        (("user_id", "audio_id"), "audios", ("user_id", "id")),
+        (
+            ("user_id", "audio_id", "transcript_id"),
+            "transcripts",
+            ("user_id", "audio_id", "id"),
+        ),
+        (
+            ("user_id", "transcript_id", "transcript_version"),
+            "transcripts",
+            ("user_id", "id", "version"),
+        ),
+        (
+            ("user_id", "transcript_id", "segment_id"),
+            "segments",
+            ("user_id", "transcript_id", "id"),
+        ),
+    }
+    # The parent keys those FKs need exist on the parent models.
+    segment_keys = {
+        tuple(constraint.columns.keys())
+        for constraint in SEGMENTS.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    transcript_keys = {
+        tuple(constraint.columns.keys())
+        for constraint in TRANSCRIPTS.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    assert ("user_id", "transcript_id", "id") in segment_keys
+    assert ("user_id", "audio_id", "id") in transcript_keys
+    assert ("user_id", "id", "version") in transcript_keys
 
 
 def test_task_revisions_pin_the_task_and_the_run_to_the_tenant() -> None:

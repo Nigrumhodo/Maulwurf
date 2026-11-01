@@ -51,6 +51,9 @@ from app.models import (
     OutboxEvent,
     ProcessingRun,
     Segment,
+    Task,
+    TaskRevision,
+    TaskSource,
     Transcript,
     VariantConfirmationToken,
 )
@@ -468,6 +471,9 @@ class TombstoneResult:
     attempts_cancelled: int
     outbox_events_skipped: int
     processing_runs_cancelled: int
+    tasks_deleted: int
+    task_sources_deleted: int
+    task_revisions_deleted: int
     message_sources_deleted: int
     messages_tombstoned: int
     embeddings_deleted: int
@@ -485,6 +491,8 @@ async def tombstone_audio(
     Una sola transacción: `deleted_at` primero para que nadie la lea como viva; invalida
     el fencing de los intentos activos (un commit tardío falla su chequeo de token);
     outbox y runs se detienen; la purga dura va en orden de FK con conteos verificables.
+    Las tareas de la clase y su procedencia se borran antes que `segments`/`transcripts`
+    (A3.1), porque `tasks.audio_id` no usa `ON DELETE` y la procedencia cita el corpus.
     Los eventos de Google existentes se conservan por defecto (DISENO §3.5): borrarlos
     exige la opción explícita y `google_remote_operations`, que son S3/F2.
     """
@@ -548,6 +556,32 @@ async def tombstone_audio(
         )
         .execution_options(synchronize_session=False)
         .values(status="cancelled", finished_at=datetime.now(UTC))
+    )
+
+    # A3.1: the class purge removes the tasks derived from this class and every provenance
+    # row that points at its corpus *before* `segments`/`transcripts` disappear.
+    # `tasks.audio_id` has no ON DELETE on purpose (DISENO §3.6), so the order is explicit;
+    # `task_sources` of a chat task that cites this class also go away, which is the
+    # "deleting a source invalidates the proposal" rule of ESPECIFICACION §M4. Counts are
+    # reported like the S2 derivatives instead of hiding the work in a cascade.
+    task_ids = select(Task.id).where(Task.user_id == user_id, Task.audio_id == audio.id)
+    task_revisions = await db.execute(
+        delete(TaskRevision)
+        .where(TaskRevision.user_id == user_id, TaskRevision.task_id.in_(task_ids))
+        .execution_options(synchronize_session=False)
+    )
+    task_sources = await db.execute(
+        delete(TaskSource)
+        .where(
+            TaskSource.user_id == user_id,
+            or_(TaskSource.audio_id == audio.id, TaskSource.task_id.in_(task_ids)),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    tasks = await db.execute(
+        delete(Task)
+        .where(Task.user_id == user_id, Task.audio_id == audio.id)
+        .execution_options(synchronize_session=False)
     )
 
     transcript_ids = select(Transcript.id).where(
@@ -633,6 +667,9 @@ async def tombstone_audio(
         attempts_cancelled=_rowcount(cancelled) or 0,
         outbox_events_skipped=_rowcount(skipped) or 0,
         processing_runs_cancelled=_rowcount(stopped) or 0,
+        tasks_deleted=_rowcount(tasks) or 0,
+        task_sources_deleted=_rowcount(task_sources) or 0,
+        task_revisions_deleted=_rowcount(task_revisions) or 0,
         message_sources_deleted=len(source_rows),
         messages_tombstoned=_rowcount(messages) or 0,
         embeddings_deleted=_rowcount(embeddings) or 0,
