@@ -1009,7 +1009,10 @@ CREATE INDEX notifications_due ON notifications (status, scheduled_at) WHERE sta
   freezes no reminder wall-clock preference (only the digest time), so the all-day default is
   09:00 local with an explicit override; the digest preference is not reused. Thresholds
   already past at confirmation are not inserted, so a late confirmation never fires a
-  retrospective burst. J4.4 owns DST normalization.
+  retrospective burst. J4.4 normalizes both DST edges in `_resolve_local_wall`: a repeated
+  wall clock is armed once at its first fold, and a nonexistent one moves to the first valid
+  instant after the gap; the identity keeps the user-local target day, so the transition
+  cannot duplicate an occurrence.
 - A manual test send or warned resend is a new audited occurrence of the same identity; it
   carries `occurrence_seq` 1, 2, … (0 is the scheduled row). Automatic dedupe is unchanged,
   and the original `delivery_unknown` row is never mutated to `pending`.

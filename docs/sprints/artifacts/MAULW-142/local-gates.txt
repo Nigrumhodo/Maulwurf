@@ -1,0 +1,105 @@
+# J4.4 / MAULW-142 local gates
+
+Date (UTC): 2026-11-01
+Environment: Linux (Ubuntu 24.04), Python 3.12.3, uv 0.13.1, PostgreSQL 16.15 with
+pgvector 0.8.0, Redis 7.0.15. Deterministic tests only: no Riva, LLM, Google, Gmail, real
+class audio, credential or secret. `apps/web` is untouched.
+
+Base: `origin/develop@dd7f9c8` (J4.3 / PR #152 merged before this branch).
+
+## apps/api static
+
+```text
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 288 source files
+```
+
+## apps/api unit
+
+Raw sandbox environment (the two failures are the pre-existing bracketed-IPv6 `httpx` cases
+in `test_ingest_sink`/`test_llm`, unrelated to this diff):
+
+```text
+$ uv run pytest tests/unit -q
+2 failed, 1648 passed, 35 warnings
+
+FAILED tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured
+FAILED tests/unit/test_llm.py::test_shared_http_client_is_bounded_reused_and_closed
+```
+
+With `NO_PROXY`/`no_proxy` sanitized to `localhost,127.0.0.1,::1`:
+
+```text
+$ uv run pytest tests/unit -q
+1650 passed, 35 warnings
+```
+
+## U-S4-JF-02 (J4.4)
+
+```text
+$ uv run pytest tests/unit/test_reminder_dst.py -q
+28 passed
+```
+
+Cases: the 09:00 wall clock is preserved across both New York transitions (only the UTC
+instant moves); a nonexistent hour moves to the gap end on the 2026-03-08 New York gap
+(`02:00`/`02:30` -> `03:00 EDT`, `07:00 UTC`), on the 30-minute Lord Howe gap and on the
+Santiago midnight gap; valid minutes just before/after the gap are untouched; a repeated
+hour arms one occurrence at its first fold (`01:30 EDT`, `05:30 UTC`) and the second fold
+is never planned; the canonical `dedupe_key` carries the local target day, not the instant,
+so both folds share one identity; re-planning before/after the transition returns the same
+instant and key; confirmation exactly at the normalised instant keeps the threshold and one
+second later omits it; timed reminders stay absolute instants and derive their local
+occurrence day across the fold; A4.3 retires the old `due_version`, a disabled threshold,
+and never selects `sent`/`cancelled` rows on a DST target; every DST occurrence matches the
+canonical builder with unique keys.
+
+## PostgreSQL adapter
+
+```text
+$ uv run pytest tests/integration/test_reminder_dst_schedule.py -q
+4 passed
+```
+
+Cases: a transition-day all-day target persists once with the canonical keys and an
+idempotent re-confirmation; a nonexistent local hour is stored at the gap end and not
+duplicated; a repeated local hour is stored once at its first fold; a new `due_version`
+cancels the DST generation and arms the new one.
+
+## Integration regressions
+
+```text
+$ uv run pytest tests/integration/test_reminder_dst_schedule.py \
+    tests/integration/test_reminders_schedule.py \
+    tests/integration/test_s4_notification_cancellation.py \
+    tests/integration/test_s4_notifications_schema.py \
+    tests/integration/test_notification_scheduler.py \
+    tests/integration/test_notifications_endpoints.py -q
+95 passed
+```
+
+## Full integration suite
+
+```text
+$ uv run pytest -m integration -q
+783 passed, 1651 deselected, 835 warnings in 154.53s
+```
+
+No sandbox failure appeared in this run (PostgreSQL 16.15 + Redis 7.0.15).
+
+## Documentation
+
+```text
+$ python3 scripts/docs/check_refs.py
+OK: 967 documented repository paths exist or are expected.
+```
+
+## Quality CI
+
+Run `41307155722` (head `58fcd78`, the last code+evidence commit) is green in all 17 PR
+checks, including `python-static (api)`, `python-unit (api)`, `integration (api)`,
+`integration (ingest)`, `e2e-smoke`, `docs` and `secret-scan`. Later commits are
+documentation only. No merge was performed.

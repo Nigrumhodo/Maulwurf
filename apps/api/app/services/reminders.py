@@ -29,9 +29,13 @@ accepts an explicit override. A future preference can pass its own `local_time` 
 changing the scheduling contract; reusing `digest_daily_time` would couple two unrelated
 preferences.
 
-DST is J4.4's ticket: this module resolves the local wall clock with `zoneinfo` and does not
-yet move a nonexistent hour to the next valid instant. A repeated hour resolves to its first
-occurrence (one local occurrence, as M8 requires).
+DST follows J4.4's rule in `_resolve_local_wall`: a repeated wall clock (fall back) is
+armed once at its first fold, and a nonexistent one (spring forward) moves to the first
+valid instant after the gap. `zoneinfo` alone would keep the "ghost" instant obtained with
+the offset in force before the transition, which is not the next valid instant. Both
+resolutions are deterministic, so re-planning after the time change returns the same
+instant and `dedupe_key`; the persistent identity carries the user-local target day, never
+the instant, so the transition cannot split one occurrence into two.
 
 The persistence adapter writes the plan and the A4.3 obsolete-generation cancellation in the
 caller's transaction. The upsert only conflicts on `uq_notifications_dedupe_key`: a repeated
@@ -242,15 +246,50 @@ def _due_kind(task: ReminderTask) -> str | None:
     return None
 
 
+# IANA forward transitions are months apart and their gaps are at most a few hours wide, so
+# 26 h from the ghost instant contains the transition while staying inside a window with a
+# single one. The search uses whole UTC seconds, the precision IANA transitions are defined at.
+_GAP_SEARCH: Final = timedelta(hours=26)
+_ONE_SECOND: Final = timedelta(seconds=1)
+_EPOCH: Final = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+def _resolve_local_wall(wall: datetime, zone: ZoneInfo) -> datetime:
+    """Resolve a naive local wall clock to an instant, normalising both DST edges.
+
+    A repeated wall clock (fall back) has two instants; `fold=0` keeps the first one, so the
+    target day yields exactly one local occurrence and one dedupe identity. A nonexistent
+    wall clock (spring forward) moves to the first valid instant after the gap: the
+    transition instant at which the local wall clock reaches the requested time. Python's
+    default resolution instead returns the "ghost" instant obtained with the offset in force
+    before the transition (02:30 becomes 03:30 in a 02:00-03:00 gap), which is a later valid
+    instant but not the next one. Both resolutions are deterministic, so re-planning after
+    the change returns the same `scheduled_at` and `dedupe_key`.
+    """
+    candidate = wall.replace(tzinfo=zone, fold=0)
+    if candidate.astimezone(UTC).astimezone(zone).replace(tzinfo=None) == wall:
+        return candidate
+    # The wall clock is inside a forward gap. `candidate` (the ghost instant) is already
+    # past the transition and bounds the search; the earliest whole UTC second whose local
+    # wall clock has reached `wall` is the transition instant, i.e. the gap end.
+    ghost = candidate.astimezone(UTC)
+    low = int((ghost - _GAP_SEARCH - _EPOCH).total_seconds())
+    high = int((ghost - _EPOCH).total_seconds())
+    while low < high:
+        middle = (low + high) // 2
+        instant = _EPOCH + middle * _ONE_SECOND
+        if instant.astimezone(zone).replace(tzinfo=None) >= wall:
+            high = middle
+        else:
+            low = middle + 1
+    return (_EPOCH + high * _ONE_SECOND).astimezone(zone)
+
+
 def _local_target(
     day: date, *, local_time: time, zone: ZoneInfo
 ) -> datetime:
-    """Resolve one local target day at the configured wall clock.
-
-    J4.4 owns the DST correction of a nonexistent hour; `zoneinfo` already resolves a
-    repeated hour to a single local occurrence (fold=0), which is the M8 rule.
-    """
-    return datetime.combine(day, local_time, tzinfo=zone)
+    """Resolve one local target day at the configured wall clock (J4.4 DST rules)."""
+    return _resolve_local_wall(datetime.combine(day, local_time), zone)
 
 
 def plan_task_reminders(
