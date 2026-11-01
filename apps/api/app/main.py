@@ -19,6 +19,7 @@ from app.routers import (
     integrations,
     internal_metrics,
     me,
+    notifications,
     search,
     subjects,
 )
@@ -48,6 +49,7 @@ app.add_middleware(RequestIdMiddleware)
 app.include_router(health.router)
 app.include_router(ingestion.router)
 app.include_router(me.router)
+app.include_router(notifications.router)
 app.include_router(auth.router)
 app.include_router(audios.router)
 app.include_router(integrations.router)

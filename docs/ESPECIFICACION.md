@@ -740,9 +740,12 @@ consults the persisted message; it does not re-run the LLM with the same
   or another provider is out of scope and requires a new decision, privacy/retention review,
   delivery contract, budget, and a joint update of the specification and plan.
 - **Anti-spam:** group reminders and deduplicate scheduling with a unique key
-  `(user_id, tipo, task_id, due_version, occurrence)`. Digest per user/local date. Changing
-  the due date/preferences cancels stale future occurrences; never send all expired
-  thresholds retrospectively for a newly confirmed task.
+  `(user_id, tipo, task_id, due_version, occurrence)`. Digest per user/local date. A manual
+  repetition (a test send or a warned resend) is an audited occurrence too and carries an
+  `occurrence_seq` inside the same identity: `0` is the scheduled occurrence and each manual
+  repetition takes the next number, so automatic dedupe stays exact and a resend never
+  mutates the original. Changing the due date/preferences cancels stale future occurrences;
+  never send all expired thresholds retrospectively for a newly confirmed task.
 - Gmail does not offer exactly-once delivery with `gmail.send`: if the response is lost
   after sending, mark `delivery_unknown` and do not retry automatically to avoid duplicates.
   Show it in the panel; a manual resend warns about the risk. A stable `Message-ID` does not
@@ -763,7 +766,8 @@ consults the persisted message; it does not re-run the LLM with the same
   `provider_message_id`, attempts, and a redacted error. An expired `sending` lease counts
   as uncertain delivery, not automatically pending.
 
-**Endpoints:** `PATCH /me/notifications` (preferences); `POST /notifications/test`;
+**Endpoints:** `GET /me/notifications` (current preferences) and `PATCH /me/notifications`
+(preferences); `POST /notifications/test`;
 `GET /notifications?status=&from=&to=&limit=&cursor=`; `POST /notifications/{id}/resend`
 with `{acknowledge_duplicate_risk:true}`. Resending creates a new audited occurrence and
 never changes a `delivery_unknown` delivery to `pending`.

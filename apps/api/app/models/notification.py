@@ -15,11 +15,16 @@ a mutable "last notification" per task. The frozen shape is DISENO §2.9 / ESPEC
   lower-snake-case token so a provider payload, an address or a message body can never be
   persisted by accident (`services.notifications` maps an unknown value to `unknown`).
 - Dedupe is persistent and lives in the database. `dedupe_key` is the canonical rendering of
-  `(user_id, type, task_id, due_version, occurrence)` and has its own UNIQUE constraint; the
+  `(user_id, type, task_id, due_version, occurrence)` — plus `|n:<seq>` for a manual
+  repetition — and has its own UNIQUE constraint; the
   natural tuple keeps the frozen `UNIQUE NULLS NOT DISTINCT` rule, so a repeated occurrence
   cannot be inserted even if a caller formatted the text differently. Digests and test sends
   have no task, which is why the tuple uses NULLS NOT DISTINCT rather than the default
   null-distinct semantics.
+- `occurrence_seq` (A4.2) separates a manual repetition from the automatic occurrence: 0 is
+  the scheduled row, and a test send or a warned resend takes the next number inside the same
+  identity. Scheduled dedupe stays exact and the original `delivery_unknown` row is never
+  mutated to make room for a resend.
 - `(user_id, task_id) -> tasks` is tenant-pinned and cascades. A deleted task removes its
   reminders: keeping them would either null the NOT NULL tenant/occurrence identity (the
   frozen `SET NULL` sketch does not survive a composite FK) or make two deleted tasks collide
@@ -110,6 +115,7 @@ class Notification(TenantOwned, Base):
             "task_id",
             "due_version",
             "occurrence",
+            "occurrence_seq",
             name="uq_notifications_occurrence",
             postgresql_nulls_not_distinct=True,
         ),
@@ -117,6 +123,7 @@ class Notification(TenantOwned, Base):
         CheckConstraint(_in("status", NOTIFICATION_STATUSES), name="status"),
         CheckConstraint("attempts >= 0", name="attempts"),
         CheckConstraint("due_version IS NULL OR due_version >= 1", name="due_version"),
+        CheckConstraint("occurrence_seq >= 0", name="occurrence_seq"),
         # Digests/test sends never belong to a task; a reminder always carries its task and
         # its due generation. The task FK cascades, so no unlinked reminder can exist.
         CheckConstraint(
@@ -180,6 +187,12 @@ class Notification(TenantOwned, Base):
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     # Canonical (user_id, type, task_id, due_version, occurrence) rendering.
     dedupe_key: Mapped[str] = mapped_column(Text, nullable=False)
+    # A4.2: 0 is the scheduled/automatic occurrence. A manual repetition (test send or
+    # resend) takes the next number inside the same frozen identity, so an audited duplicate
+    # never collides with the automatic dedupe and no original row has to be mutated.
+    occurrence_seq: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")

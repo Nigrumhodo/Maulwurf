@@ -131,6 +131,36 @@ def test_an_unknown_type_is_rejected() -> None:
         _key(type="reminder_t12")
 
 
+# --- Manual repetitions (A4.2) ---------------------------------------------------------
+
+
+def test_a_scheduled_occurrence_keeps_the_five_component_key() -> None:
+    # A4.1 frozen the key for automatic scheduling; A4.2's sequence must not change it.
+    assert _key() == _key(occurrence_seq=0)
+    assert "|n:" not in _key()
+
+
+def test_a_manual_occurrence_adds_its_audit_sequence() -> None:
+    first = _key(occurrence_seq=1)
+    second = _key(occurrence_seq=2)
+
+    assert first == f"{_key()}|n:1"
+    assert second == f"{_key()}|n:2"
+    assert first != second != _key()
+
+
+@pytest.mark.parametrize("value", [-1, -2])
+def test_a_negative_occurrence_sequence_is_rejected(value: int) -> None:
+    with pytest.raises(ValueError):
+        _key(occurrence_seq=value)
+
+
+@pytest.mark.parametrize("value", [True, "1", 1.5])
+def test_the_occurrence_sequence_must_be_an_integer(value: object) -> None:
+    with pytest.raises(ValueError):
+        _key(occurrence_seq=value)
+
+
 # --- Database uniqueness --------------------------------------------------------------
 
 
@@ -150,16 +180,19 @@ def test_the_persisted_dedupe_key_has_its_own_unique_constraint() -> None:
 
 def test_the_natural_occurrence_key_is_unique_with_nulls_not_distinct() -> None:
     unique = _unique_constraints(NOTIFICATIONS)
-    natural = unique[("user_id", "type", "task_id", "due_version", "occurrence")]
+    natural = unique[
+        ("user_id", "type", "task_id", "due_version", "occurrence", "occurrence_seq")
+    ]
     assert natural.name == "uq_notifications_occurrence"
     assert natural.dialect_options["postgresql"]["nulls_not_distinct"] is True
-    # The natural key mirrors the builder components in this exact order.
+    # The natural key mirrors the builder components plus A4.2's manual-repetition sequence.
     assert [column.name for column in natural.columns] == [
         "user_id",
         "type",
         "task_id",
         "due_version",
         "occurrence",
+        "occurrence_seq",
     ]
 
 
@@ -173,6 +206,7 @@ def test_a_duplicate_key_and_a_duplicate_tuple_are_both_rejected_by_the_database
         "task_id",
         "due_version",
         "occurrence",
+        "occurrence_seq",
     ) in unique
 
 

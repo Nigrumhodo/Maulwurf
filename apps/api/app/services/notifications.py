@@ -27,6 +27,10 @@ words directly:
 ``(user_id, type, task_id, due_version, occurrence)``; the database holds both its UNIQUE
 constraint and the frozen ``UNIQUE NULLS NOT DISTINCT`` tuple from DISENO §2.9. The builder
 is the only place that formats the identity, so callers cannot invent a second spelling.
+A4.2 adds ``occurrence_seq``: scheduled occurrences keep sequence 0 and the five-component
+key, while a manual test send or a warned resend appends ``|n:<seq>`` and is stored as a new
+audited row. ``ensure_resendable`` is the endpoint's pure gate: only a failed or uncertain
+delivery can be repeated.
 
 Every persisted error is a token from ``NOTIFICATION_ERROR_CODES``; any other value is
 mapped to ``unknown`` before it reaches the database, whose CHECK also rejects free text.
@@ -428,6 +432,42 @@ def redact_error_code(value: str | None) -> str | None:
     return candidate if candidate in NOTIFICATION_ERROR_CODES else "unknown"
 
 
+# Only an occurrence that did not provably reach the provider can be manually repeated:
+# `failed` is a known non-delivery and `delivery_unknown` may not have been delivered.
+# `pending` is already queued, `sending` is in flight, `sent` is a confirmed duplicate and
+# `cancelled` is an obsolete occurrence that must not be revived.
+RESENDABLE_STATUSES: Final = frozenset({"failed", "delivery_unknown"})
+
+
+class NotificationNotResendable(ValueError):
+    """A manual resend was requested for a row the M8 contract cannot repeat."""
+
+    def __init__(self, status: str) -> None:
+        super().__init__(f"notification in status {status!r} cannot be resent")
+        self.status = status
+
+
+def ensure_resendable(notification: NotificationRow) -> str:
+    """Validate that a manual resend may create a new audited occurrence."""
+    if notification.status not in RESENDABLE_STATUSES:
+        raise NotificationNotResendable(notification.status)
+    return notification.status
+
+
+def _validate_occurrence_seq(value: int) -> int:
+    # `bool` is an `int` subclass; it is never a valid sequence.
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("occurrence_seq must be a non-negative integer")
+    return value
+
+
+def next_occurrence_sequence(current_max: int | None) -> int:
+    """Next manual sequence inside one frozen identity; ``0`` is the scheduled row."""
+    if current_max is None:
+        return 1
+    return _validate_occurrence_seq(current_max) + 1
+
+
 def dedupe_identity(
     *,
     user_id: uuid.UUID,
@@ -439,9 +479,8 @@ def dedupe_identity(
     """Validate and return the frozen dedupe tuple of DISENO §2.9.
 
     Reminders carry a task, its due generation and a target local date. Digests carry only
-    the local date. A test send is one audited occurrence too, so it carries its local date
-    and no task: with ``UNIQUE NULLS NOT DISTINCT`` the natural key still needs a value that
-    distinguishes audited sends from each other.
+    the local date. A test send carries its local date and no task; the occurrence sequence
+    of ``dedupe_key`` distinguishes repeated audited sends of the same day.
     """
     if type not in NOTIFICATION_TYPES:
         raise ValueError(f"unknown notification type: {type!r}")
@@ -472,11 +511,14 @@ def dedupe_key(
     task_id: uuid.UUID | None,
     due_version: int | None,
     occurrence: date | None,
+    occurrence_seq: int = 0,
 ) -> str:
     """Canonical text rendering of the persistent dedupe identity.
 
     UUIDs are canonical lowercase strings and NULL components render as ``-``, which a UUID
-    or a date can never be, so the key is unambiguous and stable across processes.
+    or a date can never be, so the key is unambiguous and stable across processes. A
+    scheduled occurrence keeps the five-component A4.1 key; a manual repetition appends
+    ``|n:<seq>`` so it is auditable without disturbing automatic dedupe.
     """
     identity = dedupe_identity(
         user_id=user_id,
@@ -492,4 +534,7 @@ def dedupe_key(
         str(identity[3]) if identity[3] is not None else "-",
         identity[4].isoformat() if identity[4] is not None else "-",
     ]
+    sequence = _validate_occurrence_seq(occurrence_seq)
+    if sequence:
+        rendered.append(f"n:{sequence}")
     return "|".join(rendered)

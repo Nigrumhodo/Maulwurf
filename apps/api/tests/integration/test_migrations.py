@@ -317,9 +317,10 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     revision = ScriptDirectory.from_config(cfg).get_revision(_head(empty_schema))
     assert revision is not None
     parent = revision.down_revision
-    assert parent == "0014"  # this chain is linear
+    assert parent == "0015"  # this chain is linear
     command.upgrade(cfg, "head")
 
+    # `0016` only adds the manual-occurrence sequence and swaps the natural unique key;
     # `0015` only adds the deletion/remote-operation tables and the session link; `0014`
     # adds `notifications` and the Gmail/digest columns; `0013` only adds the
     # Calendar task-link FK/index/CHECKs (no table/column change); `0012` only adds
@@ -330,6 +331,9 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     # `settings`; `0005` only changes roles, policies and RLS flags; `0003` only backfills
     # `chunks.tsv` (data, not schema) and `0004` only adds the run fencing token, so the
     # steps back stay on the previous schemas and only remove those additions.
+    command.downgrade(cfg, "-1")
+    assert _state(empty_schema) == (A44_TABLES, ["0015"])
+
     command.downgrade(cfg, "-1")
     assert _state(empty_schema) == (S4_TABLES, ["0014"])
 
@@ -617,6 +621,44 @@ def test_notifications_revision_round_trips(empty_schema: str) -> None:
     command.downgrade(cfg, "0013")
     assert "notifications" not in _state(empty_schema)[0]
     assert "gmail_opt_in" not in _table_columns(empty_schema, "settings")
+
+    command.upgrade(cfg, "head")
+
+
+def test_notification_manual_occurrences_revision_round_trips(empty_schema: str) -> None:
+    """A4.2: `0016` adds the audit sequence that makes manual repetitions insertable."""
+    cfg = alembic_config(empty_schema)
+    command.upgrade(cfg, "0015")
+    assert "occurrence_seq" not in _table_columns(empty_schema, "notifications")
+
+    command.upgrade(cfg, "head")
+    assert "occurrence_seq" in _table_columns(empty_schema, "notifications")
+
+    async def manual_key_shape() -> tuple[str, str]:
+        engine = create_async_engine(empty_schema)
+        async with engine.connect() as conn:
+            definition = await conn.scalar(
+                text(
+                    "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                    "WHERE conname = 'uq_notifications_occurrence'"
+                )
+            )
+            default = await conn.scalar(
+                text(
+                    "SELECT column_default FROM information_schema.columns "
+                    "WHERE table_name = 'notifications' AND column_name = 'occurrence_seq'"
+                )
+            )
+        await engine.dispose()
+        return str(definition), str(default)
+
+    definition, default = asyncio.run(manual_key_shape())
+    assert "(user_id, type, task_id, due_version, occurrence, occurrence_seq)" in definition
+    assert "NULLS NOT DISTINCT" in definition
+    assert default == "0"
+
+    command.downgrade(cfg, "0015")
+    assert "occurrence_seq" not in _table_columns(empty_schema, "notifications")
 
     command.upgrade(cfg, "head")
 
