@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.core.db import bind_cross_tenant, reset_cross_tenant, session_scope
 from app.core.logging import configure_logging
 from app.services.deletion import purge_expired_residuals
+from app.services.digests import materialize_due_digests
 from app.services.scheduler_lease import run_notification_scheduler
 from app.workers.dispatcher import dispatch_pending
 from app.workers.index_job import JOB_TIMEOUT_S, MAX_TRIES, index
@@ -39,6 +40,8 @@ RECONCILE_SECOND = 30
 RETENTION_MINUTE = 17
 RETENTION_SECOND = 45
 RETENTION_BATCHES_PER_RUN = 5
+# J4.6: materialize the next digest occurrence off the claim second; the following tick claims it.
+DIGEST_SECOND = 20
 
 _REDIS = RedisSettings.from_dsn(str(settings.redis_url))
 
@@ -101,6 +104,41 @@ async def schedule_notifications(ctx: dict[str, Any]) -> None:
             "schedule_notifications claimed=%d expired=%d",
             report.claimed,
             report.expired,
+        )
+
+
+async def materialize_digests(ctx: dict[str, Any]) -> None:
+    """Scheduler cron (J4.6): ensure the next daily/weekly digest occurrence exists.
+
+    The cron runs as the cross-tenant jobs role and only inserts/updates `notifications`
+    rows; the J4.2 tick remains the only place that claims them for delivery. It shares
+    the J4.2 operational gate (`MAULWURF_NOTIFICATION_SCHEDULER_ENABLED`): before J4.1
+    consumes `sending`, materializing digests would only accumulate rows that nothing can
+    deliver. A failure is logged by type only; the next minute retries and the canonical
+    dedupe key makes a retry idempotent.
+    """
+    del ctx  # The cron needs no Redis; delivery is J4.1's job.
+    if not settings.notification_scheduler_enabled:
+        return
+    token = bind_cross_tenant()
+    try:
+        try:
+            async with session_scope() as db:
+                report = await materialize_due_digests(db)
+        except Exception as exc:
+            # Only the type: an error message can carry a DSN or a row value.
+            logger.warning("materialize_digests.failed error=%s", type(exc).__name__)
+            return
+    finally:
+        reset_cross_tenant(token)
+    if report.planned or report.written or report.cancelled or report.skipped:
+        logger.info(
+            "materialize_digests users=%d planned=%d written=%d cancelled=%d skipped=%d",
+            report.users,
+            report.planned,
+            report.written,
+            report.cancelled,
+            report.skipped,
         )
 
 
@@ -174,6 +212,9 @@ class SchedulerSettings:
         # J4.2: one elected role claims due occurrences every minute. Running at startup
         # drains whatever became due while the scheduler was down, inside the 15 min SLA.
         cron(schedule_notifications, second=0, run_at_startup=True),
+        # J4.6 materializes the next digest occurrence off the claim second; the following
+        # J4.2 tick claims it, so a minute of scan granularity stays inside the SLA.
+        cron(materialize_digests, second=DIGEST_SECOND, run_at_startup=True),
         cron(
             reconcile,
             minute=set(range(0, 60, RECONCILE_EVERY_MINUTES)),
