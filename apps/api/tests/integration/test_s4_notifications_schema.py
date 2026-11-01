@@ -470,6 +470,24 @@ async def test_deleting_a_task_deletes_its_notifications(
     ) is None
 
 
+async def test_deleting_the_user_cascades_tasks_and_notifications(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    task = await make_task(db_session, actor)
+    row = await _reminder(db_session, actor, task)
+    task_id, notification_id = task.id, row.id
+
+    # Account deletion (A4.4) already relies on the user cascade; the extra task -> notification
+    # edge must not leave the two cascade paths fighting each other.
+    await db_session.execute(text("DELETE FROM users WHERE id = :id"), {"id": actor.user_id})
+    await db_session.flush()
+    db_session.expire_all()
+
+    assert await db_session.get(Task, task_id) is None
+    assert await db_session.get(Notification, notification_id) is None
+
+
 # --- settings extension ----------------------------------------------------------------
 
 
