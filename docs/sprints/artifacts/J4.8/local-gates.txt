@@ -80,3 +80,14 @@ Quality CI after the test-isolation fix:
   into the ASR assertion (7.0 vs 5.0 minutes). The seed moved to 2099 and the endpoint test
   injects that clock; the targeted module and the full integration job are green after the
   fix. No production query changed.
+
+Quality CI (GitHub Actions, workflow `quality.yml`):
+  Run 41319073318, head 40736f2 (the last code change; an evidence-only commit may follow),
+  2026-11-01: all 17 checks green, including:
+  - python-unit (api) 1752 passed
+  - integration (api) 827 passed (the isolated budget module included)
+  - python-unit (ingest) 302 passed / 6 skipped
+  - integration (ingest) 77 passed / 11 skipped
+  - python-static (api) and python-static (ingest) clean
+  - compose-ingest-env passed (the check this sandbox cannot run without Docker)
+  - docs, secret-scan, e2e-smoke, build-images, web and the license reports passed.
