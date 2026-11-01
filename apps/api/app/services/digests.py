@@ -23,14 +23,18 @@ Opt-in is a scheduling gate: a user without ``gmail_opt_in`` gets no new digest 
 Like A4.3 records, opting out pauses delivery instead of irreversibly cancelling an already
 scheduled occurrence; J4.1 refuses to send it because the preference is no longer set.
 
-The materializer runs as the cross-tenant jobs role from the ARQ cron. It keeps only the
-current/next period alive: pending daily digests of an older local date and pending weekly
-digests of an older week are cancelled, so a scheduler outage cannot flush a retrospective
-burst when it comes back. A pending occurrence whose instant has not arrived is recomputed
-when ``digest_daily_time`` or ``digest_weekday`` changes (the dedupe identity stays the
-same), and a ``cancelled`` occurrence is reopened only when the preference is enabled again.
-A ``sending``/``sent``/``failed``/``delivery_unknown`` row is never rewritten, so delivery
-history is preserved.
+The materializer runs as the cross-tenant jobs role from the ARQ cron. It keeps the next
+planned occurrence of each enabled type and cancels the pending rows that plan leaves
+behind: a digest of an older period is cancelled when its ``scheduled_at`` is still ahead
+(the preferred hour or weekday moved to one that already passed today/this week, so the
+leftover row would be delivered with the previous schedule) or when its period is already
+over (a scheduler outage cannot flush a retrospective burst). A current-period row whose
+instant already arrived stays claimable by J4.2, and a pre-armed row of a later period is
+left for the plan to adopt. A pending occurrence whose key is still planned and whose
+``scheduled_at`` moved is recomputed (the dedupe identity stays the same), a row whose
+instant already matches is not rewritten at all, and a ``cancelled`` occurrence is reopened
+only when the preference is enabled again. A ``sending``/``sent``/``failed``/
+``delivery_unknown`` row is never rewritten, so delivery history is preserved.
 """
 
 import uuid
@@ -137,7 +141,11 @@ class DigestContent:
 
 @dataclass(frozen=True, slots=True)
 class DigestMaterialization:
-    """Counts of one materializer tick; no row payload leaves the adapter."""
+    """Counts of one materializer tick; no row payload leaves the adapter.
+
+    ``written`` counts inserted or changed rows only, so a tick with no preference change
+    reports zero even when occurrences were planned.
+    """
 
     users: int
     planned: int
@@ -199,6 +207,11 @@ def _local_instant(day: date, local_time: time, zone: ZoneInfo) -> datetime:
 def _sunday(day: date) -> date:
     """Sunday that starts the week containing ``day`` (0 = Sunday, as in the preference)."""
     return day - timedelta(days=(day.weekday() + 1) % DAYS_PER_WEEK)
+
+
+def _current_period(type_: str, local_day: date) -> date:
+    """Period identity of ``local_day`` for one digest type."""
+    return local_day if type_ == "digest_daily" else _sunday(local_day)
 
 
 def _occurrence(
@@ -341,14 +354,15 @@ def _rearmed_values(statement: Any) -> dict[str, Any]:
     """Columns written when a pending digest is recomputed or a cancelled one is reopened.
 
     Only ``pending``/``cancelled`` rows reach this branch (the conflict clause's WHERE).
-    Resetting the delivery fields keeps an unusual historical row from coming back as
-    ``pending`` with a lease, fence or sent proof that violates the M8 CHECKs.
+    Clearing the delivery fields keeps an unusual historical row from coming back as
+    ``pending`` with a lease, fence or sent proof that violates the M8 CHECKs. ``attempts``
+    is deliberately absent: a pending row that carries a retry keeps its counter, and a
+    cancelled row was never claimed.
     """
     return {
         "status": "pending",
         "scheduled_at": statement.excluded.scheduled_at,
         "lease_expires_at": None,
-        "attempts": 0,
         "claimed_by_fence": None,
         "sent_at": None,
         "provider_message_id": None,
@@ -357,43 +371,54 @@ def _rearmed_values(statement: Any) -> dict[str, Any]:
     }
 
 
-async def _cancel_stale_digests(
+async def _cancel_unscheduled_digests(
     db: AsyncSession,
     *,
     user_id: uuid.UUID,
+    planned: tuple[DigestOccurrence, ...],
     local_day: date,
-    daily_enabled: bool,
-    weekly_enabled: bool,
+    now: datetime,
 ) -> int:
-    """Cancel pending digests whose period is already over.
+    """Cancel pending digests of an enabled type that the current plan left behind.
 
-    A scheduler outage must not turn into a retrospective burst: yesterday's daily digest
-    and last week's weekly digest are obsolete once their period has passed. Rows in
-    ``sending`` or any terminal state are delivery history and are never rewritten.
+    A pending row whose canonical identity is the planned next occurrence is kept and
+    recomputed by the upsert. A row of the same type from an **older** period is obsolete:
+    it is cancelled when its ``scheduled_at`` is still ahead (a preference change to an hour
+    or weekday that already passed moves the plan to the next period, and the leftover row
+    would otherwise be delivered with the old schedule) or when its period is already over
+    (a scheduler outage must not flush a retrospective burst).
+
+    Two cases are deliberately preserved: a current-period row whose instant already
+    arrived stays claimable by J4.2 (a missed claim at the exact minute is retried later the
+    same day, as before), and a pre-armed row of a **later** period is left for the plan to
+    adopt when it reaches that period, so it is never cancelled and recreated needlessly.
+    ``sending`` and terminal rows are delivery history and are never rewritten, a manual
+    resend (``occurrence_seq > 0``) is an audited one-shot, and a disabled type is left to
+    A4.3's preference cancellation.
     """
-    conditions = []
-    if daily_enabled:
-        conditions.append(
-            and_(
-                Notification.type == "digest_daily",
-                Notification.occurrence < local_day,
-            )
-        )
-    if weekly_enabled:
-        conditions.append(
-            and_(
-                Notification.type == "digest_weekly",
-                Notification.occurrence < _sunday(local_day),
-            )
-        )
-    if not conditions:
+    if not planned:
         return 0
+    conditions = [
+        and_(
+            Notification.type == occurrence.type,
+            Notification.occurrence < occurrence.occurrence,
+            or_(
+                Notification.scheduled_at > now,
+                Notification.occurrence
+                < _current_period(occurrence.type, local_day),
+            ),
+        )
+        for occurrence in planned
+    ]
     result = await db.execute(
         update(Notification)
         .where(
             Notification.user_id == user_id,
             Notification.status == "pending",
             Notification.occurrence_seq == 0,
+            Notification.dedupe_key.not_in(
+                frozenset(occurrence.dedupe_key for occurrence in planned)
+            ),
             or_(*conditions),
         )
         .values(status="cancelled", updated_at=func.now())
@@ -404,15 +429,25 @@ async def _cancel_stale_digests(
 async def _write_occurrences(db: AsyncSession, rows: list[dict[str, Any]]) -> int:
     """Upsert this user's digest occurrences; the canonical key is the conflict target.
 
-    A pending row keeps its identity and gets the recomputed ``scheduled_at``; a
-    ``cancelled`` row is reopened. ``sending``/``sent``/``failed``/``delivery_unknown``
-    never match the WHERE and keep their delivery history.
+    A pending row is rewritten only when the plan moves its ``scheduled_at``, so a tick with
+    no preference change touches nothing and ``written`` counts only inserted or changed
+    rows; ``attempts`` is never reset by a rewrite. A ``cancelled`` row is reopened when the
+    preference returns. ``sending``/``sent``/``failed``/``delivery_unknown`` never match the
+    WHERE and keep their delivery history.
     """
     statement = pg_insert(Notification).values(rows)
     upsert = statement.on_conflict_do_update(
         constraint="uq_notifications_dedupe_key",
         set_=_rearmed_values(statement),
-        where=Notification.status.in_(("pending", "cancelled")),
+        where=or_(
+            Notification.status == "cancelled",
+            and_(
+                Notification.status == "pending",
+                Notification.scheduled_at.is_distinct_from(
+                    statement.excluded.scheduled_at
+                ),
+            ),
+        ),
     )
     result = await db.execute(upsert)
     return max(int(cast(CursorResult[Any], result).rowcount or 0), 0)
@@ -466,12 +501,12 @@ async def materialize_due_digests(
         except DigestScheduleError:
             skipped += 1
             continue
-        cancelled += await _cancel_stale_digests(
+        cancelled += await _cancel_unscheduled_digests(
             db,
             user_id=user_id,
+            planned=occurrences,
             local_day=local_day,
-            daily_enabled=preferences.digest_daily_enabled,
-            weekly_enabled=preferences.digest_weekly_enabled,
+            now=instant,
         )
         if not occurrences:
             continue

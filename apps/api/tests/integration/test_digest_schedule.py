@@ -11,6 +11,9 @@ contract without Gmail:
 - changing the time recomputes a still-pending occurrence instead of duplicating it, a
   cancelled occurrence is reopened when the preference returns, and a stale pending period
   is cancelled instead of producing a retrospective burst;
+- a schedule change that lands on an hour or weekday already past cancels the current
+  period's pending row instead of delivering it with the old schedule, and a tick with no
+  preference change rewrites nothing (no `attempts` reset);
 - the content builder returns the upcoming tasks and the M5 `time_conflicts` /
   `deadline_clashes` for the daily and weekly windows;
 - the materializer works under the cross-tenant `maulwurf_jobs` role used by the cron.
@@ -259,6 +262,30 @@ async def test_a_time_change_to_an_already_passed_hour_cancels_the_pending_perio
         now=datetime(2026, 11, 1, 11, 30, tzinfo=UTC),
     )
     assert claimed == []
+
+
+async def test_a_due_current_period_digest_stays_claimable_on_the_next_tick(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    actor.user.timezone = BOGOTA
+    await _settings(db_session, actor, digest_weekly_enabled=False)
+    assert (await materialize_due_digests(db_session, now=NOW)).written == 1
+    (due,) = await _digests(db_session, actor)
+
+    # The claimer runs at second 0 and the materializer at second 20. If the 07:00 claim
+    # fails, the same-day row must remain claimable instead of being cancelled the moment
+    # the planner moves on to tomorrow.
+    report = await materialize_due_digests(db_session, now=DUE)
+
+    assert report.cancelled == 0
+    assert due.status == "pending"
+    claimed = await claim_due_notifications(
+        db_session,
+        fencing_token=1,
+        now=datetime(2026, 11, 1, 12, 0, 30, tzinfo=UTC),
+    )
+    assert [row.id for row in claimed] == [due.id]
 
 
 async def test_a_second_tick_without_changes_does_not_rewrite_pending_rows(
