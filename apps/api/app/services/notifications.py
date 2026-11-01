@@ -22,6 +22,10 @@ words directly:
   resend is a new audited occurrence (A4.2/J4.5).
 - A ``sending`` row without a lease cannot prove a live owner, so it fails closed as
   ``delivery_unknown`` (uncertain), never as a retryable state.
+- A delivery adapter classifies its failure explicitly (J4.5): only a proven rejection is
+  ``failed``; a lost response, a timeout or any unexpected sender exception may already have
+  reached the provider and is terminal ``delivery_unknown``. The settlement boundary lives
+  in ``app.services.notification_delivery``; nothing here retries an uncertain delivery.
 
 ``dedupe_key`` is the canonical text rendering of
 ``(user_id, type, task_id, due_version, occurrence)``; the database holds both its UNIQUE
