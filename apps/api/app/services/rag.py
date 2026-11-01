@@ -1112,12 +1112,17 @@ class RAGService:
     async def _owned_conversation(
         self, db: AsyncSession, user_id: uuid.UUID, conversation_id: uuid.UUID
     ) -> Conversation:
+        # FOR UPDATE serializes `prepare` with `DELETE /chat/conversations/{id}`: a delete
+        # that committed while this transaction waited re-evaluates `deleted_at IS NULL` and
+        # the turn becomes 404 instead of inserting messages after the purge.
         conversation = await db.scalar(
-            select(Conversation).where(
+            select(Conversation)
+            .where(
                 Conversation.user_id == user_id,
                 Conversation.id == conversation_id,
                 Conversation.deleted_at.is_(None),
             )
+            .with_for_update()
         )
         if conversation is None:
             raise ChatConversationNotFound("Conversación no encontrada.")

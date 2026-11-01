@@ -1073,6 +1073,7 @@ Typed codes (no PII or sensitive content):
 | `not_found` | 404 | Nonexistent, tombstoned, or unknown route |
 | `method_not_allowed` | 405 | HTTP method not allowed on an existing route |
 | `validation_failed` | 422 | Invalid fields (per-field detail) |
+| `chat_mode_invalid` | 422 | Conversation `mode`/scope mismatch or unknown mode (M7) |
 | `language_not_allowed` | 422 | Code outside the tested allowlist |
 | `consent_required` | 422 | Missing cloud-processing acceptance |
 | `upload_expired` | 410 | Ingestion session TTL expired |
@@ -1579,7 +1580,8 @@ Contract rules:
   ranges and schemas validated by the backend.
 - Modes validated by the `conversations` CHECK; everything within the tenant.
 - L2.5 implements `POST .../messages` and `.../cancel` with the minimal turn persistence;
-  conversation create/list/history/delete remain A2.12. `Last-Event-ID` is the last received
+  A2.12 adds conversation create/list/paginated history/delete over the same tables.
+  `Last-Event-ID` is the last received
   character offset: every connect/reconnect re-sends `snapshot` and skips that prefix from the
   persisted message.
 

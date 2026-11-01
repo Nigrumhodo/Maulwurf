@@ -507,6 +507,54 @@ async def test_chat_replay_interleaves_citations_and_keeps_monotonic_event_ids(
     assert chat_sse.llm.calls == 1
 
 
+async def test_i_s2_an_11_repeated_client_message_id_returns_the_original_turn(
+    chat_sse: Harness,
+) -> None:
+    """Idempotency is per conversation: the retry replays, it does not call the model again."""
+    actor, conversation, _, _ = await _setup_corpus(chat_sse.factory)
+    first = await _post(chat_sse, actor, conversation.id, client_message_id="idem-a2-12")
+    assert first.status_code == 200
+    second = await _post(chat_sse, actor, conversation.id, client_message_id="idem-a2-12")
+
+    assert second.status_code == 200
+    first_done = next(data for name, _, data in _events(first.text) if name == "done")
+    second_done = next(data for name, _, data in _events(second.text) if name == "done")
+    assert second_done["message_id"] == first_done["message_id"]
+    assert chat_sse.llm is not None and chat_sse.llm.calls == 1
+    async with chat_sse.factory() as db:
+        messages = (
+            (await db.execute(select(Message).where(Message.conversation_id == conversation.id)))
+            .scalars()
+            .all()
+        )
+    assert len(messages) == 2  # one user message and one assistant message, no duplicate turn
+
+
+async def test_i_s2_an_11_deleted_conversation_rejects_a_new_turn(
+    chat_sse: Harness,
+) -> None:
+    actor, conversation, _, _ = await _setup_corpus(chat_sse.factory)
+    assert (await _post(chat_sse, actor, conversation.id)).status_code == 200
+
+    deleted = await chat_sse.client.delete(
+        f"/chat/conversations/{conversation.id}",
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+    assert deleted.status_code == 204
+
+    after_delete = await _post(chat_sse, actor, conversation.id, client_message_id="after-delete")
+    assert after_delete.status_code == 404
+    assert chat_sse.llm is not None and chat_sse.llm.calls == 1
+    async with chat_sse.factory() as db:
+        rows = await db.scalar(
+            select(func.count())
+            .select_from(Message)
+            .where(Message.conversation_id == conversation.id)
+        )
+    assert rows == 0
+
+
 async def test_chat_persists_assistant_message_sources_and_validated_citations(
     chat_sse: Harness,
 ) -> None:
@@ -564,12 +612,9 @@ async def test_validate_citation_source_rejects_another_tenant(chat_sse: Harness
 
         source = _retrieved_source(audio_a, transcript_a, chunk_a, segment_a)
         assert (
-            await validate_citation_source(db, user_id=actor_a.user_id, source=source)
-            is not None
+            await validate_citation_source(db, user_id=actor_a.user_id, source=source) is not None
         )
-        assert (
-            await validate_citation_source(db, user_id=actor_b.user_id, source=source) is None
-        )
+        assert await validate_citation_source(db, user_id=actor_b.user_id, source=source) is None
 
 
 async def test_validate_citation_source_rejects_stale_transcript_version(
