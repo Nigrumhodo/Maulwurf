@@ -23,10 +23,10 @@ The database enforces the parts the service layer must not be able to break:
 manual task has zero rows. The literal evidence with its verbatim quote (`task_evidence`) is
 A3.2's table: this revision creates only the shape A3.1 owns.
 
-`task_sources` and `task_revisions` declare `user_id` directly instead of using
-`TenantOwned`: the source table's primary key is composite and has no `id` for the generic
-tenant repository, and every revision is reached through its task. Both still carry the
-composite tenant FK, so a row can never point at another user's task.
+`task_sources` declares `user_id` directly instead of using `TenantOwned`: its primary key is
+composite and the table has no `id` column for the generic tenant repository. It still
+carries the composite tenant FK, so a row can never point at another user's task.
+`task_revisions` is `TenantOwned` because it has an `id` and the tenant helpers apply.
 """
 
 import uuid
