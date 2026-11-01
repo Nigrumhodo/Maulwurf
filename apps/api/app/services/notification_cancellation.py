@@ -18,10 +18,10 @@ import uuid
 from types import SimpleNamespace
 from typing import cast
 
-from sqlalchemy import Table, func, select, update
+from sqlalchemy import Table, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.notification import Notification
+from app.models.notification import DIGEST_TYPES, Notification
 from app.services.notifications import obsolete_pending
 
 NOTIFICATIONS = cast(Table, Notification.__table__)
@@ -66,7 +66,17 @@ class SqlNotificationCancellationStore:
             NOTIFICATIONS.c.status == "pending",
         )
         if task_id is not None:
-            query = query.where(NOTIFICATIONS.c.task_id == task_id)
+            if enabled_types is None:
+                query = query.where(NOTIFICATIONS.c.task_id == task_id)
+            else:
+                # A preference rule is user-level: fetch the task's reminders plus every
+                # digest so the task scope cannot hide a disabled digest.
+                query = query.where(
+                    or_(
+                        NOTIFICATIONS.c.task_id == task_id,
+                        NOTIFICATIONS.c.type.in_(DIGEST_TYPES),
+                    )
+                )
         rows = (await self._db.execute(query)).mappings().all()
 
         candidates = [SimpleNamespace(**dict(row)) for row in rows]

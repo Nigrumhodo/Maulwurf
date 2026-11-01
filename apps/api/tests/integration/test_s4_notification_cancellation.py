@@ -237,6 +237,44 @@ async def test_a_preference_change_cancels_disabled_reminders_and_digests(
     assert statuses[foreign.id] == "pending"
 
 
+async def test_a_combined_due_and_preference_change_cancels_the_task_and_disabled_digests(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    task = await make_task(db_session, actor)
+    other_task = await make_task(db_session, actor)
+
+    stale = await _reminder(
+        db_session, actor, task, row_type="reminder_t2", due_version=1
+    )
+    current_disabled = await _reminder(
+        db_session, actor, task, row_type="reminder_t2", due_version=2
+    )
+    other_task_row = await _reminder(
+        db_session, actor, other_task, row_type="reminder_t2", due_version=1
+    )
+    daily = await _task_less(db_session, actor)
+    weekly = await _task_less(db_session, actor, row_type="digest_weekly")
+    rows = [stale, current_disabled, other_task_row, daily, weekly]
+
+    store = SqlNotificationCancellationStore(db_session)
+    enabled = _enabled(reminder_offsets_hours=(48, 24), digest_daily_enabled=False)
+    assert (
+        await store.cancel_obsolete(
+            actor.user_id, task_id=task.id, due_version=2, enabled_types=enabled
+        )
+        == 3
+    )
+
+    statuses = await _stored_statuses(db_session, rows)
+    assert statuses[stale.id] == "cancelled"
+    assert statuses[current_disabled.id] == "cancelled"
+    assert statuses[daily.id] == "cancelled"
+    # The due rule stays scoped to its task, and the still-enabled digest stays pending.
+    assert statuses[other_task_row.id] == "pending"
+    assert statuses[weekly.id] == "pending"
+
+
 # --- Guards ----------------------------------------------------------------------------
 
 

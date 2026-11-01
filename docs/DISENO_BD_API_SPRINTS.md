@@ -989,7 +989,9 @@ CREATE INDEX notifications_due ON notifications (status, scheduled_at) WHERE sta
   row may already be leaving through Gmail, and `sent`/`failed`/`delivery_unknown` are
   history); a new `due_version` retires the pending reminders of the previous generation of
   **that** task, and a preference change retires the reminder/digest types no longer
-  enabled. A stale pending row whose instant already passed is cancelled too, so it can
+  enabled. The task scope belongs to the due-date rule only: digests are user-level and a
+  preference change still evaluates them when both rules are applied together. A stale
+  pending row whose instant already passed is cancelled too, so it can
   never fire late. Deleting a task cascades to its reminders (A4.1): an unlinked
   reminder would be undeliverable and would also collide with another deleted task's
   occurrence under `NULLS NOT DISTINCT`.

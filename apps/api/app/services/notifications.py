@@ -351,8 +351,9 @@ def obsolete_pending[RowT: NotificationRow](
     ``due_version`` is the task's current generation and requires ``task_id``: only the
     reminders of that task in another generation are superseded. ``enabled_types`` is the
     complete set returned by :func:`enabled_preference_types`; a pending reminder or digest
-    whose type is absent is obsolete. An explicit ``test`` send is not preference-driven and
-    is never selected.
+    whose type is absent is obsolete. A ``task_id`` scopes the due-date rule only: digests
+    are user-level, so a combined call still evaluates them against the preferences. An
+    explicit ``test`` send is not preference-driven and is never selected.
 
     Only ``pending`` rows are selected: ``sending`` may already be leaving through Gmail and
     every terminal state is delivery history. A pending row is selected even when its
@@ -370,20 +371,22 @@ def obsolete_pending[RowT: NotificationRow](
     for notification in notifications:
         if notification.status != "pending":
             continue
-        if task_id is not None and notification.task_id != task_id:
-            continue
-        if notification.type in REMINDER_TYPES:
-            superseded = (
-                due_version is not None and notification.due_version != due_version
-            )
-            disabled = (
-                enabled_types is not None and notification.type not in enabled_types
-            )
-            if superseded or disabled:
-                selected.append(notification)
-        elif notification.type in DIGEST_TYPES:
+        if notification.type in DIGEST_TYPES:
+            # Digests are user-level rows: a task scope belongs to the due-date rule and
+            # must not hide them from a preference change evaluated in the same call.
             if enabled_types is not None and notification.type not in enabled_types:
                 selected.append(notification)
+            continue
+        if notification.type not in REMINDER_TYPES:
+            continue
+        if task_id is not None and notification.task_id != task_id:
+            continue
+        superseded = (
+            due_version is not None and notification.due_version != due_version
+        )
+        disabled = enabled_types is not None and notification.type not in enabled_types
+        if superseded or disabled:
+            selected.append(notification)
     return tuple(selected)
 
 

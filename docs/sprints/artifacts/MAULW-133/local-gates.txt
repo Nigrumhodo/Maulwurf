@@ -3,7 +3,8 @@ Date: 2026-11-01 (UTC)
 Host: Linux 7.0.0-39-generic sandbox; PostgreSQL 16.15 with pgvector 0.8.0 (isolated
 cluster on :5434) and Redis 7.0.15 (isolated instance on :6381, no persistence)
 Worktree: task/MAULW-133
-Head: feed05c for gates 1–7; full-suite capture on 22cb76f (evidence-only commit)
+Head: feed05c for gates 1–7; 22cb76f for the 664-case capture; review fix1 on top of
+439375a (a task scope no longer hides user digests from a combined cancellation)
 Scope: U-S4-AN-03 cancellation core, PostgreSQL persistence adapter, documentation.
 apps/web untouched; no route, migration, provider, Gmail or credential involved.
 
@@ -24,13 +25,14 @@ Commands and results
        tests/integration/test_s4_notification_cancellation.py \
        tests/integration/test_s4_notifications_schema.py \
        tests/integration/test_calendar_revision_patch.py -q
-   -> 36 passed, 1 warning in 12.05s
-   The 6 new A4.3 cases are:
+   -> 37 passed, 1 warning in 5.45s (6-case modules were 36 before review fix1)
+   The 7 A4.3 cases now include:
      test_a_new_due_generation_cancels_only_the_older_pending_rows
      test_a_stale_occurrence_past_its_instant_is_cancelled_and_cannot_be_claimed
      test_a_sending_occurrence_is_never_rewritten_by_a_generation_change
      test_a_second_cancellation_is_idempotent
      test_a_preference_change_cancels_disabled_reminders_and_digests
+     test_a_combined_due_and_preference_change_cancels_the_task_and_disabled_digests
      test_cancelling_without_a_rule_is_rejected_and_writes_nothing
 
 5. cd apps/api && env -u no_proxy -u NO_PROXY uv run pytest \
@@ -60,6 +62,18 @@ Commands and results
    the ingest credential are not configured in this sandbox. This is the same pre-existing
    environment limitation recorded for A4.1, not an A4.3 regression: the A4.3 modules,
    the notification schema/lifecycle modules, RLS and the rest of the suite pass.
+
+9. Review fix1 (Hoplite finding 1 on 439375a): a task scope belongs to the due-date rule
+   only, so a combined due-date/preference call still evaluates the user-level digests.
+   Re-ran on the same isolated services:
+   - uv run ruff check .                  -> All checks passed!
+   - uv run mypy .                        -> Success: no issues found in 265 source files
+   - pytest tests/unit -q                 -> 1513 passed, 35 warnings in 15.28s
+   - pytest tests/unit/test_notification_cancellation.py -q -> 30 passed in 1.13s
+   - pytest tests/integration/test_s4_notification_cancellation.py -q -> 7 passed
+   - pytest -m integration -q             -> 665 passed, 17 failed, 1514 deselected,
+                                             699 warnings in 598.09s (the same 17
+                                             test_ingest_reception.py 503 cases)
 
 Environment note
 ----------------

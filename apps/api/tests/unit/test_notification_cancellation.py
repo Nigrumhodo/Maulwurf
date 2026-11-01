@@ -264,18 +264,25 @@ def test_a_preference_change_never_rewrites_a_delivered_occurrence() -> None:
     assert _statuses([sent, in_flight]) == ["sent", "sending"]
 
 
-def test_a_preference_change_scoped_to_a_task_leaves_its_digests_alone() -> None:
-    digest = _digest()
+def test_a_combined_task_scope_and_preference_change_still_cancels_user_digests() -> None:
+    daily = _digest("digest_daily")
     reminder = _row(type="reminder_t48")
+    other_task_reminder = _row(task_id=OTHER_TASK, type="reminder_t48")
 
     cancelled = cancel_obsolete(
-        [digest, reminder],
+        [daily, reminder, other_task_reminder],
         task_id=TASK,
         enabled_types=frozenset(),
     )
 
-    assert cancelled == (reminder,)
-    assert _statuses([digest, reminder]) == ["pending", "cancelled"]
+    # The task scope belongs to the due-date rule; a preference change remains user-level,
+    # so the disabled digest is cancelled while the other task's reminder is untouched.
+    assert cancelled == (daily, reminder)
+    assert _statuses([daily, reminder, other_task_reminder]) == [
+        "cancelled",
+        "cancelled",
+        "pending",
+    ]
 
 
 # --- No retrospective burst ------------------------------------------------------------
