@@ -159,3 +159,102 @@ Review fix1 (2026-11-01, hoplite findings on head 45c1415):
     The previous run 41321079970 failed only `integration (api)` on the old hardcoded
     migration-head guard; the guard update in 17500c6 fixed it (the same 39-case local
     module above is green). The final evidence commit gets its own CI run before merge.
+
+Review fix2 — hoplite finding 1 on head e9e0b1e (2026-11-01)
+  Finding: migration 0019 created its five indexes with plain CREATE INDEX inside the
+  Alembic transaction. That takes a SHARE lock on messages, transcripts, notifications,
+  outbox_events and google_remote_operations for the whole build, blocking chat, ingest and
+  outbox writes on a deployment with traffic.
+
+  Change (TDD; the tests below failed first and pass on the fix):
+    - 0019 upgrade/downgrade: op.get_context().autocommit_block() with
+      postgresql_concurrently=True. Each index is dropped first with
+      DROP INDEX CONCURRENTLY IF EXISTS, so the non-transactional build is retry-safe: a
+      crash between indexes (or an invalid leftover) converges on the next upgrade instead of
+      failing with "already exists".
+    - alembic/env.py: the migration advisory lock is session-scoped and taken with
+      pg_try_advisory_lock + short polls. Rationale: 0019's autocommit commit releases a
+      transaction-scoped lock, and a *blocking* session lock deadlocks with CREATE INDEX
+      CONCURRENTLY (which waits for every older snapshot).
+
+  Red evidence, before the fix:
+    $ uv run pytest tests/integration/test_migrations.py -q -k "budget_aggregate"
+    2 failed, 1 passed
+      test_budget_aggregate_indexes_are_built_concurrently:
+        assert 'CREATE INDEX CONCURRENTLY messages_by_created_at' in
+        "BEGIN; ... CREATE INDEX messages_by_created_at ON messages (created_at); ...
+         COMMIT;"
+      test_budget_aggregate_indexes_recover_from_a_partial_run:
+        asyncpg.exceptions.DuplicateTableError: relation "messages_by_created_at"
+        already exists
+
+  Red evidence, migration change without the env.py change:
+    $ uv run pytest tests/integration/test_migrations.py -q -k "concurrent_upgrades"
+    1 failed  (3 runs, 3 failures)
+      ERROR [alembic.util.messaging] Online migration expected to match one row when
+      updating '0018' to '0019' in 'alembic_version'; 0 found
+    (the transaction-scoped lock was released by 0019's commit; a second replica ran 0019)
+
+  Red evidence, blocking session lock instead of polling:
+    asyncpg.exceptions.DeadlockDetectedError: deadlock detected
+      DETAIL: Process A waits for ExclusiveLock on advisory lock [277779,19777,...];
+              blocked by process B.
+              Process B waits for ShareLock on virtual transaction 4/12764;
+              blocked by process A.
+    (CREATE INDEX CONCURRENTLY waits for B's snapshot while B waits for the lock)
+
+  Green evidence, after the fix:
+    $ uv run pytest tests/integration/test_migrations.py -q
+    33 passed, 170 warnings in 99.99s
+    (the module previously had 30 cases; +3 for 0019: round trip, offline DDL and
+    partial-run recovery)
+
+    $ uv run pytest tests/integration/test_migrations.py -q -k "concurrent_upgrades"
+    1 passed  (3 runs, 3 passes)
+
+    $ uv run pytest tests/integration/test_provider_budget_metrics.py \
+        tests/integration/test_observability_metrics.py -q
+    9 passed
+
+  Rendered DDL (offline mode, no connection; BEGIN is closed before the indexes):
+    $ MAULWURF_ENV=local ... uv run alembic upgrade 0018:0019 --sql
+    BEGIN;
+    -- Running upgrade 0018 -> 0019
+    COMMIT;
+    DROP INDEX CONCURRENTLY IF EXISTS messages_by_created_at;
+    CREATE INDEX CONCURRENTLY messages_by_created_at ON messages (created_at);
+    DROP INDEX CONCURRENTLY IF EXISTS transcripts_by_created_at;
+    CREATE INDEX CONCURRENTLY transcripts_by_created_at ON transcripts (created_at, audio_id);
+    DROP INDEX CONCURRENTLY IF EXISTS notifications_by_status_sent_at;
+    CREATE INDEX CONCURRENTLY notifications_by_status_sent_at ON notifications (status, sent_at);
+    DROP INDEX CONCURRENTLY IF EXISTS outbox_events_by_type_created_at;
+    CREATE INDEX CONCURRENTLY outbox_events_by_type_created_at ON outbox_events (type, created_at);
+    DROP INDEX CONCURRENTLY IF EXISTS google_remote_operations_by_created_at;
+    CREATE INDEX CONCURRENTLY google_remote_operations_by_created_at
+      ON google_remote_operations (created_at);
+    BEGIN;
+    UPDATE alembic_version SET version_num='0019' WHERE alembic_version.version_num = '0018';
+    COMMIT;
+
+    $ MAULWURF_ENV=local ... uv run alembic downgrade 0019:0018 --sql
+    DROP INDEX CONCURRENTLY IF EXISTS google_remote_operations_by_created_at;
+    DROP INDEX CONCURRENTLY IF EXISTS outbox_events_by_type_created_at;
+    DROP INDEX CONCURRENTLY IF EXISTS notifications_by_status_sent_at;
+    DROP INDEX CONCURRENTLY IF EXISTS transcripts_by_created_at;
+    DROP INDEX CONCURRENTLY IF EXISTS messages_by_created_at;
+
+  Gates:
+    $ cd apps/api && uv run ruff check .            All checks passed!
+    $ uv run mypy .                                 Success: no issues found in 304 files
+    $ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 uv run pytest tests/unit -q
+    1752 passed (raw environment: 1750 passed, 2 failed — the same pre-existing
+    bracketed-IPv6 NO_PROXY cases in test_ingest_sink/test_llm, unchanged)
+    $ cd apps/ingest && uv run ruff check . && uv run mypy .
+    All checks passed! / Success: no issues found in 83 source files
+    $ uv run pytest -m "not integration and not provider and not load" -q
+    308 passed, 93 deselected
+    $ python3 scripts/docs/check_refs.py
+    (see the final run recorded with the PR body)
+
+  Not run here: a real deployment with concurrent chat/ingest traffic (no Docker and no
+  reference host in this sandbox); J4.7's reference drill stays NOT RUN.

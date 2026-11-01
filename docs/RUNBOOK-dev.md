@@ -116,11 +116,23 @@ record and status codes are in
 
 The `api` container runs `alembic upgrade head` before uvicorn, so
 `docker compose up` leaves the DB at `head` with no manual step. If several replicas start at
-the same time, an advisory lock serializes them; the one waiting more than 120 s fails instead
-of hanging.
+the same time, a session-scoped advisory lock serializes them; a replica that cannot take it
+within 120 s fails instead of hanging. The lock is session-scoped (not transaction-scoped) so
+it survives `0019`'s autocommit block, and it is taken with short `pg_try_advisory_lock`
+polls instead of a blocking `pg_advisory_lock()`: a waiting transaction would deadlock with
+`CREATE INDEX CONCURRENTLY`, which waits for every older snapshot.
+
+`0019` builds its five budget indexes with `CREATE INDEX CONCURRENTLY`, outside the migration
+transaction, so a deploy over live traffic does not hold a SHARE lock on `messages`,
+`transcripts`, `notifications`, `outbox_events` or `google_remote_operations`. The trade-off
+is that the build is not atomic: if it fails or the process is killed, the version stays at
+`0018` and the indexes already built may remain. Rerun `alembic upgrade head`; the migration
+drops its own index names first (`DROP INDEX CONCURRENTLY IF EXISTS`), so it converges
+instead of failing with "already exists" (it rebuilds the indexes a previous attempt had
+finished).
 
 ```bash
-docker compose exec api alembic current            # applied revision (head; 0001–0005)
+docker compose exec api alembic current            # applied revision (head; 0001–0019)
 docker compose exec api alembic upgrade head       # apply manually, e.g. after a pull
 docker compose exec api alembic downgrade -1       # rollback to the previous revision
 docker compose exec api alembic history            # revision chain

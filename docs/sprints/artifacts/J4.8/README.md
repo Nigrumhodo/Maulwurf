@@ -51,6 +51,26 @@ Local gates for the code, tests and documentation are in
   only declares `expose: ["8000"]` and Caddy answers 404 to `/internal/*`. The compose
   `exec` command stays **NOT RUN** here: this sandbox has no Docker daemon.
 
+## Review fix2 (2026-11-01, hoplite finding 1 on head `e9e0b1e`)
+
+- **No SHARE lock on the hot tables:** `0019` now runs its five index builds with
+  `CREATE INDEX CONCURRENTLY` inside `op.get_context().autocommit_block()` (and drops them
+  with `DROP INDEX CONCURRENTLY`), so a deploy over live traffic does not block writes on
+  `messages`, `transcripts`, `notifications`, `outbox_events` or
+  `google_remote_operations`.
+- **Retry-safe online build:** because the build cannot be transactional, each index is
+  dropped first with `DROP INDEX CONCURRENTLY IF EXISTS`. A failure between indexes leaves
+  the version at `0018`, and the next `upgrade` converges instead of failing with "already
+  exists"; an interrupted build's invalid index is replaced the same way.
+- **Migration lock:** `alembic/env.py` keeps the advisory lock session-scoped and takes it
+  with `pg_try_advisory_lock` polls. The previous `pg_advisory_xact_lock` was released by
+  `0019`'s commit and a second replica re-ran the migration; a *blocking* session lock
+  deadlocks with `CREATE INDEX CONCURRENTLY`.
+- **Tests:** `test_migrations.py` adds the `0019` round trip, an offline-SQL assertion that
+  every `CREATE`/`DROP` is `CONCURRENTLY` and outside `BEGIN`, and a partial-run recovery
+  case; the four-replica serialization case covers the lock. Red/green commands and outputs
+  are in [`local-gates.txt`](local-gates.txt).
+
 ## Explicit non-claims
 
 - No real provider call, real credential, real Google account or approved budget was used.
