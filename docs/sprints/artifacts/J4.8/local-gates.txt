@@ -15,8 +15,9 @@ API:
 
   $ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 MAULWURF_ENV=local \
       uv run pytest tests/unit -q
-  1735 passed, 35 warnings in 38.24s
-  (after merging origin/develop at 99c0ff7, which brought J4.6/#156)
+  1752 passed, 35 warnings in 25.45s
+  (after merging origin/develop at 99c0ff7, which brought J4.6/#156, and at 99e15e9,
+  which brought A4.6/#154)
 
 Ingest:
   $ cd apps/ingest && uv run ruff check .
