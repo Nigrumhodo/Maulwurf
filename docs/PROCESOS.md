@@ -462,6 +462,8 @@ no browser flow yet.
 | SSE events | Initial `snapshot`, then `delta` and `citation`, and exactly one terminal `done` or `error`; all with monotonic ID |
 | Reconnection | `: ping` heartbeats between deltas; `Last-Event-ID` allows skipping what was already sent |
 | Message states | `streaming`, `completed`, `failed` and `cancelled` |
+| History | Newest page returned oldest-first; same-timestamp turns keep the question before its answer; opaque keyset cursor |
+| Conversation list | Bounded keyset pages ordered by last activity |
 | Idempotency | Repeating `client_message_id` returns the saved message |
 | Without reliable times | The citation shows "segment N", never an invented minute (D6) |
 | Sources | All sources given to the model are recorded, including those inherited from the history |

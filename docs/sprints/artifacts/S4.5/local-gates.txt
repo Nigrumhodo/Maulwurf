@@ -123,5 +123,9 @@ Success: no issues found in 83 source files
 $ python3 scripts/docs/check_refs.py
 OK: 872 documented repository paths exist or are expected.
 
+# After merging develop@158702b into the branch (conflict resolved in CLAIMS.md):
+$ python3 scripts/docs/check_refs.py
+OK: 873 documented repository paths exist or are expected.
+
 Note: no Riva/LLM/Google call, no real class audio, no PostgreSQL/Redis requirement for
 this harness and no `apps/web` change.

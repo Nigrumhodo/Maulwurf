@@ -1,10 +1,58 @@
-"""Request/response schemas for the streaming chat endpoints (L2.5)."""
+"""Request/response schemas for the M7 chat endpoints (L2.5 and A2.12)."""
 
 import re
+import uuid
+from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+TITLE_MAX_CHARS = 200
+
+
+class ConversationCreateIn(BaseModel):
+    """Mode and scope of a new conversation; coherence is checked by the service."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    # A plain string, not a Literal: an unknown mode must answer the M7 contract code
+    # `chat_mode_invalid`, not the generic pydantic `validation_failed`.
+    mode: str = Field(min_length=1, max_length=16)
+    subject_id: uuid.UUID | None = None
+    audio_id: uuid.UUID | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=TITLE_MAX_CHARS)
+
+
+class ConversationOut(BaseModel):
+    id: str
+    mode: str
+    subject_id: str | None
+    audio_id: str | None
+    title: str | None
+    created_at: datetime
+    updated_at: datetime
+    last_message_at: datetime | None
+
+
+class ConversationListOut(BaseModel):
+    items: list[ConversationOut]
+    next_cursor: str | None = None
+
+
+class MessageOut(BaseModel):
+    id: str
+    role: str
+    content: str
+    status: str
+    client_message_id: str | None
+    citas: list[dict[str, Any]]
+    created_at: datetime
+
+
+class MessageHistoryOut(BaseModel):
+    items: list[MessageOut]
+    next_cursor: str | None = None
 
 
 class SendMessageIn(BaseModel):

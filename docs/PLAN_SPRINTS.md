@@ -255,7 +255,7 @@ were open S1 tickets when this backlog was written; both are now `done` (see
 | A2.9 | Listing, `GET /audios/{id}`, SSE progress from the DB, conditional `txt`/`srt` exports | A2.6 | I-S2-AN-07/09 |
 | A2.10 | Atomic commit + `cleanup_pending` state; outbox gate only for index/analyze | S2.5 | I-S2-AN-10 |
 | A2.11 | `GET /search` (paired with L2.4) | L2.3 | I-S2-JL-06 |
-| A2.12 | M7 conversation CRUD (all/subject/class modes), paginated history, and delete/purge; L2.5 already provides the streaming `POST .../messages` and `.../cancel` | A2.1, L2.5 (contract) | I-S2-AN-11 |
+| A2.12 | M7 conversation CRUD (all/subject/class modes), bounded keyset-paginated listing and history, and delete/purge; L2.5 already provides the streaming `POST .../messages` and `.../cancel` | A2.1, L2.5 (contract) | I-S2-AN-11 |
 | A2.13 | *(gap, P0)* API↔ingest reception contract: ADR on where the `PUT` terminates, `ReceptionSink` client, internal credential (pairs with S2.11) | A2.4; S2.1 | I-S2-AN-12 |
 | A2.14 | *(gap, P1)* Reservation lifecycle and `PUT` concurrency: row lock and `receiving` transition, atomic quota/slot, stale-reservation expiry | A2.3, A2.4 | I-S2-AN-13 |
 | A2.15 | *(gap, P2)* Error envelope on 404, 405 and unhandled exceptions | A2.4 | U-S2-AN-14 |

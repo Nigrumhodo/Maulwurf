@@ -121,6 +121,13 @@ version; `embeddings.index_version` is part of the FK to its chunk. `dimension` 
 vector column's 1536 and a transcript's `text` must not be blank. `0009_s2_schema_integrity`
 follows `0008`; `alembic check` runs in the integration suite and fails on metadata drift.
 
+Implementation (A2.12, revision `0010`): `messages_by_conversation_order`
+`(user_id, conversation_id, created_at, id)` replaces the FK-only
+`messages_by_conversation` index. It backs the paginated history order and the
+`max(created_at)` aggregate that orders the conversation listing; its prefix still covers the
+`(user_id, conversation_id)` FK. The revision only swaps indexes, so no table or column is
+added.
+
 ### 2.1.1 Extensions
 
 ```sql
@@ -651,6 +658,10 @@ CREATE TABLE messages (
 CREATE UNIQUE INDEX messages_client_idem
   ON messages (conversation_id, client_message_id)
   WHERE client_message_id IS NOT NULL;
+-- A2.12, revision 0010: replaces the FK-only (user_id, conversation_id) index. The trailing
+-- keys serve history pagination and `max(created_at)` per conversation.
+CREATE INDEX messages_by_conversation_order
+  ON messages (user_id, conversation_id, created_at, id);
 
 CREATE TABLE message_sources (
   id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1074,6 +1085,7 @@ Typed codes (no PII or sensitive content):
 | `not_found` | 404 | Nonexistent, tombstoned, or unknown route |
 | `method_not_allowed` | 405 | HTTP method not allowed on an existing route |
 | `validation_failed` | 422 | Invalid fields (per-field detail) |
+| `chat_mode_invalid` | 422 | Conversation `mode`/scope mismatch or unknown mode (M7) |
 | `language_not_allowed` | 422 | Code outside the tested allowlist |
 | `consent_required` | 422 | Missing cloud-processing acceptance |
 | `upload_expired` | 410 | Ingestion session TTL expired |
@@ -1545,8 +1557,8 @@ It does not reactivate revisions, tombstoned tasks, or obsolete versions.
 | Method | Route | Sprint | Description | Responses |
 |---|---|---|---|---|
 | `POST` | `/chat/conversations` | S2 | Creates a conversation (`mode: all\|subject\|class` + `subject_id`/`audio_id` per mode) | `201` · `422 chat_mode_invalid` |
-| `GET` | `/chat/conversations` | S2 | Tenant list | `200` |
-| `GET` | `/chat/conversations/{id}/messages` | S2 | Paginated history | `200` |
+| `GET` | `/chat/conversations` | S2 | Tenant list, keyset paginated (`limit` 1–100, default 50) | `200` |
+| `GET` | `/chat/conversations/{id}/messages` | S2 | Paginated history, deterministic user-before-assistant order | `200` |
 | `POST` | `/chat/conversations/{id}/messages` | S2 | Sends a question; **SSE consumed with `fetch`**; an idempotent `client_message_id` returns the existing message without re-executing; at most two concurrent streams per user | `200 text/event-stream` · `429 rate_limited` |
 | `DELETE` | `/chat/conversations/{id}` | S2 | Tombstone and purge of content/sources | `204` |
 | `POST` | `/chat/conversations/{id}/messages/{message_id}/cancel` | S2 | Cancels the in-flight stream; the partial is left `cancelled` | `202` |
@@ -1597,9 +1609,25 @@ Contract rules:
   ranges and schemas validated by the backend.
 - Modes validated by the `conversations` CHECK; everything within the tenant.
 - L2.5 implements `POST .../messages` and `.../cancel` with the minimal turn persistence;
-  conversation create/list/history/delete remain A2.12. `Last-Event-ID` is the last received
+  A2.12 adds conversation create/list/paginated history/delete over the same tables; `DELETE`
+  cancels assistant rows still `streaming` in the same transaction and signals their
+  producers after the commit, so an in-flight answer stops consuming model tokens.
+  `Last-Event-ID` is the last received
   character offset: every connect/reconnect re-sends `snapshot` and skips that prefix from the
   persisted message.
+- A turn's two rows are inserted in one transaction, so ordering by `created_at` alone can
+  interleave a question and its answer. `RAGService.prepare` reads the turn clock from
+  PostgreSQL (`clock_timestamp()`) after taking the conversation lock and writes the user row
+  at that mark and the assistant one microsecond later; the database clock keeps turns
+  ordered across API hosts whose clocks disagree. The history query, its keyset cursor and
+  the RAG history also break a legacy equal-timestamp tie with a `user < system < assistant`
+  role rank. The v2 history cursor carries that role, so v1 cursors are rejected instead of
+  silently skipping or duplicating a message.
+- Both conversation reads are bounded: history pages use `limit` 1–100 (default 50) and the
+  listing uses the same keyset pattern. Revision `0010` replaces the FK-only
+  `messages_by_conversation` index with
+  `messages_by_conversation_order (user_id, conversation_id, created_at, id)`, which supports
+  the history order and the per-conversation `max(created_at)` used by the listing.
 
 ### 3.11 M8/M9 — Notifications and dashboard (S4)
 
