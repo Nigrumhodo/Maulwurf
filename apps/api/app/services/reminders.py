@@ -5,6 +5,11 @@ A task with a resolved date gets one `notifications` occurrence per enabled thre
 - **timed instant** (`due_at`): T-48 h, T-24 h and T-2 h before the instant;
 - **all-day** (`due_date`): T-3 d and T-1 d at the user's local wall-clock time.
 
+The all-day reminder uses the user's current IANA zone (`users.timezone`), not the task's
+class-timezone snapshot: the snapshot resolves the extracted date, while the delivery has to
+follow the person's local clock. A timed reminder already carries its instant, so only the
+local day recorded in `occurrence` needs the user's zone.
+
 An undated task (`date_status=missing|ambiguous`) gets no reminders, and a task that is not
 `confirmed` is not schedulable: completing or dismissing it must never arm a message. The
 schedule is **never retrospective**: if the user confirms late, thresholds that already
