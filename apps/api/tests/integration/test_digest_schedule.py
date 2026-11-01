@@ -230,6 +230,85 @@ async def test_a_pending_digest_is_recomputed_when_the_time_changes(
     assert rows[0].scheduled_at == datetime(2026, 11, 1, 14, 0, tzinfo=UTC)
 
 
+async def test_a_time_change_to_an_already_passed_hour_cancels_the_pending_period(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    actor.user.timezone = BOGOTA
+    settings = await _settings(db_session, actor, digest_weekly_enabled=False)
+    assert (await materialize_due_digests(db_session, now=NOW)).written == 1
+    (today,) = await _digests(db_session, actor)
+    assert today.scheduled_at == DUE
+
+    # 04:00 in Bogota (09:00 UTC) already passed at NOW, so the next occurrence is tomorrow.
+    settings.digest_daily_time = time(4, 0)
+    await db_session.flush()
+    report = await materialize_due_digests(db_session, now=NOW)
+
+    assert report.cancelled == 1
+    assert report.written == 1
+    assert today.status == "cancelled"
+    pending = [row for row in await _digests(db_session, actor) if row.status == "pending"]
+    assert [row.occurrence for row in pending] == [date(2026, 11, 2)]
+    assert pending[0].scheduled_at == datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
+
+    # The old 12:00 UTC instant must never deliver the cancelled period.
+    claimed = await claim_due_notifications(
+        db_session,
+        fencing_token=1,
+        now=datetime(2026, 11, 1, 11, 30, tzinfo=UTC),
+    )
+    assert claimed == []
+
+
+async def test_a_second_tick_without_changes_does_not_rewrite_pending_rows(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    actor.user.timezone = BOGOTA
+    await _settings(db_session, actor)
+    assert (await materialize_due_digests(db_session, now=NOW)).written == 2
+    before = {
+        row.id: (row.updated_at, row.attempts, row.scheduled_at)
+        for row in await _digests(db_session, actor)
+    }
+
+    again = await materialize_due_digests(db_session, now=NOW)
+
+    assert again.planned == 2
+    assert again.written == 0
+    after = {
+        row.id: (row.updated_at, row.attempts, row.scheduled_at)
+        for row in await _digests(db_session, actor)
+    }
+    assert after == before
+
+
+async def test_a_pending_retry_keeps_its_attempt_counter_when_the_time_changes(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    actor.user.timezone = BOGOTA
+    settings = await _settings(db_session, actor, digest_weekly_enabled=False)
+    assert (await materialize_due_digests(db_session, now=NOW)).written == 1
+    (row,) = await _digests(db_session, actor)
+
+    # J4.2 never returns a claimed row to `pending` (a lease expiry ends in
+    # `delivery_unknown`), but a pending row that does carry an attempt must keep the
+    # counter: rewriting it to zero on every tick would silently reset retry accounting.
+    row.attempts = 1
+    await db_session.flush()
+    settings.digest_daily_time = time(9, 0)
+    await db_session.flush()
+
+    assert (await materialize_due_digests(db_session, now=NOW)).written == 1
+    (updated,) = await _digests(db_session, actor)
+
+    assert updated.id == row.id
+    assert updated.scheduled_at == datetime(2026, 11, 1, 14, 0, tzinfo=UTC)
+    assert updated.attempts == 1
+
+
 async def test_a_cancelled_digest_is_reopened_when_the_preference_returns(
     db_session: AsyncSession,
 ) -> None:
@@ -315,6 +394,33 @@ async def test_a_future_weekly_row_follows_a_weekday_change(
     assert pending[0].id == next_row.id
     assert pending[0].occurrence == date(2026, 11, 8)
     assert pending[0].scheduled_at == datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
+
+
+async def test_a_weekday_change_to_an_already_passed_day_cancels_the_current_week(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    actor.user.timezone = BOGOTA
+    settings = await _settings(
+        db_session, actor, digest_daily_enabled=False, digest_weekday=3
+    )
+    wednesday = datetime(2026, 11, 4, 10, 0, tzinfo=UTC)  # 05:00 Wednesday in Bogota
+    assert (await materialize_due_digests(db_session, now=wednesday)).written == 1
+    (this_week,) = await _digests(db_session, actor)
+    assert this_week.occurrence == date(2026, 11, 1)
+    assert this_week.scheduled_at == datetime(2026, 11, 4, 12, 0, tzinfo=UTC)
+
+    # Monday already passed, so the next weekly occurrence is next week's Monday.
+    settings.digest_weekday = 1
+    await db_session.flush()
+    report = await materialize_due_digests(db_session, now=wednesday)
+
+    assert report.cancelled == 1
+    assert report.written == 1
+    assert this_week.status == "cancelled"
+    pending = [row for row in await _digests(db_session, actor) if row.status == "pending"]
+    assert [row.occurrence for row in pending] == [date(2026, 11, 8)]
+    assert pending[0].scheduled_at == datetime(2026, 11, 9, 12, 0, tzinfo=UTC)
 
 
 async def test_a_stale_pending_digest_is_cancelled_instead_of_sent_late(
