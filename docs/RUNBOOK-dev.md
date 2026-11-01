@@ -334,6 +334,19 @@ copy or inspect the attempt directory.
   One applies the migration and the others wait for the lock; the one waiting more than 120 s fails and
   Docker restarts it (`restart: unless-stopped`). This is expected, not an app error. In a
   real deployment (S4) the migration will be a single step, separate from the replicas.
+- **Ingest answers `503 capacity_unavailable` for every upload**: the admission latch is
+  closed. `docker compose logs ingest` carries `ingest.alert code=cleanup_failed` when a
+  durable `cleanup_status=failed` row exists (a clean latch read never reopens it) and
+  `ingest.alert code=cleanup_unrecorded` when a run could not persist its unverified
+  cleanup because a newer owner had already moved the fencing token. The second case is
+  the documented S4.2 decision: the row stays `pending`, admission stays open, and the
+  occurrence is observable through that alert and
+  `maulwurf_ingest_failures_total{stage="cleanup",error_code="cleanup_unrecorded"}` on
+  `/internal/metrics`; the operator procedure belongs to S4.1. If PostgreSQL was down when
+  `ingest` started, the sweeper retries `open_service_pool` every
+  `INGEST_SWEEP_INTERVAL_S` (60 s) and starts recovery once the database answers, so no
+  container restart is required. Never paste attempt paths, transcripts, or audio into a
+  ticket.
 
 ## 9. Local environment privacy rules
 

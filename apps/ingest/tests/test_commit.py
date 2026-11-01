@@ -11,7 +11,7 @@ from pathlib import Path
 
 import asyncpg
 import pytest
-from test_supervisor import Attempt, _seed  # noqa: E402
+from test_supervisor import PROVEN_CLEANUP, Attempt, _seed  # noqa: E402
 
 from maulwurf_ingest import lease
 from maulwurf_ingest.asr_job import STUB_TRANSCRIPT_NAME, _read_stub
@@ -329,7 +329,7 @@ async def test_enable_waits_for_verified_cleanup_and_leaves_other_events(
     ]
     assert await enable_text_outbox(pool, owned, audio_id=audio_id, version=version) is False
 
-    assert await lease.record_cleanup(pool, owned, verified=True, evidence={"verified": True})
+    assert await lease.record_cleanup(pool, owned, verified=True, evidence=PROVEN_CLEANUP)
     await pool.execute(
         "UPDATE ingestion_attempts SET lease_expires_at = now() - interval '1 second'"
         " WHERE id = $1",

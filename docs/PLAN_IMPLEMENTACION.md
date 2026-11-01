@@ -111,6 +111,14 @@ alignment for G2-T; update spec, API, and UI in the same revision. No silent fal
   Redis, logs, traces, caches, or artifacts. Persist inspection evidence without audio.
 - [ ] Check that lease expiration does not mark cleanup as verified. Without evidence, block
   the outbox; on cleanup failure, stop local admission and alert.
+- [ ] Run one recovery pass every 60 s from the ingest lifespan, sequentially and without
+  overlap, re-reading the durable admission latch before each pass. Default lease is 30 s
+  with a 10 s heartbeat (at least three renewals per lease); reject an unsafe interval.
+- [ ] Require descriptor/process/mount absence before `cleanup_status=verified`. A persisted
+  `failed` cleanup is the durable latch: it closes admission, alerts and is not retried; an
+  unreadable or malformed latch fails closed until a clean read. A cleanup that cannot be
+  persisted (driver error or moved fencing token) stays `pending`, raises
+  `cleanup_unrecorded` plus its failure metric and does not close admission.
 
 **Exit:** immediate normal cleanup and supervisor recovery demonstrated; limits/TTL
 published. Sweeper target every 60 s, not an instant-deletion promise when the host is
@@ -357,6 +365,9 @@ usage.
 - [ ] Mandatory language before bytes; UI formats/limits equal to validated capabilities.
 - [ ] ASR, cleanup, analysis, index, task, Calendar, and notification states remain separate;
   F1 does not depend on F2 analysis.
+- [ ] Cleanup verification requires absence evidence; a persisted `failed` cleanup closes
+  admission, `pending` only blocks the outbox, and an unrecorded cleanup raises
+  `cleanup_unrecorded` plus a failure metric.
 - [ ] The schema supports every API contract: dedupe decided in the PUT, versioned consent,
   spans/task_sources, agenda start/end, revisions, versions, and traceable deletion.
 - [ ] Consent, isolation, and human confirmation also apply to jobs, tools, and later changes.

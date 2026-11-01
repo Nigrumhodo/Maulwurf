@@ -36,6 +36,13 @@ SYNTHETIC_TEXT = (
     "Hoy repasamos derivadas. La tarea es para el viernes y el examen es el lunes siguiente."
 )
 
+# S4.2: only this evidence proves `audio_deleted_at` (descriptors, processes and mounts,
+# not file names). Tests that record a verified cleanup use it verbatim.
+PROVEN_CLEANUP: dict[str, object] = cleanup.CleanupEvidence(
+    workdir_absent=True, tmp_is_tmpfs=True, live_processes=0, open_descriptors=0,
+    mounts_under_workdir=0, unreadable_processes=0,
+).as_json()
+
 
 def _synthetic_audio() -> bytes:
     if shutil.which("espeak-ng") or shutil.which("espeak"):
@@ -282,7 +289,7 @@ async def test_expired_lease_blocks_publication_but_not_cleanup_evidence(
     assert (await _row(pool, attempt))["cleanup_status"] == "pending"
     # Nadie tomó el intento: la evidencia real de limpieza sí se puede registrar.
     assert await lease.record_cleanup(
-        pool, owned, verified=True, evidence={"verified": True},
+        pool, owned, verified=True, evidence=PROVEN_CLEANUP,
     )
 
 
