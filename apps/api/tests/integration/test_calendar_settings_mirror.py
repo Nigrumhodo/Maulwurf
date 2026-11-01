@@ -141,7 +141,7 @@ async def test_settings_coverage_is_either_empty_or_a_complete_window(
 ) -> None:
     actor = await make_actor(db_session)
 
-    partial = [
+    partial: list[dict[str, Any]] = [
         {"calendar_coverage_from": NOW},
         {"calendar_coverage_to": NOW + timedelta(days=1)},
         {"calendar_coverage_from": NOW, "calendar_coverage_to": NOW},

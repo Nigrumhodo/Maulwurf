@@ -293,9 +293,10 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     revision = ScriptDirectory.from_config(cfg).get_revision(_head(empty_schema))
     assert revision is not None
     parent = revision.down_revision
-    assert parent == "0011"  # this chain is linear
+    assert parent == "0012"  # this chain is linear
     command.upgrade(cfg, "head")
 
+    # `0013` only adds the Calendar task-link FK/index/CHECKs (no table/column change);
     # `0012` only adds constraints and indexes (no table/column change); `0011` only adds
     # the M4 task tables; `0010` only swaps one index on `messages` (no table/column change);
     # `0009` only adds indexes, FKs and CHECKs (no table/column change); `0008` only adds the
@@ -303,6 +304,9 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     # `0006` only adds `settings`; `0005` only changes roles, policies and RLS flags; `0003`
     # only backfills `chunks.tsv` (data, not schema) and `0004` only adds the run fencing
     # token, so the steps back stay on the previous schemas and only remove those additions.
+    command.downgrade(cfg, "-1")
+    assert _state(empty_schema) == (A31_TABLES, ["0012"])
+
     command.downgrade(cfg, "-1")
     assert _state(empty_schema) == (A31_TABLES, ["0011"])
 
@@ -471,6 +475,37 @@ def test_tasks_revision_round_trips(empty_schema: str) -> None:
     command.downgrade(cfg, "0009")
     assert task_tables.isdisjoint(_state(empty_schema)[0])
     assert _rls_state(empty_schema, ordered) == {}
+
+    command.upgrade(cfg, "head")
+
+
+def test_calendar_task_link_revision_round_trips(empty_schema: str) -> None:
+    """A3.8: the mirror gains its tenant-pinned task link and checks in `0013`."""
+    cfg = alembic_config(empty_schema)
+    command.upgrade(cfg, "0012")
+    foreign_keys, indexes, _columns = _s2_catalog(empty_schema)
+    assert not any(
+        "(user_id, task_id) REFERENCES tasks" in definition
+        for definition in foreign_keys["calendar_events"]
+    )
+    assert "calendar_events_by_task" not in indexes
+
+    command.upgrade(cfg, "head")
+    foreign_keys, indexes, _columns = _s2_catalog(empty_schema)
+    assert any(
+        "FOREIGN KEY (user_id, task_id) REFERENCES tasks(user_id, id) "
+        "ON DELETE SET NULL (task_id)" in definition
+        for definition in foreign_keys["calendar_events"]
+    )
+    assert "calendar_events_by_task" in indexes
+
+    command.downgrade(cfg, "0012")
+    foreign_keys, indexes, _columns = _s2_catalog(empty_schema)
+    assert not any(
+        "(user_id, task_id) REFERENCES tasks" in definition
+        for definition in foreign_keys["calendar_events"]
+    )
+    assert "calendar_events_by_task" not in indexes
 
     command.upgrade(cfg, "head")
 

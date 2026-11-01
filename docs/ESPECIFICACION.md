@@ -1031,9 +1031,11 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   revision. `confidence_score` nullable on manual tasks, bounded [0,1], no probabilistic
   semantics.
 - `calendar_events`: key `(user_id, calendar_id, event_id)`; nullable link to task and
-  source `google|maulwurf`. A task has at most one linked event; other Google events have no
-  task. Persist the write calendar in settings, the selected read calendars, and sync
-  status/ETag/coverage.
+  source `google|maulwurf`. The link is tenant-pinned (`(user_id, task_id) -> tasks`) and
+  `ON DELETE SET NULL (task_id)`: deleting the task unlinks the mirror row and keeps the
+  event. A task has at most one linked event; other Google events have no task. Persist the
+  write calendar in settings, the selected read calendars, and sync status/ETag/coverage;
+  an empty ETag is unknown, never a conditional-write baseline.
 - `messages.citas` references
   `{audio_id, transcript_version, chunk_id, segment_id, t_inicio, t_fin}` and validated
   text; normalize links in `message_sources` to locate/purge derived responses when deleting

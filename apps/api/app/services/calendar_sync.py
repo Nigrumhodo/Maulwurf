@@ -438,7 +438,7 @@ def parse_remote_event(
         start_date=start_date,
         end_date_exclusive=end_date,
         timezone=timezone,
-        etag=etag if isinstance(etag, str) else None,
+        etag=etag if isinstance(etag, str) and etag else None,
         remote_status=remote_status,
     )
 

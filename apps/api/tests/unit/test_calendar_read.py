@@ -344,6 +344,23 @@ def test_timed_and_all_day_events_are_normalized_to_utc_and_exclusive_dates() ->
     assert all_day.source == "google"
 
 
+def test_a_blank_etag_is_stored_as_unknown() -> None:
+    # The mirror CHECK rejects an empty ETag: it is not a conditional-write baseline, so the
+    # parser stores the honest NULL instead of failing the whole read on provider noise.
+    for raw in ("", 0):
+        parsed = parse_remote_event(
+            "primary",
+            {
+                "id": "g1",
+                "etag": raw,
+                "start": {"date": "2026-10-06"},
+                "end": {"date": "2026-10-07"},
+            },
+        )
+        assert isinstance(parsed, RemoteCalendarEvent)
+        assert parsed.etag is None
+
+
 def test_cancelled_event_is_exposed_as_a_key_not_a_row() -> None:
     parsed = parse_remote_event(
         "primary",

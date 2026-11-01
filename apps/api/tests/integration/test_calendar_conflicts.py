@@ -236,11 +236,7 @@ async def _settings(
         calendar_last_synced_at=NOW if coverage else None,
         calendar_coverage_from=window.start if coverage else None,
         calendar_coverage_to=window.end if coverage else None,
-        calendar_coverage_calendar_ids=(
-            read_calendars if read_calendars is not None else [CALENDAR]
-        )
-        if coverage
-        else [],
+        calendar_coverage_calendar_ids=[CALENDAR] if coverage else [],
     )
     db.add(row)
     await db.flush()

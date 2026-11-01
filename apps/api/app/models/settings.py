@@ -11,12 +11,17 @@ partial mirror instead of presenting it as complete.
 The row is not `TenantOwned` because the tenant column is the primary key, like
 `google_credentials`. Every query filters `user_id` explicitly and the table is protected by
 forced row-level security for the API and worker roles (migration `0006`).
+
+A3.8 closes the shape with CHECKs: selected and coverage calendar ids are never NULL or blank
+inside the arrays, the write calendar is never blank, and coverage is either empty or one
+complete window (`from < to`, at least one calendar, `last_synced_at` present). A partial
+publication can therefore never be presented as covered.
 """
 
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Text, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Text, text
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -27,6 +32,38 @@ class CalendarSettings(Base):
     """Target calendar of the app-created "Maulwurf" secondary calendar."""
 
     __tablename__ = "settings"
+    __table_args__ = (
+        CheckConstraint(
+            "calendar_write_calendar_id IS NULL OR btrim(calendar_write_calendar_id) <> ''",
+            name="write_calendar_not_blank",
+        ),
+        CheckConstraint(
+            "array_position(calendar_read_calendar_ids, NULL) IS NULL",
+            name="read_calendars_no_null",
+        ),
+        CheckConstraint(
+            "array_position(calendar_read_calendar_ids, '') IS NULL",
+            name="read_calendars_no_blank",
+        ),
+        CheckConstraint(
+            "array_position(calendar_coverage_calendar_ids, NULL) IS NULL",
+            name="coverage_calendars_no_null",
+        ),
+        CheckConstraint(
+            "array_position(calendar_coverage_calendar_ids, '') IS NULL",
+            name="coverage_calendars_no_blank",
+        ),
+        CheckConstraint(
+            "(calendar_coverage_from IS NULL AND calendar_coverage_to IS NULL "
+            "AND cardinality(calendar_coverage_calendar_ids) = 0 "
+            "AND calendar_last_synced_at IS NULL) "
+            "OR (calendar_coverage_from IS NOT NULL AND calendar_coverage_to IS NOT NULL "
+            "AND calendar_coverage_from < calendar_coverage_to "
+            "AND cardinality(calendar_coverage_calendar_ids) > 0 "
+            "AND calendar_last_synced_at IS NOT NULL)",
+            name="coverage_window",
+        ),
+    )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
