@@ -2,7 +2,7 @@
 
 Date (UTC): 2026-11-01 11:32 UTC
 Branch: task/MAULW-143
-Code head: d5e6d91 (the later evidence commit is documentation only)
+Code head: 331f733 (the later evidence commit is documentation only)
 Base: origin/develop 2d4bc2d (J4.2 / PR #151 merged)
 Host: Linux x86_64
 Python: Python 3.12.3 | uv 0.13.1
@@ -68,7 +68,7 @@ The 11 new cases in `tests/integration/test_notification_delivery_unknown.py` pr
   attempts, `updated_at`), and the new occurrence can be delivered on its own.
 
 The same targeted run was repeated after the immutable `DeliveryRequest`, the enforced
-`sender_timeout`/lease bound and the `CancelledError` case: **61 passed** on head `d5e6d91`.
+`sender_timeout`/lease bound and the `CancelledError` case: **61 passed** on head `331f733`.
 
 ## Migration module (isolated run)
 
@@ -94,7 +94,7 @@ develop). A later re-run on the shared host reproduced those 17 and added one te
 alone (above). This is the documented sibling-worktree race on one PostgreSQL cluster, not
 a failure of this diff; CI uses isolated service containers.
 
-The DTO/timeout/cancellation follow-up (`d5e6d91`) only touches the new sender boundary and
+The DTO/timeout/cancellation follow-up (`331f733`) only touches the new sender boundary and
 three new integration cases; the targeted suite is 61 passed on that head. Later commits are
 documentation only; Quality CI is green in all 17 checks on the PR head, including
 `integration (api)`. A post-restart repeat on the rebuilt local
