@@ -35,8 +35,11 @@ Commands and results
    passed. No code was changed for it.
 
 6. python3 scripts/docs/check_refs.py
-   -> OK after this artifact is present (the first run reported the not-yet-created
-      docs/sprints/artifacts/A4.4/ directory).
+   -> OK: 897 documented repository paths exist or are expected.
+
+7. PR #145 Quality CI run 41280150478 (head 8963d22)
+   -> all 17 checks green, including python-unit (api), integration (api),
+      integration (ingest), e2e-smoke, docs and secret-scan.
 
 Scope/security notes
 --------------------
