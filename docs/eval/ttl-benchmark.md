@@ -81,6 +81,10 @@ spike, so this is a projection, not a provider-contract result.
 | Upload start | full **600 s** window + 5.55 s upload = **605.55 s** of the 2,400 s chain | 10 + 30 min | 1,794 s left | fits |
 | ASR | local **0.0161 s/s**, billed **1.0083 s/s**, provider **0.0564 s/s**; 3 h projected in **788.08 s** (173.89 local + 614.20 provider) | 60 min (3,600 s) | **×4.57** | fits |
 
+The numbers above come from `ttl-benchmark.json`; `ttl-benchmark.txt` is a second run in
+table form (`38.87 MiB/s` and `787.40 s`), included to show the run-to-run variation of a
+shared host. Neither capture contains audio or provider data.
+
 Per-slot measurements from the same capture:
 
 | Slot | Reception bytes | Wall | Throughput | ASR fragments | ASR billed | ASR wall |
