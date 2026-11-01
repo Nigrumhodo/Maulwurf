@@ -693,14 +693,14 @@ flowchart LR
 ```
 
 **Status: partial.** Class deletion (`DELETE /audios/{id}` tombstone) is implemented (A2.7);
-account deletion is A4.4 (S4) and still planned. `routers/me.py` only implements `GET` and
-`PATCH`; there is no account-deletion route.
+account deletion is implemented at the API level in A4.4 (`DELETE /me` creates the observable
+operation and `GET /me/deletion/{id}` reports it). The Web client flows are D4.x.
 
 | Aspect | Contract |
 |---|---|
-| Google events | No third-party events are deleted, nor deletions without authorization; without permissions deletion in Google is not guaranteed |
-| Residual record | `account_deletions` keeps only what is needed to report the result, without profile or text |
-| Operation states | `pending`, `completed` and `completed_with_remote_failures` |
+| Google events | No third-party events are deleted, nor deletions without authorization; without permissions deletion in Google is not guaranteed. `delete_maulwurf_events=false` (default) keeps Maulwurf-created events and only purges local tasks/links |
+| Residual record | `account_deletions` keeps only what is needed to report the result, without profile or text; expired rows in it and `google_remote_operations` are deleted by the scheduled retention job |
+| Operation states | `pending`, `running`, `completed` and `completed_with_remote_failures`; a post-tombstone failure is resumable via `POST /me/deletion/{id}/resume` |
 | Backups | Encrypted text and metadata only; deletions are reapplied on restore (validated in F3) |
 
 ## 11. P8 · Team Process: Sprint, Claim, PR and Definition of Done
@@ -785,7 +785,7 @@ indicated column.
 | Calendar outbox event | DISENO §2.6: `sync_task_event` | `plan/S3.md` (A3.4): `calendar.event.sync` | Only names the `sync_task_event` job |
 | Order of the SSE events | ESPECIFICACION M7: `delta*` and then `citation*` | DISENO §3.10: `delta` and `citation` in any order | Does not fix the order |
 | Weekly digest content | ESPECIFICACION M8: includes new tasks | `plan/S4.md` (J4.6): only upcoming ones and conflicts | Does not detail the content |
-| Remote operations after the purge | DISENO §2.8: `google_remote_operations` survives the purge | The same table declares `user_id ... ON DELETE CASCADE` | The prose; to be resolved in A4.4 |
+| Remote operations after the purge | DISENO §2.8: `google_remote_operations` survives the purge | The same table declares `user_id ... ON DELETE CASCADE` | The code (A4.4): `user_id` is an opaque UUID without a FK, so the residual remote ids, authorization, status and redacted error survive the purge |
 
 ## 13. Maintenance
 

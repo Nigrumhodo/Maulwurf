@@ -1097,12 +1097,21 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   deleted by the application.
 - Account deletion: `DELETE /me` returns `202 {deletion_operation_id}`. The flow applies
   tombstones, blocks sessions/jobs, leaves the initiating session in a restricted mode (check
-  the deletion status and sign out; other sessions are revoked), requests authorized remote
-  deletions while credentials exist, purges data, and then removes tokens.
-  `GET /me/deletion/{id}` exposes `pending|completed|completed_with_remote_failures`; the
-  residual record keeps only remote IDs, authorization, status, redacted error, and
-  expiration. Do not delete other people's events; without permissions, deletion in Google
-  is not guaranteed.
+  the status, resume an authorized operation, and sign out; other sessions are revoked),
+  claims the operation atomically, requests authorized remote deletions while credentials
+  exist, purges data, and then removes tokens. `GET /me/deletion/{id}` exposes
+  `pending|running|completed|completed_with_remote_failures`; a purge failure after the
+  tombstone still answers `202` and stays resumable through
+  `POST /me/deletion/{id}/resume` (CSRF/Origin checked, owner-scoped). An already-succeeded
+  remote delete is never repeated. The residual record keeps only remote IDs, authorization,
+  status, redacted error, and expiration; an hourly batched job deletes both residual tables
+  (`account_deletions`, `google_remote_operations`) once `expires_at` passes (provisional
+  30-day window pending D8). Once that job removes the operation row, the session link is
+  cleared and the restricted cookie gets `401` instead of `404`. `delete_maulwurf_events`
+  defaults to `false`: local tasks and
+  links are purged, but Maulwurf-created events remain in the user's Google calendar unless
+  the user explicitly opts in. Do not delete other people's events; without permissions,
+  deletion in Google is not guaranteed.
 - Backups only of encrypted text/metadata, proposed maximum retention 30 days, and a
   deletion log reapplied on restore. The UI distinguishes deletion of active data, backup
   expiration, and data already sent to third parties. Consent for third-party voices and
