@@ -745,7 +745,10 @@ consults the persisted message; it does not re-run the LLM with the same
   `occurrence_seq` inside the same identity: `0` is the scheduled occurrence and each manual
   repetition takes the next number, so automatic dedupe stays exact and a resend never
   mutates the original. Changing the due date/preferences cancels stale future occurrences;
-  never send all expired thresholds retrospectively for a newly confirmed task.
+  never send all expired thresholds retrospectively for a newly confirmed task. A future
+  occurrence cancelled by a preference is re-armed only when the same task generation is
+  scheduled again with that threshold enabled; it was never delivered. A `sending`, `sent`,
+  `failed` or `delivery_unknown` occurrence is never revived.
 - Gmail does not offer exactly-once delivery with `gmail.send`: if the response is lost
   after sending, mark `delivery_unknown` and do not retry automatically to avoid duplicates.
   Show it in the panel; a manual resend warns about the risk. A stable `Message-ID` does not
