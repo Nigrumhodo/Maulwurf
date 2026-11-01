@@ -999,6 +999,12 @@ CREATE INDEX notifications_due ON notifications (status, scheduled_at) WHERE sta
   never fire late. Deleting a task cascades to its reminders (A4.1): an unlinked
   reminder would be undeliverable and would also collide with another deleted task's
   occurrence under `NULLS NOT DISTINCT`.
+- J4.3 resolves `occurrence` as the user-local target day of the delivery: the local date of
+  `due_at - threshold` for timed reminders and `due_date - offset` for all-day ones. A4.1
+  freezes no reminder wall-clock preference (only the digest time), so the all-day default is
+  09:00 local with an explicit override; the digest preference is not reused. Thresholds
+  already past at confirmation are not inserted, so a late confirmation never fires a
+  retrospective burst. J4.4 owns DST normalization.
 - A manual test send or warned resend is a new audited occurrence of the same identity; it
   carries `occurrence_seq` 1, 2, … (0 is the scheduled row). Automatic dedupe is unchanged,
   and the original `delivery_unknown` row is never mutated to `pending`.

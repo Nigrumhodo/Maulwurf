@@ -312,6 +312,30 @@ def _offset_set(values: Iterable[int], *, field: str) -> set[int]:
     return offsets
 
 
+def scheduled_reminder_types(
+    *,
+    reminder_offsets_hours: Iterable[int],
+    reminder_allday_offsets_days: Iterable[int],
+) -> tuple[str, ...]:
+    """Reminder types the thresholds enable, earliest threshold first.
+
+    This is the scheduling half of :func:`enabled_preference_types`: J4.3 needs the ordered
+    types to create one occurrence per threshold, while A4.3 only needs the set to cancel
+    what a preference change disabled. Both share this mapping so a threshold that enables
+    a reminder can never disagree with the one that keeps it alive. An offset without a
+    frozen type (for example ``12`` hours) enables nothing.
+    """
+    hours = _offset_set(reminder_offsets_hours, field="reminder_offsets_hours")
+    days = _offset_set(reminder_allday_offsets_days, field="reminder_allday_offsets_days")
+    timed = tuple(
+        type_ for type_, offset in TIMED_REMINDER_OFFSETS.items() if offset in hours
+    )
+    allday = tuple(
+        type_ for type_, offset in ALLDAY_REMINDER_OFFSETS.items() if offset in days
+    )
+    return timed + allday
+
+
 def enabled_preference_types(
     *,
     reminder_offsets_hours: Iterable[int],
@@ -328,13 +352,11 @@ def enabled_preference_types(
     opt-in is a delivery gate owned by J4.1/J4.6, not a cancellation rule: opting out pauses
     delivery without irreversibly cancelling a still-valid occurrence.
     """
-    hours = _offset_set(reminder_offsets_hours, field="reminder_offsets_hours")
-    days = _offset_set(reminder_allday_offsets_days, field="reminder_allday_offsets_days")
-    enabled = {
-        type_ for type_, offset in TIMED_REMINDER_OFFSETS.items() if offset in hours
-    }
-    enabled.update(
-        type_ for type_, offset in ALLDAY_REMINDER_OFFSETS.items() if offset in days
+    enabled = set(
+        scheduled_reminder_types(
+            reminder_offsets_hours=reminder_offsets_hours,
+            reminder_allday_offsets_days=reminder_allday_offsets_days,
+        )
     )
     if digest_daily_enabled:
         enabled.add("digest_daily")
