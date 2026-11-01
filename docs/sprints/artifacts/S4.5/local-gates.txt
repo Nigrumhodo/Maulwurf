@@ -125,4 +125,3 @@ OK: 872 documented repository paths exist or are expected.
 
 Note: no Riva/LLM/Google call, no real class audio, no PostgreSQL/Redis requirement for
 this harness and no `apps/web` change.
-
