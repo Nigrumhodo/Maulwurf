@@ -2047,7 +2047,7 @@ delivery tested; runbooks and security/cost review; final demo.
 | Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
 | 1 | A4.1 | `notifications` table per M8: `scheduled_at`, `due_version`, `dedupe_key`, statuses (`pending\|sending\|sent\|failed\|delivery_unknown\|cancelled`), `provider_message_id`, redacted errors | Tested schema |
-| 1–2 | A4.2 | `PATCH /me/notifications` and `POST /notifications/test` | Endpoints |
+| 1–2 | A4.2 | Preferences (`GET/PATCH /me/notifications`), test send, cursor listing and warned resend | Endpoints |
 | 2 | A4.3 | Changing the due date/preferences cancels obsolete future occurrences; never a retrospective burst when confirming late | Cancellation tests |
 | 2–3 | A4.4 | Observable account deletion: `DELETE /me` → 202 + `deletion_operation_id`; tombstone, session/job blocking, remote deletion **before** revoking, idempotent purge, and `GET /me/deletion/{id}` | Deletion E2E |
 | 3 | A4.5 | D8 already approved: validate encrypted text/metadata backups, agreed retention, and tombstones reapplied on restore | Restore verified |
