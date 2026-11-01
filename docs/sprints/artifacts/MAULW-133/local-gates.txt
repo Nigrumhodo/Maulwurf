@@ -3,8 +3,8 @@ Date: 2026-11-01 (UTC)
 Host: Linux 7.0.0-39-generic sandbox; PostgreSQL 16.15 with pgvector 0.8.0 (isolated
 cluster on :5434) and Redis 7.0.15 (isolated instance on :6381, no persistence)
 Worktree: task/MAULW-133
-Head: feed05c for gates 1–7; 22cb76f for the 664-case capture; review fix1 on top of
-439375a (a task scope no longer hides user digests from a combined cancellation)
+Head: review fix1 on 4db2ea3; merge of develop after A4.2 (#147) at 1d5890a; evidence
+commit follows
 Scope: U-S4-AN-03 cancellation core, PostgreSQL persistence adapter, documentation.
 apps/web untouched; no route, migration, provider, Gmail or credential involved.
 
@@ -73,6 +73,21 @@ Commands and results
    - pytest tests/integration/test_s4_notification_cancellation.py -q -> 7 passed
    - pytest -m integration -q             -> 665 passed, 17 failed, 1514 deselected,
                                              699 warnings in 598.09s (the same 17
+                                             test_ingest_reception.py 503 cases)
+
+10. Develop sync after A4.2 merged (#147, merge commit 1d5890a, develop c9635ee, migration
+   0016_s4_notification_resends): only docs/plan/S4.md and docs/sprints/CLAIMS.md needed a
+   manual conflict resolution (both sides kept); apps/web untouched. Post-merge:
+   - uv run ruff check .                  -> All checks passed!
+   - uv run mypy .                        -> Success: no issues found in 272 source files
+   - pytest tests/unit -q                 -> 1562 passed, 35 warnings in 14.66s
+   - pytest tests/integration/test_s4_notification_cancellation.py \
+            tests/integration/test_notifications_endpoints.py \
+            tests/integration/test_s4_notifications_schema.py \
+            tests/integration/test_migrations.py tests/integration/test_rls.py -q
+                                          -> 108 passed, 197 warnings in 57.63s
+   - pytest -m integration -q             -> 706 passed, 17 failed, 1563 deselected,
+                                             756 warnings in 603.40s (the same 17
                                              test_ingest_reception.py 503 cases)
 
 Environment note
