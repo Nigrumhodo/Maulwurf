@@ -77,6 +77,9 @@ class Message(TenantOwned, Base):
             "created_at",
             "id",
         ),
+        # J4.8: the internal budget aggregate is cross-tenant and filters only by
+        # `created_at`; the tenant-first index above cannot serve that range.
+        Index("messages_by_created_at", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()

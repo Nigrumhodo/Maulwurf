@@ -13,6 +13,7 @@ ownership is recorded in [docs/sprints/CLAIMS.md](../docs/sprints/CLAIMS.md); fu
 |---|---|
 | `docker-compose.yml` | S1's 8 services with healthchecks; images pinned by digest |
 | `Caddyfile` | Local TLS proxy (`tls internal`), same origin for web/api/ingest, no buffering or cache, and the J2.10 body/timeout limits |
+| `alerting/` | J4.8 Prometheus rules, scrape example and the budget alert contract; the local stack does not run Prometheus |
 
 | Service | Image | Notes |
 |---|---|---|
@@ -78,8 +79,9 @@ Healthchecks, TLS, tests, and shutdown: [docs/RUNBOOK-dev.md](../docs/RUNBOOK-de
 
 ## Pending in this area
 
-- **J2.5:** the C-S2-JF-10 compose capture, alert destination and scrape configuration are
-  still pending; see `docs/sprints/CLAIMS.md`.
+- **J2.5/J4.8:** the C-S2-JF-10 compose capture and the real alert destination remain
+  deployment work. J4.8 provides the Prometheus rules/scrape example and the provider
+  budget metrics; the reference host (J4.7) owns mounting and routing them.
 - **Migrations:** the `api` container runs `alembic upgrade head` on boot (A1.7);
   manual commands in the [runbook](../docs/RUNBOOK-dev.md) (§5).
 - **Host verification (J1.2):** active `zram` and `core_pattern` to systemd-coredump were

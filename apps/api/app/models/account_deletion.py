@@ -85,6 +85,8 @@ class GoogleRemoteOperation(Base):
         CheckConstraint(_in("kind", REMOTE_KINDS), name="kind"),
         CheckConstraint(_in("status", REMOTE_STATUSES), name="status"),
         Index("google_remote_operations_by_user", "user_id", "status"),
+        # J4.8: the internal Google budget counts recorded operations in a UTC month.
+        Index("google_remote_operations_by_created_at", "created_at"),
         # The identifiers are purged after the same residual window as `account_deletions`.
         Index("google_remote_operations_expiry", "expires_at"),
     )

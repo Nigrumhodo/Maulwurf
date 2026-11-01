@@ -189,6 +189,13 @@ class Settings(BaseSettings):
     # `sending` only to expire them as a false `delivery_unknown` (terminal). The scheduler
     # therefore starts disabled and must only be enabled once J4.1 consumes `sending`.
     notification_scheduler_enabled: bool = False
+    # J4.8: monthly provider caps over units the application already measures. They are
+    # operator inputs from the S4.5 cost table and the real provider contract, not invented
+    # limits: unset means usage is reported with `configured=0` and nothing alarms.
+    budget_llm_tokens: int | None = Field(default=None, ge=1)
+    budget_asr_minutes: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    budget_google_operations: int | None = Field(default=None, ge=1)
+    budget_warning_ratio: float = Field(default=0.8, gt=0, le=1, allow_inf_nan=False)
 
     @property
     def allowed_origin(self) -> str:

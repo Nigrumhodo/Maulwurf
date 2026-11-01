@@ -116,11 +116,23 @@ record and status codes are in
 
 The `api` container runs `alembic upgrade head` before uvicorn, so
 `docker compose up` leaves the DB at `head` with no manual step. If several replicas start at
-the same time, an advisory lock serializes them; the one waiting more than 120 s fails instead
-of hanging.
+the same time, a session-scoped advisory lock serializes them; a replica that cannot take it
+within 120 s fails instead of hanging. The lock is session-scoped (not transaction-scoped) so
+it survives `0019`'s autocommit block, and it is taken with short `pg_try_advisory_lock`
+polls instead of a blocking `pg_advisory_lock()`: a waiting transaction would deadlock with
+`CREATE INDEX CONCURRENTLY`, which waits for every older snapshot.
+
+`0019` builds its five budget indexes with `CREATE INDEX CONCURRENTLY`, outside the migration
+transaction, so a deploy over live traffic does not hold a SHARE lock on `messages`,
+`transcripts`, `notifications`, `outbox_events` or `google_remote_operations`. The trade-off
+is that the build is not atomic: if it fails or the process is killed, the version stays at
+`0018` and the indexes already built may remain. Rerun `alembic upgrade head`; the migration
+drops its own index names first (`DROP INDEX CONCURRENTLY IF EXISTS`), so it converges
+instead of failing with "already exists" (it rebuilds the indexes a previous attempt had
+finished).
 
 ```bash
-docker compose exec api alembic current            # applied revision (head; 0001–0005)
+docker compose exec api alembic current            # applied revision (head; 0001–0019)
 docker compose exec api alembic upgrade head       # apply manually, e.g. after a pull
 docker compose exec api alembic downgrade -1       # rollback to the previous revision
 docker compose exec api alembic history            # revision chain
@@ -383,6 +395,53 @@ queues persists the F1 → F2 upgrade, so an `--apply` pass that queues nothing 
 row. `GET /audios/{id}` reports `analysis_backfill_available` before the pass and the
 `analyze` stage becomes `pending` after it. Until L3.6 lands, the queued job is the existing
 S2 `analyze` no-op: this command proves the queue, not extraction output.
+
+## 11. Provider budgets, alerts and operator runbooks (J4.8)
+
+The API exports the current UTC month's provider usage on `/internal/metrics`:
+
+```bash
+cd apps/api
+uv run python - <<'PY'
+import urllib.request
+print(urllib.request.urlopen('http://127.0.0.1:8000/internal/metrics', timeout=3).read().decode())
+PY
+```
+
+The `maulwurf_budget_*` series are always present for `llm`, `asr` and `google`; the limit,
+ratio, warning and exhausted series appear only when the matching
+`MAULWURF_BUDGET_*` cap is set. Unset means measure-only, never a zero budget. A
+dependency-free check for a cron or an operator shell:
+
+```bash
+# API running standalone on the host:
+python scripts/ops/budget_check.py --url http://127.0.0.1:8000/internal/metrics
+
+# API from the compose stack (the service only exposes its port internally):
+cd infra
+docker compose exec -T api python - < ../scripts/ops/budget_check.py
+```
+
+From a private-network host that resolves the service name, pass
+`--url http://api:8000/internal/metrics`. The full operator procedure is
+[`runbooks/budget-alerts.md`](runbooks/budget-alerts.md) §3.2.
+
+The Prometheus rules and scrape example are in
+[`infra/alerting/`](../infra/alerting/README.md); the local eight-service stack does not run
+Prometheus, so the reference deployment (J4.7) owns that wiring. Operator procedures:
+
+- [runbooks/README.md](runbooks/README.md) — index and reference-environment status;
+- [runbooks/budget-alerts.md](runbooks/budget-alerts.md) — budgets, thresholds and escalation;
+- [runbooks/provider-down.md](runbooks/provider-down.md) — Riva/LLM/embeddings/Google outage;
+- [runbooks/tokens.md](runbooks/tokens.md) — revoked or rotated credentials;
+- [runbooks/account-deletion.md](runbooks/account-deletion.md) — account deletion and resume;
+- [runbooks/cleanup.md](runbooks/cleanup.md) and [runbooks/restore.md](runbooks/restore.md) —
+  the S4.1/A4.5 procedures.
+
+The J4.8 execution record is in
+[`docs/sprints/artifacts/J4.8/`](sprints/artifacts/J4.8/). The reference-host drill is
+**NOT RUN** while J4.7 is absent; do not describe a local deterministic result as a provider
+or production verification.
 
 ## Links
 

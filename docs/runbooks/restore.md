@@ -202,3 +202,11 @@ while `--allow-missing-deletion-log` emits the warning. Local result on 2026-11-
 The reference-environment drill (J4.8) must repeat this procedure against the real backup
 volume and secret store and record the command, result and redacted evidence. Until that
 drill exists, this runbook is validated locally, not in production.
+
+On 2026-11-01 J4.8 executed the encrypted `backup`, `export-deletions --refresh-backup`,
+`verify` and clean `restore` against local PostgreSQL 16.15 and GPG 2.4. The restored target
+scrubbed the post-backup deleted account to the opaque placeholders, removed its tenant
+rows, kept the residual `account_deletions` row and preserved the retained transcript.
+Command, result and redacted evidence:
+[`docs/sprints/artifacts/J4.8/restore-drill.txt`](../sprints/artifacts/J4.8/restore-drill.txt).
+The reference-volume drill remains **NOT RUN** until J4.7 exists.

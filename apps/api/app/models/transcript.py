@@ -42,6 +42,9 @@ class Transcript(TenantOwned, Base):
         # never reach the durable text table (defense in depth next to S2.10).
         CheckConstraint("btrim(text) <> ''", name="nonblank_text"),
         Index("transcripts_by_audio", "user_id", "audio_id"),
+        # J4.8: the internal budget aggregate starts from the month's committed classes
+        # (`created_at`) and pairs the audio id to count each class once.
+        Index("transcripts_by_created_at", "created_at", "audio_id"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
