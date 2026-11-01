@@ -102,3 +102,34 @@ another worktree's contention. A first attempt on the shared services also expos
 distro pgvector 0.6 without `hnsw.iterative_scan`; pgvector 0.8.0 was built from the
 v0.8.0 tag to match CI. No test or production code was changed to accommodate either
 environment limitation.
+
+Continuation re-verification (2026-11-01, pushed fix1 head 5c5a7fc)
+--------------------------------------------------------------------
+- uv run ruff check .                  -> All checks passed!
+- uv run mypy .                        -> Success: no issues found in 272 source files
+- pytest tests/unit -q (raw env)       -> 1560 passed, 2 failed; both are the
+  pre-existing bracketed-IPv6 httpx set (test_ingest_sink/test_llm,
+  ValueError: invalid literal for int(): ':1]' from the [::1] no_proxy entry)
+- pytest tests/unit -q (sanitized NO_PROXY) -> 1562 passed
+- pytest targeted (cancellation, notification endpoints/schema, migrations, RLS)
+                                       -> 108 passed
+- pytest -m integration -q             -> 706 passed, 17 failed; all 17 are
+  tests/integration/test_ingest_reception.py answering 503 capacity_unavailable
+  (the same pre-existing sandbox sink limitation, no A4.3 regression)
+- Quality CI run 41292413919 (head 5c5a7fc) -> green in all 17 checks
+- Hoplite re-reviewed head 5c5a7fc: 30 unit cases, ruff/mypy OK and no blocking
+  findings (PostgreSQL integration not run by that QA; covered here and in CI).
+
+Second develop sync (merge a901004 of develop@64ae5f6, A4.5/#148)
+-----------------------------------------------------------------
+The merge adds `scripts/ops/`, `docs/runbooks/restore.md` and
+`tests/integration/test_backup_restore.py`, and changes `app/services/deletion.py`. The
+only conflict was the `docs/sprints/CLAIMS.md` S4 header; both sides were kept
+(A4.1-A4.5) and `apps/web` is untouched (0 files changed).
+- uv run ruff check .                  -> All checks passed!
+- uv run mypy .                        -> Success: no issues found in 273 source files
+- pytest tests/unit -q (sanitized NO_PROXY) -> 1562 passed
+- pytest targeted (A4.3 + A4.2 endpoints/schema + migrations + RLS + A4.5
+  backup/restore + calendar revision)  -> 120 passed
+- python3 scripts/docs/check_refs.py   -> OK: 939 documented repository paths at the
+  gate run (941 after this evidence capture)
