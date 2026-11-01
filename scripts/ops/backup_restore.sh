@@ -106,11 +106,12 @@ sync_url() {
 # PGDATABASE does not expand a connection URI on every libpq build, so the URL is parsed.
 load_pg_env() {
   local url="$1" output key value password="" escaped
-  output="$(python3 - "${url}" <<'PY'
-import sys
+  # The URL may carry the password, so it goes through fd 3 rather than argv or the
+  # environment of the helper process.
+  output="$(python3 - 3<<<"${url}" <<'PY'
 from urllib.parse import parse_qsl, unquote, urlsplit
 
-url = urlsplit(sys.argv[1])
+url = urlsplit(open("/dev/fd/3", encoding="utf-8").read().strip())
 if url.scheme not in {"postgres", "postgresql"}:
     raise SystemExit(f"backup_restore: unsupported database URL scheme: {url.scheme}")
 query = dict(parse_qsl(url.query, keep_blank_values=True))

@@ -51,7 +51,8 @@ pins it.
    - The URL is parsed once into `PGHOST`/`PGPORT`/`PGUSER`/`PGDATABASE`/`PGSSLMODE`; the
      password goes to a `0600` `PGPASSFILE` in a private temporary directory. `psql` and
      `pg_dump` receive no URL; `pg_restore` receives only the database name (it requires an
-     explicit target) while user, host and password stay in the environment.
+     explicit target) while user, host and password stay in the environment. The internal
+     parser reads the URL through fd 3, never through argv or its own environment.
 
 6. [Medio] `payload -> 'users'` from the log was never consumed.
    - `restore_reapply.sql` unions the log's non-active `users` entries into
