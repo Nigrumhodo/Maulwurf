@@ -47,3 +47,29 @@ FAILED tests/integration/test_ingest_reception.py::test_case_13_backpressure_kee
 
 $ python3 scripts/docs/check_refs.py
 OK: 871 documented repository paths exist or are expected.
+
+Post-merge sync with develop (develop@747ad74, merge commit 22e6a06):
+The merge only brought S4.5's `apps/ingest` tests/scripts and docs; no API production code
+changed. Re-ran the gates on the merged tree.
+
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ cd apps/api && uv run mypy .
+Success: no issues found in 258 source files
+
+$ cd apps/api && env -u no_proxy -u NO_PROXY uv run pytest tests/unit -q
+1480 passed, 35 warnings in 11.03s
+
+$ cd apps/api && env -u no_proxy -u NO_PROXY uv run pytest tests/integration/test_migrations.py tests/integration/test_rls.py tests/integration/test_isolation.py tests/integration/test_s4_notifications_schema.py tests/integration/test_calendar_revision_patch.py tests/integration/test_calendar_settings_mirror.py -q
+133 passed, 152 warnings in 53.66s
+
+$ cd apps/ingest && uv run ruff check . && uv run mypy .
+All checks passed!
+Success: no issues found in 83 source files
+
+$ cd apps/ingest && env -u no_proxy -u NO_PROXY uv run pytest tests -m "not integration and not provider and not load" -q
+306 passed, 93 deselected, 2 warnings in 10.72s
+
+$ python3 scripts/docs/check_refs.py
+OK: 898 documented repository paths exist or are expected.
