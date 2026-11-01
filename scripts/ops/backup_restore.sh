@@ -140,7 +140,7 @@ for variable, value in values.items():
         print(f"{variable}\t{value}")
 PY
 )" || die "invalid database URL"
-  unset PGHOST PGPORT PGUSER PGDATABASE PGSSLMODE PGPASSWORD PGPASSFILE
+  unset PGHOST PGPORT PGUSER PGDATABASE PGSSLMODE
   while IFS=$'\t' read -r key value; do
     case "${key}" in
       PGPASSWORD) password="${value}" ;;
@@ -152,6 +152,8 @@ PY
   if [[ -n "${password}" ]]; then
     [[ "${password}" != *$'\n'* ]] || die "the database password cannot contain a newline"
     ensure_work_dir
+    # The URL password wins over any ambient credential and never reaches argv.
+    unset PGPASSWORD PGPASSFILE
     PGPASSFILE="${WORK_DIR}/pgpass"
     escaped="${password//\\/\\\\}"
     escaped="${escaped//:/\\:}"

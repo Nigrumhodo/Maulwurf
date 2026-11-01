@@ -39,6 +39,9 @@ cannot be restored. If either window changes, change both in the same revision.
 - The passphrase in a backend secret store, exposed only as
   `MAULWURF_BACKUP_PASSPHRASE` or `MAULWURF_BACKUP_PASSPHRASE_FILE` (at least 16 characters).
   Never put it in a command line, the repository, a ticket or a log.
+- A way for `psql`, `pg_dump` and `pg_restore` to authenticate: the database URL may carry
+  the password (the script moves it to a private `PGPASSFILE`, never argv) or the operator's
+  `~/.pgpass`/`PGPASSFILE` may supply it when the URL omits it.
 - A backup directory outside the repository with mode `0700`, owned by the backup operator.
   Prefer an encrypted volume; the streamed plaintext exists only in the `pg_dump`/GPG pipes.
 
