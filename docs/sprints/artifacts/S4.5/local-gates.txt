@@ -92,6 +92,10 @@ SKIPPED [1] tests/test_cost_table.py:308: peak RSS unavailable: neither
 $ python3 scripts/docs/check_refs.py
 OK: 870 documented repository paths exist or are expected.
 
+# After the fix2 CLAIMS edit (documentation only, same code tree):
+$ python3 scripts/docs/check_refs.py
+OK: 872 documented repository paths exist or are expected.
+
 Note: no Riva/LLM/Google call, no real class audio, no PostgreSQL/Redis requirement for
 this harness and no `apps/web` change.
 
