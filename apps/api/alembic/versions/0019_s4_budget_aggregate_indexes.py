@@ -12,8 +12,21 @@ filters a UTC month range and each one would otherwise scan the whole heap on ev
 - `google_remote_operations`: recorded operations by `created_at`.
 
 The revision is additive: it creates five secondary indexes and touches no column, policy,
-grant or row. It does not introduce a price, quota or capacity number. Downgrade drops the
-indexes by name.
+grant or row. It does not introduce a price, quota or capacity number.
+
+The builds use `CREATE INDEX CONCURRENTLY` inside an autocommit block: a plain
+`CREATE INDEX` runs inside the migration transaction, holds a SHARE lock on the table for
+the whole build and blocks chat, ingest and outbox writes on a live deployment.
+CONCURRENTLY takes only SHARE UPDATE EXCLUSIVE. The trade-off is that it cannot run inside
+a transaction, so a failure between indexes commits the ones already built and leaves the
+version at `0018` (an interrupted build can also leave an invalid index behind). Each
+index is therefore dropped first with `DROP INDEX CONCURRENTLY IF EXISTS`: a retry
+converges instead of failing with "already exists", at the cost of rebuilding the indexes
+that a previous attempt had finished. Downgrade drops the indexes the same way.
+
+The session-scoped advisory lock in `alembic/env.py` outlives the autocommit block on
+purpose: a transaction-scoped lock would be released by this commit and a second replica
+could start the same migration.
 """
 
 from collections.abc import Sequence
@@ -31,18 +44,33 @@ NOTIFICATIONS_INDEX = "notifications_by_status_sent_at"
 OUTBOX_INDEX = "outbox_events_by_type_created_at"
 GOOGLE_INDEX = "google_remote_operations_by_created_at"
 
+INDEXES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    (MESSAGES_INDEX, "messages", ("created_at",)),
+    (TRANSCRIPTS_INDEX, "transcripts", ("created_at", "audio_id")),
+    (NOTIFICATIONS_INDEX, "notifications", ("status", "sent_at")),
+    (OUTBOX_INDEX, "outbox_events", ("type", "created_at")),
+    (GOOGLE_INDEX, "google_remote_operations", ("created_at",)),
+)
+
 
 def upgrade() -> None:
-    op.create_index(MESSAGES_INDEX, "messages", ["created_at"])
-    op.create_index(TRANSCRIPTS_INDEX, "transcripts", ["created_at", "audio_id"])
-    op.create_index(NOTIFICATIONS_INDEX, "notifications", ["status", "sent_at"])
-    op.create_index(OUTBOX_INDEX, "outbox_events", ["type", "created_at"])
-    op.create_index(GOOGLE_INDEX, "google_remote_operations", ["created_at"])
+    with op.get_context().autocommit_block():
+        for name, table, columns in INDEXES:
+            op.drop_index(
+                name,
+                table_name=table,
+                postgresql_concurrently=True,
+                if_exists=True,
+            )
+            op.create_index(name, table, list(columns), postgresql_concurrently=True)
 
 
 def downgrade() -> None:
-    op.drop_index(GOOGLE_INDEX, table_name="google_remote_operations")
-    op.drop_index(OUTBOX_INDEX, table_name="outbox_events")
-    op.drop_index(NOTIFICATIONS_INDEX, table_name="notifications")
-    op.drop_index(TRANSCRIPTS_INDEX, table_name="transcripts")
-    op.drop_index(MESSAGES_INDEX, table_name="messages")
+    with op.get_context().autocommit_block():
+        for name, table, _columns in reversed(INDEXES):
+            op.drop_index(
+                name,
+                table_name=table,
+                postgresql_concurrently=True,
+                if_exists=True,
+            )

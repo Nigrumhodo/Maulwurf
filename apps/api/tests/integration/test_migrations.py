@@ -109,6 +109,22 @@ S2_COMPOSITE_FOREIGN_KEYS = {
     },
 }
 
+# J4.8: `0019` adds the range indexes the cross-tenant monthly budget aggregates read. They
+# are built with CREATE INDEX CONCURRENTLY, so the exact column list is pinned here.
+BUDGET_INDEX_FRAGMENTS = {
+    "messages_by_created_at": "ON public.messages USING btree (created_at)",
+    "transcripts_by_created_at": "ON public.transcripts USING btree (created_at, audio_id)",
+    "notifications_by_status_sent_at": (
+        "ON public.notifications USING btree (status, sent_at)"
+    ),
+    "outbox_events_by_type_created_at": (
+        "ON public.outbox_events USING btree (type, created_at)"
+    ),
+    "google_remote_operations_by_created_at": (
+        "ON public.google_remote_operations USING btree (created_at)"
+    ),
+}
+
 S2_INDEX_FRAGMENTS = {
     "chunks_fts": "USING gin (tsv)",
     "embeddings_hnsw": "USING hnsw (vector vector_cosine_ops)",
@@ -327,6 +343,30 @@ def _s2_catalog(url: str) -> tuple[dict[str, set[str]], dict[str, str], set[str]
             {str(name): str(definition) for name, definition in indexes},
             set(audio_columns.scalars()),
         )
+
+    return asyncio.run(read())
+
+
+def _index_states(url: str, names: tuple[str, ...]) -> dict[str, tuple[bool, bool]]:
+    """(valid, ready) of the named indexes from `pg_index`; empty when absent."""
+
+    async def read() -> dict[str, tuple[bool, bool]]:
+        engine = create_async_engine(url)
+        try:
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        text(
+                            "SELECT c.relname, i.indisvalid, i.indisready "
+                            "FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                            "WHERE c.relname = ANY(:names)"
+                        ),
+                        {"names": list(names)},
+                    )
+                ).all()
+        finally:
+            await engine.dispose()
+        return {str(row[0]): (bool(row[1]), bool(row[2])) for row in rows}
 
     return asyncio.run(read())
 
@@ -846,6 +886,100 @@ def test_notification_claim_fence_revision_round_trips(empty_schema: str) -> Non
     assert "claimed_by_fence" not in _table_columns(empty_schema, "notifications")
 
     command.upgrade(cfg, "head")
+
+
+def test_budget_aggregate_indexes_revision_round_trips(empty_schema: str) -> None:
+    """J4.8: `0019` adds and removes the five budget range indexes without leftovers."""
+    cfg = alembic_config(empty_schema)
+    command.upgrade(cfg, "0018")
+    _foreign_keys, indexes, _columns = _s2_catalog(empty_schema)
+    assert BUDGET_INDEX_FRAGMENTS.keys().isdisjoint(indexes)
+
+    command.upgrade(cfg, "0019")
+    _foreign_keys, indexes, _columns = _s2_catalog(empty_schema)
+    for name, fragment in BUDGET_INDEX_FRAGMENTS.items():
+        assert fragment in indexes[name]
+    # A concurrent build publishes an index only once it is valid and ready.
+    assert _index_states(empty_schema, tuple(BUDGET_INDEX_FRAGMENTS)) == {
+        name: (True, True) for name in BUDGET_INDEX_FRAGMENTS
+    }
+
+    command.downgrade(cfg, "0018")
+    _foreign_keys, indexes, _columns = _s2_catalog(empty_schema)
+    assert BUDGET_INDEX_FRAGMENTS.keys().isdisjoint(indexes)
+
+    command.upgrade(cfg, "0019")
+    _foreign_keys, indexes, _columns = _s2_catalog(empty_schema)
+    assert set(BUDGET_INDEX_FRAGMENTS) <= set(indexes)
+
+
+def test_budget_aggregate_indexes_are_built_concurrently(
+    empty_schema: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """J4.8: the emitted DDL must be CONCURRENTLY, inside an autocommit block.
+
+    A plain `CREATE INDEX` runs inside the migration transaction and holds a SHARE lock on
+    `messages`/`transcripts`/`notifications`/`outbox_events`/`google_remote_operations`
+    for the whole build, which blocks chat, ingest and outbox writes on a live deployment.
+    `CREATE INDEX CONCURRENTLY` only takes SHARE UPDATE EXCLUSIVE. Rendering the offline SQL
+    pins the exact statement Alembic sends, and the online round trip above proves the
+    server accepts it, so the test does not need to time a real lock.
+    """
+    cfg = alembic_config(empty_schema)
+
+    command.upgrade(cfg, "0018:0019", sql=True)
+    upgrade_sql = capsys.readouterr().out
+    for name in BUDGET_INDEX_FRAGMENTS:
+        assert f"CREATE INDEX CONCURRENTLY {name}" in upgrade_sql
+        assert f"CREATE INDEX {name}" not in upgrade_sql
+
+    command.downgrade(cfg, "0019:0018", sql=True)
+    downgrade_sql = capsys.readouterr().out
+    for name in BUDGET_INDEX_FRAGMENTS:
+        assert f"DROP INDEX CONCURRENTLY IF EXISTS {name}" in downgrade_sql
+
+
+def test_budget_aggregate_indexes_recover_from_a_partial_run(empty_schema: str) -> None:
+    """J4.8: a failed concurrent build does not brick the retry.
+
+    `CREATE INDEX CONCURRENTLY` cannot run inside a transaction, so a failure between
+    indexes commits what already succeeded and leaves the version at `0018`; an interrupted
+    build also leaves an invalid index behind. The migration drops its own names first, so
+    the next `upgrade` converges instead of failing with "already exists".
+    """
+    cfg = alembic_config(empty_schema)
+    command.upgrade(cfg, "0018")
+
+    async def seed_leftovers() -> None:
+        engine = create_async_engine(empty_schema)
+        async with engine.begin() as conn:
+            # Finished build that the crash did not stamp, and an interrupted build.
+            await conn.execute(
+                text("CREATE INDEX messages_by_created_at ON messages (created_at)")
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX transcripts_by_created_at "
+                    "ON transcripts (created_at, audio_id)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "UPDATE pg_index SET indisvalid = false "
+                    "WHERE indexrelid = 'transcripts_by_created_at'::regclass"
+                )
+            )
+        await engine.dispose()
+
+    asyncio.run(seed_leftovers())
+    command.upgrade(cfg, "0019")
+
+    _foreign_keys, indexes, _columns = _s2_catalog(empty_schema)
+    for name, fragment in BUDGET_INDEX_FRAGMENTS.items():
+        assert fragment in indexes[name]
+    assert _index_states(empty_schema, tuple(BUDGET_INDEX_FRAGMENTS)) == {
+        name: (True, True) for name in BUDGET_INDEX_FRAGMENTS
+    }
 
 
 def test_calendar_task_link_revision_round_trips(empty_schema: str) -> None:
