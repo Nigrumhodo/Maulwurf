@@ -111,6 +111,14 @@ alignment for G2-T; update spec, API, and UI in the same revision. No silent fal
   Redis, logs, traces, caches, or artifacts. Persist inspection evidence without audio.
 - [ ] Check that lease expiration does not mark cleanup as verified. Without evidence, block
   the outbox; on cleanup failure, stop local admission and alert.
+- [ ] Run one recovery pass every 60 s from the ingest lifespan, sequentially and without
+  overlap, re-reading the durable admission latch before each pass. Default lease is 30 s
+  with a 10 s heartbeat (at least three renewals per lease); reject an unsafe interval.
+- [ ] Require descriptor/process/mount absence before `cleanup_status=verified`. A persisted
+  `failed` cleanup is the durable latch: it closes admission, alerts and is not retried; an
+  unreadable or malformed latch fails closed until a clean read. A cleanup that cannot be
+  persisted (driver error or moved fencing token) stays `pending`, raises
+  `cleanup_unrecorded` plus its failure metric and does not close admission.
 
 **Exit:** immediate normal cleanup and supervisor recovery demonstrated; limits/TTL
 published. Sweeper target every 60 s, not an instant-deletion promise when the host is
@@ -124,7 +132,8 @@ unreachable. Any detected persistence blocks the delivery.
   no audio storage. Initial single-instance ingestion; scaling with reservation affinity
   remains pending design/testing.
 - [ ] Google OAuth in the backend, opaque session, incremental scopes, encryption/rotation,
-  `GET /me` as a non-cacheable CSRF bootstrap, CSRF/Origin on every mutation, and
+  `GET /me` as a non-cacheable CSRF bootstrap (profile only; integration state is
+  `GET /integrations/status`), CSRF/Origin on every mutation, and
   logout/revocation. Do not condition chat on Calendar/Gmail scopes.
 - [ ] Tenant-aware migrations and subject CRUD. RLS, composite FKs, and pool/worker tests.
   Full model for attempts, transcript/segments, index/analysis versions, and outbox; later
@@ -141,14 +150,19 @@ because this plan exists.
 ### F1.1 Ingestion, text, and library
 
 - [ ] Implement `/ingestion/capabilities` with effective language/formats/limits/TTL. Form
-  without a preselected language, required metadata, and consent.
+  without a preselected language, required metadata, and consent. The attempt's ephemeral
+  deadlines (upload, receive, ASR) come from the published TTL; without a validated
+  publication only the provisional upload window applies. API and ingestion share one byte
+  limit and startup fails when the two configured names disagree.
 - [ ] `POST /audios` records versioned consent and reserves slot + attempt; it does not
   promise deduplication before knowing the hash. Authenticated `PUT` (terminated in the API
   and streamed to ingestion, ADR-0008) computes SHA-256 and
   answers 202 only after reception/admission, or 200/409 from dedup, always after cleanup.
   Compensate reservations if the DB fails.
 - [ ] Exact-identity deduplication in the `PUT`; a variant returns an opaque single-use
-  token, requires a second `POST` and re-upload, and verifies the hash again. Do not retain
+  token, requires a second `POST` and re-upload, and verifies the hash again. An unusable
+  token (unknown, expired, consumed or mismatched) answers the same opaque
+  `422 validation_failed` without disclosing its state. Do not retain
   audio while waiting for confirmation. Test concurrency, token expiration/reuse, and
   separation between users.
 - [ ] Transcribe sequential fragments with backpressure; reconcile boundaries and offsets
@@ -351,6 +365,9 @@ usage.
 - [ ] Mandatory language before bytes; UI formats/limits equal to validated capabilities.
 - [ ] ASR, cleanup, analysis, index, task, Calendar, and notification states remain separate;
   F1 does not depend on F2 analysis.
+- [ ] Cleanup verification requires absence evidence; a persisted `failed` cleanup closes
+  admission, `pending` only blocks the outbox, and an unrecorded cleanup raises
+  `cleanup_unrecorded` plus a failure metric.
 - [ ] The schema supports every API contract: dedupe decided in the PUT, versioned consent,
   spans/task_sources, agenda start/end, revisions, versions, and traceable deletion.
 - [ ] Consent, isolation, and human confirmation also apply to jobs, tools, and later changes.

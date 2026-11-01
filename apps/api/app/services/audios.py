@@ -19,6 +19,11 @@ derivados de la clase en una sola transacción.
 Reservation lifecycle (A2.14): `open_reception` claims the attempt under a row lock before
 the first byte, `cancel_reservation` releases a failed PUT while the API still owns the
 fencing token, and `expire_stale_reservations` reaps abandoned reservations for J2.4.
+
+Contract conformance (A2.19): the language allowlist and the reservation deadlines are
+resolved from the SAME published capabilities as the size limit (`allowed_languages`,
+`attempt_deadlines`), and every unusable variant token — unknown, expired, consumed or
+mismatched — answers the same opaque `422 validation_failed` (ADR-0006).
 """
 
 import hashlib
@@ -86,12 +91,69 @@ class Reservation:
     upload_expires_at: datetime
 
 
+@dataclass(frozen=True)
+class AttemptDeadlines:
+    """Ephemeral deadlines of one attempt; `None` means no approved TTL to enforce."""
+
+    upload_expires_at: datetime
+    receive_deadline: datetime | None
+    asr_deadline: datetime | None
+
+
 def allowed_languages() -> tuple[str, ...]:
-    """Allowlist vigente (D3): lo publicado por el spike manda sobre la lista provisional."""
+    """Allowlist vigente (D3): lo publicado por el spike manda sobre la lista provisional.
+
+    BCP-47 no distingue mayúsculas, así que la lista se normaliza igual que el `language_code`
+    de la petición (`AudioCreate`): un código publicado como `ES` sigue siendo `es`.
+    """
     capabilities = settings.ingestion_capabilities
     if capabilities.limits_validated:
-        return capabilities.languages
-    return settings.ingest_languages
+        published = capabilities.languages
+    else:
+        published = settings.ingest_languages
+    return tuple(dict.fromkeys(code.lower() for code in published))
+
+
+def _effective_ttl_minutes() -> tuple[int, int | None, int | None]:
+    """(upload, receive, asr) minutes: the publication wins, S1 has only the upload window.
+
+    `limits_validated=true` requires all three TTLs (`schemas/ingestion.py`), so the published
+    branch always returns them; without a publication the S1 provisional `upload_ttl_minutes`
+    applies and no receive/ASR deadline is invented (D4/D6 stay blocked).
+    """
+    capabilities = settings.ingestion_capabilities
+    if capabilities.limits_validated:
+        ttl = capabilities.ttl
+        if ttl.upload_start_minutes and ttl.receive_minutes and ttl.asr_minutes:
+            return ttl.upload_start_minutes, ttl.receive_minutes, ttl.asr_minutes
+    return settings.upload_ttl_minutes, None, None
+
+
+def attempt_deadlines(now: datetime) -> AttemptDeadlines:
+    """Deadlines of a new attempt, chained so each ephemeral phase has its own budget.
+
+    The client must upload within `upload_start_minutes`; reception may then use
+    `receive_minutes` and ASR `asr_minutes`. Chaining keeps `upload_expires_at <=
+    receive_deadline <= asr_deadline`, which a per-phase-from-`now` calculation cannot
+    guarantee. The API writes these values when it reserves; `ingest` owns the live lease.
+    """
+    upload_minutes, receive_minutes, asr_minutes = _effective_ttl_minutes()
+    upload_expires_at = now + timedelta(minutes=upload_minutes)
+    receive_deadline = (
+        upload_expires_at + timedelta(minutes=receive_minutes)
+        if receive_minutes is not None
+        else None
+    )
+    asr_deadline = (
+        receive_deadline + timedelta(minutes=asr_minutes)
+        if receive_deadline is not None and asr_minutes is not None
+        else None
+    )
+    return AttemptDeadlines(
+        upload_expires_at=upload_expires_at,
+        receive_deadline=receive_deadline,
+        asr_deadline=asr_deadline,
+    )
 
 
 def token_hash(presented: str) -> str:
@@ -234,12 +296,11 @@ async def _mark_token_consumed(
         .returning(VariantConfirmationToken.id)
     )
     if result.scalar_one_or_none() is None:
-        # Solo llega aquí si otra petición consumió el token entre el bloqueo y este UPDATE:
-        # la transacción entera se revierte y no queda reserva a medias.
-        raise ApiError(
-            409,
-            "invalid_transition",
-            "Este token de variante ya se usó; pide uno nuevo para continuar.",
+        # Solo llega aquí si otra petición consumió el token entre el bloqueo y este UPDATE.
+        # La transacción entera se revierte y la respuesta es la MISMA opaca del lookup
+        # (422 sobre el campo): un 409 revelaría que el token existió, A2.19.
+        raise validation_failed(
+            {"variant_confirmation_token": "Token inválido, caducado o ya utilizado."}
         )
 
 
@@ -260,9 +321,11 @@ async def create_reservation(
 
     `sha256` queda en `NULL`: aquí aún no hay bytes, así que este POST **no decide
     dedupe** (lo hará el `PUT` de A2.4 con el hash real). `lease_expires_at` también queda
-    en `NULL` (D6): el lease real lo asigna la ingesta al tomar la propiedad (S2.1).
+    en `NULL` (D6): el lease real lo asigna la ingesta al tomar la propiedad (S2.1). Los
+    deadlines efímeros salen de `attempt_deadlines`: TTL publicado si existe (A2.19).
     """
     now = datetime.now(UTC)
+    deadlines = attempt_deadlines(now)
     audio = Audio(
         user_id=user_id,
         subject_id=subject_id,
@@ -274,7 +337,6 @@ async def create_reservation(
     )
     db.add(audio)
     await db.flush()
-    upload_expires_at = now + timedelta(minutes=settings.upload_ttl_minutes)
     attempt = IngestionAttempt(
         user_id=user_id,
         audio_id=audio.id,
@@ -285,7 +347,9 @@ async def create_reservation(
         status="awaiting_upload",
         owner_instance=UNASSIGNED_OWNER,
         fencing_token=1,
-        upload_expires_at=upload_expires_at,
+        upload_expires_at=deadlines.upload_expires_at,
+        receive_deadline=deadlines.receive_deadline,
+        asr_deadline=deadlines.asr_deadline,
     )
     db.add(attempt)
     await db.flush()
@@ -296,7 +360,7 @@ async def create_reservation(
     return Reservation(
         audio_id=audio.id,
         attempt_id=attempt.id,
-        upload_expires_at=upload_expires_at,
+        upload_expires_at=deadlines.upload_expires_at,
     )
 
 

@@ -224,6 +224,9 @@ Gmail).
   without necessarily ending the application session.
 - Profile: IANA timezone, local digest time, and opt-in preferences. Each class's timezone is
   captured as a snapshot so profile changes do not alter already-extracted dates.
+  `GET /me` returns that profile plus the non-cacheable CSRF bootstrap and `PATCH /me`
+  updates only the IANA timezone; `display_name` comes from the Google profile and
+  integration state is served by `GET /integrations/status`.
 - All access, SSE, tools, and jobs are isolated by `user_id`; the backend takes it from the
   session, never from the user payload or the LLM.
 
@@ -259,7 +262,12 @@ retained file.
   `privacy_notice_version`, `cloud_processing_accepted=true`, and
   `third_party_voice_acknowledged=true`; the server records user, version, instant, and
   declared providers. A missing or outdated version is rejected before reserving capacity or
-  accepting bytes.
+  accepting bytes. Language codes are compared case-insensitively and stored lowercase.
+- The ephemeral attempt deadlines come from the published capabilities TTL
+  (`upload_start_minutes`, `receive_minutes`, `asr_minutes`): while no publication is
+  validated, only the provisional upload window applies and no receive/ASR deadline is
+  invented. The API and the ingestion service share one byte limit and refuse to start when
+  their two configuration names disagree.
 - `POST /audios` only validates metadata/consent, reserves RAM capacity, and creates the
   attempt; it cannot yet decide deduplication because it has not received the content. The
   binary upload uses `PUT` with `fetch`, not a framework upload helper or `UploadFile` with default spooling to
@@ -274,9 +282,12 @@ retained file.
   with an opaque `variant_confirmation_token`, single use, short expiry, and bound to
   user/hash/metadata/previous class. A second `POST /audios` with that token creates a variant
   reservation and requires uploading again; when the second `PUT` finishes, the server checks
-  that the hash matches before transcribing. Audio is never retained while awaiting a
-  decision. A confirmed variant creates another class without mutating existing evidence or
-  tasks. Transactional uniqueness resolves concurrent uploads toward the canonical class.
+  that the hash matches before transcribing (`422 variant_hash_mismatch` otherwise). An
+  unknown, expired, consumed or mismatched token is rejected with the same opaque
+  `422 validation_failed` so its existence and state are never disclosed. Audio is never
+  retained while awaiting a decision. A confirmed variant creates another class without
+  mutating existing evidence or tasks. Transactional uniqueness resolves concurrent uploads
+  toward the canonical class.
 - Ephemeral ASR:
   `awaiting_upload → receiving → transcribing → transcript_committed_cleanup_pending → succeeded`;
   from the active states it can also end in `requires_reupload | rejected | cancelled`.
@@ -318,7 +329,18 @@ retained file.
 - Ingestion service with private per-attempt `tmpfs` temporaries, resource reservation, task
   supervisor, and independent cleanup. Do not queue ASR in ARQ or pass temporary paths to
   remote workers. F0/F1 deploys a single ingestion instance; scaling requires routing to the
-  reservation owner, without moving files. The upload URL is same-origin relative and
+  reservation owner, without moving files. The supervisor runs one recovery pass every 60 s
+  from the ingest lifespan and re-reads the durable admission latch before each pass; passes
+  never overlap. Defaults are a 30 s lease with a 10 s heartbeat (at least three renewals per
+  lease), and a configuration without that margin is rejected.
+- Cleanup admission and verification: `cleanup_status=verified` requires proof that no
+  descriptor, process, or mount survives the attempt directory; an expired lease never
+  verifies cleanup. A persisted `cleanup_status=failed` row closes admission on the instance
+  (sticky for the process) and raises `cleanup_failed`; an unreadable or malformed latch
+  fails closed until a clean read. A cleanup that cannot be persisted (driver error or a
+  moved fencing token) raises `cleanup_unrecorded` and a failure metric without closing
+  admission, because no durable `failed` row exists; `cleanup_status=pending` blocks only the
+  text outbox. The upload URL is same-origin relative and
   validated with session/CSRF/attempt_id; it is not a public bearer token and does not allow
   choosing internal hosts.
 - Class library with transcript reader, language, status, and the permanent "audio not
@@ -401,7 +423,8 @@ traceability, without retaining audio.
   event loop, with tested cancellation/deadlines.
 - Heartbeat and lease per attempt in the DB. The local supervisor cleans expired folders even
   if the DB fails; a reconciler marks dead attempts and publishes work over text if the
-  transaction already committed.
+  transaction already committed. Defaults are a 30 s lease and a 10 s heartbeat, with at least
+  three renewals inside one lease; the periodic recovery pass runs every 60 s.
 - Text outbox created alongside the transcript, enabled after cleanup; the reconciler
   verifies the attempt's release before dispatching the required stages (index in F1, also
   analysis from F2). The attempt only moves to `succeeded` after commit and verified cleanup.
@@ -941,10 +964,12 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   reception/ASR/cleanup timestamps, and a typed error. It also records
   `privacy_notice_version`, `cloud_processing_accepted_at`,
   `third_party_voice_acknowledged_at`, and the declared providers' set/versions.
-  `audio_deleted_at` only after verifying the absence of temporaries. Proposed initial
-  expirations: 10 min to start the upload, 30 min of reception, 60 min from complete
-  reception for ASR; adjust with the F0 benchmark and publish effective limits. Sweeper
-  target every 60 s; normal cleanup is immediate, it does not wait for the TTL.
+  `audio_deleted_at` only after verifying the absence of temporaries. A persisted
+  `cleanup_status=failed` blocks new admissions and becomes the durable latch; `pending`
+  blocks only the text outbox. Proposed initial expirations: 10 min to start the upload, 30
+  min of reception, 60 min from complete reception for ASR; adjust with the F0 benchmark and
+  publish effective limits. Sweeper target every 60 s; normal cleanup is immediate, it does
+  not wait for the TTL.
 - `transcripts`: unique `(audio_id, version)`, text, requested language,
   provider/model/configuration, `timestamp_precision`, quality, and summary/topics with the
   analysis version. `segments`: stable ID within a version, ordinal, text, and character
@@ -1073,7 +1098,8 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   payloads.
 - Metrics: RAM/tmpfs/slots, ASR latency, temporary age, failed cleanup, expired leases,
   outbox lag, retries, tokens/cost, recall/invalid citations, sync/uncertain delivery.
-  Immediate alert when cleanup is not met; per-stage failure panel.
+  Immediate alert when cleanup is not met, including a cleanup that could not be persisted
+  (`cleanup_unrecorded`) and its failure metric; per-stage failure panel.
 - `GET /healthz` per process; the API's `GET /readyz` checks Postgres/Redis, and the
   ingestion one checks the DB, safe temporaries, cleanup, and operational capacity. Do not
   invoke paid providers on every healthcheck.

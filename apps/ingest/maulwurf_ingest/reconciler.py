@@ -20,7 +20,7 @@ from pathlib import Path
 
 import asyncpg
 
-from maulwurf_ingest import admission, cleanup, persistence, rls
+from maulwurf_ingest import admission, cleanup, metrics, persistence, rls
 from maulwurf_ingest import lease as leases
 from maulwurf_ingest.cleanup import CleanupEvidence
 
@@ -109,6 +109,40 @@ async def _enable(pool: asyncpg.Pool, lease: leases.Lease) -> ReconcileAction:
     return ReconcileAction.ENABLED
 
 
+async def _record_cleanup(
+    pool: asyncpg.Pool, lease: leases.Lease, *, verified: bool, evidence: dict[str, object],
+) -> bool | None:
+    """Persist cleanup evidence; ``None`` when the write itself failed.
+
+    A driver error on this statement used to abort the whole pass, including
+    ``sweep_stranded``. One attempt that cannot record its evidence must not stop
+    the recovery of the rest: the caller treats the row as not recorded and
+    continues with the next one.
+    """
+    try:
+        return await leases.record_cleanup(
+            pool, lease, verified=verified, evidence=evidence,
+        )
+    except Exception as exc:  # noqa: BLE001 — one row must not abort the whole pass
+        # Only the type: driver errors can include the DSN with credentials.
+        logger.error(
+            "reconciler.cleanup_record_failed attempt_id=%s error=%s",
+            lease.attempt_id, type(exc).__name__,
+        )
+        return None
+
+
+def _note_unrecorded_cleanup(attempt_id: uuid.UUID) -> None:
+    """Make a cleanup this pass could not persist explicitly visible.
+
+    The row stays ``pending`` (no durable ``failed`` latch exists), so admission
+    stays open, but neither a driver error nor a moved fencing token may leave
+    only a log line: the alert and the failure metric are the observable record.
+    """
+    admission.flag_unrecorded_cleanup(attempt_id)
+    metrics.record_failure("cleanup", "cleanup_unrecorded")
+
+
 async def reconcile_committed(
     pool: asyncpg.Pool, *, instance: str, tmp_dir: str | None = None,
     lease_ttl: timedelta = DEFAULT_LEASE_TTL,
@@ -146,17 +180,41 @@ async def reconcile_committed(
             results.append(ReconcileResult(attempt_id, ReconcileAction.LOST))
             continue
         if workdirs:
-            evidence = await _destroy(workdirs)
-            recorded = await leases.record_cleanup(
+            try:
+                evidence = await _destroy(workdirs)
+            except Exception as exc:  # noqa: BLE001 — an exception is not proof of absence
+                # The periodic sweeper must not turn an unverified cleanup into a silent
+                # retry: record it as failed (durable across restarts) and stop admission.
+                logger.error(
+                    "reconciler.cleanup_error attempt_id=%s error=%s",
+                    attempt_id, type(exc).__name__,
+                )
+                cleanup.log_cleanup_failed(
+                    str(attempt_id), None, error_type=type(exc).__name__,
+                )
+                recorded = await _record_cleanup(
+                    pool, lease, verified=False,
+                    evidence={"verified": False, "error": type(exc).__name__},
+                )
+                if recorded:
+                    admission.halt(attempt_id)
+                else:
+                    _note_unrecorded_cleanup(attempt_id)
+                results.append(ReconcileResult(attempt_id, ReconcileAction.CLEANUP_FAILED))
+                continue
+            recorded = await _record_cleanup(
                 pool, lease, verified=evidence.verified, evidence=evidence.as_json(),
             )
             if not evidence.verified:
                 if recorded:
                     admission.halt(attempt_id)
+                else:
+                    _note_unrecorded_cleanup(attempt_id)
                 logger.error("reconciler.cleanup_failed attempt_id=%s", attempt_id)
                 results.append(ReconcileResult(attempt_id, ReconcileAction.CLEANUP_FAILED))
                 continue
             if not recorded:
+                _note_unrecorded_cleanup(attempt_id)
                 results.append(ReconcileResult(attempt_id, ReconcileAction.LOST))
                 continue
         results.append(ReconcileResult(attempt_id, await _enable(pool, lease)))

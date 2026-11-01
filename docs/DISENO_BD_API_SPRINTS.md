@@ -1040,7 +1040,7 @@ assign a person or ticket ownership. The effective owner is looked up in
 | Tracing | JSON logs with `request_id`, `audio_id`, `attempt_id`, `run_id`; no sensitive payloads |
 | Pagination | `limit` (1–200, default 50) + opaque `cursor` |
 | Quotas | `429` with `Retry-After` for per-user quota; `503` with `Retry-After` for ingestion capacity. Effective values TBD after F0 |
-| Language | No preselection or autodetection; `multi` and translation out of MVP/v1 |
+| Language | No preselection or autodetection; `multi` and translation out of MVP/v1. Codes are compared case-insensitively (BCP-47) and stored lowercase |
 
 ### 3.2 Error envelope and codes
 
@@ -1088,6 +1088,7 @@ Typed codes (no PII or sensitive content):
 | `invalid_transition` | 409 | Target status not allowed |
 | `transcript_unavailable` | 409 | No usable transcript (re-upload); 404 if the resource does not exist for the tenant |
 | `srt_unavailable` | 409 | Invalid timestamps for SRT |
+| `variant_hash_mismatch` | 422 | The second `PUT` hash does not match the confirmed variant |
 | `session_conflict` | 409 | The session was already rotated or revoked by another request; repeat `GET /me` |
 | `subject_name_taken` | 409 | The user already has an active subject with that name (case-insensitive) |
 | `subject_has_active_audios` | 409 | The subject has active classes; `details.class_count` says how many |
@@ -1120,7 +1121,8 @@ uses the row below; the stored `error_code` can be more specific than the public
 
 `401 internal_credential_invalid` is not stored and is not shown to the browser; the public
 answer is `500 internal_error`. `409 wrong_instance` and `409 reception_not_held` on admit
-are `503 capacity_unavailable`.
+are `503 capacity_unavailable`. A capacity `503` always carries `Retry-After` and never marks
+itself `retryable=false` in `details`: the header is the retry signal (A2.19).
 
 ### 3.3 M1 — Authentication, profile, and integrations (S1; connect/reconnect in S3)
 
@@ -1129,8 +1131,8 @@ are `503 capacity_unavailable`.
 | `GET` | `/auth/google/start` | S1 | OAuth Authorization Code with `state`, PKCE, and `nonce`; scopes `openid email profile` | `302` to Google |
 | `GET` | `/auth/google/callback` | S1 | Validates `nonce`/issuer/audience; creates the user by `sub`; issues an opaque session | `302` to `/` with cookie |
 | `POST` | `/auth/logout` | S1 | Revokes the session | `204` |
-| `GET` | `/me` | S1 | Profile + integrations + non-cacheable CSRF bootstrap | `200` (shape below) |
-| `PATCH` | `/me` | S1 | Updates `timezone` (IANA), `display_name` | `200` |
+| `GET` | `/me` | S1 | Profile + non-cacheable CSRF bootstrap; integration status is `GET /integrations/status` | `200` (shape below) |
+| `PATCH` | `/me` | S1 | Updates `timezone` (IANA) only | `200` |
 | `GET` | `/integrations/status` | S1 | Login/Calendar/Gmail status, scopes, freshness | `200` |
 | `POST` | `/integrations/google/connect` | S3 | Incremental OAuth with Calendar scopes (real verification D7) | `302` to Google |
 | `POST` | `/integrations/google/reconnect` | S3 | Re-authorization after `invalid_grant` (Testing expires after 7 days) | `302` to Google |
@@ -1149,20 +1151,16 @@ the client can show the deletion status without keeping access to the rest of th
 {
   "id": "b2a1…",
   "email": "estudiante@uni.edu",
+  "display_name": "Estudiante",
   "timezone": "America/Bogota",
-  "csrf_token": "plain-token-only-in-non-cacheable-response",
-  "integrations": {
-    "google_login": "connected",
-    "calendar": {
-      "status": "connected",
-      "calendar_id": "abc@group.calendar.google.com",
-      "scopes": ["calendar.app.created", "calendar.events.readonly",
-                 "calendar.calendarlist.readonly"]
-    },
-    "gmail": { "status": "disconnected" }
-  }
+  "csrf_token": "plain-token-only-in-non-cacheable-response"
 }
 ```
+
+`display_name` is read-only here (it comes from the Google profile). Integration state is
+**not** embedded in `/me`: `GET /integrations/status` is the single integrations surface
+(`google.status`, granted `scopes`, `calendar_id`, token freshness). A2.19 narrowed this
+section to the frozen S1 A1.8 contract.
 
 Declining Calendar/Gmail permissions does **not** prevent transcribing or chatting.
 
@@ -1201,6 +1199,16 @@ shape does not claim to prove limits or languages:
 
 After F0, non-null fields must link to the versioned report that measured them.
 
+The reservation deadlines are derived from the published TTL, never from an invented
+number: `upload_expires_at = now + ttl.upload_start_minutes`, `receive_deadline =
+upload_expires_at + ttl.receive_minutes` and `asr_deadline = receive_deadline +
+ttl.asr_minutes` (chained, so each ephemeral phase has its own budget and the three values
+are monotonic). While no publication is validated, the API keeps the provisional
+`MAULWURF_UPLOAD_TTL_MINUTES` window and leaves `receive_deadline`/`asr_deadline` null. The
+size limit has ONE value: the API reads `INGEST_MAX_UPLOAD_BYTES` from the shared
+configuration and refuses to start when it disagrees with `MAULWURF_UPLOAD_MAX_BYTES`;
+`GET /ingestion/capabilities` publishes the effective limit once F0 validates it.
+
 `POST /audios` reserves a session; it cannot deduplicate before knowing the hash.
 
 ```json
@@ -1220,7 +1228,10 @@ After F0, non-null fields must link to the versioned report that measured them.
 
 `privacy_notice_version` and the two acknowledgements are validated before reserving. The
 optional token can only come from a previous `409 duplicate_variant`, belongs to the same
-tenant, expires soon, and is consumed once.
+tenant, expires soon, and is consumed once. An unknown, expired, consumed or mismatched
+token — including one consumed by a racing request — answers the same opaque
+`422 validation_failed` keyed on `variant_confirmation_token`; the state is never disclosed,
+so this `POST` has no `409`.
 
 - `201 Created`: `{"audio_id","attempt_id","upload_url","upload_expires_at","outcome":"new"}`.
 - `422 consent_required|language_not_allowed|validation_failed`; `429` quota; `503` no slot.

@@ -31,20 +31,19 @@ only publishes once the class's latest attempt has `cleanup_status='verified'`.
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Literal
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.errors import ApiError, validation_failed
 from app.models import Audio, IngestionAttempt, OutboxEvent, ProcessingRun, Transcript
 from app.models.ingestion import ACTIVE_INGESTION_STATES
 from app.services import state_machine
 from app.services.analysis_windows import DEFAULT_OVERLAP_TOKENS, DEFAULT_TARGET_TOKENS
-from app.services.audios import UNASSIGNED_OWNER
+from app.services.audios import UNASSIGNED_OWNER, attempt_deadlines
 
 INDEX_STAGE = "index"
 ANALYSIS_STAGE = "analyze"
@@ -610,7 +609,7 @@ async def open_reupload(
     is unknown again — the next `PUT` recomputes it and decides dedupe on its own.
     """
     now = datetime.now(UTC)
-    upload_expires_at = now + timedelta(minutes=settings.upload_ttl_minutes)
+    deadlines = attempt_deadlines(now)
     attempt = IngestionAttempt(
         user_id=user_id,
         audio_id=audio.id,
@@ -621,12 +620,16 @@ async def open_reupload(
         status="awaiting_upload",
         owner_instance=UNASSIGNED_OWNER,
         fencing_token=1,
-        upload_expires_at=upload_expires_at,
+        upload_expires_at=deadlines.upload_expires_at,
+        receive_deadline=deadlines.receive_deadline,
+        asr_deadline=deadlines.asr_deadline,
     )
     db.add(attempt)
     audio.sha256 = None
     await db.flush()
     # Flat values captured before the router's `commit()`.
     return ReuploadReservation(
-        audio_id=audio.id, attempt_id=attempt.id, upload_expires_at=upload_expires_at
+        audio_id=audio.id,
+        attempt_id=attempt.id,
+        upload_expires_at=deadlines.upload_expires_at,
     )
