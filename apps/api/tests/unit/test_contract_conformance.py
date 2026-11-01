@@ -36,7 +36,12 @@ from app.models import IngestionAttempt, User, VariantConfirmationToken
 from app.models import Session as AuthSession
 from app.routers import me
 from app.routers.audios import AudioCreate
-from app.schemas.ingestion import IngestionCapabilities
+from app.schemas.ingestion import (
+    EFFECTIVE_TTL_MINUTES,
+    TTL_SOURCE_REPORT,
+    TTL_SOURCE_VERSION,
+    IngestionCapabilities,
+)
 from app.services import audios as audios_service
 from app.services import sessions
 from app.services import uploads as uploads_service
@@ -70,6 +75,8 @@ def _published(**overrides: Any) -> IngestionCapabilities:
         "accepted_input_formats": ("wav",),
         "languages": ("es",),
         "ttl": {"upload_start_minutes": 10, "receive_minutes": 30, "asr_minutes": 60},
+        "ttl_source_report": TTL_SOURCE_REPORT,
+        "ttl_source_version": TTL_SOURCE_VERSION,
         "active_slots": 2,
     }
     values.update(overrides)
@@ -95,6 +102,29 @@ class _RecordingDb:
 
 
 # --- 1. TTL: the published capabilities decide the reservation deadlines -----------------
+
+
+def test_the_effective_ttls_are_published_without_a_full_limit_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S4.4: 10/30/60 min are effective while size/duration (D4) stay unvalidated."""
+    monkeypatch.setattr(
+        audios_service,
+        "settings",
+        _settings(ingestion_capabilities=IngestionCapabilities()),
+    )
+    now = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
+
+    deadlines = audios_service.attempt_deadlines(now)
+
+    assert EFFECTIVE_TTL_MINUTES == {
+        "upload_start_minutes": 10,
+        "receive_minutes": 30,
+        "asr_minutes": 60,
+    }
+    assert deadlines.upload_expires_at == now + timedelta(minutes=10)
+    assert deadlines.receive_deadline == now + timedelta(minutes=40)
+    assert deadlines.asr_deadline == now + timedelta(minutes=100)
 
 
 def test_reservation_deadlines_follow_the_published_ttl(
@@ -144,9 +174,16 @@ async def test_new_attempt_persists_the_published_deadlines(
 def test_without_a_publication_no_receive_or_asr_deadline_is_invented(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # D4/D6 are blocked: the S1 provisional window has no approved receive/ASR TTL.
+    # An explicit no-TTL publication keeps the S1 fallback: no receive/ASR number is invented.
+    no_ttls = IngestionCapabilities(
+        ttl={"upload_start_minutes": None, "receive_minutes": None, "asr_minutes": None},
+        ttl_source_report=None,
+        ttl_source_version=None,
+    )
     monkeypatch.setattr(
-        audios_service, "settings", _settings(upload_ttl_minutes=15)
+        audios_service,
+        "settings",
+        _settings(ingestion_capabilities=no_ttls, upload_ttl_minutes=15),
     )
     now = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
 

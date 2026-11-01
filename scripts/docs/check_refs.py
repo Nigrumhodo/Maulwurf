@@ -120,7 +120,6 @@ EXPECTED_FILES: dict[str, str] = {
     "infra/deploy/": "planned by S4/J4.7",
     "infra/docker-compose.prod.yml": "planned by S4/J4.7",
     "scripts/load/g1_load.py": "planned by S4/S4.3",
-    "scripts/load/ttl_benchmark.py": "planned by S4/S4.4",
     "scripts/maintenance/sweep_orphans.py": "planned by S4/A4.7",
     "scripts/ops/backup_restore.sh": "planned by S4/A4.5",
     "scripts/provider/gmail_send_test.py": "planned by S4/J4.10",
