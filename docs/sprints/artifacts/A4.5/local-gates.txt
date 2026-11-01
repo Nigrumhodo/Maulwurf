@@ -115,7 +115,7 @@ Commands (2026-11-01, same host, PostgreSQL 16.15, GPG 2.4; re-run after merging
    -> 1532 passed, 719 deselected
 
 5. cd apps/api && uv run pytest tests/integration/test_backup_restore.py -q
-   -> 2 passed (21.37 s)
+   -> 2 passed (19.54 s)
 
 6. python3 scripts/docs/check_refs.py
    -> OK: 931 documented repository paths exist or are expected.
@@ -143,3 +143,12 @@ What the new I-S4-AN-05 cases prove
 - A post-deletion log is attached with `export-deletions --refresh-backup`, which replaces
   the paired log and re-pins `deletion_log_sha256`; the restore of the older dump then
   re-applies the later deletions.
+
+Quality CI (fix1)
+-----------------
+Run `41291817529` (head `916d318`, after merging `develop@c9635ee`) is green in all 17
+checks: `python-static (api/ingest)`, `python-unit (api/ingest)`, `integration (api)`
+including the two I-S4-AN-05 cases, `integration (ingest)`, `e2e-smoke`, `docs`, `web`,
+`build-images`, `secret-scan`, the three license reports, `compose-ingest-env`,
+`caddy-limits` and `send-webhook`. Later commits on the branch are documentation only.
+No merge was performed.

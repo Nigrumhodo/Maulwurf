@@ -92,6 +92,10 @@ $ git diff --check
 (no output)
 ```
 
+Quality CI run `41291817529` (head `916d318`, after merging `develop@c9635ee`) is green in
+all 17 checks, including `integration (api)` with both I-S4-AN-05 cases. Later commits are
+documentation only.
+
 ## Scope and security notes
 
 - The smoke and integration runs used only synthetic text rows; no audio, Riva/LLM/Google
