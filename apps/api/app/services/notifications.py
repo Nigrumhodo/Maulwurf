@@ -25,7 +25,7 @@ constraint and the frozen ``UNIQUE NULLS NOT DISTINCT`` tuple from DISENO §2.9.
 is the only place that formats the identity, so callers cannot invent a second spelling.
 A4.2 adds ``occurrence_seq``: scheduled occurrences keep sequence 0 and the five-component
 key, while a manual test send or a warned resend appends ``|n:<seq>`` and is stored as a new
-audited row. ``ensure_resendable`` is the endpoint's pure gate: only a terminal audited
+audited row. ``ensure_resendable`` is the endpoint's pure gate: only a failed or uncertain
 delivery can be repeated.
 
 Every persisted error is a token from ``NOTIFICATION_ERROR_CODES``; any other value is
@@ -281,9 +281,11 @@ def redact_error_code(value: str | None) -> str | None:
     return candidate if candidate in NOTIFICATION_ERROR_CODES else "unknown"
 
 
-# Only an audited terminal delivery can be manually repeated. `pending` is already queued,
-# `sending` is in flight, and `cancelled` is an obsolete occurrence that must not be revived.
-RESENDABLE_STATUSES: Final = frozenset({"sent", "failed", "delivery_unknown"})
+# Only an occurrence that did not provably reach the provider can be manually repeated:
+# `failed` is a known non-delivery and `delivery_unknown` may not have been delivered.
+# `pending` is already queued, `sending` is in flight, `sent` is a confirmed duplicate and
+# `cancelled` is an obsolete occurrence that must not be revived.
+RESENDABLE_STATUSES: Final = frozenset({"failed", "delivery_unknown"})
 
 
 class NotificationNotResendable(ValueError):

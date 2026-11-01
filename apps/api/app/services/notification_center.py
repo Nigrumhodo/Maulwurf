@@ -312,7 +312,7 @@ async def resend_notification(
     *,
     now: datetime | None = None,
 ) -> Notification | None:
-    """Create a new pending occurrence for an audited terminal delivery.
+    """Create a new pending occurrence for a failed or uncertain delivery.
 
     The source row is locked but never written: `delivery_unknown` stays `delivery_unknown`
     and `sent` stays `sent`. `None` means the row is absent or belongs to another tenant.

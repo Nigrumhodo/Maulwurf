@@ -72,14 +72,16 @@ def test_the_sequence_must_be_an_integer(value: object) -> None:
 # --- Resend eligibility ---------------------------------------------------------------
 
 
-def test_only_terminal_audited_deliveries_can_be_resent() -> None:
-    assert RESENDABLE_STATUSES == frozenset({"sent", "failed", "delivery_unknown"})
+def test_only_unsent_or_uncertain_deliveries_can_be_resent() -> None:
+    assert RESENDABLE_STATUSES == frozenset({"failed", "delivery_unknown"})
     for status in RESENDABLE_STATUSES:
         assert ensure_resendable(_row(status)) == status
 
 
-@pytest.mark.parametrize("status", ["pending", "sending", "cancelled"])
-def test_a_queued_in_flight_or_cancelled_occurrence_is_not_resendable(status: str) -> None:
+@pytest.mark.parametrize("status", ["pending", "sending", "sent", "cancelled"])
+def test_a_queued_in_flight_delivered_or_cancelled_occurrence_is_not_resendable(
+    status: str,
+) -> None:
     with pytest.raises(NotificationNotResendable):
         ensure_resendable(_row(status))
 

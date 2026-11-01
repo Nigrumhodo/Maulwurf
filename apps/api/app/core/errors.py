@@ -280,8 +280,9 @@ def notifications_test_unavailable(reason: str) -> ApiError:
 
 
 def notification_not_resendable(status: str) -> ApiError:
-    # A4.2: pending/sending are already queued or in flight, and cancelled occurrences are
-    # obsolete. Only an audited terminal delivery may be repeated.
+    # A4.2: pending/sending are already queued or in flight, sent is a confirmed delivery
+    # and cancelled occurrences are obsolete. Only a failed or uncertain delivery may be
+    # repeated.
     return ApiError(
         409,
         "notification_not_resendable",

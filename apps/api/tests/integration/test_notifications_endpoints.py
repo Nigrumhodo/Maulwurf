@@ -765,8 +765,8 @@ async def test_each_resend_gets_the_next_sequence(
     assert await _count(db_session) == 3
 
 
-@pytest.mark.parametrize("status", ["pending", "sending", "cancelled"])
-async def test_a_queued_in_flight_or_cancelled_occurrence_is_not_resendable(
+@pytest.mark.parametrize("status", ["pending", "sending", "sent", "cancelled"])
+async def test_a_queued_in_flight_delivered_or_cancelled_occurrence_is_not_resendable(
     client: AsyncClient, db_session: AsyncSession, status: str
 ) -> None:
     actor = await _verified_actor(db_session)
@@ -776,14 +776,18 @@ async def test_a_queued_in_flight_or_cancelled_occurrence_is_not_resendable(
             actor,
             status=status,
             scheduled_at=NOW,
+            attempts=1 if status in {"sending", "sent"} else 0,
+            sent_at=NOW if status == "sent" else None,
+            provider_message_id="gmail-original" if status == "sent" else None,
             lease_expires_at=(
                 NOW + timedelta(minutes=5) if status == "sending" else None
             ),
         ),
     )
+    row_id = row.id
 
     response = await client.post(
-        f"{NOTIFICATIONS}/{row.id}/resend",
+        f"{NOTIFICATIONS}/{row_id}/resend",
         json={"acknowledge_duplicate_risk": True},
         cookies=actor.cookies,
         headers=actor.headers,
@@ -824,37 +828,6 @@ async def test_resending_a_failed_delivery_is_allowed(
     await db_session.refresh(row)
     assert row.status == "failed"
     assert row.last_error_code == "provider_rejected"
-
-
-async def test_resending_a_sent_delivery_is_allowed_with_the_duplicate_warning(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
-    actor = await _verified_actor(db_session)
-    row = await _store(
-        db_session,
-        _notification(
-            actor,
-            status="sent",
-            scheduled_at=NOW,
-            attempts=1,
-            sent_at=NOW,
-            provider_message_id="gmail-original",
-        ),
-    )
-    row_id = row.id
-
-    response = await client.post(
-        f"{NOTIFICATIONS}/{row_id}/resend",
-        json={"acknowledge_duplicate_risk": True},
-        cookies=actor.cookies,
-        headers=actor.headers,
-    )
-
-    assert response.status_code == 202
-    assert response.json()["occurrence_seq"] == 1
-    await db_session.refresh(row)
-    assert row.status == "sent"
-    assert row.provider_message_id == "gmail-original"
 
 
 async def test_resend_is_tenant_scoped_and_unknown_ids_are_404(
