@@ -69,3 +69,8 @@ Run 41257113125 (workflow `quality`, head 22e9ad9, created 2026-11-01T00:31:23Z)
 - python-unit (ingest): 239 passed, 6 skipped, 80 deselected.
 - integration (ingest): 66 passed, 11 skipped, 247 deselected, 1 xfailed (the 8
   I-S4-SG-03 cases included).
+
+Quality CI on the evidence head:
+Run 41257417783 (workflow `quality`, head ce4a3cf) repeats 16/16 jobs and 17/17 PR
+checks green, with `python-unit (ingest)` 239 passed, 6 skipped and
+`integration (ingest)` 66 passed, 11 skipped, 1 xfailed.
