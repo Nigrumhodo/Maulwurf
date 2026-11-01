@@ -1109,14 +1109,14 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   `POST /me/deletion/{id}/resume` (CSRF/Origin checked, owner-scoped). An already-succeeded
   remote delete is never repeated. The residual record keeps only remote IDs, authorization,
   status, redacted error, and expiration; an hourly batched job deletes both residual tables
-  (`account_deletions`, `google_remote_operations`) once `expires_at` passes (provisional
-  30-day window pending D8). Once that job removes the operation row, the session link is
+  (`account_deletions`, `google_remote_operations`) once `expires_at` passes (30-day window,
+  D8 approved in A4.5). Once that job removes the operation row, the session link is
   cleared and the restricted cookie gets `401` instead of `404`. `delete_maulwurf_events`
   defaults to `false`: local tasks and
   links are purged, but Maulwurf-created events remain in the user's Google calendar unless
   the user explicitly opts in. Do not delete other people's events; without permissions,
   deletion in Google is not guaranteed.
-- Backups only of encrypted text/metadata, proposed maximum retention 30 days, and a
+- Backups only of encrypted text/metadata, maximum retention 30 days (D8 approved), and a
   deletion log reapplied on restore. The UI distinguishes deletion of active data, backup
   expiration, and data already sent to third parties. Consent for third-party voices and
   cloud processing before the upload.
@@ -1246,7 +1246,7 @@ are not offered again as retention/autodetection options. Real pending items:
 | D5 | Quality/cost of the proposed LLM and embeddings | F1/F2 evaluation per language; do not assume valid JSON or high confidence implies accuracy |
 | D6 | Timestamps unavailable or insufficient at the endpoint | Blocks F1's temporal promise; decide validated ephemeral alignment or accept a text-only product. Do not implement a hidden fallback |
 | D7 | Minimum scopes and real Google behavior | **D7-CAL** before F2; **D7-MAIL** and uncertain delivery before F3. Each half requires a real contract and a protected account |
-| D8 | Text/chat retention and backups | Approve the policy before persisting the first non-synthetic transcript/chat; F3 validates restore, expiration, and reapplication of deletions |
+| D8 | Text/chat retention and backups | Approved (A4.5): encrypted text/metadata backups, a 30-day maximum that matches the residual deletion window, and a deletion log reapplied on every clean restore; never audio. F3 validates restore, expiration, and reapplication of deletions |
 
 Out of MVP/v1: diarization, URL/bot sources, collaboration, local mode, per-subject
 calendars, and other task managers. Future diarization would have to run during ingestion or
