@@ -1093,7 +1093,11 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   is not used as an implicit JWT/JWKS issuer.
 - Distributed rate limit and per-user quotas: audio bytes/minutes, ingestion slots, LLM
   tokens, chat, and Google. Admission rejects before receiving audio when there is no
-  capacity (`429`/`503` with retry), without a queue of files waiting on disk.
+  capacity (`429`/`503` with retry), without a queue of files waiting on disk. Every
+  active limit answers `429` with `Retry-After`; a limiter or capacity outage answers
+  `503` with `Retry-After` (fail closed). Numbers come only from recorded decisions
+  (M5/M6/M7 and D4/D5); authentication and incremental consent have no published number
+  yet, so their fixed-window mechanism stays configuration-driven and unset means no limit.
 - Ingestion defense per M2/M3: streaming parser, byte/duration/time limits, ffmpeg sandbox,
   random internal names. Proxy without disk buffering, caching, or body capture; do not use a
   CDN that stores upload requests.
@@ -1101,10 +1105,11 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   duration, sizes, status, and redacted errors. Disable core dumps, persistent swap, and
   memory snapshots/hibernation on ingestion hosts; tmpfs alone is **not** enough if it can
   swap.
-- Browser: `Cache-Control: no-store` for private content; the service worker excludes
-  upload, API, transcripts/chat, and SSE responses; do not store audio in IndexedDB/Cache
-  Storage. Release `File`/object URLs on finish/cancel; the user's local original is not
-  deleted by the application.
+- Browser: `Cache-Control: no-store` for private content, guaranteed structurally on every
+  API response (routes, errors, redirects and SSE) rather than per route; the service worker
+  excludes upload, API, transcripts/chat, and SSE responses; do not store audio in
+  IndexedDB/Cache Storage. Release `File`/object URLs on finish/cancel; the user's local
+  original is not deleted by the application.
 - Account deletion: `DELETE /me` returns `202 {deletion_operation_id}`. The flow applies
   tombstones, blocks sessions/jobs, leaves the initiating session in a restricted mode (check
   the status, resume an authorized operation, and sign out; other sessions are revoked),
