@@ -203,8 +203,8 @@ a test gRPC server.
 ## 5. F2 — Action: extraction and Calendar
 
 - [ ] Windowed analysis, Pydantic schema, aggregation/dedupe, and atomic active review.
-  Extraction based on class date/timezone; Unicode spans per segment and literal evidence
-  checking.
+  Extraction based on class date/timezone; Unicode spans per segment, a mandatory verbatim
+  quote per evidence span and literal evidence checking.
 - [ ] Versioned analysis runs: each `processing_runs` row records the transcript,
   configuration and prompt version it applied; a version change creates a new run while
   old runs remain queryable, and reanalysis reprocesses only the stages whose version
