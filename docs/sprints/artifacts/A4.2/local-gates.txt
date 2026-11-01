@@ -1,0 +1,48 @@
+A4.2 (MAULW-132) local gates — 2026-11-01 08:13 UTC
+branch: task/MAULW-132
+code head: 6cad610dd11e4c352b260fa317c9f99b42663010
+base: origin/develop d25e687 (merge 1c67ed8; A4.2 migration renumbered 0015 -> 0016)
+host: Linux x86_64
+python: Python 3.12.3 | uv 0.13.1
+postgres: PostgreSQL 16.15 (Ubuntu 16.15-1.pgdg24.04+2)
+redis: redis-cli 7.0.15
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 269 source files
+
+$ env -u no_proxy -u NO_PROXY uv run pytest tests/unit -q
+1532 passed, 35 warnings in 15.93s
+
+$ env -u no_proxy -u NO_PROXY uv run pytest \
+    tests/integration/test_notifications_endpoints.py \
+    tests/integration/test_s4_notifications_schema.py \
+    tests/integration/test_calendar_revision_patch.py -q
+70 passed, 51 warnings in 19.27s
+
+$ env -u no_proxy -u NO_PROXY uv run pytest \
+    tests/integration/test_migrations.py::test_upgrade_from_empty_reaches_head \
+    tests/integration/test_migrations.py::test_downgrade_and_upgrade_again \
+    tests/integration/test_migrations.py::test_notification_manual_occurrences_revision_round_trips -q
+3 passed, 32 warnings in 17.12s
+
+$ python3 scripts/docs/check_refs.py
+OK: 909 documented repository paths exist or are expected.
+
+Full integration, pre-merge head 4d4062d:
+$ env -u no_proxy -u NO_PROXY uv run pytest -m integration -q
+684 passed, 17 failed in 229.33s
+All 17 failures are the pre-existing `tests/integration/test_ingest_reception.py` cases:
+the sandbox default ingest sink answers `503 capacity_unavailable` without
+MAULWURF_INGEST_URL/credential. The same set is recorded by A4.1 on pristine develop.
+
+Post-merge full integration: not run cleanly on this shared host. Sibling agent
+worktrees (mwt-133/mwt-135) kept full integration suites running against the same
+PostgreSQL cluster, so the migration fixture's `ALTER ROLE` intermittently raised
+`tuple concurrently updated`. The post-merge targeted suites above are green; CI runs
+the full suite in isolated service containers.
+
+No real Gmail/Google call, no credential, no secret and no class audio are involved.
+`apps/web` and `apps/ingest` are untouched.
