@@ -16,6 +16,7 @@ provider call is involved. The contract under test is the delivery side of I-S4-
 No real email, credential, class audio or `apps/web` change is involved.
 """
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, timedelta
@@ -28,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_session
 from app.main import app
 from app.models import Notification
-from app.services.notification_delivery import settle_delivery
+from app.services.notification_delivery import DeliveryRequest, settle_delivery
 from app.services.notifications import (
     NotificationDeliveryAmbiguous,
     NotificationDeliveryRejected,
@@ -69,10 +70,10 @@ class StubSender:
         self.outcome = outcome
         self.calls: list[uuid.UUID] = []
 
-    async def send(self, notification: Notification) -> str:
-        self.calls.append(notification.id)
+    async def send(self, request: DeliveryRequest) -> str:
+        self.calls.append(request.notification_id)
         if self.outcome == "sent":
-            return f"gmail-{notification.id}"
+            return f"gmail-{request.notification_id}"
         if self.outcome == "lost":
             raise NotificationDeliveryAmbiguous()
         if self.outcome == "timeout":
@@ -81,6 +82,8 @@ class StubSender:
             raise NotificationDeliveryRejected()
         if self.outcome == "blank":
             return "   "
+        if self.outcome == "cancelled":
+            raise asyncio.CancelledError()
         raise AssertionError(f"unknown stub outcome: {self.outcome}")
 
 
@@ -257,6 +260,36 @@ async def test_an_expired_lease_is_uncertain_without_calling_the_sender(
     assert stored.last_error_code == "lease_expired"
     # A lease that cannot prove an owner never reaches the provider.
     assert sender.calls == []
+    assert stored.status != "pending"
+
+
+async def test_a_cancelled_send_waits_for_the_lease_and_never_returns_to_pending(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    row = await _store(db_session, _notification(actor))
+    await _claim(db_session, row)
+    notification_id = row.id
+    sender = StubSender("cancelled")
+
+    # CancelledError is a BaseException: it must not be swallowed as a normal outcome.
+    with pytest.raises(asyncio.CancelledError):
+        await settle_delivery(db_session, notification_id, sender=sender, now=NOW)
+
+    stored = await db_session.get(Notification, notification_id)
+    assert stored is not None
+    assert stored.status == "sending"
+    assert stored.last_error_code is None
+    assert await _count(db_session, actor, status="pending") == 0
+    assert sender.calls == [notification_id]
+
+    # The scheduler later finds the claim without a live owner and closes it as uncertain.
+    assert await expire_delivery_leases(
+        db_session, now=NOW + timedelta(minutes=6)
+    ) == 1
+    stored = await _reload(db_session, notification_id)
+    assert stored.status == "delivery_unknown"
+    assert stored.last_error_code == "lease_expired"
     assert stored.status != "pending"
 
 

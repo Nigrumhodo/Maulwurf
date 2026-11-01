@@ -41,16 +41,19 @@ $ env -u no_proxy -u NO_PROXY uv run pytest \
     tests/integration/test_notification_delivery_unknown.py \
     tests/integration/test_notifications_endpoints.py \
     tests/integration/test_notification_scheduler.py -q
-58 passed
+59 passed
 ```
 
-The 8 new cases in `tests/integration/test_notification_delivery_unknown.py` prove:
+The 9 new cases in `tests/integration/test_notification_delivery_unknown.py` prove:
 
 - a lost response is terminal `delivery_unknown` (`response_lost`), the at-least-once
   retry is a `skipped` no-op and the sender is called once;
 - a timeout / unexpected sender exception is also uncertain (`response_lost`);
 - an expired `sending` lease is closed as `delivery_unknown` (`lease_expired`) without
   calling the sender and never returns to `pending`;
+- a `CancelledError` is not swallowed: the row stays `sending` and the lease closes it as
+  uncertain, never as `pending` (the adapter receives an immutable `DeliveryRequest`, not
+  the ORM row);
 - only a proven rejection becomes `failed` (`provider_rejected`);
 - a confirmed send records its provider message id once, and a retry is a no-op;
 - a success without a provider identity fails closed as uncertain;
