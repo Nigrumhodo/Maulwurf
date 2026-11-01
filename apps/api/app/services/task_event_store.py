@@ -54,6 +54,10 @@ TASKS = Table(
     # ETag of our last successful Calendar write (J3.6). A3.1 must create this column; a
     # NULL baseline fails closed instead of being read as "nothing changed".
     Column("calendar_etag", Text),
+    # Required by the A3.1 table but not read by the sync engine; the projection carries
+    # them so a writer (test fixture or a future caller) can insert a valid M4 row.
+    Column("tipo", Text, nullable=False),
+    Column("date_status", Text, nullable=False),
     Column("titulo", Text, nullable=False),
     Column("detalle", Text),
     Column("timezone", Text, nullable=False),

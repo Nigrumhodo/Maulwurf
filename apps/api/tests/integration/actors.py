@@ -31,6 +31,8 @@ from app.models import (
     Segment,
     Session,
     Subject,
+    Task,
+    TaskRevision,
     Transcript,
     User,
     VariantConfirmationToken,
@@ -524,6 +526,37 @@ async def make_calendar_event(db: AsyncSession, actor: Actor) -> CalendarEvent:
     return event
 
 
+async def make_task(db: AsyncSession, actor: Actor) -> Task:
+    """Manual task without a date: the unresolved state invents nothing (A3.1)."""
+    task = Task(
+        user_id=actor.user_id,
+        source="manual",
+        tipo="recordatorio",
+        titulo=f"Recordatorio {uuid.uuid4().hex[:6]}",
+        timezone="America/Bogota",
+        all_day=True,
+        date_status="missing",
+    )
+    db.add(task)
+    await db.flush()
+    return task
+
+
+async def make_task_revision(db: AsyncSession, actor: Actor) -> TaskRevision:
+    """Pending edit of the actor's manual task; the active row is not touched."""
+    task = await make_task(db, actor)
+    revision = TaskRevision(
+        user_id=actor.user_id,
+        task_id=task.id,
+        base_task_version=task.version,
+        revision_type="edit_of_confirmed",
+        proposed_fields={"titulo": "Recordatorio revisado"},
+    )
+    db.add(revision)
+    await db.flush()
+    return revision
+
+
 Factory = Callable[[AsyncSession, Actor], Awaitable[Any]]
 
 FACTORIES: dict[type[TenantOwned], Factory] = {
@@ -542,4 +575,6 @@ FACTORIES: dict[type[TenantOwned], Factory] = {
     VariantConfirmationToken: make_variant_confirmation_token,
     OutboxEvent: make_outbox_event,
     CalendarEvent: make_calendar_event,
+    Task: make_task,
+    TaskRevision: make_task_revision,
 }

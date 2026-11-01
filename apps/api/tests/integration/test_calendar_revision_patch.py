@@ -215,6 +215,9 @@ async def _insert_task(
         "calendar_id": CALENDAR_ID,
         "calendar_event_id": None,
         "calendar_etag": None,
+        # A3.1 columns the ETag path does not use; the Calendar block is set below.
+        "tipo": "entrega",
+        "date_status": "missing",
         "titulo": "Entregar informe corregido",
         "detalle": "Informe revisado y firmado",
         "timezone": "America/Bogota",

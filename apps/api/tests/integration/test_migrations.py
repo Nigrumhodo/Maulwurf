@@ -58,9 +58,10 @@ S2_TABLES = S1_TABLES | {
 }
 
 # J3.3 adds the per-user Calendar `settings` row (DISENO §2.9) and J3.7 adds the
-# `calendar_events` mirror; the migration chain is linear, so the head of the graph
-# includes both.
+# `calendar_events` mirror; A3.1 adds the three M4 task tables. The migration chain is
+# linear, so the head of the graph includes all of them.
 S3_TABLES = S2_TABLES | {"settings", "calendar_events"}
+A31_TABLES = S3_TABLES | {"tasks", "task_sources", "task_revisions"}
 
 S2_COMPOSITE_FOREIGN_KEYS = {
     "variant_confirmation_tokens": {
@@ -154,8 +155,10 @@ def _state(url: str) -> tuple[set[str], list[str]]:
     return asyncio.run(read())
 
 
-def _rls_state(url: str) -> dict[str, tuple[bool, bool]]:
-    """(ENABLE, FORCE) for two representative tables, from the catalog."""
+def _rls_state(
+    url: str, tables: tuple[str, ...] = ("subjects", "users")
+) -> dict[str, tuple[bool, bool]]:
+    """(ENABLE, FORCE) for the requested tables, from the catalog."""
 
     async def read() -> dict[str, tuple[bool, bool]]:
         engine = create_async_engine(url)
@@ -166,8 +169,9 @@ def _rls_state(url: str) -> dict[str, tuple[bool, bool]]:
                         "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity "
                         "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
                         "WHERE n.nspname = 'public' AND c.relkind = 'r' "
-                        "AND c.relname IN ('subjects', 'users')"
-                    )
+                        "AND c.relname = ANY(:tables)"
+                    ),
+                    {"tables": list(tables)},
                 )
             ).all()
         await engine.dispose()
@@ -281,7 +285,7 @@ def test_upgrade_from_empty_reaches_head(empty_schema: str) -> None:
 
     command.upgrade(alembic_config(empty_schema), "head")
 
-    assert _state(empty_schema) == (S3_TABLES, [_head(empty_schema)])
+    assert _state(empty_schema) == (A31_TABLES, [_head(empty_schema)])
 
 
 def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
@@ -289,14 +293,18 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     revision = ScriptDirectory.from_config(cfg).get_revision(_head(empty_schema))
     assert revision is not None
     parent = revision.down_revision
-    assert parent == "0008"  # this chain is linear
+    assert parent == "0009"  # this chain is linear
     command.upgrade(cfg, "head")
 
-    # `0009` only adds indexes, FKs and CHECKs (no table/column change); `0008` only adds the
-    # manual-sync cooldown column; `0007` only adds the mirror and the coverage columns;
-    # `0006` only adds `settings`; `0005` only changes roles, policies and RLS flags; `0003`
-    # only backfills `chunks.tsv` (data, not schema) and `0004` only adds the run fencing
-    # token, so the steps back stay on the previous schemas and only remove those additions.
+    # `0010` only adds the M4 task tables; `0009` only adds indexes, FKs and CHECKs (no
+    # table/column change); `0008` only adds the manual-sync cooldown column; `0007` only
+    # adds the mirror and the coverage columns; `0006` only adds `settings`; `0005` only
+    # changes roles, policies and RLS flags; `0003` only backfills `chunks.tsv` (data, not
+    # schema) and `0004` only adds the run fencing token, so the steps back stay on the
+    # previous schemas and only remove those additions.
+    command.downgrade(cfg, "-1")
+    assert _state(empty_schema) == (S3_TABLES, ["0009"])
+
     command.downgrade(cfg, "-1")
     assert _state(empty_schema) == (S3_TABLES, ["0008"])
 
@@ -328,7 +336,7 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     assert _state(empty_schema) == (S1_TABLES, ["0001"])
 
     command.upgrade(cfg, "head")
-    assert _state(empty_schema)[0] == S3_TABLES
+    assert _state(empty_schema)[0] == A31_TABLES
 
 
 def test_rls_revision_round_trips(empty_schema: str) -> None:
@@ -434,6 +442,28 @@ def test_schema_integrity_revision_round_trips(empty_schema: str) -> None:
         "FOREIGN KEY (user_id, chunk_id) REFERENCES chunks" in definition
         for definition in foreign_keys["embeddings"]
     )
+
+    command.upgrade(cfg, "head")
+
+
+def test_tasks_revision_round_trips(empty_schema: str) -> None:
+    cfg = alembic_config(empty_schema)
+    task_tables = {"tasks", "task_sources", "task_revisions"}
+    ordered = tuple(sorted(task_tables))
+
+    command.upgrade(cfg, "0009")
+    assert task_tables.isdisjoint(_state(empty_schema)[0])
+    assert _rls_state(empty_schema, ordered) == {}
+
+    command.upgrade(cfg, "head")
+    assert task_tables <= _state(empty_schema)[0]
+    assert _rls_state(empty_schema, ordered) == {
+        table: (True, True) for table in task_tables
+    }
+
+    command.downgrade(cfg, "0009")
+    assert task_tables.isdisjoint(_state(empty_schema)[0])
+    assert _rls_state(empty_schema, ordered) == {}
 
     command.upgrade(cfg, "head")
 
@@ -730,4 +760,4 @@ def test_concurrent_upgrades_serialize_without_errors(empty_schema: str) -> None
             raise
         assert replica.returncode == 0, stderr.decode()[-500:]
 
-    assert _state(empty_schema) == (S3_TABLES, [_head(empty_schema)])
+    assert _state(empty_schema) == (A31_TABLES, [_head(empty_schema)])
