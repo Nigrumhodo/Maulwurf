@@ -2,7 +2,8 @@ A4.6 — local gate evidence (MAULW-136)
 Date: 2026-11-01 (UTC)
 Host: Linux sandbox, PostgreSQL 16.15 (localhost:5432), pgvector 0.8.0, Redis 7.0.15
 Worktree: /home/hatch/workspace/repos/mwt-136, branch task/MAULW-136 (from develop
-2d4bc2d, after A4.4 #145 and J4.2 #151)
+2d4bc2d, after A4.4 #145 and J4.2 #151; synced with develop dd7f9c8, J4.3 #152, before
+the final runs)
 Scope: structural `Cache-Control: no-store`, fixed-window auth/consent limits, Retry-After
 on every active limit, ownership re-verified on API/SSE/jobs. No migration, provider call,
 audio, credential or apps/web change.
@@ -21,10 +22,10 @@ Commands and results
    -> All checks passed!
 
 2. cd apps/api && uv run mypy .
-   -> Success: no issues found in 288 source files
+   -> Success: no issues found in 291 source files (after merging J4.3/develop)
 
 3. cd apps/api && uv run pytest tests/unit -q
-   -> 2 failed, 1596 passed, 35 warnings in 24.20s
+   -> 2 failed, 1637 passed, 35 warnings in 10.79s
    The two failures are the pre-existing bracketed-IPv6 NO_PROXY parsing failures also
    recorded for A3.8/A4.1/S4.5:
      tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured
@@ -32,7 +33,7 @@ Commands and results
 
 4. cd apps/api && NO_PROXY=...(bracketed entries removed) no_proxy=... \
        uv run pytest tests/unit -q
-   -> 1598 passed, 35 warnings in 20.87s
+   -> 1639 passed, 35 warnings in 10.22s (after merging J4.3/develop)
    Includes the 16 new A4.6 cases:
      tests/unit/test_limits.py          10 passed
      tests/unit/test_cache_control.py    6 passed
@@ -51,6 +52,8 @@ Commands and results
      test_limiter_outage_is_a_typed_503_with_retry_after
      test_ownership_is_reverified_by_the_index_job
      test_the_calendar_cooldown_is_documented_and_has_a_retry_hint
+   After merging J4.3, `test_hardening.py` plus `test_reminders_schedule.py`:
+   -> 22 passed.
 
 6. cd apps/api && NO_PROXY=...(bracketed entries removed) no_proxy=... \
        uv run pytest -m integration -q
@@ -77,17 +80,17 @@ Commands and results
    in this sandbox and installed by CI.)
 
 8. python3 scripts/docs/check_refs.py
-   -> OK: 957 documented repository paths exist or are expected.
+   -> OK: 968 documented repository paths exist or are expected (after the J4.3 merge).
 
 9. git diff --check
    -> no whitespace errors.
 
-10. PR #154 Quality CI run 41305333305 (head bb6eb0b; base develop 2d4bc2d)
+10. PR #154 Quality CI run 41306345310 (head 1b1a838; merged develop dd7f9c8 / J4.3 #152)
     -> all 17 checks green: python-static (api/ingest), python-unit (api/ingest),
        integration (api/ingest), e2e-smoke, web, docs, build-images, compose-ingest-env,
        caddy-limits, secret-scan, the three license reports and send-webhook.
-    The previous code head 34eab72 was also green in run 41304868503; the commits after
-    bb6eb0b only update this evidence/claim text.
+    Earlier runs on the pre-merge heads bb6eb0b (41305333305) and 34eab72
+    (41304868503) were also green; later commits only update this evidence/claim text.
 
 What the new evidence proves
 ----------------------------
