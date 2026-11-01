@@ -275,6 +275,19 @@ def test_peak_rss_prefers_vmhwm_over_self_maxrss(
     assert harness.process_hwm_bytes() == vm_hwm_bytes
 
 
+def test_peak_rss_ignores_a_zero_vmhwm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _load()
+    fallback_bytes = 12_345
+    monkeypatch.setattr(
+        harness, "_status_kib", lambda name: 0 if name == "VmHWM" else None
+    )
+    monkeypatch.setattr(harness, "self_maxrss_bytes", lambda: fallback_bytes)
+
+    assert harness.process_hwm_bytes() == fallback_bytes
+
+
 def test_peak_rss_stays_unknown_without_either_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

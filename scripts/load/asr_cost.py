@@ -749,10 +749,10 @@ def process_hwm_bytes() -> int | None:
     ``VmHWM`` in ``/proc/self/status`` is the primary source. Some sandboxes (gVisor,
     for example) hide that field, so fall back to ``ru_maxrss`` from
     ``getrusage(RUSAGE_SELF)``, which is the same kernel peak expressed in KiB on Linux.
-    A missing peak stays unknown instead of becoming a fabricated value.
+    A missing or zero peak stays unknown instead of becoming a fabricated value.
     """
     vm_hwm = _status_kib("VmHWM")
-    if vm_hwm is not None:
+    if vm_hwm is not None and vm_hwm > 0:
         return vm_hwm
     return self_maxrss_bytes()
 

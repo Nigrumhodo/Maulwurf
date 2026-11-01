@@ -117,11 +117,15 @@ Case B — neither source available:
 
 Case C — the normal host (VmHWM present), regression after the change:
     $ cd apps/ingest && uv run pytest tests/test_asr_cost.py -q -k peak_rss
-    3 passed, 18 deselected in 0.38s
+    4 passed, 18 deselected
     $ uv run pytest tests/test_asr_cost.py tests/test_cost_table.py -q -m 'not load'
-    35 passed, 2 deselected in 0.53s
+    36 passed, 2 deselected
+
+A zero `VmHWM` is also treated as missing and falls back to `ru_maxrss`; the unit case
+`test_peak_rss_ignores_a_zero_vmhwm` pins it.
 
 Conclusion: VmHWM remains the primary source; ru_maxrss is used only when VmHWM is
-unavailable, and the RAM term stays NO VERIFICADO with an explicit skip when neither
-exists. The load case never fails because of a missing kernel field and never publishes
-an invented zero. No repository file is written by the shim; it is validation-only.
+unavailable or zero, and the RAM term stays NO VERIFICADO with an explicit skip when
+neither exists. The load case never fails because of a missing kernel field and never
+publishes an invented zero. No repository file is written by the shim; it is
+validation-only.

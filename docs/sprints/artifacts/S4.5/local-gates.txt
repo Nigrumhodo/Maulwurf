@@ -96,6 +96,33 @@ OK: 870 documented repository paths exist or are expected.
 $ python3 scripts/docs/check_refs.py
 OK: 872 documented repository paths exist or are expected.
 
+# Review fix5: a zero VmHWM is treated as missing, so the fallback covers it too.
+$ cd apps/ingest && uv run pytest tests/test_asr_cost.py -q -k peak_rss
+4 passed, 18 deselected
+
+$ cd apps/ingest && uv run pytest tests -q -m 'not integration and not provider and not load'
+304 passed, 93 deselected, 2 warnings
+
+$ cd apps/ingest && uv run pytest tests/test_asr_cost.py tests/test_cost_table.py -q -m 'not load'
+36 passed, 2 deselected
+
+$ cd apps/ingest && uv run pytest tests/test_asr_cost.py tests/test_cost_table.py -q -m load
+2 passed, 36 deselected
+
+$ cd apps/ingest && LD_PRELOAD=/tmp/peak_rss_shim.so uv run pytest tests/test_cost_table.py -q -m load
+1 passed, 15 deselected
+
+$ cd apps/ingest && LD_PRELOAD=/tmp/peak_rss_shim.so MAULWURF_TEST_HIDE_MAXRSS=1 \
+    uv run pytest tests/test_cost_table.py -q -m load -rs
+1 skipped, 15 deselected
+
+$ cd apps/ingest && uv run ruff check . && uv run mypy .
+All checks passed!
+Success: no issues found in 83 source files
+
+$ python3 scripts/docs/check_refs.py
+OK: 872 documented repository paths exist or are expected.
+
 Note: no Riva/LLM/Google call, no real class audio, no PostgreSQL/Redis requirement for
 this harness and no `apps/web` change.
 
