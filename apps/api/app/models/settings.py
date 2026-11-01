@@ -15,8 +15,9 @@ forced row-level security for the API and worker roles (migration `0006`).
 A3.8 closes the shape with CHECKs: selected and coverage calendar ids are never NULL or blank
 inside the arrays, the write calendar is never blank, and coverage is either empty or one
 complete window (`from < to`, at least one calendar, `last_synced_at` present). A partial
-publication can therefore never be presented as covered. "Blank" is `btrim(value)` over
-ASCII whitespace, so spaces and tabs are rejected too; the array checks call the `IMMUTABLE`
+publication can therefore never be presented as covered. "Blank" means empty or only ASCII
+whitespace: spaces, tabs, newlines, carriage returns, form feeds and vertical tabs
+(`btrim(value, E' \\t\\n\\r\\f' || chr(11)) = ''`); the array checks call the `IMMUTABLE`
 helpers created by migration `0013` because a CHECK cannot contain `unnest()`.
 """
 

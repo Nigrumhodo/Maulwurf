@@ -515,17 +515,24 @@ def test_calendar_task_link_revision_normalizes_legacy_rows(empty_schema: str) -
     """A3.8 keeps rows that predate the FK/CHECKs loadable instead of failing the upgrade.
 
     The cleanup uses the same `btrim(...) = ''` criterion as the CHECKs: whitespace-only
-    ETags become NULL, whitespace-only array elements are removed, and a blank write
-    calendar becomes NULL. A coverage window that is still complete after the array cleanup
-    keeps its timestamps; an incomplete one is reset to "never synced".
+    ETags (vertical tab included) become NULL, whitespace-only array elements are removed,
+    and a blank write calendar becomes NULL. A value made only of the letter `v` is text,
+    not whitespace, so it survives both the cleanup and the new CHECKs. A coverage window
+    that is still complete after the array cleanup keeps its timestamps; an incomplete one
+    is reset to "never synced".
     """
     cfg = alembic_config(empty_schema)
     command.upgrade(cfg, "0012")
 
-    async def seed() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    async def seed() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
         engine = create_async_engine(empty_schema)
         async with engine.begin() as conn:
-            user_id, event_id, coverage_user = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+            user_id, event_id, v_event_id, coverage_user = (
+                uuid.uuid4(),
+                uuid.uuid4(),
+                uuid.uuid4(),
+                uuid.uuid4(),
+            )
             for actor_id in (user_id, coverage_user):
                 await conn.execute(
                     text(
@@ -553,6 +560,18 @@ def test_calendar_task_link_revision_normalizes_legacy_rows(empty_schema: str) -
                     "etag": " \t ",
                 },
             )
+            # A legacy ETag made only of a vertical tab is blank and must be cleared. The
+            # event identity is the letter `v` (base32hex), which is not whitespace.
+            await conn.execute(
+                text(
+                    "INSERT INTO calendar_events "
+                    "(id, user_id, calendar_id, event_id, title, start_at, end_at, "
+                    "etag, last_synced_at) "
+                    "VALUES (:id, :user_id, 'vvv', 'v', 'Letter v', now(), "
+                    "now() + interval '1 hour', :etag, now())"
+                ),
+                {"id": v_event_id, "user_id": user_id, "etag": chr(11)},
+            )
             await conn.execute(
                 text(
                     "INSERT INTO settings "
@@ -560,7 +579,7 @@ def test_calendar_task_link_revision_normalizes_legacy_rows(empty_schema: str) -
                     "calendar_last_synced_at, calendar_coverage_from, calendar_coverage_to, "
                     "calendar_coverage_calendar_ids) "
                     "VALUES (:user_id, :write_id, "
-                    "ARRAY['primary', NULL, '', '   ', E'\\t']::text[], now(), "
+                    "ARRAY['primary', NULL, '', '   ', E'\\t', 'v', chr(11)]::text[], now(), "
                     "now() - interval '1 day', now(), '{}'::text[])"
                 ),
                 {"user_id": user_id, "write_id": " \t "},
@@ -573,23 +592,32 @@ def test_calendar_task_link_revision_normalizes_legacy_rows(empty_schema: str) -
                     "calendar_coverage_calendar_ids) "
                     "VALUES (:user_id, ARRAY['primary']::text[], now(), "
                     "now() - interval '1 day', now(), "
-                    "ARRAY['archive', NULL, '', '   ', E'\\t']::text[])"
+                    "ARRAY['archive', NULL, '', '   ', E'\\t', 'v', chr(11)]::text[])"
                 ),
                 {"user_id": coverage_user},
             )
         await engine.dispose()
-        return user_id, event_id, coverage_user
+        return user_id, event_id, v_event_id, coverage_user
 
-    user_id, event_id, coverage_user = asyncio.run(seed())
+    user_id, event_id, v_event_id, coverage_user = asyncio.run(seed())
     command.upgrade(cfg, "head")
 
-    async def read() -> tuple[Any, Any, Any]:
+    async def read() -> tuple[Any, Any, Any, Any]:
         engine = create_async_engine(empty_schema)
         async with engine.connect() as conn:
             event = (
                 await conn.execute(
                     text("SELECT task_id, etag FROM calendar_events WHERE id = :id"),
                     {"id": event_id},
+                )
+            ).one()
+            v_event = (
+                await conn.execute(
+                    text(
+                        "SELECT calendar_id, event_id, etag "
+                        "FROM calendar_events WHERE id = :id"
+                    ),
+                    {"id": v_event_id},
                 )
             ).one()
             settings_row = (
@@ -615,13 +643,16 @@ def test_calendar_task_link_revision_normalizes_legacy_rows(empty_schema: str) -
                 )
             ).one()
         await engine.dispose()
-        return event, settings_row, coverage_row
+        return event, v_event, settings_row, coverage_row
 
-    event, settings_row, coverage_row = asyncio.run(read())
+    event, v_event, settings_row, coverage_row = asyncio.run(read())
     assert event.task_id is None
     assert event.etag is None
+    assert v_event.calendar_id == "vvv"
+    assert v_event.event_id == "v"
+    assert v_event.etag is None
     assert settings_row.calendar_write_calendar_id is None
-    assert list(settings_row.calendar_read_calendar_ids) == ["primary"]
+    assert list(settings_row.calendar_read_calendar_ids) == ["primary", "v"]
     assert settings_row.calendar_last_synced_at is None
     assert settings_row.calendar_coverage_from is None
     assert settings_row.calendar_coverage_to is None
@@ -629,7 +660,7 @@ def test_calendar_task_link_revision_normalizes_legacy_rows(empty_schema: str) -
     assert coverage_row.calendar_last_synced_at is not None
     assert coverage_row.calendar_coverage_from is not None
     assert coverage_row.calendar_coverage_to is not None
-    assert list(coverage_row.calendar_coverage_calendar_ids) == ["archive"]
+    assert list(coverage_row.calendar_coverage_calendar_ids) == ["archive", "v"]
 
 
 @pytest.mark.parametrize(
@@ -637,10 +668,13 @@ def test_calendar_task_link_revision_normalizes_legacy_rows(empty_schema: str) -
     [
         ("calendar_id", "   "),
         ("calendar_id", "\t"),
+        ("calendar_id", chr(11)),
         ("event_id", "   "),
         ("event_id", "\t"),
+        ("event_id", chr(11)),
         ("remote_status", "   "),
         ("remote_status", "\t"),
+        ("remote_status", chr(11)),
     ],
 )
 def test_calendar_task_link_revision_rejects_blank_event_identity(
@@ -650,9 +684,10 @@ def test_calendar_task_link_revision_rejects_blank_event_identity(
 
     `calendar_id`, `event_id` and `remote_status` have no defined normalization (only the
     event itself knows them), so the migration reports which rows must be repaired instead
-    of failing later on an opaque CHECK violation. The criterion is `btrim` over ASCII
-    whitespace, so spaces and tabs are both covered. PostgreSQL DDL is transactional: the
-    rollback also restores `FORCE ROW LEVEL SECURITY`, which the cleanup lifts temporarily.
+    of failing later on an opaque CHECK violation. The criterion is the explicit ASCII
+    whitespace set, so a vertical tab is blank while the letter `v` is not. PostgreSQL DDL
+    is transactional: the rollback also restores `FORCE ROW LEVEL SECURITY`, which the
+    cleanup lifts temporarily.
     """
     cfg = alembic_config(empty_schema)
     command.upgrade(cfg, "0012")

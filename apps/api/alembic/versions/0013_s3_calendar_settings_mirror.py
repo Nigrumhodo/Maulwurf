@@ -19,9 +19,12 @@ second table:
 - `calendar_events` rejects blank identity, `remote_status` and ETag values. An empty ETag
   is an unknown baseline, not a conditional-write token.
 
-"Blank" means `btrim(value, E' \\t\\n\\r\\f\\v') = ''`: the empty string, spaces, tabs and
-any other ASCII whitespace. Plain `btrim(value)` would leave a tab untouched, so a
-`'\\t'` ETag could still become a bogus conditional-write baseline. The criterion lives in
+"Blank" means `btrim(value, E' \\t\\n\\r\\f' || chr(11)) = ''`: the empty string or only
+ASCII whitespace (space, tab, newline, carriage return, form feed and vertical tab). Plain
+`btrim(value)` would leave a tab untouched, so a `'\\t'` ETag could still become a bogus
+conditional-write baseline. The vertical tab is concatenated with `chr(11)` because
+PostgreSQL does not recognize `\\v` in an `E'...'` string: it silently means the letter
+`v`, which would make a valid base32hex id such as `v` look blank. The criterion lives in
 two `IMMUTABLE` helpers created here:
 
 - `public.maulwurf_text_is_blank(text)` for scalar columns;
@@ -94,7 +97,8 @@ def _create_blank_helpers() -> None:
 
     A CHECK cannot contain a subquery or `unnest()`, but it can call an IMMUTABLE function.
     `btrim` needs an explicit character set: its default only strips spaces, and a tab-only
-    ETag must not pass as a conditional-write baseline.
+    ETag must not pass as a conditional-write baseline. The vertical tab is appended with
+    `chr(11)` because PostgreSQL has no `\\v` escape: `E'\\v'` would be the letter `v`.
     """
     op.execute(
         """
@@ -105,7 +109,7 @@ def _create_blank_helpers() -> None:
         PARALLEL SAFE
         AS $$
             SELECT value IS NOT NULL
-               AND btrim(value, E' \\t\\n\\r\\f\\v') = ''
+               AND btrim(value, E' \\t\\n\\r\\f' || chr(11)) = ''
         $$
         """
     )

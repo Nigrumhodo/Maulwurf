@@ -15,9 +15,10 @@ event per task, and `calendar_events_by_task` gives the composite FK a non-parti
 `tentative`, …) for a returned event, `missing` for a task-linked row the read did not
 return, and `cancelled` for a task-linked row Google reported cancelled. The two local values
 are only written on linked rows; a later read that returns the event rewrites the status.
-A blank ETag (empty or whitespace-only) is unknown, never a conditional-write baseline
-(`etag_not_blank`); the same whitespace-aware `btrim` criterion applies to `calendar_id`,
-`event_id` and `remote_status` through the `IMMUTABLE` helper created by migration `0013`.
+A blank ETag (empty or only ASCII whitespace: space, tab, newline, carriage return, form
+feed or vertical tab) is unknown, never a conditional-write baseline (`etag_not_blank`);
+the same criterion applies to `calendar_id`, `event_id` and `remote_status` through the
+`IMMUTABLE` helper created by migration `0013`.
 """
 
 import uuid

@@ -123,21 +123,45 @@ async def test_settings_accepts_several_read_calendars(db_session: AsyncSession)
     assert row.calendar_write_calendar_id == "maulwurf@group.calendar.example"
 
 
+async def test_settings_accepts_calendar_ids_made_only_of_the_letter_v(
+    db_session: AsyncSession,
+) -> None:
+    """PostgreSQL's `E'\\v'` is the letter `v`, not VT; `v`/`vvv` are valid base32hex ids."""
+    actor = await make_actor(db_session)
+    row = _settings(
+        actor,
+        calendar_write_calendar_id="v",
+        calendar_read_calendar_ids=["v", "vvv"],
+        calendar_coverage_calendar_ids=["v"],
+        calendar_coverage_from=NOW,
+        calendar_coverage_to=NOW + timedelta(days=1),
+        calendar_last_synced_at=NOW,
+    )
+    db_session.add(row)
+    await db_session.flush()
+    await db_session.refresh(row)
+
+    assert row.calendar_write_calendar_id == "v"
+    assert row.calendar_read_calendar_ids == ["v", "vvv"]
+    assert row.calendar_coverage_calendar_ids == ["v"]
+
+
 async def test_settings_rejects_blank_write_and_invalid_read_calendars(
     db_session: AsyncSession,
 ) -> None:
     actor = await make_actor(db_session)
 
-    # "Blank" is the whitespace-aware `btrim` criterion, not just the empty string: spaces
-    # and tabs are unusable calendar ids and must not pass the CHECK. Each case names the
-    # expected constraint, so a rejection by an unrelated CHECK cannot hide a weaker blank
-    # rule. The coverage cases carry a complete window: only the blank-element rule can fail.
+    # "Blank" is the whitespace-aware `btrim` criterion, not just the empty string: spaces,
+    # tabs and the vertical tab (0x0b) are unusable calendar ids and must not pass the CHECK.
+    # Each case names the expected constraint, so a rejection by an unrelated CHECK cannot
+    # hide a weaker blank rule. The coverage cases carry a complete window: only the
+    # blank-element rule can fail.
     complete_window = {
         "calendar_coverage_from": NOW,
         "calendar_coverage_to": NOW + timedelta(days=1),
         "calendar_last_synced_at": NOW,
     }
-    for value in ("", "   ", "\t", " \t "):
+    for value in ("", "   ", "\t", " \t ", chr(11), f" {chr(11)} "):
         await _reject(
             db_session,
             _settings(actor, calendar_write_calendar_id=value),
@@ -246,9 +270,10 @@ async def test_mirror_rejects_blank_identity_and_remote_status(
     actor = await make_actor(db_session)
 
     # Every identity/status field shares the whitespace-aware `btrim` criterion, including
-    # the ETag: a whitespace-only ETag would otherwise become a bogus write baseline. Each
-    # case names the expected constraint, proving the blank rule itself fired.
-    for value in ("", "   ", "\t", " \t "):
+    # the ETag: a whitespace-only ETag (vertical tab included) would otherwise become a bogus
+    # write baseline. Each case names the expected constraint, proving the blank rule itself
+    # fired.
+    for value in ("", "   ", "\t", " \t ", chr(11), f" {chr(11)} "):
         await _reject(
             db_session,
             await _event(actor, calendar_id=value),
@@ -274,6 +299,27 @@ async def test_mirror_rejects_blank_identity_and_remote_status(
     assert event.etag == '"etag-1"'
     unknown = await _created_event(db_session, actor, etag=None)
     assert unknown.etag is None
+
+
+async def test_mirror_accepts_identity_and_status_made_only_of_the_letter_v(
+    db_session: AsyncSession,
+) -> None:
+    """`v` is not whitespace anywhere in the database, so the mirror must keep it."""
+    actor = await make_actor(db_session)
+    event = await _created_event(
+        db_session,
+        actor,
+        calendar_id="v",
+        event_id="vvv",
+        remote_status="v",
+        etag="v",
+    )
+    await db_session.refresh(event)
+
+    assert event.calendar_id == "v"
+    assert event.event_id == "vvv"
+    assert event.remote_status == "v"
+    assert event.etag == "v"
 
 
 # --- calendar_events block and ETag ---------------------------------------------------

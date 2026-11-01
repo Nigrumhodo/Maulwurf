@@ -347,8 +347,9 @@ def test_timed_and_all_day_events_are_normalized_to_utc_and_exclusive_dates() ->
 def test_a_blank_etag_is_stored_as_unknown() -> None:
     # The mirror CHECK rejects an empty ETag: it is not a conditional-write baseline, so the
     # parser stores the honest NULL instead of failing the whole read on provider noise.
-    # Whitespace-only is blank under the same `btrim` criterion the database uses.
-    for raw in ("", "   ", "\t", " \t ", 0):
+    # Whitespace-only is blank under the same `btrim` criterion the database uses, vertical
+    # tab included.
+    for raw in ("", "   ", "\t", " \t ", chr(11), f" {chr(11)} ", 0):
         parsed = parse_remote_event(
             "primary",
             {
@@ -382,7 +383,7 @@ def test_a_valid_etag_is_trimmed_before_storage() -> None:
 def test_a_blank_remote_status_falls_back_to_confirmed() -> None:
     # `remote_status` is NOT NULL and non-blank: Google omitting the status (or sending
     # whitespace) means the event was returned, which is `confirmed`, never a blank value.
-    for raw in ("", "   ", "\t"):
+    for raw in ("", "   ", "\t", chr(11)):
         parsed = parse_remote_event(
             "primary",
             {
@@ -398,8 +399,9 @@ def test_a_blank_remote_status_falls_back_to_confirmed() -> None:
 
 def test_a_whitespace_only_event_id_fails_the_read() -> None:
     # The mirror rejects a blank event id; failing here reports the provider contract code
-    # instead of letting an integrity error abort the publication later.
-    for raw_id in ("", "   ", "\t"):
+    # instead of letting an integrity error abort the publication later. ASCII whitespace
+    # includes the vertical tab, matching the SQL helper's explicit character set.
+    for raw_id in ("", "   ", "\t", chr(11), f" {chr(11)} "):
         with pytest.raises(CalendarEventInvalid) as error:
             parse_remote_event(
                 "primary",
@@ -410,6 +412,38 @@ def test_a_whitespace_only_event_id_fails_the_read() -> None:
                 },
             )
         assert error.value.code == "event_id_invalid"
+
+
+def test_an_event_id_made_only_of_the_letter_v_is_not_blank() -> None:
+    # PostgreSQL does not recognize `\v` in an E-string: it means the letter `v`. Google
+    # event ids are base32hex (`0-9`, `a-v`), so `v` and `vvv` are valid ids, never blanks.
+    for raw_id in ("v", "vvv"):
+        parsed = parse_remote_event(
+            "primary",
+            {
+                "id": raw_id,
+                "status": raw_id,
+                "etag": raw_id,
+                "start": {"date": "2026-10-06"},
+                "end": {"date": "2026-10-07"},
+            },
+        )
+        assert isinstance(parsed, RemoteCalendarEvent)
+        assert parsed.event_id == raw_id
+        assert parsed.remote_status == raw_id
+        assert parsed.etag == raw_id
+
+
+def test_a_padded_event_id_is_trimmed_before_storage() -> None:
+    # Validation trims the id; the stored identity must be the same trimmed token, otherwise
+    # a later read of the canonical id would upsert a second row instead of updating this one.
+    parsed = parse_remote_event(
+        "primary",
+        {"id": "  g1  ", "start": {"date": "2026-10-06"}, "end": {"date": "2026-10-07"}},
+    )
+
+    assert isinstance(parsed, RemoteCalendarEvent)
+    assert parsed.event_id == "g1"
 
 
 def test_cancelled_event_is_exposed_as_a_key_not_a_row() -> None:
