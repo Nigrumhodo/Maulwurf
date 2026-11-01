@@ -154,6 +154,8 @@ def _published(**overrides: Any) -> dict[str, Any]:
         "languages": ["es"],
         "language_policy": "explicit_select_required_no_multi",
         "ttl": {"upload_start_minutes": 10, "receive_minutes": 30, "asr_minutes": 60},
+        "ttl_source_report": "docs/eval/ttl-benchmark.md",
+        "ttl_source_version": "2026-11-01",
         "asr": {
             "provider": "nvidia-riva",
             "model": "whisper-large-v3",

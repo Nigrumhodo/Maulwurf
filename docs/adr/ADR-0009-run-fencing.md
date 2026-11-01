@@ -58,11 +58,15 @@ ledger had no equivalent (`docs/plan/S2.md` §A2.20).
   `0004`.
 - Live workers keep the same retry and idempotency behavior: the token only changes on a new
   successful claim, and the claim path is unchanged for them.
-- Finish and activation of a stale worker are no-ops. Its **build writes are not fenced yet**:
-  a stale worker can still commit chunks/embeddings after orphan cleanup, and because those
-  rows keep the same `index_version` the next build can adopt them. This is not "bounded wasted
-  work" and orphan cleanup is not the only writer. A2.18 must add a per-batch write fence or
-  prove the build idempotent under a generation lock, and its criteria record this gap.
+- Finish and activation of a stale worker are no-ops. A2.18 closed the remaining gap
+  (2026-10-31, revision `0009`): `services/index_job.require_build_fence` takes `FOR SHARE`
+  on the live `(id, fencing_token, status='running')` row before every per-class chunk
+  commit, every embedding batch commit and the generation `chunk_count` commit, so a batch
+  that starts after the reconciler closed and reclaimed the run raises `RunFenced` instead
+  of becoming durable. The new `chunks(user_id, index_version)` FK to `index_generations`
+  and `embeddings(user_id, chunk_id, index_version)` FK to `chunks` add the database-level
+  defense, so generation cleanup cannot leave adoptable rows behind. The stale-batch case
+  is `I-S2-AN-17` in `apps/api/tests/integration/test_index_job.py`.
 - The column is not part of `ESPECIFICACION.md`'s functional contract; the DDL sketch in
   `docs/DISENO_BD_API_SPRINTS.md` is a design reference and does not list this internal column.
 

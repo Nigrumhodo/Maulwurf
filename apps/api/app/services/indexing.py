@@ -88,6 +88,10 @@ INDEX_RETIRED = "retired"
 TEXT_KINDS = ("synthetic", "redacted", "real")
 TextKind = Literal["synthetic", "redacted", "real"]
 ProgressHook = Callable[["IndexProgress"], Awaitable[None]]
+# A2.18 build-phase fence: called with the build's session right before every commit. The
+# worker passes the run lease check (`services.index_job.require_build_fence`); the optional
+# hook keeps this module independent of the `processing_runs` ledger.
+FenceHook = Callable[[AsyncSession], Awaitable[None]]
 
 
 class IndexingError(Exception):
@@ -196,8 +200,15 @@ async def build_generation(
     provider: EmbeddingProvider,
     text_kind: TextKind,
     on_progress: ProgressHook | None = None,
+    fence: FenceHook | None = None,
 ) -> IndexStats:
-    """Chunk and embed whatever the `version` generation is missing (idempotent)."""
+    """Chunk and embed whatever the `version` generation is missing (idempotent).
+
+    `fence` runs before every commit this function and its batch helpers issue. The worker
+    passes the run-lease check, so a stale batch is rejected before it becomes durable
+    (ADR-0009, A2.18); the owner counter (chunk_count) and every chunk/embedding batch are
+    covered, not only the final activation.
+    """
     require_text_kind(text_kind)
     generation = await _building_generation(db, user_id=user_id, version=version)
     _require_provider_matches(generation, provider)
@@ -210,6 +221,7 @@ async def build_generation(
         transcripts=transcripts,
         chunked_audios=chunked_audios,
         on_progress=on_progress,
+        fence=fence,
     )
     logger.debug("indexing.chunked version=%s chunks=%d", version, chunks)
     embeddings, batches = await _embed_generation(
@@ -219,9 +231,11 @@ async def build_generation(
         generation=generation,
         provider=provider,
         on_progress=on_progress,
+        fence=fence,
     )
     total = await _count(db, _chunk_count_statement(user_id, version=version))
     generation.chunk_count = total
+    await _apply_fence(db, fence)
     await db.commit()
     logger.info(
         "indexing.generation_built version=%s model=%s chunks=%d embeddings=%d audios=%d",
@@ -365,6 +379,7 @@ async def _chunk_generation(
     transcripts: Sequence[Transcript],
     chunked_audios: set[uuid.UUID],
     on_progress: ProgressHook | None,
+    fence: FenceHook | None,
 ) -> int:
     created = 0
     done = 0
@@ -382,7 +397,9 @@ async def _chunk_generation(
             )
             created += 1
         # One commit per class: progress stays durable without a transaction spanning the whole
-        # corpus (the provider network never happens here).
+        # corpus (the provider network never happens here). The fence is checked after the
+        # chunk rows are staged and before they become durable.
+        await _apply_fence(db, fence)
         await db.commit()
         if on_progress is not None:
             await on_progress(
@@ -406,6 +423,7 @@ async def _embed_generation(
     generation: IndexGeneration,
     provider: EmbeddingProvider,
     on_progress: ProgressHook | None,
+    fence: FenceHook | None,
 ) -> tuple[int, int]:
     pending = await _chunks_without_embeddings(db, user_id=user_id, version=version)
     created = 0
@@ -429,6 +447,9 @@ async def _embed_generation(
                     vector=vector,
                 )
             )
+        # The provider call above may be slow; the shared run lock is taken only for the
+        # commit window so the reconciler can still close an actually expired lease.
+        await _apply_fence(db, fence)
         await db.commit()
         batches += 1
         created += len(batch)
@@ -495,6 +516,11 @@ async def _chunks_without_embeddings(
 
 async def _count(db: AsyncSession, statement: Select[tuple[int]]) -> int:
     return int((await db.execute(statement)).scalar_one())
+
+
+async def _apply_fence(db: AsyncSession, fence: FenceHook | None) -> None:
+    if fence is not None:
+        await fence(db)
 
 
 def _chunks(

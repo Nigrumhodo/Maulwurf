@@ -9,20 +9,26 @@ quién es el propietario, no el reloj del proceso:
   un propietario vencido no puede publicar, aunque nadie haya tomado el intento.
 - `record_cleanup` exige solo el token: la evidencia de limpieza es real aunque el lease
   haya vencido, siempre que nadie más haya tomado el intento. Que el lease venza nunca
-  marca `verified` por sí mismo; solo lo hace esta evidencia.
+  marca `verified` por sí mismo; solo lo hace esta evidencia. Since S4.2 the evidence
+  must prove the absence of temporaries (descriptors, processes and mounts, not just
+  file names): a `verified` claim without those checks is not written. A
+  `cleanup_status = 'failed'` is terminal: it cannot return to `verified`.
 
 SQL parametrizado con asyncpg; el esquema lo migra la API (`apps/api/alembic`).
 """
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 
 import asyncpg
 
-from maulwurf_ingest import rls
+from maulwurf_ingest import cleanup, rls
+
+logger = logging.getLogger(__name__)
 
 ACTIVE_STATES = (
     "awaiting_upload",
@@ -51,6 +57,7 @@ async def acquire(
            SET owner_instance = $3, fencing_token = fencing_token + 1,
                lease_expires_at = now() + $4, heartbeat_at = now(), updated_at = now()
          WHERE id = $1 AND user_id = $2 AND status = ANY($5::text[])
+           AND cleanup_status <> 'failed'
            AND (lease_expires_at IS NULL OR lease_expires_at <= now())
         RETURNING fencing_token
         """,
@@ -128,15 +135,29 @@ async def transition(
 async def record_cleanup(
     pool: asyncpg.Pool, lease: Lease, *, verified: bool, evidence: dict[str, object],
 ) -> bool:
+    """Persist cleanup evidence. ``audio_deleted_at`` needs proven absence (S4.2).
+
+    A ``verified`` claim without the descriptor/process/mount checks is rejected
+    (nothing is written, so the attempt stays pending and the outbox stays blocked).
+    A previously failed cleanup can never be upgraded to verified. Conversely, a
+    later ``failed`` transition clears ``cleanup_verified_at`` and
+    ``audio_deleted_at``: a failed row must never claim that audio is gone.
+    """
+    if verified and not cleanup.absence_verified(evidence):
+        logger.error(
+            "lease.cleanup_evidence_incomplete attempt_id=%s", lease.attempt_id,
+        )
+        return False
     status = await rls.execute(
         pool, lease.user_id,
         """
         UPDATE ingestion_attempts
            SET cleanup_status = $4::text, cleanup_evidence = $5::jsonb,
-               cleanup_verified_at = CASE WHEN $4 = 'verified' THEN now() END,
-               audio_deleted_at = CASE WHEN $4 = 'verified' THEN now() END,
+               cleanup_verified_at = CASE WHEN $4 = 'verified' THEN now() ELSE NULL END,
+               audio_deleted_at = CASE WHEN $4 = 'verified' THEN now() ELSE NULL END,
                updated_at = now()
          WHERE id = $1 AND user_id = $2 AND fencing_token = $3
+           AND NOT (cleanup_status = 'failed' AND $4 = 'verified')
         """,
         lease.attempt_id, lease.user_id, lease.fencing_token,
         "verified" if verified else "failed", json.dumps(evidence),

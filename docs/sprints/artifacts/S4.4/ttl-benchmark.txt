@@ -1,0 +1,13 @@
+S4.4 effective TTL benchmark (basis for L-S4-SG-02)
+Environment: python=3.12.3, system=Linux 7.0.0-39-generic, ffmpeg=ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers, riva_call=none
+Published TTLs: upload_start=10 min, receive=30 min, asr=60 min (docs/eval/ttl-benchmark.md 2026-11-01)
+Reception: 2 concurrent slot(s), 64 MiB each; slowest 38.87 MiB/s, aggregate 89.15 MiB/s
+           200 MiB projected in 5.15 s against 1800 s: fits=yes (headroom x349.79)
+           bytes that fit the budget: 69958.3 MiB
+Upload start: worst-case delay 600 s + upload 5.15 s = 605.15 s of 2400 s: fits=yes
+ASR: 2 concurrent slot(s), 120 s clip; local 0.0160 s/s, billed 1.0083 s/s, provider 0.0564 s/s (F0.1 S1.A7: 30.000 s audio -> 1.692 s latency)
+     3 h class projected in 787.40 s (local 173.21 + provider 614.20) against 3600 s: fits=yes (headroom x4.57)
+     class length that fits the ASR budget: 823.0 min
+Cleanup: every attempt directory removed=yes; harness root empty=yes
+Checks: published_ttls_match_the_benchmark=yes, published_ttl_source=yes, reception_budget_fits_the_proposal=yes, upload_start_chain_fits=yes, asr_budget_fits_the_proposal=yes, no_temporary_is_left=yes
+Result: PASS (no Riva call, no audio kept)

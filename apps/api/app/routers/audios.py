@@ -4,7 +4,9 @@
 allowlist, el token de variante opcional, la materia del tenant, la cuota y el slot ANTES
 de reservar nada, y crea el intento en `awaiting_upload` con una URL relativa de carga.
 No hay dedupe: el hash no existe hasta el `PUT`, así que este POST responde `201`, `422`,
-`429` o `503` (más `401`/`403`/`404`/`409` de contrato).
+`429` o `503` (más `401`/`403`/`404` de contrato). Un token de variante inutilizable
+—desconocido, caducado, consumido o con otros metadatos— comparte el `422 validation_failed`
+opaco, sin revelar estado (A2.19, ADR-0006).
 
 `PUT /audios/{id}/content` (A2.4) valida sesión, CSRF, Origin, propiedad, estado,
 expiración y tamaño declarado SIN leer el cuerpo, y delega la recepción en
@@ -396,8 +398,12 @@ async def _owned_live_audio(db: DbSession, user_id: uuid.UUID, audio_id: uuid.UU
         401: {"description": "Sin sesión (auth_required)"},
         403: {"description": "CSRF u Origin inválido (csrf_invalid)"},
         404: {"description": "Materia inexistente o de otro tenant (not_found)"},
-        409: {"description": "Token de variante ya consumido (invalid_transition)"},
-        422: {"description": "consent_required | language_not_allowed | validation_failed"},
+        422: {
+            "description": (
+                "consent_required | language_not_allowed | validation_failed "
+                "(incluye variant_confirmation_token inválido, caducado o ya consumido)"
+            )
+        },
         429: {"description": "Cuota por usuario (rate_limited), con Retry-After"},
         503: {"description": "Sin slot de ingesta (capacity_unavailable), con Retry-After"},
     },

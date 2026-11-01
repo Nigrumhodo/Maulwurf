@@ -114,6 +114,13 @@ its own documented policy, recorded in ADR-0006 as an explicit accepted cross-te
 Runtime grants cover the tenant tables but revoke write access to `alembic_version` (SELECT
 stays for diagnostics). S3/S4 tables add their policies and grants in their migrations.
 
+Implementation (A2.18, revision `0009`): every FK now has a non-partial covering index on its
+child columns, checked from `pg_index` by I-S2-AN-17. `chunks.index_version` references
+`index_generations(user_id, version)`; `chunks` and `message_sources` pin the exact transcript
+version; `embeddings.index_version` is part of the FK to its chunk. `dimension` is fixed to the
+vector column's 1536 and a transcript's `text` must not be blank. `0009_s2_schema_integrity`
+follows `0008`; `alembic check` runs in the integration suite and fails on metadata drift.
+
 ### 2.1.1 Extensions
 
 ```sql
@@ -361,8 +368,9 @@ Design notes ([ESPECIFICACION.md](ESPECIFICACION.md) §6.2):
   not exposed as success. An expired lease does not prove deletion: without evidence,
   `cleanup_status` stays `pending` and only the index/analyze outbox remains blocked.
   `cleanup_status='failed'` stops local admission and raises an alert.
-- Candidate TTLs are set only after the F0 benchmark; until then
-  `GET /ingestion/capabilities` returns `null` and `limits_validated=false`.
+- The effective TTLs (10/30/60 min) are published only with the S4.4 benchmark behind
+  them; the size/duration limits stay `null` and `limits_validated=false` while D4 is
+  blocked.
 - Class purge order, fixed by `DELETE /audios/{id}` (A2.7, one transaction, always explicit
   deletes and never the FK cascade, so every count in the `202` body is verifiable):
   conditional `audios.deleted_at` (a second concurrent DELETE loses and gets `404`) →
@@ -1033,7 +1041,7 @@ assign a person or ticket ownership. The effective owner is looked up in
 | Tracing | JSON logs with `request_id`, `audio_id`, `attempt_id`, `run_id`; no sensitive payloads |
 | Pagination | `limit` (1–200, default 50) + opaque `cursor` |
 | Quotas | `429` with `Retry-After` for per-user quota; `503` with `Retry-After` for ingestion capacity. Effective values TBD after F0 |
-| Language | No preselection or autodetection; `multi` and translation out of MVP/v1 |
+| Language | No preselection or autodetection; `multi` and translation out of MVP/v1. Codes are compared case-insensitively (BCP-47) and stored lowercase |
 
 ### 3.2 Error envelope and codes
 
@@ -1080,6 +1088,7 @@ Typed codes (no PII or sensitive content):
 | `invalid_transition` | 409 | Target status not allowed |
 | `transcript_unavailable` | 409 | No usable transcript (re-upload); 404 if the resource does not exist for the tenant |
 | `srt_unavailable` | 409 | Invalid timestamps for SRT |
+| `variant_hash_mismatch` | 422 | The second `PUT` hash does not match the confirmed variant |
 | `session_conflict` | 409 | The session was already rotated or revoked by another request; repeat `GET /me` |
 | `subject_name_taken` | 409 | The user already has an active subject with that name (case-insensitive) |
 | `subject_has_active_audios` | 409 | The subject has active classes; `details.class_count` says how many |
@@ -1112,7 +1121,8 @@ uses the row below; the stored `error_code` can be more specific than the public
 
 `401 internal_credential_invalid` is not stored and is not shown to the browser; the public
 answer is `500 internal_error`. `409 wrong_instance` and `409 reception_not_held` on admit
-are `503 capacity_unavailable`.
+are `503 capacity_unavailable`. A capacity `503` always carries `Retry-After` and never marks
+itself `retryable=false` in `details`: the header is the retry signal (A2.19).
 
 ### 3.3 M1 — Authentication, profile, and integrations (S1; connect/reconnect in S3)
 
@@ -1121,8 +1131,8 @@ are `503 capacity_unavailable`.
 | `GET` | `/auth/google/start` | S1 | OAuth Authorization Code with `state`, PKCE, and `nonce`; scopes `openid email profile` | `302` to Google |
 | `GET` | `/auth/google/callback` | S1 | Validates `nonce`/issuer/audience; creates the user by `sub`; issues an opaque session | `302` to `/` with cookie |
 | `POST` | `/auth/logout` | S1 | Revokes the session | `204` |
-| `GET` | `/me` | S1 | Profile + integrations + non-cacheable CSRF bootstrap | `200` (shape below) |
-| `PATCH` | `/me` | S1 | Updates `timezone` (IANA), `display_name` | `200` |
+| `GET` | `/me` | S1 | Profile + non-cacheable CSRF bootstrap; integration status is `GET /integrations/status` | `200` (shape below) |
+| `PATCH` | `/me` | S1 | Updates `timezone` (IANA) only | `200` |
 | `GET` | `/integrations/status` | S1 | Login/Calendar/Gmail status, scopes, freshness | `200` |
 | `POST` | `/integrations/google/connect` | S3 | Incremental OAuth with Calendar scopes (real verification D7) | `302` to Google |
 | `POST` | `/integrations/google/reconnect` | S3 | Re-authorization after `invalid_grant` (Testing expires after 7 days) | `302` to Google |
@@ -1141,20 +1151,16 @@ the client can show the deletion status without keeping access to the rest of th
 {
   "id": "b2a1…",
   "email": "estudiante@uni.edu",
+  "display_name": "Estudiante",
   "timezone": "America/Bogota",
-  "csrf_token": "plain-token-only-in-non-cacheable-response",
-  "integrations": {
-    "google_login": "connected",
-    "calendar": {
-      "status": "connected",
-      "calendar_id": "abc@group.calendar.google.com",
-      "scopes": ["calendar.app.created", "calendar.events.readonly",
-                 "calendar.calendarlist.readonly"]
-    },
-    "gmail": { "status": "disconnected" }
-  }
+  "csrf_token": "plain-token-only-in-non-cacheable-response"
 }
 ```
+
+`display_name` is read-only here (it comes from the Google profile). Integration state is
+**not** embedded in `/me`: `GET /integrations/status` is the single integrations surface
+(`google.status`, granted `scopes`, `calendar_id`, token freshness). A2.19 narrowed this
+section to the frozen S1 A1.8 contract.
 
 Declining Calendar/Gmail permissions does **not** prevent transcribing or chatting.
 
@@ -1172,8 +1178,9 @@ spaces; deleting a subject frees its name.
 
 ### 3.5 M2b — Ingestion and audios (S1 skeleton; S2 full)
 
-`GET /ingestion/capabilities` publishes only values observed by the spike. Before F0 the
-shape does not claim to prove limits or languages:
+`GET /ingestion/capabilities` publishes only measured values. The size/duration limits stay
+hidden while D4 is blocked, but S4.4 publishes the effective TTLs with their own benchmark
+source:
 
 ```json
 {
@@ -1182,7 +1189,9 @@ shape does not claim to prove limits or languages:
   "accepted_input_formats": [],
   "languages": [],
   "language_policy": "explicit_select_required_no_multi",
-  "ttl": {"upload_start_minutes": null, "receive_minutes": null, "asr_minutes": null},
+  "ttl": {"upload_start_minutes": 10, "receive_minutes": 30, "asr_minutes": 60},
+  "ttl_source_report": "docs/eval/ttl-benchmark.md",
+  "ttl_source_version": "2026-11-01",
   "asr": {"provider": "nvidia-riva", "model": "whisper-large-v3",
            "timestamp_precision": null},
   "active_slots": null,
@@ -1191,7 +1200,20 @@ shape does not claim to prove limits or languages:
 }
 ```
 
-After F0, non-null fields must link to the versioned report that measured them.
+After F0, non-null size/duration fields must link to the versioned report that measured
+them. A TTL publication with only one or two phases is rejected; an explicit all-null TTL
+publication is the only way to fall back to the provisional window.
+
+The reservation deadlines are derived from the published TTL, never from an invented
+number: `upload_expires_at = now + ttl.upload_start_minutes`, `receive_deadline =
+upload_expires_at + ttl.receive_minutes` and `asr_deadline = receive_deadline +
+ttl.asr_minutes` (chained, so each ephemeral phase has its own budget and the three values
+are monotonic). The TTL publication is independent of `limits_validated`: the effective
+10/30/60 min apply while D4 is blocked. The API keeps `MAULWURF_UPLOAD_TTL_MINUTES` only for
+an explicit all-null TTL publication and then leaves `receive_deadline`/`asr_deadline` null.
+The size limit has ONE value: the API reads `INGEST_MAX_UPLOAD_BYTES` from the shared
+configuration and refuses to start when it disagrees with `MAULWURF_UPLOAD_MAX_BYTES`;
+`GET /ingestion/capabilities` publishes the effective limit once F0 validates it.
 
 `POST /audios` reserves a session; it cannot deduplicate before knowing the hash.
 
@@ -1212,7 +1234,10 @@ After F0, non-null fields must link to the versioned report that measured them.
 
 `privacy_notice_version` and the two acknowledgements are validated before reserving. The
 optional token can only come from a previous `409 duplicate_variant`, belongs to the same
-tenant, expires soon, and is consumed once.
+tenant, expires soon, and is consumed once. An unknown, expired, consumed or mismatched
+token — including one consumed by a racing request — answers the same opaque
+`422 validation_failed` keyed on `variant_confirmation_token`; the state is never disclosed,
+so this `POST` has no `409`.
 
 - `201 Created`: `{"audio_id","attempt_id","upload_url","upload_expires_at","outcome":"new"}`.
 - `422 consent_required|language_not_allowed|validation_failed`; `429` quota; `503` no slot.

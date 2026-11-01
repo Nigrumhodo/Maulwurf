@@ -9,6 +9,7 @@ import os
 import threading
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 
 import asyncpg
 import pytest
@@ -21,6 +22,7 @@ from maulwurf_ingest.config import settings
 from maulwurf_ingest.credential import CredentialClaims, mint
 from maulwurf_ingest.main import app
 from maulwurf_ingest.receptions import reset_state
+from maulwurf_ingest.supervisor import sweep_pass
 
 pytestmark = pytest.mark.integration
 
@@ -223,6 +225,24 @@ async def test_failed_cleanup_stays_closed_after_restore(pool: asyncpg.Pool) -> 
     assert admission.uploads_admitted() is True
     await admission.restore_from_database(pool)
     try:
+        assert admission.uploads_admitted() is False
+    finally:
+        admission.reset()
+
+
+async def test_foreign_failed_cleanup_closes_admission_on_the_next_sweep_pass(
+    pool: asyncpg.Pool, tmp_path: Path,
+) -> None:
+    """S4.2: the periodic pass re-reads the latch, not only the process start."""
+    foreign = await _seed(pool)
+    await pool.execute(
+        "UPDATE ingestion_attempts SET cleanup_status = 'failed' WHERE id = $1",
+        foreign.attempt_id,
+    )
+    admission.reset()
+    assert admission.uploads_admitted() is True
+    try:
+        await sweep_pass(pool, instance="ingest:this", tmp_dir=str(tmp_path))
         assert admission.uploads_admitted() is False
     finally:
         admission.reset()

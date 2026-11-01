@@ -10,11 +10,14 @@ That write does not publish a transcript and does not enable the outbox.
 from __future__ import annotations
 
 import json
+import logging
 
 import asyncpg
 
-from maulwurf_ingest import rls
+from maulwurf_ingest import cleanup, rls
 from maulwurf_ingest.lease import Lease
+
+logger = logging.getLogger(__name__)
 
 
 class ReceptionInterrupted(Exception):
@@ -54,8 +57,15 @@ async def record_cancelled_cleanup(
     """Record cleanup after the fencing token was invalidated.
 
     The owner instance must still be this lease. A newer owner, or an attempt
-    that is not ``cancelled``, is not credited.
+    that is not ``cancelled``, is not credited. As in ``lease.record_cleanup``,
+    ``verified`` requires proof that no descriptor, process or mount survives;
+    ``audio_deleted_at`` is never stamped from a bare claim (S4.2).
     """
+    if verified and not cleanup.absence_verified(evidence):
+        logger.error(
+            "cancel.cleanup_evidence_incomplete attempt_id=%s", lease.attempt_id,
+        )
+        return False
     status = await rls.execute(pool, lease.user_id,
         """
         UPDATE ingestion_attempts

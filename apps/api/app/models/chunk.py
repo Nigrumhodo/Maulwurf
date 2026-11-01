@@ -25,17 +25,29 @@ class Chunk(TenantOwned, Base):
     __tablename__ = "chunks"
     __table_args__ = (
         UniqueConstraint("user_id", "id"),
+        # Target of `embeddings`' 3-column FK: the vector must belong to this exact chunk
+        # generation, never to another `index_version` of the same chunk.
+        UniqueConstraint("user_id", "id", "index_version"),
         UniqueConstraint("transcript_id", "index_version", "ordinal"),
         ForeignKeyConstraint(
             ["user_id", "audio_id"], ["audios.user_id", "audios.id"], ondelete="CASCADE"
         ),
         ForeignKeyConstraint(
-            ["user_id", "transcript_id"],
-            ["transcripts.user_id", "transcripts.id"],
+            ["user_id", "transcript_id", "transcript_version"],
+            ["transcripts.user_id", "transcripts.id", "transcripts.version"],
+            ondelete="CASCADE",
+        ),
+        # A chunk belongs to an index generation; generation cleanup cannot leave chunks
+        # that a later build would adopt.
+        ForeignKeyConstraint(
+            ["user_id", "index_version"],
+            ["index_generations.user_id", "index_generations.version"],
             ondelete="CASCADE",
         ),
         Index("chunks_fts", "tsv", postgresql_using="gin"),
         Index("chunks_by_audio", "user_id", "audio_id"),
+        Index("chunks_by_transcript", "user_id", "transcript_id", "transcript_version"),
+        Index("chunks_by_generation", "user_id", "index_version"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -76,9 +88,16 @@ class Embedding(Base):
     __tablename__ = "embeddings"
     __table_args__ = (
         PrimaryKeyConstraint("user_id", "chunk_id", "index_version"),
+        # DISENO §2.5: the embedding's `index_version` is defensive redundancy and must match
+        # its chunk's generation, so it is part of the FK key instead of a free column.
         ForeignKeyConstraint(
-            ["user_id", "chunk_id"], ["chunks.user_id", "chunks.id"], ondelete="CASCADE"
+            ["user_id", "chunk_id", "index_version"],
+            ["chunks.user_id", "chunks.id", "chunks.index_version"],
+            ondelete="CASCADE",
         ),
+        # `vector` is fixed at 1536 dimensions; a free integer would accept incompatible
+        # metadata and break a later index generation.
+        CheckConstraint("dimension = 1536", name="dimension_fixed"),
         Index(
             "embeddings_hnsw",
             "vector",
@@ -101,6 +120,7 @@ class IndexGeneration(TenantOwned, Base):
     __table_args__ = (
         UniqueConstraint("user_id", "version"),
         CheckConstraint("status IN ('building', 'active', 'retired')", name="status"),
+        CheckConstraint("dimension = 1536", name="dimension_fixed"),
         Index(
             "index_generations_one_active",
             "user_id",

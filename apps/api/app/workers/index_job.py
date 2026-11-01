@@ -47,6 +47,7 @@ from app.services.index_job import (
     generation_for_version,
     generation_skip,
     index_version_for,
+    require_build_fence,
     revalidate,
 )
 from app.services.indexing import INDEX_BUILDING
@@ -196,9 +197,21 @@ async def _index_generation(
 ) -> IndexSkip | None:
     """Builds and activates the generation. Returns a skip when it already settled, else None."""
     user_id = claim.user_id
+
+    async def fence_build(db: AsyncSession) -> None:
+        """Rejects a stale claim before every build commit (A2.18)."""
+        await require_build_fence(
+            db,
+            run_id=claim.run.run_id,
+            fencing_token=claim.run.fencing_token,
+        )
+
     async with sessions() as db:
         existing = await generation_for_version(db, user_id=user_id, version=version)
         if existing is None:
+            # The shared run lock held by this fence serializes with the reconciler until the
+            # generation row commits, so a stale worker cannot recreate an orphan build.
+            await fence_build(db)
             # A commit expires the ORM object, so the status of a new row is known, not re-read.
             await indexing.create_generation(db, user_id=user_id, version=version)
             status = INDEX_BUILDING
@@ -210,7 +223,12 @@ async def _index_generation(
     provider = providers()
     async with sessions() as db:
         await indexing.build_generation(
-            db, user_id=user_id, version=version, provider=provider, text_kind=TEXT_KIND
+            db,
+            user_id=user_id,
+            version=version,
+            provider=provider,
+            text_kind=TEXT_KIND,
+            fence=fence_build,
         )
     async with sessions() as db:
         await activate_claimed_generation(

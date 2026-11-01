@@ -1,0 +1,21 @@
+S4.1 / MAULW-149 fix1 drill environment check
+Date (UTC): 2026-10-31T23:44:00Z
+Environment: development sandbox, Linux 7.0.0-39-generic
+
+$ command -v docker
+missing
+$ command -v podman
+missing
+$ command -v nerdctl
+missing
+$ command -v docker-compose
+missing
+$ test -S /var/run/docker.sock
+absent
+
+Result: the compose detection/recovery drill (runbook steps 4-6) is NOT RUN. This sandbox
+has no container runtime, so the runbook commands cannot be executed here. The drill stays
+pending for the reviewer with the reference stack. The reference-host drill (section 7) is
+also NOT RUN: it needs J4.7 provider evidence and a real host.
+
+S4.1 therefore stays in progress. Neither drill is reported as executed or passed.

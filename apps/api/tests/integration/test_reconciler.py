@@ -576,6 +576,8 @@ async def _materialize(
     db: AsyncSession, actor: Actor, transcript: Transcript, generation: IndexGeneration
 ) -> Chunk:
     db.add(generation)
+    # A2.18: the chunk references its generation, so the parent row must exist first.
+    await db.flush()
     chunk = _chunk(actor, transcript, generation.version)
     db.add(chunk)
     await db.flush()

@@ -1,0 +1,125 @@
+{
+  "ticket": "S4.4",
+  "test_basis": "L-S4-SG-02",
+  "environment": {
+    "python": "3.12.3",
+    "system": "Linux 7.0.0-39-generic",
+    "ffmpeg": "ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers",
+    "riva_call": "none"
+  },
+  "proposal": {
+    "upload_start_minutes": 10,
+    "receive_minutes": 30,
+    "asr_minutes": 60,
+    "upload_mib": 200,
+    "class_seconds": 10800
+  },
+  "published_capabilities": {
+    "limits_validated": false,
+    "ttl": {
+      "upload_start_minutes": 10,
+      "receive_minutes": 30,
+      "asr_minutes": 60
+    },
+    "ttl_source_report": "docs/eval/ttl-benchmark.md",
+    "ttl_source_version": "2026-11-01"
+  },
+  "load": {
+    "slots": 2,
+    "concurrent": true,
+    "upload_mib": 64,
+    "asr_clip_seconds": 120
+  },
+  "reception": [
+    {
+      "slot": 0,
+      "payload_bytes": 67108864,
+      "wall_seconds": 1.776536,
+      "first_byte_seconds": 0.404309,
+      "throughput_mib_s": 36.025157,
+      "sha256_ok": true,
+      "cleanup_removed": true
+    },
+    {
+      "slot": 1,
+      "payload_bytes": 67108864,
+      "wall_seconds": 1.353399,
+      "first_byte_seconds": 0.000968,
+      "throughput_mib_s": 47.288346,
+      "sha256_ok": true,
+      "cleanup_removed": true
+    }
+  ],
+  "reception_projection": {
+    "slowest_mib_s": 36.025157,
+    "aggregate_mib_s": 83.313503,
+    "proposal_mib": 200.0,
+    "seconds_for_proposal": 5.551676,
+    "max_mib_in_budget": 64845.283,
+    "budget_minutes": 30,
+    "headroom_factor": 324.226,
+    "fits": true
+  },
+  "upload_start_projection": {
+    "start_window_seconds": 600,
+    "reception_budget_seconds": 1800,
+    "start_delay_seconds": 600,
+    "upload_seconds": 5.552,
+    "total_seconds": 605.552,
+    "remaining_seconds": 1794.448,
+    "fits": true
+  },
+  "asr": [
+    {
+      "slot": 0,
+      "clip_seconds": 120.0,
+      "billed_seconds": 121.0,
+      "fragments": 5,
+      "wall_seconds": 1.87714,
+      "local_realtime_factor": 0.015643,
+      "billed_realtime_factor": 1.008333,
+      "cleanup_removed": true
+    },
+    {
+      "slot": 1,
+      "clip_seconds": 120.0,
+      "billed_seconds": 121.0,
+      "fragments": 5,
+      "wall_seconds": 1.932093,
+      "local_realtime_factor": 0.016101,
+      "billed_realtime_factor": 1.008333,
+      "cleanup_removed": true
+    }
+  ],
+  "asr_projection": {
+    "provider_realtime_factor": 0.0564,
+    "provider_basis": "F0.1 S1.A7: 30.000 s audio -> 1.692 s latency",
+    "local_realtime_factor": 0.016100772,
+    "billed_realtime_factor": 1.008333333,
+    "class_seconds": 10800.0,
+    "projected_local_seconds": 173.888,
+    "projected_provider_seconds": 614.196,
+    "projected_total_seconds": 788.084,
+    "budget_minutes": 60,
+    "max_class_seconds": 49334.821,
+    "headroom_factor": 4.568,
+    "fits": true
+  },
+  "checks": {
+    "published_ttls_match_the_benchmark": true,
+    "published_ttl_source": true,
+    "reception_budget_fits_the_proposal": true,
+    "upload_start_chain_fits": true,
+    "asr_budget_fits_the_proposal": true,
+    "no_temporary_is_left": true
+  },
+  "passed": true,
+  "limitations": [
+    "The client uplink is not measured: the reception projection covers the server path (API -> ingest -> tmpfs), not the user's network or the Caddy edge.",
+    "The provider leg is a linear projection from one F0.1 S1.A7 30 s observation (1.692 s); no Riva channel, key or new provider call is used.",
+    "The ASR synthetic clip is a tone, not speech; local ffmpeg/fragmentation time is measured, not transcription quality or provider queueing.",
+    "No PostgreSQL, Redis or API HTTP hop is exercised; the API->ingest streaming path is represented by receiver.receive and is covered by I-S2-AN-12.",
+    "200 MiB and 3 h remain unapproved. D4 is blocked; the 200 MiB/3 h rows are the proposal used to size the projection, not a published limit.",
+    "The 10/30/60 min values do not become approved by this run: they are published only when their benchmark source is present in capabilities."
+  ]
+}

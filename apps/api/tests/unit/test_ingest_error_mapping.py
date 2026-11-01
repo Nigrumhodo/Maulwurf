@@ -10,7 +10,8 @@ def test_known_sink_codes_keep_their_public_answers() -> None:
     assert (unsupported.status_code, unsupported.code) == (415, "unsupported_format")
     capacity = map_ingest_code("capacity_unavailable")
     assert (capacity.status_code, capacity.code) == (503, "capacity_unavailable")
-    assert capacity.details["retryable"] is False
+    # A2.19: `Retry-After` is the retry signal; the body never contradicts it.
+    assert "retryable" not in capacity.details
     assert capacity.headers["Retry-After"]
     assert map_ingest_code("malformed").code == "unsupported_format"
     assert map_ingest_code("payload_too_large").status_code == 413

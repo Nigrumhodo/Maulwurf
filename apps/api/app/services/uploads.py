@@ -195,11 +195,12 @@ def map_ingest_code(code: str) -> ApiError:
     if code in {
         "capacity_unavailable", "probe_unavailable", "wrong_instance", "reception_not_held",
     }:
+        # §3.1: a capacity 503 carries `Retry-After`; that IS the retry signal, so the body
+        # must not contradict it with `retryable=false` (A2.19).
         return ApiError(
             503,
             "capacity_unavailable",
             "La recepción de audio no está disponible; inténtalo más tarde.",
-            {"retryable": False},
             headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
         )
     if code == "attempt_not_active":

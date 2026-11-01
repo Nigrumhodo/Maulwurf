@@ -15,6 +15,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKeyConstraint,
+    Index,
     Integer,
     Text,
     UniqueConstraint,
@@ -31,6 +32,8 @@ class ProcessingRun(TenantOwned, Base):
         UniqueConstraint("user_id", "id"),
         UniqueConstraint("audio_id", "stage", "transcript_version", "config_version"),
         ForeignKeyConstraint(["user_id", "audio_id"], ["audios.user_id", "audios.id"]),
+        # Supporting index for the composite FK (DISENO §2.1.8).
+        Index("processing_runs_by_audio", "user_id", "audio_id"),
         CheckConstraint("stage IN ('index', 'analyze')", name="stage"),
         CheckConstraint(
             "status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')", name="status"

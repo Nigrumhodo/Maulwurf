@@ -30,6 +30,7 @@ from app.models import (
     ChunkSegment,
     Conversation,
     Embedding,
+    IndexGeneration,
     IngestionAttempt,
     Message,
     MessageSource,
@@ -113,12 +114,23 @@ async def _seed_class(
     )
     db.add(segment)
     await db.flush()
+    # A2.18: `chunks.index_version` references a generation; the purge must handle both.
+    # The version is unique per seed: a test may seed two classes for the same actor.
+    generation = IndexGeneration(
+        user_id=actor.user_id,
+        version=f"test-{uuid.uuid4().hex}",
+        model="test-model",
+        dimension=1536,
+        status="building",
+    )
+    db.add(generation)
+    await db.flush()
     chunk = Chunk(
         user_id=actor.user_id,
         audio_id=audio.id,
         transcript_id=transcript.id,
         transcript_version=1,
-        index_version="test-v1",
+        index_version=generation.version,
         ordinal=1,
         content=TEXT,
         char_start=0,

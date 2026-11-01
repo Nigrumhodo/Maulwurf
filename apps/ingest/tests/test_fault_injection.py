@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock
 import asyncpg
 import pytest
 from test_supervisor import (  # noqa: E402
+    PROVEN_CLEANUP,
     SYNTHETIC_TEXT,
     Attempt,
     _config,
@@ -186,7 +187,8 @@ async def test_lease_lost_during_cleanup_is_fenced_and_stays_held(
 ) -> None:
     """I-S2-JF-05(c): another owner reclaims the attempt while cleanup runs; the old token loses.
 
-    The heartbeat is parked for the whole test so only the reclaim changes the lease.
+    The heartbeat interval is longer than this test and the lease is expired explicitly,
+    so only the reclaim changes the lease.
     """
     admission.reset()
     attempt = await _seed(pool)
@@ -204,7 +206,10 @@ async def test_lease_lost_during_cleanup_is_fenced_and_stays_held(
     monkeypatch.setattr(cleanup, "destroy_and_verify", held_destroy)
     task = asyncio.create_task(run_attempt(
         pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id, audio=iter_bytes(audio),
-        config=_config(tmpfs_dir, stub_transcript=SYNTHETIC_TEXT, heartbeat_interval_s=60),
+        config=_config(
+            tmpfs_dir, stub_transcript=SYNTHETIC_TEXT,
+            lease_ttl=timedelta(seconds=30), heartbeat_interval_s=10.0,
+        ),
     ))
     successor: leases.Lease | None = None
     try:
@@ -220,7 +225,7 @@ async def test_lease_lost_during_cleanup_is_fenced_and_stays_held(
             attempt.attempt_id, attempt.user_id, "ingest:a", old_token, _LEASE_TTL,
         )
         assert await leases.record_cleanup(
-            pool, stale, verified=True, evidence={"verified": True},
+            pool, stale, verified=True, evidence=PROVEN_CLEANUP,
         ) is False
     finally:
         release.set()
