@@ -96,6 +96,10 @@ $ uv run pytest tests/integration -q -m "not provider and not load"
 
 ## Quality CI
 
-Pending on the final head after the evidence/claim commits; the run id is recorded in the
-A3.1 claim row once GitHub Actions finishes. `apps/web` is untouched and no real Google or
-NVIDIA call was made.
+Run `41267260922` on head `93dbe61` (created after merging `develop@158702b`, i.e. after
+A2.12's `0010`) is green in all 16 jobs, including `python-static (api)`, `python-unit
+(api)` **1376 passed**, `integration (api)` **613 passed** (the full suite against
+`pgvector/pgvector:pg16`), `integration (ingest)`, `e2e-smoke`, `docs`, `web`,
+`build-images`, `secret-scan`, `license-report`, `caddy-limits` and `compose-ingest-env`.
+The PR is `MERGEABLE`/`CLEAN` against `develop@158702b`. A later commit on the branch only
+records this run id; `apps/web` is untouched and no real Google or NVIDIA call was made.
