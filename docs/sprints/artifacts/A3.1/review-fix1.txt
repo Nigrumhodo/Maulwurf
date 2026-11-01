@@ -71,6 +71,9 @@ $ uv run pytest tests/integration/test_s3_tasks_schema.py \
 92 passed, 76 warnings in 21.50s
 ```
 
+Per module: `test_s3_tasks_schema` **53 passed**, `test_migrations` **14 passed**,
+`test_rls` **12 passed**, `test_delete_audio` **13 passed** (92 together).
+
 Included:
 
 - `test_a_task_source_cannot_cite_a_segment_from_another_transcript` (the case hoplite
