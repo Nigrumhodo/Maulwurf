@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
     database_url: str | None = Field(default=None, validation_alias="MAULWURF_DATABASE_URL")
+    # Stable identifier of the host that owns this ingest tmpfs. `resolve` refuses an
+    # attestation whose `host` differs, and refuses to run without an expected host.
+    ingest_host_id: str | None = Field(default=None, validation_alias="INGEST_HOST_ID")
     # `enforce` (defecto, fail closed): sin endurecimiento el proceso no arranca.
     # `report` solo para desarrollo fuera del contenedor: arranca, pero /readyz responde 503.
     ingest_hardening: Literal["enforce", "report"] = Field(

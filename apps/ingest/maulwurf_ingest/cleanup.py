@@ -153,11 +153,33 @@ def live_group_members(pgid: int) -> int:
     return count
 
 
+def _state(pid: int) -> str | None:
+    """Process state from `/proc/<pid>/stat`; None when it cannot be read."""
+    try:
+        stat = (PROC / str(pid) / "stat").read_text()
+    except OSError:
+        return None
+    try:
+        return stat[stat.rindex(")") + 2 :].split()[0]
+    except (ValueError, IndexError):
+        return None
+
+
+def _inspectable_pids() -> list[int]:
+    """Visible PIDs whose descriptors can be inspected; zombies are excluded."""
+    return [pid for pid in _pids() if _state(pid) not in {"Z", "X"}]
+
+
 def open_descriptors_under(root: Path) -> tuple[int, int]:
-    """(descriptores bajo `root`, procesos ilegibles) en todos los procesos visibles."""
+    """(descriptores bajo `root`, procesos ilegibles) en todos los procesos visibles.
+
+    A zombie has already released every descriptor, so it is skipped instead of counted
+    as an unreadable process: reading `/proc/<pid>/fd` of a zombie is denied even for its
+    own UID, and counting it used to fail cleanup verification closed on a harmless race.
+    """
     prefix = str(root).rstrip("/") + "/"
     found = unreadable = 0
-    for pid in _pids():
+    for pid in _inspectable_pids():
         fd_dir = PROC / str(pid) / "fd"
         try:
             entries = list(fd_dir.iterdir())

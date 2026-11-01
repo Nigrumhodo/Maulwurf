@@ -9,6 +9,7 @@ import dataclasses
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from maulwurf_ingest import cleanup
 
@@ -108,3 +109,29 @@ def test_kill_group_on_a_gone_group_is_a_noop() -> None:
     cleanup.kill_group(proc.pid, starttime)
     proc.wait(timeout=10)
     cleanup.kill_group(proc.pid, starttime)  # ya no existe: no debe lanzar
+
+
+def test_a_zombie_is_not_an_unreadable_process(tmp_path: Path) -> None:
+    """A zombie released every descriptor: `/proc/<pid>/fd` is denied, but it leaks nothing.
+
+    Counting it as unreadable used to make cleanup verification fail closed on a harmless
+    race (the killed ffmpeg is still a zombie when the evidence is collected).
+    """
+    proc, _starttime = _spawn_sleeper()
+    try:
+        cleanup.kill_group(proc.pid, None)
+        deadline = time.monotonic() + 10
+        state = None
+        while time.monotonic() < deadline:
+            state = cleanup._state(proc.pid)
+            if state == "Z":
+                break
+            time.sleep(0.01)
+        assert state == "Z", "the child did not become a zombie"
+
+        assert proc.pid not in cleanup._inspectable_pids()
+        found, _unreadable = cleanup.open_descriptors_under(tmp_path)
+
+        assert found == 0
+    finally:
+        proc.wait(timeout=10)

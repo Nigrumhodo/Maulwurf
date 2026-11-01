@@ -114,6 +114,13 @@ its own documented policy, recorded in ADR-0006 as an explicit accepted cross-te
 Runtime grants cover the tenant tables but revoke write access to `alembic_version` (SELECT
 stays for diagnostics). S3/S4 tables add their policies and grants in their migrations.
 
+Implementation (A2.18, revision `0009`): every FK now has a non-partial covering index on its
+child columns, checked from `pg_index` by I-S2-AN-17. `chunks.index_version` references
+`index_generations(user_id, version)`; `chunks` and `message_sources` pin the exact transcript
+version; `embeddings.index_version` is part of the FK to its chunk. `dimension` is fixed to the
+vector column's 1536 and a transcript's `text` must not be blank. `0009_s2_schema_integrity`
+follows `0008`; `alembic check` runs in the integration suite and fails on metadata drift.
+
 ### 2.1.1 Extensions
 
 ```sql

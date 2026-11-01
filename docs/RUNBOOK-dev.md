@@ -308,7 +308,9 @@ docker compose down -v     # destructive: deletes volumes
 ```
 
 There is no persisted audio to delete: ingestion temporaries are `tmpfs` and
-disappear when the container is recreated.
+disappear when the container is recreated. For a failed cleanup, a stopped admission
+latch or a lost host, follow the [cleanup/recovery runbook](runbooks/cleanup.md); do not
+copy or inspect the attempt directory.
 
 ## 8. Common issues
 
