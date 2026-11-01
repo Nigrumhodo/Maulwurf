@@ -1,0 +1,73 @@
+J4.8 / C-S4-JF-10 — budget alerts drill
+Date (UTC): 2026-11-01
+Environment: local PostgreSQL 16.15 at 127.0.0.1:5432, Redis 7.0.15, API from this
+  worktree on 127.0.0.1:18080, database `maulwurf_j48_budget` migrated to head.
+  No Docker/podman in the sandbox; no real provider, key or approved budget is used.
+
+Seed (deterministic, synthetic):
+- one assistant message with 700 input + 200 output tokens -> 900 tokens;
+- one class with a committed transcript and duration 300 s -> 5.0 source minutes;
+- one sent test notification, one `sync_task_event` outbox row and one authorized
+  `delete_event` remote operation -> 3 recorded Google operations.
+
+Command:
+  cd apps/api && uv run uvicorn app.main:app --host 127.0.0.1 --port 18080
+  (MAULWURF_BUDGET_LLM_TOKENS=1000, MAULWURF_BUDGET_ASR_MINUTES=10,
+   MAULWURF_BUDGET_GOOGLE_OPERATIONS=10)
+
+Output:
+  $ curl -fsS http://127.0.0.1:18080/internal/metrics | grep '^maulwurf_budget_'
+  maulwurf_budget_usage{provider="llm",unit="tokens"} 900.0
+  maulwurf_budget_usage{provider="asr",unit="minutes"} 5.0
+  maulwurf_budget_usage{provider="google",unit="operations"} 3.0
+  maulwurf_budget_configured{provider="llm"} 1.0
+  maulwurf_budget_configured{provider="asr"} 1.0
+  maulwurf_budget_configured{provider="google"} 1.0
+  maulwurf_budget_limit{provider="llm",unit="tokens"} 1000.0
+  maulwurf_budget_limit{provider="asr",unit="minutes"} 10.0
+  maulwurf_budget_limit{provider="google",unit="operations"} 10.0
+  maulwurf_budget_ratio{provider="llm"} 0.9
+  maulwurf_budget_ratio{provider="asr"} 0.5
+  maulwurf_budget_ratio{provider="google"} 0.3
+  maulwurf_budget_warning{provider="llm"} 1.0
+  maulwurf_budget_warning{provider="asr"} 0.0
+  maulwurf_budget_warning{provider="google"} 0.0
+  maulwurf_budget_exhausted{provider="llm"} 0.0
+  maulwurf_budget_exhausted{provider="asr"} 0.0
+  maulwurf_budget_exhausted{provider="google"} 0.0
+
+  $ python3 scripts/ops/budget_check.py --url http://127.0.0.1:18080/internal/metrics
+  provider=llm state=warning usage=900 unit=tokens limit=1000 ratio=0.9000
+  provider=asr state=ok usage=5 unit=minutes limit=10 ratio=0.5000
+  provider=google state=ok usage=3 unit=operations limit=10 ratio=0.3000
+  exit=1
+
+Warning -> exhausted (API restarted with MAULWURF_BUDGET_LLM_TOKENS=500):
+  $ python3 scripts/ops/budget_check.py --url http://127.0.0.1:18080/internal/metrics
+  provider=llm state=exhausted usage=900 unit=tokens limit=500 ratio=1.8000
+  provider=asr state=ok usage=5 unit=minutes limit=10 ratio=0.5000
+  provider=google state=ok usage=3 unit=operations limit=10 ratio=0.3000
+  exit=2
+
+Unconfigured (API restarted with no MAULWURF_BUDGET_*):
+  $ python3 scripts/ops/budget_check.py --url http://127.0.0.1:18080/internal/metrics
+  provider=llm state=unconfigured usage=900 unit=tokens limit=- ratio=-
+  provider=asr state=unconfigured usage=5 unit=minutes limit=- ratio=-
+  provider=google state=unconfigured usage=3 unit=operations limit=- ratio=-
+  exit=0
+  $ python3 scripts/ops/budget_check.py --url ... --require-configured
+  provider=llm state=unconfigured usage=900 unit=tokens limit=- ratio=-
+  provider=asr state=unconfigured usage=5 unit=minutes limit=- ratio=-
+  provider=google state=unconfigured usage=3 unit=operations limit=- ratio=-
+  exit-required=1
+
+Interpretation:
+- The endpoint always exposes usage; limit/ratio/warning/exhausted exist only when a cap
+  is configured.
+- A warning is exit 1, exhaustion is exit 2, and unset is measure-only (exit 0 unless
+  `--require-configured` is passed).
+- Values are synthetic and the caps are drill values, not an approved budget. No provider
+  was called.
+
+Reference-environment step (NOT RUN): real Prometheus/Alertmanager scrape, real billing
+account and an approved cap. J4.7 (reference deployment) is absent.
