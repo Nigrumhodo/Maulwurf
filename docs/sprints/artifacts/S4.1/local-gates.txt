@@ -25,3 +25,39 @@ OK: 813 documented repository paths exist or are expected.
 Integration cases (I-S4-SG-03) were not executed locally: this sandbox has no PostgreSQL
 (MAULWURF_DATABASE_URL unset, no psql/pg_isready). The final Quality CI run is recorded in
 docs/runbooks/cleanup.md section 8.1 and in the PR body.
+
+S4.1 / MAULW-149 fix2 local gates
+Date (UTC): 2026-11-01
+Environment: development sandbox, Linux, Python 3.12, uv 0.13.1, PostgreSQL 16.15
+(scratch role `mwt149`, database `maulwurf`; the integration fixture creates and drops its
+own `maulwurf_ingest_test_*` database), `MAULWURF_ENV=local`.
+Head before this capture: 7f675fc (task/MAULW-149)
+
+$ cd apps/ingest && uv run ruff check .
+All checks passed!
+
+$ cd apps/ingest && uv run mypy .
+Success: no issues found in 80 source files
+
+$ cd apps/ingest && uv run pytest tests/test_cleanup_recovery.py -m "not integration" -q
+25 passed, 8 deselected
+
+$ cd apps/ingest && uv run pytest -m "not integration and not provider and not load" -q --ignore=tests/test_synthetic_audio.py
+236 passed, 80 deselected
+
+# Integration with a real migrated PostgreSQL (the 8 I-S4-SG-03 cases):
+$ MAULWURF_DATABASE_URL='postgresql+asyncpg://mwt149:<local-only>@127.0.0.1:5432/maulwurf' \
+  MAULWURF_ENV=local uv run pytest -m integration -q tests/test_cleanup_recovery.py
+8 passed, 25 deselected
+
+# Whole runbook file (unit + integration):
+$ MAULWURF_DATABASE_URL='postgresql+asyncpg://mwt149:<local-only>@127.0.0.1:5432/maulwurf' \
+  MAULWURF_ENV=local uv run pytest tests/test_cleanup_recovery.py -q
+33 passed in 12.17s
+
+$ python3 scripts/docs/check_refs.py
+OK: 816 documented repository paths exist or are expected.
+
+The 8 synthetic-audio cases still fail only because `espeak-ng` is absent from this sandbox;
+CI installs it. The compose and reference-host drills remain NOT RUN for the environment
+reasons recorded in drill-environment.txt.

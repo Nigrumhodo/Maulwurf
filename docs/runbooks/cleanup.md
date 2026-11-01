@@ -39,6 +39,7 @@ path is `apps/ingest/maulwurf_ingest/recovery.py`.
 | Recurring 60 s sweeper inside the service | **No.** The startup pass does not loop; embedding the timer in the supervisor is S4.2 | `main.py` says so explicitly |
 | 60 s sweeper as an operator process | Yes. `sweep --watch --interval 60` runs the same two functions | `recovery.py` |
 | Host-loss attestation | Yes, as an operator attestation; the tool refuses to write without it | `recovery.resolve_attempts` |
+| Host-bound attestation | Yes. `resolve` requires `INGEST_HOST_ID`/`--expected-host`; a missing identifier or a different host is refused before any database access | `recovery.resolve_attempts` |
 
 The CLI is available from a checkout as `scripts/ops/cleanup_recover.py`; inside the
 hardened ingest container, every command below uses
@@ -70,6 +71,17 @@ sweeper.
   (snapshot, swap, memory image, checkpoint) and owns the stop decision that keeps the text
   outbox blocked.
 - Run commands from `infra/` unless a step says otherwise. Use UTC for every timestamp.
+- **Host identity:** every ingest host has a stable `INGEST_HOST_ID`. `resolve` accepts an
+  attestation only when its `host` exactly matches `--expected-host` (which defaults to
+  `INGEST_HOST_ID`). The expected host is the host that owned the attempt, taken from the
+  deployment configuration or the incident record, **never from the evidence file**. With
+  no expected host the command fails closed (`expected_host_not_configured`); another host
+  is `host_mismatch`.
+- **Local-directory precondition:** steps 5.x run on the affected host, after 5.1 restarted
+  the ingest service there. `--tmp-dir` and `local_attempt_dirs` inspect only the tmpfs of
+  the process that executes the CLI; from another host or checkout the check passes without
+  testing the affected tmpfs. In a real host loss the new host's empty tmpfs proves nothing
+  (7.1).
 - Never `cat`, `strings`, `cp`, `tar`, `docker cp`, screenshot or attach a file from
   `/work/tmp`. Only counts, booleans and attempt UUIDs leave the tmpfs.
 - Never put a transcript, audio fragment, provider payload, token, DSN or password in a
@@ -198,6 +210,17 @@ destroyed memory/mount plus an operator attestation. In compose, force-recreatin
 ingest container destroys its `/work/tmp` tmpfs and its process memory; the new container
 gets a new empty tmpfs. The PostgreSQL volume is untouched.
 
+**Precondition:** execute 5.3–5.6 on the affected host, after 5.1 restarted the ingest
+service there, with `--expected-host` set to that host's `INGEST_HOST_ID`. `resolve` only
+sees the tmpfs of the process that runs it; running it from a different checkout or host
+does not test the affected tmpfs and is not this procedure.
+
+**TOCTOU note:** `resolve` checks the local attempt directories before the `UPDATE`; the
+`UPDATE` re-checks the lease, not the directory. This is accepted because the expired
+lease is the invariant that rules out a live writer: a process whose lease expired cannot
+heartbeat, transition or record cleanup, and a reclaim bumps the fencing token. Run
+`resolve` only after 5.1's restart and after the lease has expired (5.3).
+
 ### 5.1 Destroy the tmpfs and memory
 
 ```bash
@@ -295,6 +318,11 @@ while the resolver rejects a non-ISO `destroyed_at`. Expected: `python3 -m json.
 booleans, a timezone-less or future `destroyed_at`, and files larger than 8 KiB. Do not add
 a `notes` field or any free text.
 
+`host` must be the stable identifier of the host that owned the attempt: `INGEST_HOST_ID`
+on a live host, or the destroyed host's identifier from the incident record in section 7.
+It must match the `--expected-host` passed in 5.5/5.6 exactly. Do not derive the expected
+host from the evidence file.
+
 ### 5.5 Dry-run the attestation
 
 The evidence is streamed to the container on stdin and is never written into the image or
@@ -303,21 +331,30 @@ the audio tmpfs:
 ```bash
 docker compose exec -T ingest python -m maulwurf_ingest.recovery resolve \
   --attempt "$ATTEMPT_ID" \
+  --expected-host maulwurf-ingest-1 \
   --evidence-file /dev/stdin \
   < "$EVIDENCE_FILE"
 ```
+
+`--expected-host` is explicit here; inside the container it defaults to `INGEST_HOST_ID`
+when that variable is configured. Without either, every attempt is refused with
+`expected_host_not_configured` (fail closed).
 
 Expected:
 
 ```text
 evidence_sha256=<64 lowercase hex characters>
 evidence_host=maulwurf-ingest-1
+expected_host=maulwurf-ingest-1
 evidence_destroyed_at=2026-10-31T12:34:56+00:00
 applied=false
 attempt=<ATTEMPT_ID> action=would_verify status=transcript_committed_cleanup_pending cleanup_status=failed
 ```
 
-If the decision is `refused`, read its `reason`: `live_lease` (wait and repeat 5.3),
+If the decision is `refused`, read its `reason`: `host_mismatch` (the evidence names a
+different host than `--expected-host`; stop and fix the incident record, do not edit the
+file to match), `expected_host_not_configured` (set `--expected-host` or `INGEST_HOST_ID`;
+do not proceed without one), `live_lease` (wait and repeat 5.3),
 `local_attempt_directory_present` (the tmpfs still has the attempt; repeat 5.1),
 `not_covered_by_evidence` (the attempt was created after the attested destruction, or its
 last heartbeat/update is later than the destruction plus the one-minute clock-skew margin),
@@ -328,12 +365,15 @@ last heartbeat/update is later than the destruction plus the one-minute clock-sk
 ```bash
 docker compose exec -T ingest python -m maulwurf_ingest.recovery resolve \
   --attempt "$ATTEMPT_ID" \
+  --expected-host maulwurf-ingest-1 \
   --evidence-file /dev/stdin \
   --apply \
   < "$EVIDENCE_FILE"
 ```
 
 Expected: `attempt=<ATTEMPT_ID> action=verified ... cleanup_status=verified` and exit `0`.
+The stored `cleanup_evidence` also records `expected_host`, so the accepted host pair is
+auditable. A host refusal leaves the row untouched.
 
 ```bash
 docker compose exec -T ingest python -m maulwurf_ingest.recovery sweep
@@ -475,6 +515,13 @@ record and signs the incident; the **security/privacy reviewer** must confirm an
 provider cannot prove. If a fact remains unproven, keep the text outbox blocked and require
 a reupload. Do not treat an empty directory listing as proof.
 
+**Expected host in this path.** `resolve` runs on the replacement host, but `--expected-host`
+must name the **destroyed host that owned the attempts**, not the new host's identifier and
+never a value copied from the evidence file. If the replacement reuses the old logical
+identifier as its `INGEST_HOST_ID`, record that decision in the incident before attesting.
+The local-directory check is vacuous here; the attestation and the expired lease are the
+only controls.
+
 ### 7.2 List the attempts that need the attestation
 
 ```bash
@@ -507,12 +554,20 @@ the window is uncertain, widen it and inspect the statuses; do not guess a UUID.
 ### 7.3 Attest the old host's destruction
 
 Write the Appendix A file with the provider's `destroyed_at`, `host`, reviewer and
-incident reference, and the four destruction facts `true`. Then copy it into the container
-and dry-run/apply the same way as 5.5–5.6, passing every UUID from 7.2:
+incident reference, and the four destruction facts `true`. The evidence `host` and
+`--expected-host` must both name the destroyed host that owned the attempts:
+
+```bash
+export LOST_HOST_ID='<the destroyed host identifier from the incident record>'
+```
+
+Then copy the file into the container and dry-run/apply the same way as 5.5–5.6, passing
+every UUID from 7.2:
 
 ```bash
 docker compose exec -T ingest python -m maulwurf_ingest.recovery resolve \
   --attempt "$ATTEMPT_ID" \
+  --expected-host "$LOST_HOST_ID" \
   --evidence-file /dev/stdin \
   < "$EVIDENCE_FILE"
 ```
@@ -534,13 +589,13 @@ VERIFIED**. The local compose drill is the only executable equivalent in this re
 
 | Check | Command | Result in this revision |
 |---|---|---|
-| Unit behavior of the runbook tool | `cd apps/ingest && uv run pytest tests/test_cleanup_recovery.py -m "not integration" -q` | 19 passed |
-| Unit suite of the area | `cd apps/ingest && uv run pytest -m "not integration and not provider and not load" -q --ignore=tests/test_synthetic_audio.py` | 230 passed. Without `--ignore`, the 8 `test_synthetic_audio.py` cases fail only because `espeak-ng` is absent in this sandbox; CI installs it |
+| Unit behavior of the runbook tool | `cd apps/ingest && uv run pytest tests/test_cleanup_recovery.py -m "not integration" -q` | 25 passed |
+| Unit suite of the area | `cd apps/ingest && uv run pytest -m "not integration and not provider and not load" -q --ignore=tests/test_synthetic_audio.py` | 236 passed. Without `--ignore`, the 8 `test_synthetic_audio.py` cases fail only because `espeak-ng` is absent in this sandbox; CI installs it |
 | Ruff | `cd apps/ingest && uv run ruff check .` | pass |
 | Mypy | `cd apps/ingest && uv run mypy .` | pass |
 | Documentation paths | `python3 scripts/docs/check_refs.py` | pass |
-| I-S4-SG-03 integration | `cd apps/ingest && uv run pytest -m integration -q tests/test_cleanup_recovery.py` | Local sandbox: 6 skipped (no PostgreSQL). Quality CI run `41255292952`, job `integration (ingest)`: **64 passed**, 11 skipped, 1 xfailed; the 6 cases in this file are included |
-| Quality CI | all jobs in `.github/workflows/quality.yml` | Run `41255292952` (head `8f9676c`): all 17 checks green, including `python-unit (ingest)` 233 passed and `integration (ingest)` 64 passed. See section 8.1 |
+| I-S4-SG-03 integration | `cd apps/ingest && uv run pytest -m integration -q tests/test_cleanup_recovery.py` | Local dispatch smoke with PostgreSQL 16.15: 8 passed (the host-mismatch and missing-host cases included). Quality CI run `41255292952`, job `integration (ingest)`: **64 passed**, 11 skipped, 1 xfailed; the 6 cases in that run are included |
+| Quality CI | all jobs in `.github/workflows/quality.yml` | Run `41255292952` (head `8f9676c`): all 17 checks green, including `python-unit (ingest)` 233 passed and `integration (ingest)` 64 passed. See section 8.1; the fix2 run is recorded after the push |
 | Compose detection/recovery drill | steps 4–6 | **NOT RUN HERE**: this sandbox has no `docker`, `podman`, `docker-compose` or `/var/run/docker.sock`; the reviewer must execute it on the reference stack |
 | Host-loss restoration | section 7 | **NOT RUN HERE**: needs J4.7 provider evidence and a real host; the reviewer records it |
 
@@ -566,6 +621,9 @@ Stop and escalate to the security/privacy reviewer, keeping admission closed, wh
 
 - the evidence file cannot show memory **and** tmpfs destruction, no snapshots and no swap;
 - the failed row's `cleanup_evidence` contains a path, transcript, audio or secret;
+- `resolve` reports `host_mismatch` (the attestation names another host) or
+  `expected_host_not_configured` (no host identity is configured); do not bypass either by
+  editing the evidence file, the environment or the database;
 - `resolve` refuses a row and the reason is not one of the transient conditions in 5.5;
 - a second cleanup failure appears during the same incident;
 - the new host's PostgreSQL volume is not the approved durable copy.
@@ -581,6 +639,8 @@ is lost.
 - [ ] Steps 4.1–4.5 were executed on the reference stack; the alert, metrics and
       `status --check` outputs are attached to the incident record.
 - [ ] Step 5 was executed (or witnessed) and the evidence file has the Appendix A fields.
+- [ ] `--expected-host` named the host that owned the attempts and matched the incident
+      record; no attestation was accepted without it.
 - [ ] A failure path was rehearsed at least once; the failed row was recovered and the
       text outbox released without a second transcript.
 - [ ] Section 7 evidence includes the provider termination/no-snapshot/no-swap facts.
@@ -606,6 +666,9 @@ Rules enforced by `load_evidence`:
 
 - exactly the eight fields above; no `notes` and no extra keys;
 - `host`, `reviewer` and `reference` are 1–200 printable characters, no control characters;
+- `host` must exactly match the `--expected-host` passed to `resolve` (or
+  `INGEST_HOST_ID`); a different value is `host_mismatch` and no expected host is
+  `expected_host_not_configured`, both without a database write;
 - `destroyed_at` is an ISO 8601 instant with a timezone, not more than 5 minutes in the
   future;
 - the four booleans are exactly `true`;
@@ -613,10 +676,10 @@ Rules enforced by `load_evidence`:
   record can link the exact attestation.
 
 The tool stores only those fields plus `source = operator_attestation`, `verified = true`,
-`evidence_sha256` and `recorded_at`. It never stores the file path or free text. The
-persisted `cleanup_verified_at` and `audio_deleted_at` are the attestation record time; the
-destruction instant is `cleanup_evidence.destroyed_at`, because the evidence is reviewed
-after the event.
+`evidence_sha256`, `expected_host` and `recorded_at`. It never stores the file path or free
+text. The persisted `cleanup_verified_at` and `audio_deleted_at` are the attestation record
+time; the destruction instant is `cleanup_evidence.destroyed_at`, because the evidence is
+reviewed after the event.
 
 ## Appendix B — No-audio checklist for every step
 
