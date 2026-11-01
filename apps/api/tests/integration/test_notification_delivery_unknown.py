@@ -35,7 +35,10 @@ from app.services.notifications import (
     claim,
     dedupe_key,
 )
-from app.services.scheduler_lease import expire_delivery_leases
+from app.services.scheduler_lease import (
+    claim_due_notifications,
+    expire_delivery_leases,
+)
 from tests.integration.actors import Actor, make_actor, make_task
 
 pytestmark = pytest.mark.integration
@@ -189,6 +192,16 @@ async def test_a_lost_response_is_terminal_uncertainty_and_the_retry_is_a_no_op(
     assert stored.status == "delivery_unknown"
     assert await _count(db_session, actor, status="pending") == 0
     assert await expire_delivery_leases(db_session) == 0
+    # A later scheduler tick only selects pending rows: the uncertain delivery is not
+    # reclaimed and therefore never reaches the sender again.
+    assert (
+        await claim_due_notifications(
+            db_session,
+            fencing_token=1,
+            now=NOW + timedelta(minutes=1),
+        )
+        == []
+    )
 
     page = await client.get(NOTIFICATIONS, cookies=actor.cookies)
     item = page.json()["items"][0]
