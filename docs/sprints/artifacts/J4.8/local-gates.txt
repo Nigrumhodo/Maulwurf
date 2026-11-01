@@ -72,7 +72,7 @@ Not run in this sandbox:
 - `apps/web` is untouched by this ticket.
 
 Quality CI after the test-isolation fix:
-  Run 41319073318 (workflow quality, head 40736f2) is green in all 17 checks, including
+  Run 41319452963 (workflow quality, head 21bc759) is green in all 17 checks, including
   python-static (api), python-unit (api), integration (api), integration (ingest),
   e2e-smoke, compose-ingest-env, docs, secret-scan and build-images. The first CI run of
   the ticket (41317818217) exposed that the budget aggregate is intentionally global and
@@ -82,7 +82,7 @@ Quality CI after the test-isolation fix:
   fix. No production query changed.
 
 Quality CI (GitHub Actions, workflow `quality.yml`):
-  Run 41319073318, head 40736f2 (the last code change; an evidence-only commit may follow),
+  Run 41319452963, head 21bc759 (the last code change; an evidence-only commit may follow),
   2026-11-01: all 17 checks green, including:
   - python-unit (api) 1752 passed
   - integration (api) 827 passed (the isolated budget module included)
