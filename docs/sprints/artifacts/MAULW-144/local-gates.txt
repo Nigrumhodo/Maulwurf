@@ -84,7 +84,7 @@ Full API integration suite (same sanitized proxy):
 
 ```text
 $ uv run pytest tests/integration -q
-798 passed, 833 warnings in 159.72s
+798 passed, 833 warnings in 154.27s
 ```
 
 ## apps/ingest regression
