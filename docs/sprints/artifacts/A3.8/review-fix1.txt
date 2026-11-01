@@ -97,6 +97,14 @@ $ python3 scripts/docs/check_refs.py
 OK: 865 documented repository paths exist or are expected.
 ```
 
+## Quality CI
+
+Run `41274263254` on code head `058cb87` (both fix1 commits) is green in all 16 jobs:
+`python-static (api/ingest)`, `python-unit (api/ingest)`, `integration (api/ingest)`,
+`build-images`, `e2e-smoke`, `docs`, `web`, `secret-scan`, `caddy-limits`,
+`compose-ingest-env` and `license-report (api/ingest/web)`. The previous head `a9b4316` was
+green in run `41269967985`.
+
 ## Scope
 
 - `apps/api` only for code/tests; `docs/ESPECIFICACION.md` clarifies the ETag/blank
