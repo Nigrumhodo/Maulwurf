@@ -268,6 +268,39 @@ def calendar_sync_temporarily_unavailable(
     )
 
 
+def notifications_test_unavailable(reason: str) -> ApiError:
+    # A4.2: a test send needs Gmail opt-in and a verified recipient. The reason is a closed
+    # set so the settings screen can explain the next step without parsing the message.
+    return ApiError(
+        409,
+        "notifications_test_unavailable",
+        "El envío de prueba no está disponible en el estado actual.",
+        {"reason": reason},
+    )
+
+
+def notification_not_resendable(status: str) -> ApiError:
+    # A4.2: pending/sending are already queued or in flight, and cancelled occurrences are
+    # obsolete. Only an audited terminal delivery may be repeated.
+    return ApiError(
+        409,
+        "notification_not_resendable",
+        "Esta entrega no se puede reexpedir en su estado actual.",
+        {"status": status},
+    )
+
+
+def acknowledgement_required() -> ApiError:
+    # A4.2/M8: a manual resend may duplicate a delivery that Gmail already accepted, so the
+    # client must acknowledge the risk explicitly.
+    return ApiError(
+        422,
+        "acknowledgement_required",
+        "Confirma el riesgo de entrega duplicada para reexpedir.",
+        {"field": "acknowledge_duplicate_risk"},
+    )
+
+
 async def _handle_validation(_: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, RequestValidationError)  # noqa: S101 - registrado solo para ella
     # Solo ubicación y mensaje por campo: nunca el valor recibido (puede traer PII).

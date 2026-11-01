@@ -234,6 +234,20 @@ async def test_patch_updates_only_the_sent_fields_and_persists_them(
     assert row.reminder_offsets_hours == [48, 24, 2]
 
 
+async def test_an_empty_patch_is_a_no_op_and_does_not_create_the_row(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await _verified_actor(db_session)
+
+    response = await client.patch(
+        PREFERENCES, json={}, cookies=actor.cookies, headers=actor.headers
+    )
+
+    assert response.status_code == 200
+    assert response.json()["gmail_opt_in"] is False
+    assert await db_session.get(CalendarSettings, actor.user_id) is None
+
+
 async def test_patch_requires_the_session_origin_and_csrf(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
@@ -340,7 +354,7 @@ async def test_test_send_records_an_audited_pending_occurrence(
     assert notification["type"] == "test"
     assert notification["status"] == "pending"
     assert notification["occurrence"] == today.isoformat()
-    assert notification["occurrence_seq"] == 0
+    assert notification["occurrence_seq"] == 1
     assert notification["task_id"] is None
     assert notification["last_error_code"] is None
     assert body["warning"]["code"] == "delivery_uncertain"
@@ -356,6 +370,7 @@ async def test_test_send_records_an_audited_pending_occurrence(
         task_id=None,
         due_version=None,
         occurrence=today,
+        occurrence_seq=1,
     )
 
 
@@ -371,7 +386,7 @@ async def test_a_second_test_send_is_a_new_audited_occurrence(
     assert first.status_code == second.status_code == 202
     one, two = first.json()["notification"], second.json()["notification"]
     assert one["id"] != two["id"]
-    assert (one["occurrence_seq"], two["occurrence_seq"]) == (0, 1)
+    assert (one["occurrence_seq"], two["occurrence_seq"]) == (1, 2)
     assert await _count(db_session) == 2
 
 
@@ -583,7 +598,7 @@ async def test_listing_is_tenant_scoped(
 
 
 async def _unknown_reminder(db: AsyncSession, actor: Actor) -> Notification:
-    task = await make_task(db_session=db, actor=actor)
+    task = await make_task(db, actor)
     return await _store(
         db,
         _notification(
@@ -603,15 +618,16 @@ async def test_resend_requires_the_duplicate_risk_acknowledgement(
 ) -> None:
     actor = await _verified_actor(db_session)
     row = await _unknown_reminder(db_session, actor)
+    row_id = row.id
 
     missing = await client.post(
-        f"{NOTIFICATIONS}/{row.id}/resend",
+        f"{NOTIFICATIONS}/{row_id}/resend",
         json={},
         cookies=actor.cookies,
         headers=actor.headers,
     )
     refused = await client.post(
-        f"{NOTIFICATIONS}/{row.id}/resend",
+        f"{NOTIFICATIONS}/{row_id}/resend",
         json={"acknowledge_duplicate_risk": False},
         cookies=actor.cookies,
         headers=actor.headers,
@@ -622,6 +638,7 @@ async def test_resend_requires_the_duplicate_risk_acknowledgement(
     assert refused.status_code == 422
     assert refused.json()["error"]["code"] == "acknowledgement_required"
     assert await _count(db_session) == 1
+    await db_session.refresh(row)
     assert row.status == "delivery_unknown"
 
 
@@ -630,11 +647,15 @@ async def test_resend_creates_a_new_audited_occurrence_and_keeps_the_original_in
 ) -> None:
     actor = await _verified_actor(db_session)
     original = await _unknown_reminder(db_session, actor)
+    original_id = original.id
     original_key = original.dedupe_key
     original_updated_at = original.updated_at
+    original_task_id = original.task_id
+    original_occurrence = original.occurrence
+    original_due_version = original.due_version
 
     response = await client.post(
-        f"{NOTIFICATIONS}/{original.id}/resend",
+        f"{NOTIFICATIONS}/{original_id}/resend",
         json={"acknowledge_duplicate_risk": True},
         cookies=actor.cookies,
         headers=actor.headers,
@@ -643,13 +664,14 @@ async def test_resend_creates_a_new_audited_occurrence_and_keeps_the_original_in
     assert response.status_code == 202
     body = response.json()
     created = body["notification"]
-    assert created["id"] != str(original.id)
+    assert created["id"] != str(original_id)
     assert created["status"] == "pending"
     assert created["occurrence_seq"] == 1
     assert created["type"] == "reminder_t24"
-    assert created["task_id"] == str(original.task_id)
-    assert created["occurrence"] == original.occurrence.isoformat()
-    assert created["due_version"] == original.due_version
+    assert created["task_id"] == str(original_task_id)
+    assert original_occurrence is not None
+    assert created["occurrence"] == original_occurrence.isoformat()
+    assert created["due_version"] == original_due_version
     assert body["warning"]["code"] == "duplicate_risk_acknowledged"
 
     await db_session.refresh(original)
@@ -673,15 +695,16 @@ async def test_each_resend_gets_the_next_sequence(
 ) -> None:
     actor = await _verified_actor(db_session)
     original = await _unknown_reminder(db_session, actor)
+    original_id = original.id
 
     first = await client.post(
-        f"{NOTIFICATIONS}/{original.id}/resend",
+        f"{NOTIFICATIONS}/{original_id}/resend",
         json={"acknowledge_duplicate_risk": True},
         cookies=actor.cookies,
         headers=actor.headers,
     )
     second = await client.post(
-        f"{NOTIFICATIONS}/{original.id}/resend",
+        f"{NOTIFICATIONS}/{original_id}/resend",
         json={"acknowledge_duplicate_risk": True},
         cookies=actor.cookies,
         headers=actor.headers,
@@ -724,6 +747,36 @@ async def test_a_queued_in_flight_or_cancelled_occurrence_is_not_resendable(
     assert await _count(db_session) == 1
 
 
+async def test_resending_a_failed_delivery_is_allowed(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await _verified_actor(db_session)
+    row = await _store(
+        db_session,
+        _notification(
+            actor,
+            status="failed",
+            scheduled_at=NOW,
+            attempts=1,
+            last_error_code="provider_rejected",
+        ),
+    )
+    row_id = row.id
+
+    response = await client.post(
+        f"{NOTIFICATIONS}/{row_id}/resend",
+        json={"acknowledge_duplicate_risk": True},
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+
+    assert response.status_code == 202
+    assert response.json()["notification"]["status"] == "pending"
+    await db_session.refresh(row)
+    assert row.status == "failed"
+    assert row.last_error_code == "provider_rejected"
+
+
 async def test_resending_a_sent_delivery_is_allowed_with_the_duplicate_warning(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
@@ -739,9 +792,10 @@ async def test_resending_a_sent_delivery_is_allowed_with_the_duplicate_warning(
             provider_message_id="gmail-original",
         ),
     )
+    row_id = row.id
 
     response = await client.post(
-        f"{NOTIFICATIONS}/{row.id}/resend",
+        f"{NOTIFICATIONS}/{row_id}/resend",
         json={"acknowledge_duplicate_risk": True},
         cookies=actor.cookies,
         headers=actor.headers,
@@ -749,6 +803,7 @@ async def test_resending_a_sent_delivery_is_allowed_with_the_duplicate_warning(
 
     assert response.status_code == 202
     assert response.json()["notification"]["occurrence_seq"] == 1
+    await db_session.refresh(row)
     assert row.status == "sent"
     assert row.provider_message_id == "gmail-original"
 
@@ -759,9 +814,10 @@ async def test_resend_is_tenant_scoped_and_unknown_ids_are_404(
     alice = await _verified_actor(db_session)
     bob = await _verified_actor(db_session)
     row = await _unknown_reminder(db_session, alice)
+    row_id = row.id
 
     foreign = await client.post(
-        f"{NOTIFICATIONS}/{row.id}/resend",
+        f"{NOTIFICATIONS}/{row_id}/resend",
         json={"acknowledge_duplicate_risk": True},
         cookies=bob.cookies,
         headers=bob.headers,

@@ -10,8 +10,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.core.deps import COOKIE_NAME, CurrentSession, DbSession, MutationSession
 from app.core.errors import auth_required
 from app.core.validation import is_iana_timezone
+from app.models import CalendarSettings, User
 from app.models import Session as SessionRow
-from app.models import User
+from app.schemas.notifications import (
+    NotificationPreferencesOut,
+    NotificationPreferencesPatch,
+    format_digest_time,
+)
+from app.services import notification_center
 from app.services.sessions import csrf_token_for
 
 router = APIRouter(tags=["me"])
@@ -76,3 +82,71 @@ async def update_me(
     profile = await _profile(request, response, session, db)
     await db.commit()
     return profile
+
+
+def _preferences_out(row: CalendarSettings | None) -> NotificationPreferencesOut:
+    """Complete M8 preference set; an absent row means the opted-out defaults."""
+    if row is None:
+        return NotificationPreferencesOut(
+            gmail_opt_in=False,
+            digest_daily_enabled=False,
+            digest_daily_time="07:00",
+            digest_weekly_enabled=False,
+            digest_weekday=0,
+            reminder_offsets_hours=[48, 24, 2],
+            reminder_allday_offsets_days=[3, 1],
+            updated_at=None,
+        )
+    return NotificationPreferencesOut(
+        gmail_opt_in=row.gmail_opt_in,
+        digest_daily_enabled=row.digest_daily_enabled,
+        digest_daily_time=format_digest_time(row.digest_daily_time),
+        digest_weekly_enabled=row.digest_weekly_enabled,
+        digest_weekday=row.digest_weekday,
+        reminder_offsets_hours=list(row.reminder_offsets_hours),
+        reminder_allday_offsets_days=list(row.reminder_allday_offsets_days),
+        updated_at=row.updated_at,
+    )
+
+
+@router.get(
+    "/me/notifications",
+    responses={
+        200: {"description": "Preferencias M8 completas del usuario"},
+        401: {"description": "Sin sesión (auth_required)"},
+    },
+)
+async def get_notification_preferences(
+    response: Response, session: CurrentSession, db: DbSession
+) -> NotificationPreferencesOut:
+    """Read the current preferences without creating the settings row."""
+    response.headers["Cache-Control"] = "no-store"
+    row = await notification_center.get_preferences(db, session.user_id)
+    return _preferences_out(row)
+
+
+@router.patch(
+    "/me/notifications",
+    responses={
+        200: {"description": "Preferencias M8 completas tras la actualización parcial"},
+        401: {"description": "Sin sesión (auth_required)"},
+        403: {"description": "Origin/CSRF inválidos (csrf_invalid)"},
+        422: {"description": "validation_failed: preferencia inválida"},
+    },
+)
+async def update_notification_preferences(
+    body: NotificationPreferencesPatch,
+    response: Response,
+    session: MutationSession,
+    db: DbSession,
+) -> NotificationPreferencesOut:
+    """Apply only the sent fields; Gmail remains opt-in and no scope is granted here."""
+    response.headers["Cache-Control"] = "no-store"
+    changes = body.model_dump(exclude_unset=True)
+    if not changes:
+        row = await notification_center.get_preferences(db, session.user_id)
+        return _preferences_out(row)
+    row = await notification_center.apply_preferences(db, session.user_id, changes)
+    out = _preferences_out(row)
+    await db.commit()
+    return out

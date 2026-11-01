@@ -7,20 +7,22 @@ resent, every manual repetition gets the next sequence inside its frozen identit
 opaque cursor never accepts a malformed or foreign position.
 """
 
+import base64
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+
+from app.core.errors import ApiError
 from app.services.notification_center import (
     NotificationCursor,
     decode_cursor,
     encode_cursor,
     local_occurrence_date,
 )
-
-from app.core.errors import ApiError
 from app.services.notifications import (
     RESENDABLE_STATUSES,
     NotificationNotResendable,
@@ -115,15 +117,18 @@ def test_a_malformed_or_unsupported_cursor_is_a_typed_422(value: str) -> None:
 
 
 def test_a_naive_cursor_timestamp_is_rejected() -> None:
-    encoded = encode_cursor(_cursor(scheduled_at=datetime(2026, 11, 2, 12, 0)))
+    payload = {
+        "v": 1,
+        "t": "2026-11-02T12:00:00",
+        "i": str(NOTIFICATION_ID),
+    }
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+
     with pytest.raises(ApiError):
         decode_cursor(encoded)
 
 
 def test_a_cursor_with_a_non_uuid_position_is_rejected() -> None:
-    import base64
-    import json
-
     encoded = encode_cursor(_cursor())
     data = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
     data["i"] = "not-a-uuid"

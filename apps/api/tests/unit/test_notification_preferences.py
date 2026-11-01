@@ -12,6 +12,8 @@ No provider is called and no mail is sent from these values.
 from datetime import time
 
 import pytest
+from pydantic import ValidationError
+
 from app.schemas.notifications import (
     MAX_OFFSET_DAYS,
     MAX_OFFSET_HOURS,
@@ -20,7 +22,6 @@ from app.schemas.notifications import (
     NotificationPreferencesPatch,
     format_digest_time,
 )
-from pydantic import ValidationError
 
 
 def test_a_partial_update_only_carries_the_fields_the_user_changed() -> None:
@@ -111,3 +112,10 @@ def test_the_threshold_lists_are_bounded() -> None:
 def test_unknown_preference_fields_are_rejected() -> None:
     with pytest.raises(ValidationError):
         NotificationPreferencesPatch(gmail_send=True)  # type: ignore[call-arg]
+
+
+def test_an_explicit_null_is_not_a_way_to_erase_a_preference() -> None:
+    with pytest.raises(ValidationError):
+        NotificationPreferencesPatch(gmail_opt_in=None)
+    with pytest.raises(ValidationError):
+        NotificationPreferencesPatch(reminder_offsets_hours=None)

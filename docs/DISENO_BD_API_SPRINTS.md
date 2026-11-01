@@ -954,7 +954,8 @@ CREATE TABLE notifications (
   occurrence          date,                       -- target local date
   due_version         integer,
   scheduled_at        timestamptz NOT NULL,
-  dedupe_key          text NOT NULL,              -- (user_id, type, task_id, due_version, occurrence)
+  dedupe_key          text NOT NULL,              -- canonical identity (occurrence_seq suffix if > 0)
+  occurrence_seq      integer NOT NULL DEFAULT 0, -- 0 = scheduled; > 0 = manual test/resend
   status              text NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending','sending','sent','failed','delivery_unknown','cancelled')),
   lease_expires_at    timestamptz,                -- expired 'sending' = uncertain delivery
@@ -964,7 +965,8 @@ CREATE TABLE notifications (
   last_error_code     text,                       -- redacted, no PII
   created_at          timestamptz NOT NULL DEFAULT now(),
   updated_at          timestamptz NOT NULL DEFAULT now(),
-  UNIQUE NULLS NOT DISTINCT (user_id, type, task_id, due_version, occurrence)
+  UNIQUE NULLS NOT DISTINCT
+    (user_id, type, task_id, due_version, occurrence, occurrence_seq)
 );
 CREATE INDEX notifications_due ON notifications (status, scheduled_at) WHERE status = 'pending';
 ```
@@ -974,6 +976,9 @@ CREATE INDEX notifications_due ON notifications (status, scheduled_at) WHERE sta
   when confirming late. Deleting a task cascades to its reminders (A4.1): an unlinked
   reminder would be undeliverable and would also collide with another deleted task's
   occurrence under `NULLS NOT DISTINCT`.
+- A manual test send or warned resend is a new audited occurrence of the same identity; it
+  carries `occurrence_seq` 1, 2, … (0 is the scheduled row). Automatic dedupe is unchanged,
+  and the original `delivery_unknown` row is never mutated to `pending`.
 - DST: nonexistent time → next valid instant; repeated time → a single local occurrence.
   Tasks without a date have no scaled reminders.
 - Gmail does not guarantee exactly-once delivery: lost response or expired `sending` lease
@@ -1169,6 +1174,7 @@ itself `retryable=false` in `details`: the header is the retry signal (A2.19).
 | `GET` | `/integrations/status` | S1 | Login/Calendar/Gmail status, scopes, freshness | `200` |
 | `POST` | `/integrations/google/connect` | S3 | Incremental OAuth with Calendar scopes (real verification D7) | `302` to Google |
 | `POST` | `/integrations/google/reconnect` | S3 | Re-authorization after `invalid_grant` (Testing expires after 7 days) | `302` to Google |
+| `GET` | `/me/notifications` | S4 | Current M8 preferences (read companion of the PATCH) | `200` |
 | `PATCH` | `/me/notifications` | S4 | M8 preferences (Gmail opt-in, digests, thresholds) | `200` |
 | `POST` | `/notifications/test` | S4 | Test send to the verified email | `202` |
 | `DELETE` | `/me` | S4 | Account deletion; accepts explicit `delete_maulwurf_events`, creates the operation, and requests remote deletions before revoking tokens | `202 {deletion_operation_id}` |
@@ -1654,6 +1660,7 @@ Contract rules:
 
 | Method | Route | Sprint | Description |
 |---|---|---|---|
+| `GET` | `/me/notifications` | S4 | Current M8 preferences: Gmail opt-in, digest switches/time/weekday, visible thresholds |
 | `PATCH` | `/me/notifications` | S4 | M8 preferences: Gmail opt-in, daily digest time/weekday, visible thresholds |
 | `POST` | `/notifications/test` | S4 | Test send to the verified email (Gmail `gmail.send`); `202` with an uncertain-delivery warning |
 | `GET` | `/notifications?status=&from=&to=&limit=&cursor=` | S4 | Paginated delivery panel; does not mix sensitive payloads |
@@ -1700,7 +1707,7 @@ no new endpoints in the MVP.
 | `/tasks*` (M4) | — | — | ✓ | — |
 | `/calendar/*` (M5) | — | — | ✓ | — |
 | `/integrations/google/connect\|reconnect` | — | — | ✓ | — |
-| `PATCH /me/notifications`, `POST /notifications/test`, `GET /notifications`, `POST /notifications/{id}/resend` | — | — | — | ✓ |
+| `GET/PATCH /me/notifications`, `POST /notifications/test`, `GET /notifications`, `POST /notifications/{id}/resend` | — | — | — | ✓ |
 | `DELETE /me`, `GET /me/deletion/{id}` | — | — | — | ✓ |
 
 ---

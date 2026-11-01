@@ -315,9 +315,10 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     revision = ScriptDirectory.from_config(cfg).get_revision(_head(empty_schema))
     assert revision is not None
     parent = revision.down_revision
-    assert parent == "0013"  # this chain is linear
+    assert parent == "0014"  # this chain is linear
     command.upgrade(cfg, "head")
 
+    # `0015` only adds the manual-occurrence sequence and swaps the natural unique key;
     # `0014` adds `notifications` and the Gmail/digest columns; `0013` only adds the
     # Calendar task-link FK/index/CHECKs (no table/column change); `0012` only adds
     # constraints and indexes (no table/column change); `0011` only adds the M4 task tables;
@@ -327,6 +328,9 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     # `settings`; `0005` only changes roles, policies and RLS flags; `0003` only backfills
     # `chunks.tsv` (data, not schema) and `0004` only adds the run fencing token, so the
     # steps back stay on the previous schemas and only remove those additions.
+    command.downgrade(cfg, "-1")
+    assert _state(empty_schema) == (S4_TABLES, ["0014"])
+
     command.downgrade(cfg, "-1")
     assert _state(empty_schema) == (A31_TABLES, ["0013"])
 
