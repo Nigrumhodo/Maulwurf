@@ -111,8 +111,11 @@ def _calendar_block() -> str:
 class Task(TenantOwned, Base):
     __tablename__ = "tasks"
     __table_args__ = (
-        # Target of the tenant-aware FKs from sources, revisions and the Calendar mirror.
+        # Target of the tenant-aware FKs from sources and revisions.
         UniqueConstraint("user_id", "id"),
+        # No ON DELETE: a class or subject purge must delete its task rows explicitly
+        # (DISENO §3.6). Failing loudly beats silently keeping a proposal whose corpus is
+        # gone; `task_sources` and `task_revisions` do cascade from the task itself.
         ForeignKeyConstraint(["user_id", "audio_id"], ["audios.user_id", "audios.id"]),
         ForeignKeyConstraint(["user_id", "subject_id"], ["subjects.user_id", "subjects.id"]),
         CheckConstraint(_in("source", TASK_ORIGINS), name="source"),
