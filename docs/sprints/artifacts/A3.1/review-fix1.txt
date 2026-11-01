@@ -1,6 +1,7 @@
 # A3.1 (MAULW-99) — hoplite review fix1 evidence
 
-Captured: 2026-11-01T02:51Z on code head `0cd775a` (after `e1d6d00`).
+Captured: 2026-11-01T03:05Z on merge head `fcc0219` (review fix `0cd775a` merged with
+`develop@158702b`, which brought A2.12's `0010_s2_messages_history_order`).
 Host: Linux x86_64 | Python 3.12.3 | PostgreSQL 16.15 | Redis 7.0.15 | uv 0.13.1.
 No provider call, no audio upload, no Google credential and no secret are involved.
 
@@ -37,7 +38,7 @@ $ cd apps/api && uv run ruff check .
 All checks passed!
 
 $ uv run mypy .
-Success: no issues found in 244 source files
+Success: no issues found in 249 source files
 ```
 
 ## Unit (no PostgreSQL)
@@ -45,7 +46,7 @@ Success: no issues found in 244 source files
 ```
 $ SANITIZED_PROXY=localhost,127.0.0.1,::1,198.19.0.1,198.19.0.2
 $ NO_PROXY="$SANITIZED_PROXY" no_proxy="$SANITIZED_PROXY" uv run pytest tests/unit -q
-1351 passed, 35 warnings in 9.54s
+1376 passed, 35 warnings in 9.27s
 ```
 
 U-S3-AN-01 (`tests/unit/test_task_schema.py`) is now 26 cases: the new check asserts the
@@ -67,7 +68,7 @@ $ uv run pytest tests/integration/test_s3_tasks_schema.py \
     tests/integration/test_migrations.py \
     tests/integration/test_rls.py \
     tests/integration/test_delete_audio.py -q
-92 passed, 75 warnings in 22.84s
+92 passed, 76 warnings in 21.50s
 ```
 
 Included:
@@ -82,11 +83,15 @@ Included:
 - `test_delete_purges_every_derivative_and_keeps_google_by_default` now proves that the
   task, its source and its revision are gone before the corpus tables.
 
-Full suite at the code head (same working tree, before the documentation-only commits):
+Merge note: `develop@158702b` added its own revision `0010` (A2.12). A3.1's task
+tables moved to `0011_s3_tasks` and this fix to `0012_s3_task_source_membership` so the
+chain stays linear; the parent assertions and the `test_rls_migration` probe were updated.
+
+Full suite at the merge head (same working tree, before the evidence-only commit):
 
 ```
 $ uv run pytest tests/integration -q -m "not provider and not load"
-590 passed, 1 deselected, 540 warnings in 107.45s
+613 passed, 1 deselected, 598 warnings in 93.20s
 ```
 
 ## Quality CI
