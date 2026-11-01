@@ -386,5 +386,8 @@ usage.
 - [ ] The schema supports every API contract: dedupe decided in the PUT, versioned consent,
   spans/task_sources, agenda start/end, revisions, versions, and traceable deletion.
 - [ ] Consent, isolation, and human confirmation also apply to jobs, tools, and later changes.
+- [ ] Private API responses are `Cache-Control: no-store` structurally (routes, errors,
+  redirects and SSE); every rate limit is a recorded decision and answers `429`/`503` with
+  `Retry-After`, failing closed when the limiter is unavailable.
 - [ ] All pending or blocked gates are reported; no documentary test is presented as
   application/provider validation.

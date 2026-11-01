@@ -1142,11 +1142,11 @@ assign a person or ticket ownership. The effective owner is looked up in
 | Origin | Same-origin behind Caddy; absolute routes as in the specification (no `/api` prefix) |
 | Session | Opaque cookie `mw_session` (`Secure`, `HttpOnly`, `SameSite=Lax`); the server stores only the hash |
 | CSRF | `GET /me` delivers the plain token under `Cache-Control: no-store`; the server keeps only `csrf_hash`. Every mutation (`POST`/`PUT`/`PATCH`/`DELETE`, including binary) requires a valid `X-CSRF-Token` and a matching `Origin`. Rotates with the session, not per read. |
-| HTTP privacy | `Cache-Control: no-store` on private content; the service worker (if any, S4) excludes upload/API/transcripts/chat/SSE |
+| HTTP privacy | `Cache-Control: no-store` on private content, enforced structurally on every API response (routes, errors, redirects and SSE); the service worker (if any, S4) excludes upload/API/transcripts/chat/SSE |
 | Identity | `user_id` always from backend session state; never from a payload or LLM output |
 | Tracing | JSON logs with `request_id`, `audio_id`, `attempt_id`, `run_id`; no sensitive payloads |
 | Pagination | `limit` (1–200, default 50) + opaque `cursor` |
-| Quotas | `429` with `Retry-After` for per-user quota; `503` with `Retry-After` for ingestion capacity. Effective values TBD after F0 |
+| Quotas | `429` with `Retry-After` for per-user quota; `503` with `Retry-After` for ingestion capacity or a limiter outage (fail closed). Active values come only from recorded decisions: M5/M6/M7 and D4/D5. Authentication and incremental consent have no published number yet, so their fixed-window mechanism is configuration-driven and unset means no limit |
 | Language | No preselection or autodetection; `multi` and translation out of MVP/v1. Codes are compared case-insensitively (BCP-47) and stored lowercase |
 
 ### 3.2 Error envelope and codes
@@ -1235,20 +1235,28 @@ itself `retryable=false` in `details`: the header is the retry signal (A2.19).
 
 | Method | Route | Sprint | Description | Response |
 |---|---|---|---|---|
-| `GET` | `/auth/google/start` | S1 | OAuth Authorization Code with `state`, PKCE, and `nonce`; scopes `openid email profile` | `302` to Google |
-| `GET` | `/auth/google/callback` | S1 | Validates `nonce`/issuer/audience; creates the user by `sub`; issues an opaque session | `302` to `/` with cookie |
+| `GET` | `/auth/google/start` | S1 | OAuth Authorization Code with `state`, PKCE, and `nonce`; scopes `openid email profile` | `302` to Google · `429` conditional · `503` |
+| `GET` | `/auth/google/callback` | S1 | Validates `nonce`/issuer/audience; creates the user by `sub`; issues an opaque session | `302` to `/` with cookie · `429` conditional · `503` |
 | `POST` | `/auth/logout` | S1 | Revokes the session | `204` |
 | `GET` | `/me` | S1 | Profile + non-cacheable CSRF bootstrap; integration status is `GET /integrations/status` | `200` (shape below) |
 | `PATCH` | `/me` | S1 | Updates `timezone` (IANA) only | `200` |
 | `GET` | `/integrations/status` | S1 | Login/Calendar/Gmail status, scopes, freshness | `200` |
-| `POST` | `/integrations/google/connect` | S3 | Incremental OAuth with Calendar scopes (real verification D7) | `302` to Google |
-| `POST` | `/integrations/google/reconnect` | S3 | Re-authorization after `invalid_grant` (Testing expires after 7 days) | `302` to Google |
+| `POST` | `/integrations/google/connect` | S3 | Incremental OAuth with Calendar scopes (real verification D7) | `302` to Google · `429` conditional · `503` |
+| `POST` | `/integrations/google/reconnect` | S3 | Re-authorization after `invalid_grant` (Testing expires after 7 days) | `302` to Google · `429` conditional · `503` |
 | `GET` | `/me/notifications` | S4 | Current M8 preferences (read companion of the PATCH) | `200` |
 | `PATCH` | `/me/notifications` | S4 | M8 preferences (Gmail opt-in, digests, thresholds) | `200` |
 | `POST` | `/notifications/test` | S4 | Test send to the verified email | `202` |
 | `DELETE` | `/me` | S4 | Account deletion; accepts explicit `delete_maulwurf_events` (default `false` keeps Maulwurf-created Google events), creates the operation, claims it atomically, and requests remote deletions before revoking tokens; a post-tombstone failure still answers `202` and stays resumable | `202 {deletion_operation_id}` |
 | `GET` | `/me/deletion/{id}` | S4 | Non-sensitive deletion status; accepts the restricted initiator session | `pending\|running\|completed\|completed_with_remote_failures` |
 | `POST` | `/me/deletion/{id}/resume` | S4 | Authorized retry of a `pending`/`running` operation; accepts the restricted initiator session with Origin/CSRF; an already-closed operation is a no-op | `202` (still open) · `200` (closed) · `403` · `404` |
+
+The four OAuth entry points carry A4.6's fixed-window abuse guard. `/auth/google/start`
+and `/auth/google/callback` are keyed by a hash of the peer address; `connect`/`reconnect`
+are keyed by the authenticated user. No numeric decision exists yet (D4/D5 open), so the
+limits are configuration (`MAULWURF_AUTH_RATE_LIMIT_PER_MINUTE`,
+`MAULWURF_INTEGRATION_RATE_LIMIT_PER_MINUTE`) and unset means "no limit", the same rule as
+the A2.3 upload quota. When enabled they answer `429 rate_limited` with `Retry-After`; a
+Redis outage fails closed with `503 capacity_unavailable` and `Retry-After`.
 
 After `DELETE /me`, the session that started the operation enters **restricted mode**: only
 `GET /me/deletion/{id}`, `POST /me/deletion/{id}/resume` and `POST /auth/logout`; every other

@@ -65,8 +65,14 @@ def csrf_invalid() -> ApiError:
 
 def _response(error: ApiError, extra_headers: dict[str, str] | None = None) -> JSONResponse:
     body = {"error": {"code": error.code, "message": error.message, "details": error.details}}
-    headers = {**error.headers, **(extra_headers or {})}
-    return JSONResponse(status_code=error.status_code, content=body, headers=headers or None)
+    # A4.6: every error is private too, and the unhandled-500 handler runs outside the
+    # `NoStoreMiddleware` stack, so the header is repeated here instead of assumed.
+    headers = {
+        "Cache-Control": "no-store",
+        **error.headers,
+        **(extra_headers or {}),
+    }
+    return JSONResponse(status_code=error.status_code, content=body, headers=headers)
 
 
 async def _handle(_: Request, exc: Exception) -> JSONResponse:

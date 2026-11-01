@@ -107,6 +107,12 @@ class Settings(BaseSettings):
     # A2.11: provisional per-user search quota (one embeddings call per search). D5/F0
     # must replace it with the provider quota measured by the contract spike.
     search_rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
+    # A4.6: authentication and incremental consent have no published numeric decision yet
+    # (D4/D5 open), so the fixed-window mechanism ships wired but unset. `None` means "no
+    # limit", the same rule as the A2.3 upload quota; a deployment that freezes a number
+    # enables it without a code change.
+    auth_rate_limit_per_minute: int | None = Field(default=None, ge=1, le=600)
+    integration_rate_limit_per_minute: int | None = Field(default=None, ge=1, le=600)
     # Contrato de ingesta S1 (A1.8). Valores provisionales hasta D2/D4 (S1.A8/A2.2):
     # allowlist propuesta por S1.A3 y límite de bytes de `.env.example` (200 MiB, no aprobado).
     privacy_notice_version: str = "2026-09-v1"
