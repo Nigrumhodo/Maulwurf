@@ -262,7 +262,10 @@ clean them up at the end.
   deployed. T-48/T-24/T-2 h for instants; T-3d/T-1d at local time for all-day; no
   retrospective burst.
 - [ ] Digests by local date; DST, due-date/preference changes, and cancellation of stale
-  occurrences. Confirm task deletion/completion immediately before claiming a send.
+  occurrences. A future occurrence cancelled by a preference is re-armed only when the same
+  task generation is scheduled again with the threshold enabled, and never after a delivery
+  attempt or a terminal delivery state. Confirm task deletion/completion immediately before
+  claiming a send.
 - [ ] Ambiguous Gmail failure or expired `sending` lease → `delivery_unknown`, no blind
   retry. State that an already sent/in-flight email cannot be recalled when deleting a task.
 - [ ] Delivery/failed-sync panel with warned manual resend, preferences, statistics, and
