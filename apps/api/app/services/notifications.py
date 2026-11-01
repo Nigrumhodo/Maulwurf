@@ -16,10 +16,14 @@ words directly:
   task, or a reminder/digest type no longer enabled by the preferences. ``sending`` (it may
   already be leaving through Gmail) and every terminal state stay untouched, and a stale
   occurrence whose instant already passed is cancelled instead of being delivered late.
-- ``sent``, ``failed``, ``delivery_unknown`` and ``cancelled`` are terminal and absorbing.
+- ``sent``, ``failed``, ``delivery_unknown`` and ``cancelled`` are terminal for delivery.
   In particular ``delivery_unknown`` never returns to ``pending`` or ``sending``: Gmail does
   not offer exactly-once delivery, so the system never retries it automatically. A manual
-  resend is a new audited occurrence (A4.2/J4.5).
+  resend is a new audited occurrence (A4.2/J4.5). A4.3's cancellation of a **scheduled**
+  occurrence is the one reversible case at the scheduling layer: J4.3 may re-arm that same
+  row when the threshold is enabled again and the task generation is confirmed, because the
+  row was never claimed or delivered. The delivery helpers never perform that transition and
+  a manual resend of a cancelled row stays rejected.
 - A ``sending`` row without a lease cannot prove a live owner, so it fails closed as
   ``delivery_unknown`` (uncertain), never as a retryable state.
 
@@ -457,7 +461,9 @@ def redact_error_code(value: str | None) -> str | None:
 # Only an occurrence that did not provably reach the provider can be manually repeated:
 # `failed` is a known non-delivery and `delivery_unknown` may not have been delivered.
 # `pending` is already queued, `sending` is in flight, `sent` is a confirmed duplicate and
-# `cancelled` is an obsolete occurrence that must not be revived.
+# `cancelled` is an obsolete occurrence that must not be revived by a manual resend. J4.3's
+# scheduler may re-arm the same scheduled occurrence through its explicit upsert; that is a
+# scheduling decision, not this endpoint's repetition.
 RESENDABLE_STATUSES: Final = frozenset({"failed", "delivery_unknown"})
 
 

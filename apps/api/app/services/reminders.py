@@ -34,9 +34,12 @@ yet move a nonexistent hour to the next valid instant. A repeated hour resolves 
 occurrence (one local occurrence, as M8 requires).
 
 The persistence adapter writes the plan and the A4.3 obsolete-generation cancellation in the
-caller's transaction. `ON CONFLICT DO NOTHING` makes a repeated confirmation idempotent: the
-same task version can never duplicate an occurrence, and the previous generation is retired
-before the new rows are inserted.
+caller's transaction. The upsert only conflicts on `uq_notifications_dedupe_key`: a repeated
+confirmation of the same task version updates nothing while the occurrence is still pending,
+and it re-arms a scheduled occurrence that A4.3 cancelled (for example after a preference was
+disabled and enabled again). A row that is `sending`, `sent`, `failed` or `delivery_unknown`
+is never rewritten, so the idempotent re-confirmation cannot resend a delivery. The previous
+generation is retired before the new rows are inserted.
 """
 
 import uuid
@@ -166,6 +169,8 @@ class ReminderSchedule:
     """Counts of one scheduling attempt; no row payload leaves the adapter."""
 
     planned: int
+    # Occurrences armed by the attempt: newly inserted plus `cancelled` rows reopened by the
+    # upsert. A pending duplicate is not counted because it was already armed.
     inserted: int
     cancelled: int
 
@@ -351,11 +356,41 @@ async def load_reminder_preferences(
 
 
 async def _database_clock(db: AsyncSession) -> datetime:
-    """PostgreSQL's instant, so a skewed API host cannot arm or skip a threshold."""
-    value = await db.scalar(select(func.now()))
+    """PostgreSQL's current instant, so a skewed API host cannot arm or skip a threshold.
+
+    `now()` is the start of the transaction, not the moment of the comparison: a long
+    confirmation transaction would measure "already past" against a stale instant and could
+    arm a retrospective reminder. `clock_timestamp()` is the statement instant, which is
+    what "now" means for this gate. J4.2's scheduler keeps `now()` on purpose: its tick is a
+    single bound transaction where the election, the expiry sweep and the claim must share
+    one instant, and both expressions come from the same database server clock.
+    """
+    value = await db.scalar(select(func.clock_timestamp()))
     if not isinstance(value, datetime) or value.tzinfo is None:
         raise _error("clock_invalid", "the database did not return a timezone-aware instant")
     return value
+
+
+def _rearmed_values(statement: Any) -> dict[str, Any]:
+    """Columns reopened when a cancelled scheduled occurrence is armed again.
+
+    Only `cancelled` rows reach this branch (the conflict clause's WHERE), and A4.3 only
+    cancels rows that are still `pending`, so the delivery fields must already be empty. They
+    are reset anyway so an unusual historical row can never come back as `pending` with a
+    lease or delivery proof that violates the M8 CHECKs, and a re-armed occurrence starts
+    with a clean attempt count.
+    """
+    return {
+        "status": "pending",
+        "scheduled_at": statement.excluded.scheduled_at,
+        "lease_expires_at": None,
+        "attempts": 0,
+        "claimed_by_fence": None,
+        "sent_at": None,
+        "provider_message_id": None,
+        "last_error_code": None,
+        "updated_at": func.now(),
+    }
 
 
 async def schedule_task_reminders(
@@ -372,14 +407,18 @@ async def schedule_task_reminders(
     The plan is built (and validated) before anything is written, so an invalid timezone or
     preference never retires the previous generation. A4.3 owns *which* occurrences are
     obsolete, so the adapter reuses its store: pending reminders of another `due_version`
-    of this task are cancelled before the new generation is inserted. `ON CONFLICT DO
-    NOTHING` then absorbs a repeated confirmation of the same version. The caller commits; a
-    crash cannot leave the old generation armed next to the new one.
+    of this task are cancelled before the new generation is inserted. The upsert targets
+    `uq_notifications_dedupe_key` explicitly: a repeated confirmation of the same version
+    leaves a still-pending occurrence untouched, and reopens a row A4.3 cancelled (the user
+    disabled and re-enabled a threshold) so the reminder is not silently lost. `sending`,
+    `sent`, `failed` and `delivery_unknown` never match the reopen condition and keep their
+    delivery history. The caller commits; a crash cannot leave the old generation armed next
+    to the new one.
 
-    With no explicit `now`, the comparison uses PostgreSQL's clock (like the J4.2
-    scheduler), not the API host's. No insert happens for an undated or non-confirmed task;
-    the cancellation still runs so an edit that removed the date retires the generation that
-    was armed before it.
+    With no explicit `now`, the comparison uses PostgreSQL's current instant (the same
+    database clock the J4.2 scheduler uses), not the API host's. No insert happens for an
+    undated or non-confirmed task; the cancellation still runs so an edit that removed the
+    date retires the generation that was armed before it.
     """
     instant = now if now is not None else await _database_clock(db)
     occurrences = plan_task_reminders(
@@ -404,12 +443,19 @@ async def schedule_task_reminders(
             "due_version": occurrence.due_version,
             "scheduled_at": occurrence.scheduled_at,
             "dedupe_key": occurrence.dedupe_key,
+            # A4.2 reserves 0 for the scheduled occurrence; a manual resend takes >= 1.
             "occurrence_seq": 0,
             "status": "pending",
         }
         for occurrence in occurrences
     ]
-    result = await db.execute(pg_insert(Notification).values(rows).on_conflict_do_nothing())
+    statement = pg_insert(Notification).values(rows)
+    upsert = statement.on_conflict_do_update(
+        constraint="uq_notifications_dedupe_key",
+        set_=_rearmed_values(statement),
+        where=Notification.status == "cancelled",
+    )
+    result = await db.execute(upsert)
     inserted = max(int(cast(CursorResult[Any], result).rowcount or 0), 0)
     return ReminderSchedule(
         planned=len(occurrences), inserted=inserted, cancelled=cancelled

@@ -998,7 +998,12 @@ CREATE INDEX notifications_due ON notifications (status, scheduled_at) WHERE sta
   pending row whose instant already passed is cancelled too, so it can
   never fire late. Deleting a task cascades to its reminders (A4.1): an unlinked
   reminder would be undeliverable and would also collide with another deleted task's
-  occurrence under `NULLS NOT DISTINCT`.
+  occurrence under `NULLS NOT DISTINCT`. A **scheduled** occurrence that A4.3 cancelled can
+  be re-armed when the same task generation is scheduled again and the threshold is enabled
+  (for example after disabling and re-enabling a preference): it was never claimed or
+  delivered. The re-arm targets `uq_notifications_dedupe_key` and only reopens `cancelled`
+  rows; `sending`, `sent`, `failed` and `delivery_unknown` keep their history, and a manual
+  resend of a cancelled row remains forbidden.
 - J4.3 resolves `occurrence` as the user-local target day of the delivery: the local date of
   `due_at - threshold` for timed reminders and `due_date - offset` for all-day ones. A4.1
   freezes no reminder wall-clock preference (only the digest time), so the all-day default is
