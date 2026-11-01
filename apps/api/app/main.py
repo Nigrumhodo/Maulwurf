@@ -5,6 +5,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from fastapi import FastAPI
 
+from app.core.cache_control import NoStoreMiddleware
 from app.core.db import engine
 from app.core.errors import install_error_handlers
 from app.core.logging import configure_logging
@@ -46,6 +47,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Maulwurf API", version=__version__, lifespan=lifespan)
 install_error_handlers(app)
 app.add_middleware(RequestIdMiddleware)
+# Added last so it is the outermost user middleware: it sees redirects, SSE starts and the
+# framework's own 404/405, not only the routes that remembered the header.
+app.add_middleware(NoStoreMiddleware)
 app.include_router(health.router)
 app.include_router(ingestion.router)
 app.include_router(me.router)
