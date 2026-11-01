@@ -404,8 +404,7 @@ async def _cancel_unscheduled_digests(
             Notification.occurrence < occurrence.occurrence,
             or_(
                 Notification.scheduled_at > now,
-                Notification.occurrence
-                < _current_period(occurrence.type, local_day),
+                Notification.occurrence < _current_period(occurrence.type, local_day),
             ),
         )
         for occurrence in planned
