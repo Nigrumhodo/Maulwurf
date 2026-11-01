@@ -79,6 +79,8 @@ explicit Definition of Done. See "Sprint Model" below.
     migrations, tests, lint).
   - `docs/runbooks/cleanup.md` — S4.1 executable cleanup/recovery runbook (failed
     cleanup, 60 s operator sweeper, host-loss attestation).
+  - `docs/runbooks/restore.md` — A4.5 executable D8 backup/restore procedure (encrypted
+    text/metadata only, 30-day retention, tombstone reapplication on a clean restore).
 - `infra/` — Local development stack (area `J-`, merged): `docker-compose.yml` (8 services
   with healthchecks, images pinned by digest) and `Caddyfile` (local TLS proxy without
   buffering, with the J2.10 edge body/timeout limits; [ADR-0010](docs/adr/ADR-0010-ingress.md)
@@ -87,8 +89,9 @@ explicit Definition of Done. See "Sprint Model" below.
   `README.scaffold.md`); `scripts/ci/` holds the CI guards, `scripts/docs/` the
   documentation checks and diagram export, `scripts/provider/` the Riva spike scripts
   (protected `P-*` provider runs), `scripts/e2e/` the synthetic class helper, the J2.6
-  pipeline smoke and its deterministic provider/Riva doubles, and
-  `scripts/load/` the proxy no-buffering and load helpers.
+  pipeline smoke and its deterministic provider/Riva doubles, `scripts/load/` the proxy
+  no-buffering and load helpers, and `scripts/ops/` the A4.5 D8 backup/restore driver
+  (`backup_restore.sh`) with its tombstone replay SQL (`restore_reapply.sql`).
 - `.env.example` — Template for `MAULWURF_*`, Google OAuth, NVIDIA, and provisional ingest
   limit variables; copy to `.env` (never commit `.env`).
 - `.gitignore`, `AGENTS.md`, `LICENSE` (AGPL-3.0), `README.md`, `README.scaffold.md`
@@ -417,6 +420,7 @@ versioned or retained as a CI artifact. Persist only non-sensitive metrics and e
 - [`docs/RUNBOOK-dev.md`](docs/RUNBOOK-dev.md) — Development runbook: local stack,
   healthchecks, migrations, tests, and lint.
 - [`docs/runbooks/cleanup.md`](docs/runbooks/cleanup.md) — S4.1 cleanup/recovery runbook.
+- [`docs/runbooks/restore.md`](docs/runbooks/restore.md) — A4.5 D8 backup/restore runbook.
 - [`docs/sprints/CLAIMS.md`](docs/sprints/CLAIMS.md) — Canonical claim registry (S1–S4).
 - [`docs/sprints/README.md`](docs/sprints/README.md) — Claiming rules and logbook template;
   one logbook per member in that directory.
@@ -429,5 +433,6 @@ versioned or retained as a CI artifact. Persist only non-sensitive metrics and e
 - [`LICENSE`](LICENSE) — GNU Affero General Public License, version 3.
 - `> TODO:` add `docs/ARCH.md` and the production runbooks J4.8 owns (provider outage,
   tokens, restore, account deletion); S4.1's cleanup runbook is
-  [`docs/runbooks/cleanup.md`](docs/runbooks/cleanup.md). The development runbook is
+  [`docs/runbooks/cleanup.md`](docs/runbooks/cleanup.md) and A4.5's restore runbook is
+  [`docs/runbooks/restore.md`](docs/runbooks/restore.md). The development runbook is
   [`docs/RUNBOOK-dev.md`](docs/RUNBOOK-dev.md); L1.2 ADRs are in `docs/adr/`.

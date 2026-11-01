@@ -81,10 +81,10 @@ from app.services.google_tokens import GoogleTokenError, fresh_access_token
 
 logger = logging.getLogger(__name__)
 
-# Provisional retention of the residual operation. It mirrors the proposed 30-day maximum
-# for encrypted backups (ESPECIFICACION, privacy section); A4.5/D8 must confirm it before
-# it is presented as a retention guarantee. The status route answers 404 after it, and the
-# scheduled purge deletes both residual tables once it passes.
+# Residual retention. D8 (A4.5) approved a 30-day maximum for encrypted text/metadata
+# backups, so this window is no longer provisional and must stay equal to the backup
+# retention in `scripts/ops/backup_restore.sh`. The status route answers 404 after it, and
+# the scheduled purge deletes both residual tables once it passes.
 RESIDUAL_RETENTION_DAYS = 30
 # A live execution keeps this claim; a crash releases it only after the lease, never while
 # another caller could still be running the same remote deletes.
