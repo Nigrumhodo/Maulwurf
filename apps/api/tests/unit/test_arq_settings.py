@@ -6,17 +6,21 @@ import pytest
 from arq.worker import Function
 
 from app.core.config import settings as app_settings
+from app.services.digests import DigestMaterialization
 from app.services.scheduler_lease import SchedulerReport
 from app.workers import arq_app
 from app.workers.arq_app import (
+    DIGEST_SECOND,
     HEALTH_CHECK_INTERVAL_S,
     RECONCILE_EVERY_MINUTES,
+    RECONCILE_SECOND,
     RETENTION_MINUTE,
     RETENTION_SECOND,
     SchedulerSettings,
     WorkerSettings,
     analyze,
     dispatch_outbox,
+    materialize_digests,
     purge_residuals,
     reconcile,
     schedule_notifications,
@@ -55,11 +59,12 @@ def test_worker_registers_index_analyze_and_calendar_sync_with_their_budgets() -
     assert calendar_function.timeout_s == CALENDAR_SYNC_TIMEOUT_S
 
 
-def test_scheduler_runs_only_the_outbox_notification_reconciler_and_retention_crons() -> None:
+def test_scheduler_runs_the_outbox_notification_digest_reconciler_and_retention_crons() -> None:
     assert not hasattr(SchedulerSettings, "functions")
     assert [job.coroutine for job in SchedulerSettings.cron_jobs] == [
         dispatch_outbox,
         schedule_notifications,
+        materialize_digests,
         reconcile,
         purge_residuals,
     ]
@@ -166,27 +171,115 @@ async def test_notification_scheduler_cron_is_a_no_op_while_disabled(
     assert events == []
 
 
+def test_digest_materializer_cron_runs_off_the_claim_second() -> None:
+    _dispatch, _schedule, digest, _reconcile, _retention = SchedulerSettings.cron_jobs
+    assert digest.coroutine is materialize_digests
+    assert digest.second == DIGEST_SECOND
+    assert digest.second not in {0, RECONCILE_SECOND}
+    assert digest.minute is None and digest.run_at_startup
+
+
+async def test_digest_cron_survives_a_database_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    @asynccontextmanager
+    async def broken_scope() -> AsyncIterator[None]:
+        raise ConnectionRefusedError("connect to db failed: CANARIO-9d2b4a user=maulwurf")
+        yield
+
+    monkeypatch.setattr(app_settings, "notification_scheduler_enabled", True)
+    monkeypatch.setattr(arq_app, "session_scope", broken_scope)
+
+    await materialize_digests({})
+
+    assert "materialize_digests.failed error=ConnectionRefusedError" in caplog.text
+    assert "CANARIO-9d2b4a" not in caplog.text
+
+
+async def test_digest_cron_uses_the_cross_tenant_jobs_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[object] = []
+    token = object()
+
+    def _bind() -> object:
+        events.append("bind")
+        return token
+
+    def _reset(value: object) -> None:
+        events.append(value is token)
+
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[object]:
+        yield object()
+
+    async def fake_materialize(db: object) -> DigestMaterialization:
+        del db
+        events.append("run")
+        return DigestMaterialization(
+            users=1, planned=2, written=2, cancelled=0, skipped=0
+        )
+
+    monkeypatch.setattr(app_settings, "notification_scheduler_enabled", True)
+    monkeypatch.setattr(arq_app, "bind_cross_tenant", _bind)
+    monkeypatch.setattr(arq_app, "reset_cross_tenant", _reset)
+    monkeypatch.setattr(arq_app, "session_scope", scope)
+    monkeypatch.setattr(arq_app, "materialize_due_digests", fake_materialize)
+
+    await materialize_digests({})
+
+    assert events == ["bind", "run", True]
+
+
+async def test_digest_cron_is_a_no_op_while_the_scheduler_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """J4.1 owns the consumer of `sending`; digest rows must not pile up before it exists."""
+    events: list[str] = []
+
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[object]:
+        events.append("session")
+        yield object()
+
+    async def fake_materialize(db: object) -> DigestMaterialization:
+        del db
+        events.append("run")
+        return DigestMaterialization(
+            users=0, planned=0, written=0, cancelled=0, skipped=0
+        )
+
+    monkeypatch.setattr(app_settings, "notification_scheduler_enabled", False)
+    monkeypatch.setattr(arq_app, "bind_cross_tenant", lambda: events.append("bind"))
+    monkeypatch.setattr(arq_app, "session_scope", scope)
+    monkeypatch.setattr(arq_app, "materialize_due_digests", fake_materialize)
+
+    await materialize_digests({})
+
+    assert events == []
+
+
 def test_dispatch_cron_runs_every_minute_at_second_zero() -> None:
-    dispatch, _schedule, _reconcile, _retention = SchedulerSettings.cron_jobs
+    dispatch, _schedule, _digest, _reconcile, _retention = SchedulerSettings.cron_jobs
     assert dispatch.second == 0
     assert dispatch.minute is None and dispatch.run_at_startup
 
 
 def test_notification_scheduler_cron_runs_every_minute_and_at_startup() -> None:
-    _dispatch, schedule, _reconcile, _retention = SchedulerSettings.cron_jobs
+    _dispatch, schedule, _digest, _reconcile, _retention = SchedulerSettings.cron_jobs
     assert schedule.coroutine is schedule_notifications
     assert schedule.second == 0
     assert schedule.minute is None and schedule.run_at_startup
 
 
 def test_reconciler_cron_runs_on_a_fixed_minute_grid_off_the_dispatcher_second() -> None:
-    _dispatch, _schedule, reconciler, _retention = SchedulerSettings.cron_jobs
+    _dispatch, _schedule, _digest, reconciler, _retention = SchedulerSettings.cron_jobs
     assert reconciler.second != 0
     assert reconciler.minute == set(range(0, 60, RECONCILE_EVERY_MINUTES))
 
 
 def test_retention_cron_runs_hourly_off_the_other_crons() -> None:
-    _dispatch, _schedule, _reconcile, retention = SchedulerSettings.cron_jobs
+    _dispatch, _schedule, _digest, _reconcile, retention = SchedulerSettings.cron_jobs
     assert retention.second == RETENTION_SECOND
     assert retention.minute == RETENTION_MINUTE
     assert retention.second not in {0, 30}
