@@ -350,6 +350,8 @@ async def test_the_elected_scheduler_claims_a_due_row_once(
     assert claimed.status == "sending"
     assert claimed.attempts == 1
     assert claimed.lease_expires_at == NOW + DELIVERY_LEASE
+    assert report.lease is not None
+    assert claimed.claimed_by_fence == report.lease.fencing_token == 1
     assert stored[future.id].status == "pending"
     assert stored[cancelled.id].status == "cancelled"
     assert stored[sent.id].status == "sent"
@@ -386,11 +388,57 @@ async def test_the_claim_uses_the_database_clock_not_the_host_clock(
     monkeypatch.setattr(scheduler_lease, "datetime", _HostClockAhead)
 
     async with factory() as db:
-        claimed = await claim_due_notifications(db, limit=10)
+        claimed = await claim_due_notifications(db, fencing_token=1, limit=10)
         await db.commit()
     assert claimed == []
     stored = await _get(factory, notification_id)
     assert stored[notification_id].status == "pending"
+
+
+async def test_the_claim_persists_the_elected_fence_and_a_stale_row_keeps_it(
+    committed_db: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+    actor: Actor,
+) -> None:
+    """J4.1 needs the claim's fence on the row to reject a superseded scheduler.
+
+    The first claim belongs to election 1. After a takeover, a new row is claimed under
+    fence 2 while the first row still proves fence 1: comparing both with the live election
+    is what a sender can use to refuse a stale hand-off.
+    """
+    _engine, factory = committed_db
+    role = _role()
+    first_due = _notification(actor, scheduled_at=NOW - timedelta(minutes=2), sequence=0)
+    (first_id,) = await _store(factory, first_due)
+
+    first = await _run(factory, role=role, holder="host-a")
+    assert first.lease is not None
+    assert first.lease.fencing_token == 1
+    stored = await _get(factory, first_id)
+    assert stored[first_id].claimed_by_fence == 1
+
+    # The holder dies without renewing; the election row is now expired on the DB clock.
+    async with factory() as db:
+        await db.execute(
+            text(
+                "UPDATE scheduler_leases "
+                "SET lease_expires_at = now() - interval '1 second', "
+                "heartbeat_at = now() - interval '2 seconds' "
+                "WHERE name = :name"
+            ),
+            {"name": role},
+        )
+        await db.commit()
+
+    second_due = _notification(actor, scheduled_at=NOW - timedelta(minutes=1), sequence=1)
+    (second_id,) = await _store(factory, second_due)
+    second = await _run(factory, role=role, holder="host-b")
+    assert second.lease is not None
+    assert second.lease.fencing_token == 2
+
+    stored = await _get(factory, first_id, second_id)
+    assert stored[first_id].claimed_by_fence == 1
+    assert stored[first_id].status == "sending"
+    assert stored[second_id].claimed_by_fence == 2
 
 
 async def test_two_workers_claim_disjoint_due_rows_with_skip_locked(
@@ -414,7 +462,9 @@ async def test_two_workers_claim_disjoint_due_rows_with_skip_locked(
 
     async def worker(limit: int, claimed_event: asyncio.Event) -> list[uuid.UUID]:
         async with factory() as db:
-            claimed = await claim_due_notifications(db, now=NOW, limit=limit)
+            claimed = await claim_due_notifications(
+                db, fencing_token=1, now=NOW, limit=limit
+            )
             claimed_event.set()
             await release.wait()
             await db.commit()
@@ -464,21 +514,22 @@ async def test_the_claim_is_ordered_by_due_instant_and_bounded(
     ids = await _store(factory, *rows)
 
     async with factory() as db:
-        first = await claim_due_notifications(db, now=NOW, limit=2)
+        first = await claim_due_notifications(db, fencing_token=1, now=NOW, limit=2)
         await db.commit()
     assert [row.scheduled_at for row in first] == sorted(
         row.scheduled_at for row in first
     )
     first_ids = {row.id for row in first}
     assert first_ids == {ids[0], ids[1]}
+    assert {row.fencing_token for row in first} == {1}
 
     async with factory() as db:
-        second = await claim_due_notifications(db, now=NOW, limit=2)
+        second = await claim_due_notifications(db, fencing_token=1, now=NOW, limit=2)
         await db.commit()
     assert [row.id for row in second] == [ids[2]]
 
     async with factory() as db:
-        third = await claim_due_notifications(db, now=NOW, limit=2)
+        third = await claim_due_notifications(db, fencing_token=1, now=NOW, limit=2)
         await db.commit()
     assert third == []
 

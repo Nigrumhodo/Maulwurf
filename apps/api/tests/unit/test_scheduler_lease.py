@@ -4,6 +4,7 @@ import os
 from datetime import timedelta
 from typing import cast
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.scheduler_lease import (
@@ -13,6 +14,7 @@ from app.services.scheduler_lease import (
     DELIVERY_SLA,
     SCHEDULER_ROLE,
     SchedulerReport,
+    claim_due_notifications,
     process_holder,
     run_notification_scheduler,
 )
@@ -66,3 +68,9 @@ async def test_a_disabled_scheduler_never_touches_the_database() -> None:
     report = await run_notification_scheduler(cast(AsyncSession, object()))
 
     assert report == SchedulerReport(active=False)
+
+
+async def test_a_claim_rejects_a_missing_fencing_token_before_writing() -> None:
+    # A claim without a fence would produce a `sending` row J4.1 cannot validate.
+    with pytest.raises(ValueError, match="fencing"):
+        await claim_due_notifications(cast(AsyncSession, object()), fencing_token=0)

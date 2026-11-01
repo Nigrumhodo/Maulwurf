@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 import pytest
 from arq.worker import Function
 
+from app.core.config import settings as app_settings
 from app.services.scheduler_lease import SchedulerReport
 from app.workers import arq_app
 from app.workers.arq_app import (
@@ -98,7 +99,7 @@ async def test_notification_scheduler_cron_survives_a_database_failure(
         yield
 
     monkeypatch.setattr(arq_app, "session_scope", broken_scope)
-    monkeypatch.setattr(arq_app.settings, "notification_scheduler_enabled", True)
+    monkeypatch.setattr(app_settings, "notification_scheduler_enabled", True)
 
     await schedule_notifications({})
 
@@ -128,7 +129,7 @@ async def test_notification_scheduler_cron_uses_the_cross_tenant_jobs_policy(
         events.append(("run", enabled))
         return SchedulerReport(active=True, claimed=1)
 
-    monkeypatch.setattr(arq_app.settings, "notification_scheduler_enabled", True)
+    monkeypatch.setattr(app_settings, "notification_scheduler_enabled", True)
     monkeypatch.setattr(arq_app, "bind_cross_tenant", _bind)
     monkeypatch.setattr(arq_app, "reset_cross_tenant", _reset)
     monkeypatch.setattr(arq_app, "session_scope", scope)
@@ -155,7 +156,7 @@ async def test_notification_scheduler_cron_is_a_no_op_while_disabled(
         events.append("run")
         return SchedulerReport(active=True, claimed=1)
 
-    monkeypatch.setattr(arq_app.settings, "notification_scheduler_enabled", False)
+    monkeypatch.setattr(app_settings, "notification_scheduler_enabled", False)
     monkeypatch.setattr(arq_app, "bind_cross_tenant", lambda: events.append("bind"))
     monkeypatch.setattr(arq_app, "session_scope", scope)
     monkeypatch.setattr(arq_app, "run_notification_scheduler", fake_run)

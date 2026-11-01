@@ -78,3 +78,43 @@ $ uv run pytest -m "not integration and not provider and not load" -q
 $ python3 scripts/docs/check_refs.py
 OK: 946 documented repository paths exist or are expected.
 ```
+
+## Fix1 after the hoplite review (2026-11-01)
+
+Changes: the scheduler cron is disabled by default
+(`MAULWURF_NOTIFICATION_SCHEDULER_ENABLED=false`) until J4.1 consumes `sending`; the
+election, expiry sweep and due comparison use PostgreSQL's transaction clock (`now()`)
+instead of each host's wall clock; migration `0018` adds `notifications.claimed_by_fence`
+and the atomic claim writes the elected fence so J4.1 can validate it before sending.
+
+```text
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 279 source files
+
+$ uv run pytest tests/unit -q          # sanitized NO_PROXY
+1576 passed, 35 warnings
+
+$ uv run pytest tests/integration/test_notification_scheduler.py -q
+12 passed
+
+$ uv run pytest tests/integration/test_migrations.py -q
+30 passed
+
+$ uv run pytest tests/integration -q   # sanitized NO_PROXY
+740 passed, 776 warnings
+
+$ python3 scripts/docs/check_refs.py
+OK: 947 documented repository paths exist or are expected.
+```
+
+The raw sandbox environment still produces the same two pre-existing bracketed-IPv6
+`httpx` failures in unit tests (`test_ingest_sink`/`test_llm`) and 19 instances in the ingest
+reception integration file; both disappear with a `NO_PROXY` without bracketed IPv6 entries
+and are unrelated to this diff. The new scheduler cases cover a host clock far ahead of the
+database for election, expiry and due comparison, the persisted fence across a takeover,
+the disabled cron and the disabled service, and the `has_table_privilege` guard for
+app/jobs/ingest on both `scheduler_leases` and `notifications`.
+

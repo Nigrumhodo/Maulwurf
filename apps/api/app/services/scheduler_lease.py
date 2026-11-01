@@ -27,9 +27,18 @@ Rows another worker already claimed are skipped instead of waited on, so several
 drain a backlog without blocking each other and without claiming a row twice. `dedupe_key`
 (the A4.1 unique identity) still makes a duplicate occurrence impossible by construction.
 
+Each claim also persists the elected `fencing_token` in `notifications.claimed_by_fence`.
+The row can therefore prove which election moved it: J4.1 (Gmail) must compare that value with
+the live election before sending, and must not deliver a row claimed by a superseded
+scheduler. Terminal rows keep the fence of the attempt that ended them, like the lease.
+
 An expired `sending` lease becomes `delivery_unknown` before the new batch is claimed. It is
 never returned to `pending`, because the previous worker may already have reached the
 provider: Gmail does not offer exactly-once delivery.
+
+The cron is disabled by default (`MAULWURF_NOTIFICATION_SCHEDULER_ENABLED=false`) until J4.1
+deploys the consumer of `sending`. A disabled tick elects no role and moves no row, so a due
+occurrence cannot be marked `delivery_unknown` for an attempt that never happened.
 
 The cron runs every minute. With a minute of scan granularity and a bounded batch, the target
 delivery SLA of 15 minutes (`DELIVERY_SLA`) leaves ample room for a slow tick; it is not a
@@ -100,6 +109,8 @@ class ClaimedNotification:
     scheduled_at: datetime
     lease_expires_at: datetime
     attempts: int
+    # The election fence that made this claim; J4.1 compares it before sending.
+    fencing_token: int
 
 
 @dataclass(frozen=True)
@@ -262,6 +273,7 @@ async def expire_delivery_leases(
 async def claim_due_notifications(
     db: AsyncSession,
     *,
+    fencing_token: int,
     now: datetime | None = None,
     limit: int = BATCH_SIZE,
     delivery_lease: timedelta = DELIVERY_LEASE,
@@ -272,7 +284,13 @@ async def claim_due_notifications(
     statement, and a concurrent worker skips it instead of duplicating the send. Rows are
     taken in due order so a backlog drains fairly. Both the due comparison and the delivery
     lease use PostgreSQL's clock, so a host clock skew cannot claim a row early.
+
+    `fencing_token` is the fence of the election that owns this claim. It is stored on every
+    claimed row (`claimed_by_fence`) so J4.1 can prove, at send time, that the row still
+    belongs to the current scheduler and not to a superseded election.
     """
+    if fencing_token < 1:
+        raise ValueError("the claim requires a positive fencing token")
     clock = _instant_expression(now)
     _validate_ttl(delivery_lease)
     if limit < 1:
@@ -296,6 +314,7 @@ async def claim_due_notifications(
             status="sending",
             lease_expires_at=clock + _interval_expression(delivery_lease),
             attempts=Notification.attempts + 1,
+            claimed_by_fence=fencing_token,
             updated_at=clock,
         )
         .returning(
@@ -316,6 +335,7 @@ async def claim_due_notifications(
             scheduled_at=scheduled_at,
             lease_expires_at=lease_expires_at,
             attempts=int(attempts),
+            fencing_token=fencing_token,
         )
         for notification_id, user_id, type_, scheduled_at, lease_expires_at, attempts in rows
     ]
@@ -358,6 +378,7 @@ async def run_notification_scheduler(
     expired = await expire_delivery_leases(db, now=now)
     claimed = await claim_due_notifications(
         db,
+        fencing_token=lease.fencing_token,
         now=now,
         limit=batch_size,
         delivery_lease=delivery_lease,

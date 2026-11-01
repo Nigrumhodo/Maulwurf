@@ -9,8 +9,11 @@ The row is global (there is no tenant column): it describes infrastructure, neve
 data. `holder` identifies the process that currently owns the role, `fencing_token` grows
 every time a different holder takes over, and `lease_expires_at` bounds how long the claim
 is valid. A process renews the same row on every cron tick; only an expired row may be
-taken over. Migration `0017` grants the table to the `maulwurf_jobs` role only, because the
-API never schedules deliveries.
+taken over, and every comparison uses PostgreSQL's clock. The claim copies the elected
+`fencing_token` into `notifications.claimed_by_fence`, so the delivery step (J4.1) can
+prove that a row still belongs to the current election before sending it. Migration `0017`
+grants the table to the `maulwurf_jobs` role only, because the API never schedules
+deliveries.
 """
 
 from datetime import datetime
