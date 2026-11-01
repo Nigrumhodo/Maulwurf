@@ -1,0 +1,135 @@
+A4.3 — local gate evidence (MAULW-133)
+Date: 2026-11-01 (UTC)
+Host: Linux 7.0.0-39-generic sandbox; PostgreSQL 16.15 with pgvector 0.8.0 (isolated
+cluster on :5434) and Redis 7.0.15 (isolated instance on :6381, no persistence)
+Worktree: task/MAULW-133
+Head: review fix1 on 4db2ea3; merge of develop after A4.2 (#147) at 1d5890a; evidence
+commit follows
+Scope: U-S4-AN-03 cancellation core, PostgreSQL persistence adapter, documentation.
+apps/web untouched; no route, migration, provider, Gmail or credential involved.
+
+Commands and results
+--------------------
+1. cd apps/api && uv run ruff check .
+   -> All checks passed!
+
+2. cd apps/api && uv run mypy .
+   -> Success: no issues found in 265 source files
+
+3. cd apps/api && env -u no_proxy -u NO_PROXY uv run pytest tests/unit -q
+   -> 1513 passed, 35 warnings in 60.30s
+   (the sanitized proxy removes the two pre-existing bracketed-IPv6 httpx failures of
+   test_ingest_sink/test_llm; no test or production code was changed to hide them)
+
+4. cd apps/api && env -u no_proxy -u NO_PROXY uv run pytest \
+       tests/integration/test_s4_notification_cancellation.py \
+       tests/integration/test_s4_notifications_schema.py \
+       tests/integration/test_calendar_revision_patch.py -q
+   -> 37 passed, 1 warning in 5.45s (6-case modules were 36 before review fix1)
+   The 7 A4.3 cases now include:
+     test_a_new_due_generation_cancels_only_the_older_pending_rows
+     test_a_stale_occurrence_past_its_instant_is_cancelled_and_cannot_be_claimed
+     test_a_sending_occurrence_is_never_rewritten_by_a_generation_change
+     test_a_second_cancellation_is_idempotent
+     test_a_preference_change_cancels_disabled_reminders_and_digests
+     test_a_combined_due_and_preference_change_cancels_the_task_and_disabled_digests
+     test_cancelling_without_a_rule_is_rejected_and_writes_nothing
+
+5. cd apps/api && env -u no_proxy -u NO_PROXY uv run pytest \
+       tests/integration/test_rls.py -q
+   -> 13 passed, 7 warnings in 9.55s
+
+6. python3 scripts/docs/check_refs.py
+   -> OK: 912 documented repository paths exist or are expected.
+
+7. Post-rename rerun on feed05c (only the adapter class name changed to
+   SqlNotificationCancellationStore):
+   - uv run ruff check .                  -> All checks passed!
+   - uv run mypy .                        -> Success: no issues found in 265 source files
+   - pytest tests/unit -q                 -> 1513 passed, 35 warnings in 16.13s
+   - pytest tests/integration/test_s4_notification_cancellation.py -q
+                                          -> 6 passed, 1 warning in 4.53s
+
+8. Full API integration suite on the isolated PostgreSQL 16.15 + pgvector 0.8.0 and
+   Redis 7.0.15 instances:
+     cd apps/api && env -u no_proxy -u NO_PROXY \
+       MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@localhost:5434/maulwurf \
+       MAULWURF_REDIS_URL=redis://localhost:6381/0 \
+       uv run pytest -m integration -q
+   -> 664 passed, 17 failed, 1514 deselected, 699 warnings in 573.33s
+   All 17 failures are tests/integration/test_ingest_reception.py::test_case_*; the
+   default ingest sink answers 503 capacity_unavailable because MAULWURF_INGEST_URL and
+   the ingest credential are not configured in this sandbox. This is the same pre-existing
+   environment limitation recorded for A4.1, not an A4.3 regression: the A4.3 modules,
+   the notification schema/lifecycle modules, RLS and the rest of the suite pass.
+
+9. Review fix1 (Hoplite finding 1 on 439375a): a task scope belongs to the due-date rule
+   only, so a combined due-date/preference call still evaluates the user-level digests.
+   Re-ran on the same isolated services:
+   - uv run ruff check .                  -> All checks passed!
+   - uv run mypy .                        -> Success: no issues found in 265 source files
+   - pytest tests/unit -q                 -> 1513 passed, 35 warnings in 15.28s
+   - pytest tests/unit/test_notification_cancellation.py -q -> 30 passed in 1.13s
+   - pytest tests/integration/test_s4_notification_cancellation.py -q -> 7 passed
+   - pytest -m integration -q             -> 665 passed, 17 failed, 1514 deselected,
+                                             699 warnings in 598.09s (the same 17
+                                             test_ingest_reception.py 503 cases)
+
+10. Develop sync after A4.2 merged (#147, merge commit 1d5890a, develop c9635ee, migration
+   0016_s4_notification_resends): only docs/plan/S4.md and docs/sprints/CLAIMS.md needed a
+   manual conflict resolution (both sides kept); apps/web untouched. Post-merge:
+   - uv run ruff check .                  -> All checks passed!
+   - uv run mypy .                        -> Success: no issues found in 272 source files
+   - pytest tests/unit -q                 -> 1562 passed, 35 warnings in 14.66s
+   - pytest tests/integration/test_s4_notification_cancellation.py \
+            tests/integration/test_notifications_endpoints.py \
+            tests/integration/test_s4_notifications_schema.py \
+            tests/integration/test_migrations.py tests/integration/test_rls.py -q
+                                          -> 108 passed, 197 warnings in 57.63s
+   - pytest -m integration -q             -> 706 passed, 17 failed, 1563 deselected,
+                                             756 warnings in 603.40s (the same 17
+                                             test_ingest_reception.py 503 cases)
+
+Environment note
+----------------
+The sandbox restarted into an image without PostgreSQL or Redis, so both were installed
+locally for this capture. Other Maulwurf worktrees share the original :5432/:6379
+services and run `alembic upgrade head` at the same time; those migrations execute
+`ALTER ROLE "maulwurf_app" ...` and PostgreSQL can answer `tuple concurrently updated`,
+failing a session-scoped migration fixture before any test runs. The final suite therefore
+ran on an isolated cluster (:5434, UTF8) and an isolated Redis (:6381) to avoid measuring
+another worktree's contention. A first attempt on the shared services also exposed a
+distro pgvector 0.6 without `hnsw.iterative_scan`; pgvector 0.8.0 was built from the
+v0.8.0 tag to match CI. No test or production code was changed to accommodate either
+environment limitation.
+
+Continuation re-verification (2026-11-01, pushed fix1 head 5c5a7fc)
+--------------------------------------------------------------------
+- uv run ruff check .                  -> All checks passed!
+- uv run mypy .                        -> Success: no issues found in 272 source files
+- pytest tests/unit -q (raw env)       -> 1560 passed, 2 failed; both are the
+  pre-existing bracketed-IPv6 httpx set (test_ingest_sink/test_llm,
+  ValueError: invalid literal for int(): ':1]' from the [::1] no_proxy entry)
+- pytest tests/unit -q (sanitized NO_PROXY) -> 1562 passed
+- pytest targeted (cancellation, notification endpoints/schema, migrations, RLS)
+                                       -> 108 passed
+- pytest -m integration -q             -> 706 passed, 17 failed; all 17 are
+  tests/integration/test_ingest_reception.py answering 503 capacity_unavailable
+  (the same pre-existing sandbox sink limitation, no A4.3 regression)
+- Quality CI run 41292413919 (head 5c5a7fc) -> green in all 17 checks
+- Hoplite re-reviewed head 5c5a7fc: 30 unit cases, ruff/mypy OK and no blocking
+  findings (PostgreSQL integration not run by that QA; covered here and in CI).
+
+Second develop sync (merge a901004 of develop@64ae5f6, A4.5/#148)
+-----------------------------------------------------------------
+The merge adds `scripts/ops/`, `docs/runbooks/restore.md` and
+`tests/integration/test_backup_restore.py`, and changes `app/services/deletion.py`. The
+only conflict was the `docs/sprints/CLAIMS.md` S4 header; both sides were kept
+(A4.1-A4.5) and `apps/web` is untouched (0 files changed).
+- uv run ruff check .                  -> All checks passed!
+- uv run mypy .                        -> Success: no issues found in 273 source files
+- pytest tests/unit -q (sanitized NO_PROXY) -> 1562 passed
+- pytest targeted (A4.3 + A4.2 endpoints/schema + migrations + RLS + A4.5
+  backup/restore + calendar revision)  -> 120 passed
+- python3 scripts/docs/check_refs.py   -> OK: 939 documented repository paths at the
+  gate run (941 after this evidence capture)
