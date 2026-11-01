@@ -926,7 +926,8 @@ CREATE INDEX account_deletions_expiry ON account_deletions (expires_at);
   and logout only). Execution uses an atomic `pending -> running` claim with a bounded lease;
   a purge failure after the tombstone leaves a resumable `pending` operation and still answers
   `202`. An hourly scheduled job runs as the cross-tenant jobs role and deletes both residual
-  tables once `expires_at` passes; the window is a provisional 30 days pending D8.
+  tables once `expires_at` passes; the window is 30 days (D8, A4.5) and matches the backup
+  retention.
   `delete_maulwurf_events` defaults to `false`, so Maulwurf-created Google events stay in the
   user's calendar unless the deletion explicitly opts in (the UI must say so; A4.5).
 - Complete/dismiss cancels future reminders but keeps the event with a notice, unless

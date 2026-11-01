@@ -268,11 +268,12 @@ clean them up at the end.
   a new audited occurrence with its own `occurrence_seq`, while the five-component automatic
   dedupe of scheduled reminders stays exact.
 - [ ] Runbooks for cleanup, provider outage, budget, revoked tokens, restore, and account
-  deletion. D8 must already be approved before non-synthetic data; F3 checks restore,
-  expiration, and reapplied deletions. Account deletion applies its residual window with a
-  scheduled batched purge of `account_deletions` and `google_remote_operations` (30 days is
-  provisional until D8); `delete_maulwurf_events=false` keeps Maulwurf-created Google events
-  unless the user opts in, so the UI must state that outcome.
+  deletion. D8 is approved (A4.5): encrypted text/metadata backups, a 30-day maximum that
+  matches the residual deletion window, and a deletion log reapplied on a clean restore; no
+  audio. F3 checks restore, expiration, and reapplied deletions. Account deletion applies its
+  residual window with a scheduled batched purge of `account_deletions` and
+  `google_remote_operations`; `delete_maulwurf_events=false` keeps Maulwurf-created Google
+  events unless the user opts in, so the UI must state that outcome.
 
 **Exit:** real test send observed and G7-MAIL/G8 approved; uncertain delivery visible, not
 an exactly-once guarantee. Restore verified without reintroducing deleted sources. Security
@@ -347,7 +348,7 @@ synthetic-only evaluation leaves that generalization unverified.
 | D6 Temporal alignment | F0/F1 | Approve exactly G2-T or G2-X and reflect it in API/UI |
 | D7-CAL | Before F2 | Calendar contract and real scopes |
 | D7-MAIL | Before F3 | Gmail contract, opt-in, and uncertain delivery |
-| D8 Local retention | Before non-synthetic data | Active policy/backups/deletion; residual deletion rows purged after the agreed window; restore validated in F3 |
+| D8 Local retention | Before non-synthetic data | Approved (A4.5): encrypted text/metadata backups, a 30-day maximum matching the residual deletion window, a deletion log reapplied on a clean restore and no audio; F3 validates restore, expiration and reapplied deletions |
 
 A decision is recorded with state `pending|approved|blocked`, the closure owner, date,
 evidence, and consequences. `blocked` does not equal approved and stops the affected real

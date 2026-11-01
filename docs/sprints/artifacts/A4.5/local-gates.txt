@@ -1,0 +1,154 @@
+A4.5 — local gate evidence (MAULW-135)
+Date: 2026-11-01 (UTC)
+Host: Linux sandbox, PostgreSQL 16.15 (localhost:5432), Redis 7.0.15, GPG 2.4
+Worktree: task/MAULW-135
+Scope: D8 backup/restore validation (backup_restore.sh, restore_reapply.sql, restore
+runbook, I-S4-AN-05). apps/web untouched.
+
+Commands and results
+--------------------
+1. cd apps/api && uv run ruff check .
+   -> All checks passed!
+
+2. cd apps/api && uv run mypy .
+   -> Success: no issues found in 263 source files
+
+3. cd apps/api && uv run pytest tests/unit -q
+   -> 2 failed, 1481 passed, 35 warnings
+   The two failures are the pre-existing bracketed-IPv6 proxy parsing failures recorded in
+   earlier tickets:
+     tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured
+     tests/unit/test_llm.py::test_shared_http_client_is_bounded_reused_and_closed
+
+4. cd apps/api && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 \
+       uv run pytest tests/unit -q
+   -> 1483 passed, 35 warnings (raw environment adds the two pre-existing failures above;
+      no production or test code was changed to hide them)
+
+5. cd apps/api && uv run pytest tests/integration/test_backup_restore.py -q
+   -> 1 passed (also green after the sandbox restart, 31.62 s while other sessions were
+      active)
+
+6. bash -n scripts/ops/backup_restore.sh
+   -> OK (no output)
+
+7. python3 scripts/docs/check_refs.py
+   -> OK: 919 documented repository paths exist or are expected.
+
+8. git diff --check
+   -> no whitespace errors
+
+What I-S4-AN-05 proves
+----------------------
+- The backup emits an OpenPGP AES-256 dump and deletion log plus a SHA-256 manifest; the
+  transcript/message markers are not present in the encrypted bytes and the dump does not
+  start with the plaintext `PGDMP` signature.
+- The dump is taken before deleting an account and tombstoning a class, a subject and a
+  conversation. After restoring into a second, empty database and replaying the exported
+  deletion log:
+    * the deleted account is `deleted` with `deleted-<id>@invalid` / `deleted:<id>`
+      placeholders, every tenant table for it is empty and the residual
+      `account_deletions` row keeps the original operation id and `completed` status;
+    * the tombstoned class keeps `deleted_at` with `active_transcript_version = NULL` and
+      loses its transcripts/chunks; its marker text is gone;
+    * the tombstoned conversation keeps its tombstone with a NULL title and no messages;
+    * the tombstoned subject keeps its `deleted_at`;
+    * the retained class, transcript, chunk, message and active user survive unchanged.
+- The manifest pins the D8 30-day retention, which equals `RESIDUAL_RETENTION_DAYS`; a
+  manifest older than 30 days is refused, and `prune` removes only the stale file.
+- `verify` accepts the intact dump+deletion-log pair and refuses a tampered deletion log
+  (the manifest carries both SHA-256 values).
+- A second restore into the already-populated target is refused (`not clean`), so the
+  destructive path cannot overwrite a database by mistake.
+- A new `bytea` column outside the Google token blobs aborts the backup, pinning the
+  no-audio contract as a fail-closed schema check.
+- The only `bytea` columns in the restored schema are
+  `google_credentials.access_token_enc` and `refresh_token_enc` (AES-GCM blobs).
+
+Full integration note
+---------------------
+The full `pytest -m integration` run could not be completed locally because other agent
+sessions were running their own full integration suites against the same PostgreSQL cluster
+(`/tmp/opencode/maulw132-integration-merged.log` and
+`/tmp/opencode/maulw-133-integration.log`). Migration round-trip tests then failed with
+PostgreSQL `tuple concurrently updated` on `ALTER ROLE "maulwurf_app" ...`, and the failing
+subset changed between runs; a later attempt timed out after 15 min while those sessions
+restarted. The same suite with only the new module excluded passed 675 tests, the new module
+plus `test_migrations.py` passes 28/28 in isolation, and the new module passes on its own
+before and after the restart. The migration failures are shared-cluster contention, not this
+diff; the PR Quality CI runs `integration (api)` on an isolated service container.
+
+Scope/security notes
+--------------------
+- No real audio, Riva/LLM/Google call or credential. The seeded payload is text only; no
+  audio bytes are generated, stored or restored.
+- The passphrase in the test is a literal test-only value, passed through the environment
+  and never printed. No secret is committed.
+- `apps/web` was not touched.
+
+Quality CI
+----------
+PR #148 Quality CI run 41289101762 (head ecfc7da) is green in all 17 checks,
+including `python-static (api)`, `python-unit (api)`, `integration (api)` with the new
+I-S4-AN-05 case, `integration (ingest)`, `e2e-smoke`, `docs`, `secret-scan` and
+`build-images`. The isolated service containers remove the shared-cluster contention
+described above. No merge was performed; the claim stays `in progress` until review.
+
+Hoplite review fix1 (2026-11-01, findings 1-6 on head 2a98998)
+--------------------------------------------------------------
+Full mapping and rationale: `docs/sprints/artifacts/A4.5/hoplite-fix1.txt`.
+
+Commands (2026-11-01, same host, PostgreSQL 16.15, GPG 2.4; re-run after merging
+`develop@c9635ee` into the branch):
+
+1. bash -n scripts/ops/backup_restore.sh
+   -> OK
+
+2. cd apps/api && uv run ruff check .
+   -> All checks passed!
+
+3. cd apps/api && uv run mypy .
+   -> Success: no issues found in 270 source files
+
+4. cd apps/api && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 \
+       uv run pytest -m "not integration and not provider and not load" -q
+   -> 1532 passed, 719 deselected
+
+5. cd apps/api && uv run pytest tests/integration/test_backup_restore.py -q
+   -> 2 passed (19.54 s)
+
+6. python3 scripts/docs/check_refs.py
+   -> OK: 931 documented repository paths exist or are expected.
+
+7. bash scripts/ci/check_no_secrets.sh
+   -> secret-scan: 785 tracked files, 0 findings
+
+8. git diff --check
+   -> no whitespace errors
+
+What the new I-S4-AN-05 cases prove
+-----------------------------------
+- Restore without a log and without the opt-in stops before pg_restore; the target keeps
+  zero application tables.
+- Restore with `--allow-missing-deletion-log` emits a WARNING on stderr and the success
+  line says that no deletion log was replayed.
+- A valid deletion log taken from another backup is rejected by checksum before anything is
+  decrypted or written; the target keeps zero application tables.
+- `verify` fails with a WARNING when the manifest pins a log that is not next to the dump;
+  the opt-in keeps the warning and verifies the dump alone.
+- The default restore uses the paired log, and an explicit copy of the pinned log also
+  works.
+- Carol, tombstoned with a bare `users.status` change and no `account_deletions` row, is
+  purged by the log's `users` array: `deleted` placeholders, zero tenant rows, no text.
+- A post-deletion log is attached with `export-deletions --refresh-backup`, which replaces
+  the paired log and re-pins `deletion_log_sha256`; the restore of the older dump then
+  re-applies the later deletions.
+
+Quality CI (fix1)
+-----------------
+Run `41291817529` (head `916d318`, after merging `develop@c9635ee`) is green in all 17
+checks: `python-static (api/ingest)`, `python-unit (api/ingest)`, `integration (api)`
+including the two I-S4-AN-05 cases, `integration (ingest)`, `e2e-smoke`, `docs`, `web`,
+`build-images`, `secret-scan`, the three license reports, `compose-ingest-env`,
+`caddy-limits` and `send-webhook`. Later commits on the branch are documentation only.
+No merge was performed.
