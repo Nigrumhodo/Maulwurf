@@ -1,9 +1,10 @@
 # Canonical claims registry — Maulwurf
 
-> Status: **S2 open**. Review: 2026-10-09. S3.1, S3.2, S3.3, S3.4, S3.5 and S3.6 plus J3.2,
-> J3.3, J3.4, J3.5, J3.6, J3.7 and J3.8 are recorded under directed claims for MAULW-108,
-> MAULW-109, MAULW-110, MAULW-111, MAULW-112, MAULW-113, MAULW-115, MAULW-116, MAULW-117,
-> MAULW-118, MAULW-119, MAULW-120 and MAULW-121; the rest of S3 remains closed.
+> Status: **S2 open**. Review: 2026-10-09. L3.2, S3.1, S3.2, S3.3, S3.4, S3.5 and S3.6
+> plus J3.2, J3.3, J3.4, J3.5, J3.6, J3.7 and J3.8 are recorded under directed claims for
+> MAULW-92, MAULW-108, MAULW-109, MAULW-110, MAULW-111, MAULW-112, MAULW-113, MAULW-115,
+> MAULW-116, MAULW-117, MAULW-118, MAULW-119, MAULW-120 and MAULW-121; the rest of S3
+> remains closed.
 > S4.1 is recorded under a directed claim for MAULW-149, S4.2 under a directed claim for
 > MAULW-150 and S4.3 under a directed claim for MAULW-151; the rest of S4 remains closed.
 >
@@ -47,10 +48,9 @@ These six values are **all** the status vocabulary: there are no `claimed`, `in_
 ## 3. Active sprint
 
 **S2 is open.** S1 has every implementation ticket `done`; only L1.7 (coordination and the
-formal S1 close) is unclaimed. S3 and S4 remain closed except the directed S3.1, S3.2,
-S3.3, S3.4, S3.5 and S3.6 claims plus the directed S4.1, S4.2 and S4.3 claims recorded
-below. D2 and D6
-remain `pending`; D3-Audio and D4 remain `blocked`.
+formal S1 close) is unclaimed. S3 and S4 remain closed except the directed L3.2, S3.1,
+S3.2, S3.3, S3.4, S3.5 and S3.6 claims plus the directed S4.1, S4.2 and S4.3 claims
+recorded below. D2 and D6 remain `pending`; D3-Audio and D4 remain `blocked`.
 
 ### S1 — Foundation + F0 spike
 
@@ -168,14 +168,15 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 
 ### S3 — Action (extraction and Calendar)
 
-> Only S3.1, S3.2, S3.3, S3.4, S3.5 and S3.6 plus J3.2, J3.3, J3.4, J3.5, J3.6, J3.7 and J3.8
-> are recorded: they were directed by MAULW-108, MAULW-109, MAULW-110, MAULW-111, MAULW-112,
-> MAULW-113, MAULW-115, MAULW-116, MAULW-117, MAULW-118, MAULW-119, MAULW-120 and MAULW-121.
-> The remaining S3 backlog stays unclaimable until the lead opens the sprint and updates the
-> status above.
+> Only L3.2, S3.1, S3.2, S3.3, S3.4, S3.5 and S3.6 plus J3.2, J3.3, J3.4, J3.5, J3.6, J3.7
+> and J3.8 are recorded: they were directed by MAULW-92, MAULW-108, MAULW-109, MAULW-110,
+> MAULW-111, MAULW-112, MAULW-113, MAULW-115, MAULW-116, MAULW-117, MAULW-118, MAULW-119,
+> MAULW-120 and MAULW-121. The remaining S3 backlog stays unclaimable until the lead opens
+> the sprint and updates the status above.
 
 | Action | Ticket | Owner | Status | Claimed at (UTC) | Cloud eligibility | Contributors / reviewers | Reason, evidence, or PR |
 |---|---|---|---|---|---|---|---|
+| claim | L3.2 | NigrumH0do | in progress | 2026-11-01 | not applicable | — / area L, area A | MAULW-92: freeze the final §M4 Pydantic contract in `apps/api/app/schemas/analysis.py` (exclusive `due_date`/`due_at`, `date_status`, `confidence_score`, Unicode code-point spans and one mandatory verbatim quote per evidence) with the pure `check_against` seam; U-S3-JL-01 (61 cases, 18 new). `ruff`/`mypy` clean (239 files), **1320 API unit passed**; `apps/ingest` is untouched (9 espeak-ng-only failures, 237 passed with them deselected); `check_refs.py` OK (841 paths); capture in `docs/sprints/artifacts/L3.2/local-gates.txt`. Quality CI run `41261621535` (head `6fa7538`) is green in all 17 checks, including `python-unit (api)`, `integration (api)`, `integration (ingest)`, `e2e-smoke`, `docs`, `web`, `build-images` and `secret-scan`. PR #139, branch `task/MAULW-92`. |
 | claim | S3.1 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area S, area A | MAULW-108: explicit analysis backfill for F1 classes over persisted text only (no reupload/retranscription), `app/services/analysis_backfill.py` + `scripts/backfill_analysis.py`, `analysis_backfill_available` on `GET /audios/{id}`, I-S3-SG-01. L3.6/A3.1 are not in `develop`; the queue reaches the S2 `analyze` no-op, so extraction output is not claimed. Review fix: non-writing outcomes never persist the F1 → F2 upgrade and `already_f2_no_run` replaces `not_f1`. PR #119: Quality CI green at `735e382`, `integration (api)` 408 passed (13 backfill cases) and `integration (ingest)` passed. Branch `task/MAULW-108` |
 | claim | S3.2 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area S, area A | MAULW-109: sentence-aligned analysis windows with a bounded overlap and a hard total-token budget, evidence-identity dedupe, `app/services/analysis_windows.py`, the offline `scripts/eval/window_cost.py` harness and U-S3-SG-02 (43 tests; 926 API unit passed). Default 800/100 measures 10,894–15,705 transcript tokens/class-hour with a 1.073–1.111 amplification; provider latency `NO VERIFICADO`. Token numbers come from authored/redacted spike-derived text; no real LLM call. Branch `task/MAULW-109`; PR #121 open with all Quality CI checks green (926 API unit, 408 API integration, e2e-smoke and web included). |
 | claim | S3.3 | jpinillaz | in progress | 2026-10-31 | not applicable | — / area S, area A | MAULW-110: `app/services/evidence.py` keeps analysis evidence textual without ASR offsets. `reliable_times` withholds times for `timestamp_precision=none`, incomplete/non-finite/inverted pairs and pairs past the class duration; `evidence_reference` falls back to `"segment N"` and never to `00:00`; `resolve_textual_evidence` rebuilds segment/Unicode-span/verbatim-quote evidence with null times; search, RAG labels and citations share the policy. U-S3-SG-03 (24 cases) green; API unit **907 passed**, `ruff`/`mypy` clean. Quality CI run `41202443740` (head `a1ff7be`) all 18 checks green. No web change: the API returns the server-derived reference. PR #122, branch `task/MAULW-110` |
@@ -292,3 +293,4 @@ remain `pending`; D3-Audio and D4 remain `blocked`.
 | 2026-10-31 | S4.3 is published as PR #136 against `develop`; Quality CI run `41247345798` (head `246d221`) is green in all 17 checks, including `python-unit (ingest)`, `integration (ingest)` and `e2e-smoke`. The claim stays `in progress` until review and merge; no merge was performed. | This PR |
 | 2026-10-31 | S4.3 review fix1 (hoplite finding 1 on head `d3c8932`): `unmount_and_remove` returns success only from the clean `umount` (`unmounted and not point.exists()`), and the lazy `umount -l` is best-effort cleanup that never turns a failed unmount into `full_mount_removed=true`/`harness_root_empty=true`; a failed detach stays in the harness cleanup list for one retry. Two regressions added (22 harness cases). The load evidence is local to the development machine; the formal G1 verdict requires the hardened reference environment, and no merge was performed. Quality CI run `41249026159` (head `2f01709`) is green in all 17 checks. | This PR |
 | 2026-11-01 | A2.19 moves to `in progress` on `task/MAULW-179` (PR #138): the six conformance items are decided (published TTL chained into `upload_expires_at`/`receive_deadline`/`asr_deadline`, case-insensitive language allowlist, one opaque `422` for every unusable variant token with no `409` on `POST /audios`, `/me` narrowed to the frozen S1 A1.8 shape, one upload-limit value with a startup check, capacity `503` without `retryable=false`) and pinned by U-S2-AN-18. `apps/web` is untouched. | #138 |
+| 2026-11-01 | L3.2 is claimed by NigrumH0do (`in progress`) for the directed MAULW-92 ticket: the final §M4 Pydantic contract in `apps/api/app/schemas/analysis.py`, with exclusive `due_date`/`due_at`, `date_status`, `confidence_score`, Unicode code-point spans `[inicio_char, fin_char)` and one mandatory verbatim `cita_textual` per evidence span, plus the pure `check_against` seam. A3.1 builds `tasks`/`task_evidence` on it; L3.3 keeps class/tenant/transcript-version membership and the DB load. S3 is not declared open here; the rest of S3 stays blocked. | This PR |
