@@ -1,0 +1,105 @@
+# A3.8 (MAULW-106) — hoplite review fix1 evidence
+
+Captured: 2026-11-01T04:40Z on branch `task/MAULW-106` (review fix on top of `a9b4316`).
+Host: Linux 7.0.0-39 x86_64 | Python 3.12.3 | uv 0.13.1 | PostgreSQL 16.15
+(`16.15-1.pgdg24.04+2`) with pgvector 0.8.7 | Redis 7.0.15.
+No Google/provider call, no audio upload, no credential and no secret are involved.
+
+This review closes the three hoplite findings on `a9b4316`:
+
+1. **Whitespace-only values passed the CHECKs.** "Blank" now means
+   `btrim(value, E' \t\n\r\f\v') = ''` (plain `btrim(value)` only strips spaces, so a tab
+   would still pass). Two `IMMUTABLE` helpers are created by `0013`:
+   `public.maulwurf_text_is_blank(text)` and
+   `public.maulwurf_text_array_has_blank(text[])` (a CHECK cannot contain `unnest()`).
+   The write calendar, both settings arrays and `calendar_id`, `event_id`, `remote_status`
+   and `etag` all use them. `parse_remote_event` now trims the ETag and stores a blank one
+   as NULL; it also trims the remote status (blank -> `confirmed`) and rejects a
+   whitespace-only event id with `event_id_invalid` before the DB is touched.
+   Regression cases cover `""`, `"   "`, `"\t"` and `" \t "` for every field; the array
+   cases also mix a valid calendar with a blank one.
+2. **`0013` did not normalize every field its CHECKs cover.** The migration now uses the
+   same helper in the cleanup: a whitespace-only ETag becomes NULL, a whitespace-only write
+   calendar becomes NULL, and NULL/empty/whitespace-only array elements are removed. An
+   incomplete coverage window is still reset to "never synced"; a complete window keeps its
+   timestamps after the array cleanup. A blank `calendar_id`, `event_id` or `remote_status`
+   cannot be normalized without inventing a remote identity, so the migration rejects those
+   rows with a `RAISE EXCEPTION` naming the per-field counts (and a hint), instead of
+   failing later on an opaque `ADD CONSTRAINT`. Both paths are covered: the round-trip test
+   seeds whitespace-only values and asserts the normalized result, and the rejection test
+   asserts the message, the rollback to `0012` and that `FORCE ROW LEVEL SECURITY` is still
+   enabled on both tables.
+3. **`try/finally` could mask the original error.** It is gone. PostgreSQL DDL is
+   transactional: a failure rolls back the whole revision, including the temporary
+   `NO FORCE ROW LEVEL SECURITY`, so the `finally` would only have run inside the aborted
+   transaction and raised `InFailedSqlTransaction`. The rejection test above exercises that
+   failure path and confirms RLS is restored.
+
+The array-element criterion is validated against the real database by
+`tests/integration/test_calendar_settings_mirror.py` (head schema) and the migration tests;
+the helper functions are created and dropped by the round-trip test.
+
+## Static gates
+
+```
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 251 source files
+```
+
+## Unit (no PostgreSQL)
+
+```
+$ NO_PROXY="localhost,127.0.0.1" no_proxy="localhost,127.0.0.1" uv run pytest tests/unit -q
+1380 passed, 35 warnings in 10.33s
+```
+
+The raw sandbox `NO_PROXY` still adds the two pre-existing bracketed-IPv6 `httpx` failures
+documented in the previous capture (`test_ingest_sink.py`, `test_llm.py`): 1378 passed + 2
+failed. Neither module is touched by this diff.
+
+## Integration against PostgreSQL 16.15 + Redis 7.0.15
+
+Targeted Calendar/migration/RLS/isolation modules:
+
+```
+$ uv run pytest tests/integration/test_calendar_settings_mirror.py \
+    tests/integration/test_calendar_read.py \
+    tests/integration/test_calendar_conflicts.py \
+    tests/integration/test_calendar_connect.py \
+    tests/integration/test_calendar_sync_job.py \
+    tests/integration/test_calendar_revision_patch.py \
+    tests/integration/test_migrations.py \
+    tests/integration/test_rls.py \
+    tests/integration/test_isolation.py \
+    tests/integration/test_delete_audio.py \
+    tests/integration/test_s3_tasks_schema.py -q
+250 passed, 230 warnings in 69.94s
+```
+
+Full API integration suite:
+
+```
+$ NO_PROXY="localhost,127.0.0.1" no_proxy="localhost,127.0.0.1" uv run pytest -m integration -q
+632 passed, 1381 deselected, 647 warnings in 140.17s
+```
+
+Without the sanitized proxy, the full run stops on the same pre-existing
+`test_ingest_reception` `InvalidURL` failures caused by the bracketed IPv6 entries; that is
+environmental and outside this diff.
+
+## Documentation references
+
+```
+$ python3 scripts/docs/check_refs.py
+OK: 865 documented repository paths exist or are expected.
+```
+
+## Scope
+
+- `apps/api` only for code/tests; `docs/ESPECIFICACION.md` clarifies the ETag/blank
+  guarantee. `apps/web` and `apps/ingest` are untouched.
+- No endpoint, no provider call, no audio, no credential and no secret.
+- The PR stays open; nothing is merged.

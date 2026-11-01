@@ -1035,7 +1035,9 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   `ON DELETE SET NULL (task_id)`: deleting the task unlinks the mirror row and keeps the
   event. A task has at most one linked event; other Google events have no task. Persist the
   write calendar in settings, the selected read calendars, and sync status/ETag/coverage;
-  an empty ETag is unknown, never a conditional-write baseline.
+  a blank (empty or whitespace-only) ETag is unknown, never a conditional-write baseline.
+  Blank calendar ids, event ids, remote statuses and array elements are rejected under the
+  same whitespace-aware criterion.
 - `messages.citas` references
   `{audio_id, transcript_version, chunk_id, segment_id, t_inicio, t_fin}` and validated
   text; normalize links in `message_sources` to locate/purge derived responses when deleting

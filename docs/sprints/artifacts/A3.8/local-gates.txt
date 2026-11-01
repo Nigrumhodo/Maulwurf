@@ -1,6 +1,8 @@
-A3.8 / MAULW-106 — local gates
-Captured at: 2026-11-01T03:33:19Z
+A3.8 / MAULW-106 — local gates (fix1, hoplite findings 2026-11-01T03:54Z)
+Captured at: 2026-11-01T04:43:46Z
 Host: Linux 7.0.0-39-generic x86_64
+Services: PostgreSQL 16.15, Redis 7.0.15 (ADR-0005 policy: no persistence, noeviction)
+Branch: task/MAULW-106 (fix1 on top of a9b4316)
 
 $ cd apps/api && uv run ruff check .
 All checks passed!
@@ -12,38 +14,42 @@ $ uv run pytest tests/unit -q   # raw sandbox environment
 =========================== short test summary info ============================
 FAILED tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured
 FAILED tests/unit/test_llm.py::test_shared_http_client_is_bounded_reused_and_closed
-2 failed, 1375 passed, 35 warnings in 10.15s
+2 failed, 1378 passed, 35 warnings in 17.43s
 
-$ NO_PROXY=<sanitized> uv run pytest tests/unit -q
-    return super().request(
-
--- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-1377 passed, 35 warnings in 10.65s
+$ NO_PROXY=localhost,127.0.0.1 uv run pytest tests/unit -q
+1380 passed, 35 warnings in 11.59s
 
 Targeted A3.8/Calendar/migration/RLS integration modules:
 $ uv run pytest tests/integration/test_calendar_settings_mirror.py tests/integration/test_calendar_read.py tests/integration/test_calendar_conflicts.py tests/integration/test_calendar_connect.py tests/integration/test_calendar_sync_job.py tests/integration/test_calendar_revision_patch.py tests/integration/test_migrations.py tests/integration/test_rls.py tests/integration/test_isolation.py tests/integration/test_delete_audio.py tests/integration/test_s3_tasks_schema.py -q
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-244 passed, 194 warnings in 41.94s
+250 passed, 230 warnings in 85.52s (0:01:25)
 
 Full API integration suite:
-$ uv run pytest -m integration -q
+$ NO_PROXY=localhost,127.0.0.1 uv run pytest -m integration -q
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-626 passed, 1378 deselected, 611 warnings in 100.65s (0:01:40)
+632 passed, 1381 deselected, 647 warnings in 140.37s (0:02:20)
 
 Documentation references:
 $ python3 scripts/docs/check_refs.py
-OK: 862 documented repository paths exist or are expected.
+OK: 865 documented repository paths exist or are expected.
 
 Pre-existing sandbox-only unit failures (not this diff):
 - apps/api/tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured
 - apps/api/tests/unit/test_llm.py::test_shared_http_client_is_bounded_reused_and_closed
 Both fail with httpx.InvalidURL ':1]' because this sandbox prepends bracketed IPv6 entries
-to NO_PROXY; with those entries removed the same two tests pass and the whole unit suite is
-1377 passed. Neither failing module is touched by this diff.
+to NO_PROXY; with those entries replaced by localhost,127.0.0.1 the same two tests pass and
+the whole unit suite is 1380 passed. Neither failing module is touched by this diff.
 
-Final confirmation after the last migration edit (2026-11-01T03:43Z):
-$ uv run ruff check .                      -> All checks passed!
-$ uv run mypy .                            -> Success: no issues found in 251 source files
-$ uv run pytest <A3.8 + migrations + J3.7> -> 46 passed
+Fix1 coverage added by this run:
+- settings/calendar_events CHECK tests now use "", "   ", "\t" and " \t " for every blank
+  field and assert the specific constraint that fired (ck_settings_* and
+  ck_calendar_events_*), so an unrelated CHECK cannot mask a weaker rule.
+- 0013 legacy normalization: whitespace-only ETag/write calendar become NULL, whitespace
+  array elements are removed, a complete coverage window survives and an incomplete one
+  resets; each blank calendar_id/event_id/remote_status case (spaces and tabs) is exercised
+  as a rejected upgrade with rollback and RLS FORCE verification, then repaired and
+  re-upgraded.
+- parse_remote_event strips a valid ETag, stores a whitespace-only ETag as NULL, and maps a
+  blank status to `confirmed`; a whitespace-only event id fails the read.
