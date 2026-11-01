@@ -2,7 +2,7 @@
 
 Date (UTC): 2026-11-01 11:32 UTC
 Branch: task/MAULW-143
-Code head: 631171d (the later evidence commit is documentation only)
+Code head: 0f30f9c (the later evidence commit is documentation only)
 Base: origin/develop 2d4bc2d (J4.2 / PR #151 merged)
 Host: Linux x86_64
 Python: Python 3.12.3 | uv 0.13.1
@@ -62,6 +62,9 @@ The 9 new cases in `tests/integration/test_notification_delivery_unknown.py` pro
   the `|n:1` dedupe suffix, leaves the original `delivery_unknown` untouched (status, key,
   attempts, `updated_at`), and the new occurrence can be delivered on its own.
 
+The same targeted run was repeated on the final head `0f30f9c` after the immutable
+`DeliveryRequest` and the `CancelledError` case: **59 passed**.
+
 ## Migration module (isolated run)
 
 ```text
@@ -71,7 +74,7 @@ $ env -u no_proxy -u NO_PROXY uv run pytest tests/integration/test_migrations.py
 
 No migration was added by this ticket.
 
-## Full API integration (shared sandbox host)
+## Full API integration (shared sandbox host, code head 47f799c)
 
 ```text
 $ env -u no_proxy -u NO_PROXY uv run pytest -m integration -q
@@ -85,6 +88,13 @@ develop). A later re-run on the shared host reproduced those 17 and added one te
 `ALTER ROLE` flake in `test_migrations.py`; the migration module passes 30/30 when run
 alone (above). This is the documented sibling-worktree race on one PostgreSQL cluster, not
 a failure of this diff; CI uses isolated service containers.
+
+The DTO/cancellation follow-up (`0f30f9c`) only touches the new sender boundary and one new
+integration case; the targeted suite is 59 passed on that head and Quality CI is green in
+all 17 checks, including `integration (api)`. A post-restart repeat on the rebuilt local
+PostgreSQL (pgvector 0.6.0 instead of the earlier 0.8) reproduces the documented
+pre-existing `test_search`/`test_chat_sse`/`test_g4_eval` failures plus the 17 ingest `503`
+cases; they are environment-only and do not belong to this diff.
 
 ## Documentation references
 
