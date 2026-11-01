@@ -1,0 +1,116 @@
+# J4.8 — Prometheus alert rules for provider budgets and the S4 operational signals.
+#
+# These rules are deployment configuration, not part of the local 8-service compose stack.
+# The reference deployment (J4.7) owns the Prometheus/Alertmanager wiring; see
+# infra/alerting/README.md for the scrape contract and docs/runbooks/budget-alerts.md for
+# the operator response.
+groups:
+  - name: maulwurf-budgets
+    rules:
+      - alert: MaulwurfBudgetWarning
+        expr: maulwurf_budget_warning == 1
+        for: 5m
+        labels:
+          severity: warning
+          service: maulwurf
+          area: budget
+        annotations:
+          summary: "Provider {{ $labels.provider }} reached its monthly warning ratio"
+          description: >-
+            {{ $labels.provider }} is at the configured warning ratio. Inspect
+            docs/runbooks/budget-alerts.md, confirm whether the traffic is expected and
+            reduce spend before the cap is exhausted. No price or quota is inferred here.
+          runbook_url: "docs/runbooks/budget-alerts.md"
+
+      - alert: MaulwurfBudgetExhausted
+        expr: maulwurf_budget_exhausted == 1
+        for: 1m
+        labels:
+          severity: critical
+          service: maulwurf
+          area: budget
+        annotations:
+          summary: "Provider {{ $labels.provider }} exhausted its monthly budget"
+          description: >-
+            {{ $labels.provider }} reached 100% of its configured cap. Follow
+            docs/runbooks/budget-alerts.md: stop the paid path or raise the cap with an
+            explicit decision, and never let a retry loop hide the overspend.
+          runbook_url: "docs/runbooks/budget-alerts.md"
+
+      - alert: MaulwurfBudgetNotConfigured
+        expr: maulwurf_budget_configured == 0
+        for: 24h
+        labels:
+          severity: warning
+          service: maulwurf
+          area: budget
+        annotations:
+          summary: "Provider {{ $labels.provider }} has no monthly budget"
+          description: >-
+            Usage is measured but there is no cap, so no alert can fire. Set the cap from
+            docs/eval/costs.md and the real provider contract before accepting load.
+          runbook_url: "docs/runbooks/budget-alerts.md"
+
+  - name: maulwurf-ingest-cleanup
+    rules:
+      - alert: MaulwurfCleanupFailed
+        expr: increase(maulwurf_ingest_cleanup_failed_total[10m]) > 0
+        labels:
+          severity: critical
+          service: ingest
+          area: privacy
+        annotations:
+          summary: "Ingest cleanup failed: admission is halted"
+          description: >-
+            A temporary-file cleanup was not verified. Admission must stay closed until the
+            S4.1 cleanup/recovery runbook completes; never delete a row to reopen it.
+          runbook_url: "docs/runbooks/cleanup.md"
+
+      - alert: MaulwurfCleanupUnrecorded
+        expr: >-
+          increase(maulwurf_ingest_failures_total{stage="cleanup",error_code="cleanup_unrecorded"}[10m])
+          > 0
+        labels:
+          severity: critical
+          service: ingest
+          area: privacy
+        annotations:
+          summary: "Ingest could not persist unverified cleanup evidence"
+          description: >-
+            The attempt stayed pending because a newer fence owned it, or the evidence write
+            failed. Admission remains open and the text outbox stays gated. Follow
+            docs/runbooks/cleanup.md section 6.
+          runbook_url: "docs/runbooks/cleanup.md"
+
+      - alert: MaulwurfIngestAdmissionClosed
+        expr: maulwurf_ingest_admission_open == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: ingest
+          area: availability
+        annotations:
+          summary: "Ingest admission is closed"
+          description: >-
+            New uploads answer 503 until the latch is explained and cleared per
+            docs/runbooks/cleanup.md. Check cleanup_failed_total and the service logs first.
+          runbook_url: "docs/runbooks/cleanup.md"
+
+  - name: maulwurf-delivery
+    rules:
+      # Policy threshold, not a provider measurement: the S4 target is that a due
+      # notification is claimed and sent within 15 minutes with healthy dependencies.
+      - alert: MaulwurfOutboxLag
+        expr: maulwurf_outbox_lag_seconds > 900
+        for: 10m
+        labels:
+          severity: warning
+          service: worker
+          area: delivery
+        annotations:
+          summary: "The outbox has not advanced for more than 15 minutes"
+          description: >-
+            Check the worker/scheduler, Redis and PostgreSQL. A cleanup-gated event is an
+            expected wait, not lag; the metric already excludes it. Follow
+            docs/runbooks/provider-down.md when a provider is the cause.
+          runbook_url: "docs/runbooks/provider-down.md"

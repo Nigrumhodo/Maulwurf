@@ -16,13 +16,15 @@ from fastapi.responses import PlainTextResponse
 from app.core.db import session_scope
 from app.core.prometheus import PROMETHEUS_CONTENT_TYPE, render
 from app.services.outbox_metrics import collect_outbox_samples
+from app.services.provider_budget import collect_budget_samples
 
 router = APIRouter(prefix="/internal", tags=["metrics"])
 
 
 @router.get("/metrics", response_class=PlainTextResponse)
 async def metrics() -> PlainTextResponse:
-    """Outbox metrics in the Prometheus exposition format."""
+    """Outbox and provider-budget metrics in the Prometheus exposition format."""
     async with session_scope() as db:
         samples = await collect_outbox_samples(db, cross_tenant=True)
+        samples.extend(await collect_budget_samples(db, cross_tenant=True))
     return PlainTextResponse(render(samples), media_type=PROMETHEUS_CONTENT_TYPE)
