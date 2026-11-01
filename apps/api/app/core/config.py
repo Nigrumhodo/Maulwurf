@@ -112,6 +112,13 @@ class Settings(BaseSettings):
     privacy_notice_version: str = "2026-09-v1"
     ingest_languages: tuple[str, ...] = Field(default=("es", "en", "fr"), min_length=1)
     upload_max_bytes: int = Field(default=209_715_200, ge=1)
+    # A2.19: `ingest` owns the reception cut (`INGEST_MAX_UPLOAD_BYTES`) and the shared `.env`
+    # reaches this process too. Reading the same name lets startup reject two disagreeing
+    # size limits instead of silently cutting bytes with a different value than the API
+    # advertises. Unset outside Compose/the shared `.env`: no second value to compare.
+    ingest_max_upload_bytes: int | None = Field(
+        default=None, ge=1, validation_alias="INGEST_MAX_UPLOAD_BYTES"
+    )
     upload_ttl_minutes: int = Field(default=15, ge=1, le=120)
     # Token de confirmación de variante del `409 duplicate_variant` (A2.4, punto C4): M2
     # pide «expiración corta» sin publicar un número, así que es provisional como el resto
@@ -227,6 +234,19 @@ class Settings(BaseSettings):
             raise ValueError("ingest_credential_secret debe ser hexadecimal") from None
         if len(decoded) < INGEST_SECRET_MIN_BYTES:
             raise ValueError("ingest_credential_secret debe tener al menos 32 bytes")
+        return self
+
+    @model_validator(mode="after")
+    def _reject_upload_limit_drift(self) -> "Settings":
+        # A2.19: one effective byte limit. `MAULWURF_UPLOAD_MAX_BYTES` is what the API
+        # advertises; `INGEST_MAX_UPLOAD_BYTES` is where `ingest` cuts. If both are
+        # configured they must agree, or the deployment would reject a size the API
+        # accepted (or accept one it already rejected).
+        if (
+            self.ingest_max_upload_bytes is not None
+            and self.ingest_max_upload_bytes != self.upload_max_bytes
+        ):
+            raise ValueError("upload_max_bytes e INGEST_MAX_UPLOAD_BYTES deben coincidir")
         return self
 
     @model_validator(mode="after")
