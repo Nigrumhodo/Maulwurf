@@ -29,7 +29,7 @@ $ env -u no_proxy -u NO_PROXY uv run pytest \
 3 passed, 32 warnings in 17.12s
 
 $ python3 scripts/docs/check_refs.py
-OK: 909 documented repository paths exist or are expected.
+OK: 913 documented repository paths exist or are expected.
 
 Full integration, pre-merge head 4d4062d:
 $ env -u no_proxy -u NO_PROXY uv run pytest -m integration -q
