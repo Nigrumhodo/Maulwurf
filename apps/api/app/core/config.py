@@ -119,6 +119,7 @@ class Settings(BaseSettings):
     ingest_max_upload_bytes: int | None = Field(
         default=None, ge=1, validation_alias="INGEST_MAX_UPLOAD_BYTES"
     )
+    # Fallback only for an explicit all-null TTL publication; S4.4 publishes 10 min.
     upload_ttl_minutes: int = Field(default=15, ge=1, le=120)
     # Token de confirmación de variante del `409 duplicate_variant` (A2.4, punto C4): M2
     # pide «expiración corta» sin publicar un número, así que es provisional como el resto
@@ -126,7 +127,8 @@ class Settings(BaseSettings):
     variant_token_ttl_minutes: int = Field(default=5, ge=1, le=60)
     # Configuración no sensible, publicada y versionada por el spike. Pydantic Settings
     # la lee de MAULWURF_INGESTION_CAPABILITIES como un objeto JSON; sin ella el endpoint
-    # devuelve el shape seguro sin límites aprobados.
+    # publica los TTLs efectivos de S4.4 (10/30/60, con su benchmark) y deja null los
+    # límites de tamaño/duración que D4 todavía no aprobó.
     ingestion_capabilities: IngestionCapabilities = Field(default_factory=IngestionCapabilities)
     # Reception hop to `ingest` (ADR-0008 §1-§2). Unset: `get_reception_sink()` keeps the
     # unavailable sink (503). Both the URL and the secret are needed to stream.

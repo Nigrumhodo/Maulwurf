@@ -96,7 +96,7 @@ class SupervisorConfig:
     instance: str
     lease_ttl: timedelta = timedelta(seconds=LEASE_TTL_S)
     heartbeat_interval_s: float = HEARTBEAT_INTERVAL_S
-    asr_timeout_s: float = 600.0
+    asr_timeout_s: float = 3_600.0
     tmp_dir: str | None = None  # None = TMPDIR (el tmpfs del contenedor)
     realtime: bool = False  # solo pruebas: ffmpeg a velocidad real
     # Defecto: INGEST_FRAGMENT_SECONDS (30). effective_fragment_seconds lo recorta al piso.

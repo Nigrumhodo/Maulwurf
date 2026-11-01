@@ -120,9 +120,10 @@ alignment for G2-T; update spec, API, and UI in the same revision. No silent fal
   persisted (driver error or moved fencing token) stays `pending`, raises
   `cleanup_unrecorded` plus its failure metric and does not close admission.
 
-**Exit:** immediate normal cleanup and supervisor recovery demonstrated; limits/TTL
-published. Sweeper target every 60 s, not an instant-deletion promise when the host is
-unreachable. Any detected persistence blocks the delivery.
+**Exit:** immediate normal cleanup and supervisor recovery demonstrated; effective TTLs
+published (S4.4) while size/duration limits stay with D4. Sweeper target every 60 s, not an
+instant-deletion promise when the host is unreachable. Any detected persistence blocks the
+delivery.
 
 ### F0.3 Application foundation
 
@@ -151,9 +152,10 @@ because this plan exists.
 
 - [ ] Implement `/ingestion/capabilities` with effective language/formats/limits/TTL. Form
   without a preselected language, required metadata, and consent. The attempt's ephemeral
-  deadlines (upload, receive, ASR) come from the published TTL; without a validated
-  publication only the provisional upload window applies. API and ingestion share one byte
-  limit and startup fails when the two configured names disagree.
+  deadlines (upload, receive, ASR) come from the published TTL; S4.4 publishes 10/30/60 min
+  with `docs/eval/ttl-benchmark.md` behind them, independently of D4. Only an explicit
+  all-null TTL publication keeps the provisional upload window. API and ingestion share one
+  byte limit and startup fails when the two configured names disagree.
 - [ ] `POST /audios` records versioned consent and reserves slot + attempt; it does not
   promise deduplication before knowing the hash. Authenticated `PUT` (terminated in the API
   and streamed to ingestion, ADR-0008) computes SHA-256 and

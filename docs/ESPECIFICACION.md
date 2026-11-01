@@ -264,10 +264,13 @@ retained file.
   declared providers. A missing or outdated version is rejected before reserving capacity or
   accepting bytes. Language codes are compared case-insensitively and stored lowercase.
 - The ephemeral attempt deadlines come from the published capabilities TTL
-  (`upload_start_minutes`, `receive_minutes`, `asr_minutes`): while no publication is
-  validated, only the provisional upload window applies and no receive/ASR deadline is
-  invented. The API and the ingestion service share one byte limit and refuse to start when
-  their two configuration names disagree.
+  (`upload_start_minutes`, `receive_minutes`, `asr_minutes`). S4.4 publishes the effective
+  **10 / 30 / 60 min** with `docs/eval/ttl-benchmark.md` as `ttl_source_report`; this TTL
+  publication is independent of D4's size/duration limits, so `limits_validated=false` can
+  coexist with effective TTLs. A publication with only one or two TTLs is rejected; only an
+  explicit all-null TTL publication keeps the provisional upload window and invents no
+  receive/ASR deadline. The API and the ingestion service share one byte limit and refuse to
+  start when their two configuration names disagree.
 - `POST /audios` only validates metadata/consent, reserves RAM capacity, and creates the
   attempt; it cannot yet decide deduplication because it has not received the content. The
   binary upload uses `PUT` with `fetch`, not a framework upload helper or `UploadFile` with default spooling to
@@ -966,10 +969,10 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   `third_party_voice_acknowledged_at`, and the declared providers' set/versions.
   `audio_deleted_at` only after verifying the absence of temporaries. A persisted
   `cleanup_status=failed` blocks new admissions and becomes the durable latch; `pending`
-  blocks only the text outbox. Proposed initial expirations: 10 min to start the upload, 30
-  min of reception, 60 min from complete reception for ASR; adjust with the F0 benchmark and
-  publish effective limits. Sweeper target every 60 s; normal cleanup is immediate, it does
-  not wait for the TTL.
+  blocks only the text outbox. Effective expirations: 10 min to start the upload, 30 min of
+  reception, 60 min from complete reception for ASR, published with the S4.4 benchmark and
+  its `ttl_source_*` fields; changing them requires a new benchmark and the lead's approval.
+  Sweeper target every 60 s; normal cleanup is immediate, it does not wait for the TTL.
 - `transcripts`: unique `(audio_id, version)`, text, requested language,
   provider/model/configuration, `timestamp_precision`, quality, and summary/topics with the
   analysis version. `segments`: stable ID within a version, ordinal, text, and character
@@ -1201,7 +1204,7 @@ are not offered again as retention/autodetection options. Real pending items:
 | D1 | Personal deployment initially; confirm whether there will be a SaaS | Multi-tenant from F0. Google audience/consent and privacy review before opening to third parties |
 | D2 | Riva contract: exact languages, timestamps, formats/rate, limits, concurrency, quotas, and pricing | Blocking F0 spike; allowlist only with tested codes. `en`/`fr` appear in the provided example; they do not prove support for every needed language |
 | D3 | Provider retention/processing and permission for third-party voices | **D3-Audio** closes in F0 before real audio. **D3-Text** closes per provider/model before the first real transcript is sent to embeddings/LLM; changing provider reopens the decision |
-| D4 | Size/duration/deadlines and RAM per slot | 200 MiB/3 h target, initial lease values in §6; the F0 benchmark determines published limits and instance capacity |
+| D4 | Size/duration and RAM per slot | 200 MiB/3 h target and the lease values in §6; the F0 benchmark determines the published size/duration limits and instance capacity. The attempt TTLs are published separately by S4.4 (`docs/eval/ttl-benchmark.md`) and do not unblock D4 |
 | D5 | Quality/cost of the proposed LLM and embeddings | F1/F2 evaluation per language; do not assume valid JSON or high confidence implies accuracy |
 | D6 | Timestamps unavailable or insufficient at the endpoint | Blocks F1's temporal promise; decide validated ephemeral alignment or accept a text-only product. Do not implement a hidden fallback |
 | D7 | Minimum scopes and real Google behavior | **D7-CAL** before F2; **D7-MAIL** and uncertain delivery before F3. Each half requires a real contract and a protected account |

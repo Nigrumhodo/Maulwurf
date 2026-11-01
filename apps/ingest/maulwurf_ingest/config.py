@@ -39,6 +39,15 @@ class Settings(BaseSettings):
     fragment_seconds: int = Field(
         default=30, ge=1, validation_alias="INGEST_FRAGMENT_SECONDS"
     )
+    # S4.4: the published ASR TTL is 60 min. The old 600 s child cap was below the
+    # benchmark's 3 h projection (788 s local + provider), so the effective cap follows
+    # the publication; the floor refuses a deployment that would silently shorten it.
+    asr_timeout_s: float = Field(
+        default=3_600.0,
+        ge=3_600.0,
+        le=7_200.0,
+        validation_alias="INGEST_ASR_TIMEOUT_S",
+    )
     # Unset: internal routes answer 503 and /readyz reports credential.
     # Set but short, non-hex, or containing change-me: the process refuses to start.
     credential_secret: str | None = Field(default=None, validation_alias="INGEST_CREDENTIAL_SECRET")

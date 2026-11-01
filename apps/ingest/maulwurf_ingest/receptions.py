@@ -262,7 +262,7 @@ def _asr_config(request: Request) -> SupervisorConfig:
         instance=_instance_id(request),
         lease_ttl=timedelta(seconds=LEASE_TTL_S),
         heartbeat_interval_s=10.0,
-        asr_timeout_s=600.0,
+        asr_timeout_s=settings.asr_timeout_s,
     )
 
 
