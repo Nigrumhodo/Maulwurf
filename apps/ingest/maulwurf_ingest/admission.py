@@ -63,7 +63,6 @@ def _remember_alert(code: str, attempt_id: uuid.UUID) -> bool:
     return True
 
 
-
 def uploads_admitted() -> bool:
     """False after a persisted `failed` cleanup or while the latch is unreadable."""
     return not (_halted or _transient_closed)
@@ -99,7 +98,6 @@ def flag_unrecorded_cleanup(attempt_id: uuid.UUID) -> None:
     if not _remember_alert("cleanup_unrecorded", attempt_id):
         return
     logger.error("ingest.alert code=cleanup_unrecorded attempt_id=%s", attempt_id)
-
 
 
 def close() -> None:
