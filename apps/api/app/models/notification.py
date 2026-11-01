@@ -182,6 +182,9 @@ class Notification(TenantOwned, Base):
         # Covering index for the composite FKs (users through the `user_id` prefix, tasks
         # through the full pair); PostgreSQL does not index the referencing side.
         Index("notifications_by_task", "user_id", "task_id"),
+        # J4.8: the internal budget aggregate counts delivered rows by the month of
+        # `sent_at`; the partial due index only covers pending rows.
+        Index("notifications_by_status_sent_at", "status", "sent_at"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()

@@ -8,6 +8,10 @@ A2.17: the outbox aggregate is cross-tenant by definition. The read runs in one 
 as the jobs role with the explicit `app.cross_tenant` switch (the same documented policy the
 dispatcher/reconciler use), because the API's tenant policy would hide other users' rows.
 It is read-only, internal-only and returns aggregate counts, never rows or identifiers.
+
+J4.8 adds the monthly budget aggregate to the same transaction. Both aggregates run on every
+scrape and are not cached, so the example Prometheus configuration scrapes this endpoint at
+60 s or slower; see `infra/alerting/prometheus.example.yml`.
 """
 
 from fastapi import APIRouter

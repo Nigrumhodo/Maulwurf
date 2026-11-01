@@ -14,6 +14,7 @@ from functools import partial
 
 import httpx
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.routers.internal_metrics as internal_metrics
@@ -186,6 +187,34 @@ async def test_usage_counts_only_the_current_month(db_session: AsyncSession) -> 
     usage = await collect_usage(db_session, now=NOW)
 
     assert usage == {"llm": 1_000.0, "asr": 5.0, "google": 3.0}
+
+
+async def test_budget_aggregates_have_range_indexes(db_session: AsyncSession) -> None:
+    # The endpoint is scraped cross-tenant; every budget query filters a month range, so
+    # each table needs an index that a range-only predicate can use. The model metadata and
+    # this migration are kept in sync by the `alembic check` drift test.
+    result = await db_session.execute(
+        text(
+            "SELECT indexname, indexdef FROM pg_indexes "
+            "WHERE schemaname = 'public' AND indexname = ANY(:names)"
+        ),
+        {
+            "names": [
+                "messages_by_created_at",
+                "transcripts_by_created_at",
+                "notifications_by_status_sent_at",
+                "outbox_events_by_type_created_at",
+                "google_remote_operations_by_created_at",
+            ]
+        },
+    )
+    definitions = {str(name): str(definition) for name, definition in result}
+
+    assert definitions["messages_by_created_at"].endswith("(created_at)")
+    assert definitions["transcripts_by_created_at"].endswith("(created_at, audio_id)")
+    assert definitions["notifications_by_status_sent_at"].endswith("(status, sent_at)")
+    assert definitions["outbox_events_by_type_created_at"].endswith("(type, created_at)")
+    assert definitions["google_remote_operations_by_created_at"].endswith("(created_at)")
 
 
 async def test_a_transcript_committed_this_month_counts_an_audio_uploaded_last_month(

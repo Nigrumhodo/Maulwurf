@@ -24,7 +24,10 @@ Operator procedures:
 ## Metrics contract
 
 Both internal endpoints answer the Prometheus text format without authentication and are
-reachable only from the private data network; Caddy answers `404` to `/internal/*`.
+reachable only from the private data network; Caddy answers `404` to `/internal/*`. The
+example configuration scrapes them every **60 s**: `api:8000/internal/metrics` runs the
+cross-tenant budget aggregate on every scrape and the endpoint has no cache, so a lower
+interval adds database work without a better monthly signal.
 
 | Endpoint | Series used by the rules |
 |---|---|

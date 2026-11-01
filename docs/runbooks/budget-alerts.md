@@ -90,8 +90,11 @@ maulwurf_budget_configured
 ```
 
 The rule file is [`infra/alerting/maulwurf.rules.yml`](../../infra/alerting/maulwurf.rules.yml).
-The local compose stack does not run Prometheus; the reference deployment (J4.7) owns that
-wiring. See [`infra/alerting/README.md`](../../infra/alerting/README.md).
+The example scrape configuration sets a **60 s** interval: each scrape runs the cross-tenant
+budget aggregate (there is no cache), so a sub-minute interval only multiplies database work
+without changing the monthly signal. The local compose stack does not run Prometheus; the
+reference deployment (J4.7) owns that wiring. See
+[`infra/alerting/README.md`](../../infra/alerting/README.md).
 
 ## 4. Response
 

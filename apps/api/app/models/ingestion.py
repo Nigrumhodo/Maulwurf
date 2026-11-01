@@ -231,6 +231,8 @@ class OutboxEvent(TenantOwned, Base):
         Index("outbox_by_user", "user_id", postgresql_where=text("status <> 'completed'")),
         # The partial index above cannot serve the FK for completed rows.
         Index("outbox_events_by_user", "user_id"),
+        # J4.8: the internal Google budget counts one event type in a UTC month.
+        Index("outbox_events_by_type_created_at", "type", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
