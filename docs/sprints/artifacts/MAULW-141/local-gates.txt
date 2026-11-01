@@ -1,0 +1,96 @@
+# J4.3 / MAULW-141 local gates
+
+Date (UTC): 2026-11-01
+Environment: Linux (Ubuntu 24.04), Python 3.12.3, uv 0.13.1, PostgreSQL 16.15 with
+pgvector 0.8.0, Redis 7.0.15. Deterministic tests only: no Riva, LLM, Google, Gmail, real
+class audio, credential or secret. `apps/web` is untouched.
+
+Base: `origin/develop@2d4bc2d` (J4.2 / PR #151 merged before this branch).
+
+## apps/api static
+
+```text
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 286 source files
+```
+
+## apps/api unit
+
+Raw sandbox environment (the two failures are the pre-existing bracketed-IPv6 `httpx` cases
+in `test_ingest_sink`/`test_llm`, unrelated to this diff):
+
+```text
+$ uv run pytest tests/unit -q
+2 failed, 1620 passed, 35 warnings
+
+FAILED tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured
+FAILED tests/unit/test_llm.py::test_shared_http_client_is_bounded_reused_and_closed
+```
+
+With `NO_PROXY`/`no_proxy` sanitized to `localhost,127.0.0.1,::1`:
+
+```text
+$ uv run pytest tests/unit -q
+1622 passed, 35 warnings
+```
+
+## U-S4-JF-01 (J4.3)
+
+```text
+$ uv run pytest tests/unit/test_reminders.py -q
+41 passed
+```
+
+Cases: T-48/T-24/T-2 h from the instant; T-3d/T-1d at the user's local 09:00 (Bogotá and
+Tokyo); explicit local-time override; no date and `missing`/`ambiguous` states; only
+`confirmed` tasks; incoherent resolved rows fail closed; late confirmation omits past
+thresholds and keeps one due exactly at confirmation; canonical `dedupe_key` per occurrence;
+only enabled thresholds; unknown offsets; empty and duplicate arrays; malformed thresholds;
+naive instants and clocks; invalid/blank IANA zones; non-minute local times; non-positive
+`due_version`; ORM-shaped `ReminderTask.from_task`.
+
+## PostgreSQL adapter
+
+```text
+$ uv run pytest tests/integration/test_reminders_schedule.py -q
+9 passed
+```
+
+Cases: exact three timed rows, types, instants, local occurrences, `pending` status,
+`occurrence_seq=0`, `due_version` and canonical keys; idempotent re-confirmation; new
+`due_version` cancels the old generation and arms the new one; all-day rows at 09:00
+Bogotá; undated task inserts nothing; removing the date retires the armed generation; the
+settings arrays are read with the frozen defaults when absent; only the enabled thresholds
+are inserted; the adapter uses PostgreSQL's clock when no instant is injected.
+
+## Integration regressions
+
+```text
+$ uv run pytest tests/integration/test_reminders_schedule.py \
+    tests/integration/test_s4_notification_cancellation.py \
+    tests/integration/test_notification_scheduler.py \
+    tests/integration/test_notifications_endpoints.py \
+    tests/integration/test_s4_notifications_schema.py -q
+88 passed
+```
+
+```text
+$ uv run pytest -m integration -q
+19 failed, 757 passed, 1623 deselected, 1 error
+```
+
+The 19 failures are outside this diff: 18 are the known sandbox `test_ingest_reception.py`
+cases whose default ingest sink cannot resolve in this host (`InvalidURL`, pre-existing and
+recorded by earlier claims), and `test_migrations.py::test_rls_revision_round_trips` failed
+only in this shared-host full run; it passes in isolation (`1 passed`) and the extra error
+belongs to that case's teardown. No migration or RLS file is changed by this branch.
+
+## Documentation
+
+```text
+$ python3 scripts/docs/check_refs.py
+OK: 958 documented repository paths exist or are expected.
+```
