@@ -1,0 +1,170 @@
+# J4.6 / MAULW-144 local gates
+
+Date (UTC): 2026-11-01
+Environment: Linux (Ubuntu 24.04), Python 3.12.3, uv 0.13.1, PostgreSQL 16.15,
+Redis 7.0.15. Deterministic tests only: no Riva, LLM, Google, Gmail, real class audio,
+credential or secret. `apps/web` is untouched.
+
+Base: `origin/develop@21b5c0a` (merge of J4.5 / PR #153), synchronized into
+`task/MAULW-144` before the final gates; the review rework below is on top of that merge.
+
+## Review rework (hoplite, 2026-11-01T13:39:11Z)
+
+PR #156 is reused (no new PR). Two critical findings fixed on `task/MAULW-144`:
+
+- **CRITICAL 1 — a pending digest of the current period could fire with the old
+  schedule.** `_cancel_stale_digests` only cancelled rows whose `occurrence` was older than
+  the local day/week; a change of `digest_daily_time` to an hour already passed today (or
+  of `digest_weekday` to a day already passed this week) moves the planner to the next
+  period and leaves the current row pending with the old `scheduled_at`. The new
+  `_cancel_unscheduled_digests` compares the pending row with the plan: an older-period row
+  of an enabled type is cancelled when its `scheduled_at` is still ahead (the reported case)
+  or when its period is over (the pre-existing outage rule). A current-period row whose
+  instant already arrived stays claimable by J4.2, so a missed claim at the exact minute is
+  retried later the same day as before, and a pre-armed row of a later period is left for
+  the plan to adopt instead of being cancelled and recreated.
+- **CRITICAL 2 — the upsert rewrote every pending row each tick.** `_write_occurrences`
+  applied `_rearmed_values` to every `pending`/`cancelled` row without comparing
+  `scheduled_at`, so each minute rewrote all pending rows (and counted them in `written`).
+  The conflict `WHERE` now updates only a `cancelled` row or a `pending` row whose
+  `scheduled_at` is distinct from the planned one, so a no-change tick reports `written=0`,
+  and `attempts` is no longer in the update set.
+
+**Retry contract checked before accepting the behavior (M8 / J4.2).** `claim` increments
+`attempts` once when `pending → sending`; `sending` only transitions to
+`sent`/`failed`/`delivery_unknown`; all of them are terminal and an expired lease becomes
+`delivery_unknown` (`apps/api/app/services/notifications.py`). A manual resend creates a new
+row with `occurrence_seq > 0` and never mutates the original
+(`apps/api/app/services/notification_center.py`). Therefore J4.2 never returns a row to
+`pending` with `attempts > 0`, so the reset was not an active bypass through the public
+core; it was still an unconditional per-tick rewrite that would erase the counter of any
+pending row carrying a retry. Fixed as described (no rewrite without a change, `attempts`
+preserved).
+
+**TDD.** The four regression tests were committed first (`f41a313`) and failed on the old
+code for the reported reasons:
+
+```text
+$ uv run pytest tests/integration/test_digest_schedule.py -q
+4 failed, 14 passed
+FAILED test_a_time_change_to_an_already_passed_hour_cancels_the_pending_period
+FAILED test_a_second_tick_without_changes_does_not_rewrite_pending_rows
+FAILED test_a_pending_retry_keeps_its_attempt_counter_when_the_time_changes
+FAILED test_a_weekday_change_to_an_already_passed_day_cancels_the_current_week
+```
+
+A fifth guard covers the invariant the naive fix would break: a due current-period row is
+not cancelled before J4.2 can claim it (the claimer runs at second 0 and the materializer at
+second 20).
+
+## apps/api static
+
+```text
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 294 source files
+```
+
+## apps/api unit
+
+Raw sandbox environment (the two failures are the pre-existing bracketed-IPv6 `httpx` cases
+in `test_ingest_sink`/`test_llm`, unrelated to this diff):
+
+```text
+$ uv run pytest tests/unit -q
+2 failed, 1695 passed, 35 warnings
+```
+
+With `NO_PROXY`/`no_proxy` sanitized to `localhost,127.0.0.1,::1`:
+
+```text
+$ uv run pytest tests/unit -q
+1697 passed, 35 warnings
+```
+
+## J4.6 planner (unit)
+
+```text
+$ uv run pytest tests/unit/test_digests.py -q
+31 passed
+```
+
+Cases: the frozen 07:00/Sunday defaults; daily local date in Bogota and the UTC/Tokyo date
+crossing; configurable hour; strictly-next occurrence (today/tomorrow, this/next week);
+weekly weekday identity (a change inside the same week keeps the same dedupe key); both
+digests coexisting; DST spring-forward (02:30 -> 03:00 EDT / 07:00 UTC) and fall-back
+(01:30 at its first fold, 05:30 UTC); deterministic replanning; the opt-in gate; the
+canonical `dedupe_key`; and the closed validation surface (clock, timezone, HH:MM,
+weekday 0-6, digest type).
+
+## I-S4-JF-06 (PostgreSQL)
+
+```text
+$ uv run pytest tests/integration/test_digest_schedule.py -q
+19 passed
+```
+
+Cases: optional daily+weekly materialization at 07:00 local with the canonical keys and
+`occurrence_seq=0`; idempotent second tick and exactly one J4.2 claim; tomorrow's row armed
+after today's local hour; Gmail opt-in gate; disabled digests; configurable 09:30/Tokyo
+hour; pending `scheduled_at` recomputed after a time change; a cancelled digest reopened
+when the preference returns; stale pending daily periods cancelled instead of sent late;
+a past-hour change cancelling the current daily period and a past-weekday change cancelling
+the current weekly period, with the old instant unclaimable; a due current-period row that
+stays claimable on the next tick; a second tick without changes rewriting nothing; a
+pending retry keeping `attempts=1` when the time changes; `sent` history never rewritten; a
+future weekly row follows a weekday change into the next period; the cross-tenant
+`maulwurf_jobs` role under RLS; and both content windows with upcoming tasks, the M5
+`time_conflicts` pair and same-day `deadline_clashes`.
+
+## Integration regressions
+
+```text
+$ uv run pytest tests/integration/test_digest_schedule.py \
+    tests/integration/test_notification_delivery_unknown.py \
+    tests/integration/test_notification_scheduler.py \
+    tests/integration/test_reminders_schedule.py \
+    tests/integration/test_reminder_dst_schedule.py \
+    tests/integration/test_notifications_endpoints.py \
+    tests/integration/test_s4_notification_cancellation.py -q
+103 passed
+```
+
+Full API integration suite (same sanitized proxy):
+
+```text
+$ uv run pytest tests/integration -q
+814 passed, 837 warnings in 157.25s
+```
+
+## apps/ingest regression
+
+```text
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 83 source files
+
+$ uv run pytest -m "not integration and not provider and not load" -q \
+    --ignore=tests/test_synthetic_audio.py
+297 passed, 93 deselected, 2 warnings
+```
+
+`tests/test_synthetic_audio.py` is excluded because this sandbox has no `espeak-ng`; the
+other ingest unit cases are unaffected by this API-only change.
+
+## Documentation
+
+```text
+$ python3 scripts/docs/check_refs.py
+OK: 980 documented repository paths exist or are expected.
+```
+
+## Scope
+
+No migration, provider call, credential, secret, class audio or `apps/web` change. The
+Gmail render/send remains J4.1 and the protected end-to-end send remains J4.10; this ticket
+stops at the pending occurrence and the content seam J4.1 consumes.
