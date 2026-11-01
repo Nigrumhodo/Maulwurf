@@ -8,6 +8,7 @@ from sqlalchemy import (
     CheckConstraint,
     Double,
     ForeignKeyConstraint,
+    Index,
     Integer,
     Text,
     UniqueConstraint,
@@ -23,6 +24,8 @@ class Transcript(TenantOwned, Base):
     __tablename__ = "transcripts"
     __table_args__ = (
         UniqueConstraint("user_id", "id"),
+        # Target of the 3-column FKs that pin a child row to this exact transcript version.
+        UniqueConstraint("user_id", "id", "version"),
         UniqueConstraint("audio_id", "version"),
         ForeignKeyConstraint(
             ["user_id", "audio_id"], ["audios.user_id", "audios.id"], ondelete="CASCADE"
@@ -31,6 +34,10 @@ class Transcript(TenantOwned, Base):
             "timestamp_precision IN ('word', 'segment', 'none')", name="timestamp_precision"
         ),
         CheckConstraint("char_count = char_length(text)", name="char_count_matches_text"),
+        # ESPECIFICACION §M2: silence or empty text ends `rejected`; a blank transcript must
+        # never reach the durable text table (defense in depth next to S2.10).
+        CheckConstraint("btrim(text) <> ''", name="nonblank_text"),
+        Index("transcripts_by_audio", "user_id", "audio_id"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -73,6 +80,9 @@ class Segment(TenantOwned, Base):
             "(t_start IS NOT NULL AND t_end IS NOT NULL AND 0 <= t_start AND t_start < t_end)",
             name="time_range",
         ),
+        # Supporting index for the composite FK (DISENO §2.1.8); the unique key starts with
+        # `transcript_id`, so it cannot serve the tenant-prefixed lookup.
+        Index("segments_by_transcript", "user_id", "transcript_id"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()

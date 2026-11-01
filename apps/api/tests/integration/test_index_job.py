@@ -42,6 +42,7 @@ from app.services.indexing import (
     build_generation,
     create_generation,
 )
+from app.services.reconciliation import close_expired_run
 from app.services.runs import INDEX_CONFIG_VERSION
 from app.workers.index_job import PROVIDERS_KEY, SESSIONS_KEY, index
 from app.workers.reconciler import reconcile_once
@@ -61,6 +62,24 @@ class ScriptedProvider(FakeProvider):
     async def embed(self, texts: Any) -> list[list[float]]:
         self.calls.append(list(texts))
         raise self.error
+
+
+class ClosingProvider(FakeProvider):
+    """One embedding per batch; before the second batch, the run is closed by the test.
+
+    Models a reconciler that reclaimed an expired run while the stale worker was between
+    batches: the first batch is already durable, the next one must be rejected by the fence.
+    """
+
+    def __init__(self, close_run: Any) -> None:
+        super().__init__(batch_size=1)
+        self.close_run = close_run
+
+    async def embed(self, texts: Any) -> list[list[float]]:
+        self.calls.append(list(texts))
+        if len(self.calls) == 2:
+            await self.close_run()
+        return [[0.25] * self.dimension for _ in texts]
 
 
 @asynccontextmanager
@@ -328,6 +347,71 @@ async def test_activation_after_orphan_cleanup_is_refused(
         await activate_claimed_generation(
             db_session, user_id=actor.user_id, version=version, claim=claim
         )
+    assert await _generations(db_session, actor, INDEX_ACTIVE) == 0
+
+
+async def _two_indexable_classes(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Actor, list[Audio]]:
+    """Two eligible classes: chunking commits twice and embeddings run in single batches."""
+    monkeypatch.setattr(settings, "d3_text_closed_models", (settings.embedding_model,))
+    _match_production_session(db)
+    actor = await make_actor(db)
+    audios: list[Audio] = []
+    for _ in range(2):
+        audio, _attempt, transcript = await make_class_with_transcript(db, actor)
+        db.add(
+            Segment(
+                user_id=actor.user_id,
+                transcript_id=transcript.id,
+                ordinal=0,
+                text=transcript.text,
+                char_start=0,
+                char_end=transcript.char_count,
+            )
+        )
+        await db.flush()
+        audios.append(audio)
+    return actor, audios
+
+
+async def test_build_batch_after_the_run_was_closed_is_fenced(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """I-S2-AN-17: the batch after the reconciler closes the run never becomes durable.
+
+    Without the per-batch fence the stale worker would commit its second embedding batch and
+    the next build could adopt those rows under the same `index_version` (ADR-0009).
+    """
+    actor, audios = await _two_indexable_classes(db_session, monkeypatch)
+    audio = audios[0]
+    closed_at = datetime.now(UTC) + timedelta(hours=1)
+
+    async def close_run() -> None:
+        run = await _run(db_session, audio)
+        assert run is not None
+        applied = await close_expired_run(
+            db_session,
+            run_id=run.id,
+            fencing_token=run.fencing_token,
+            now=closed_at,
+        )
+        assert applied
+
+    provider = ClosingProvider(close_run)
+    await index(_ctx(db_session, provider), str(audio.id), 1)
+
+    assert len(provider.calls) == 2
+    audio_id = audio.id
+    db_session.expunge_all()
+    run = await _run(db_session, audio)
+    assert run is not None
+    assert (run.status, run.error_code) == ("failed", "lease_expired")
+    version = index_version_for(audio_id, 1)
+    embeddings = await db_session.scalar(
+        select(func.count()).select_from(Embedding).where(Embedding.index_version == version)
+    )
+    assert embeddings == 1  # only the batch committed before the close
     assert await _generations(db_session, actor, INDEX_ACTIVE) == 0
 
 

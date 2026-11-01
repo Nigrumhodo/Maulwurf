@@ -390,12 +390,24 @@ async def make_class_with_timed_segments(
 
 async def make_chunk(db: AsyncSession, actor: Actor) -> Chunk:
     transcript = await make_transcript(db, actor)
+    # A2.18: a chunk references its generation, so the fixture must materialize one first.
+    # The version is unique per call: two chunks for the same actor must not collide on
+    # `uq_index_generations_user_id_version`.
+    generation = IndexGeneration(
+        user_id=actor.user_id,
+        version=f"test-{uuid.uuid4().hex}",
+        model="test-model",
+        dimension=1536,
+        status="building",
+    )
+    db.add(generation)
+    await db.flush()
     chunk = Chunk(
         user_id=actor.user_id,
         audio_id=transcript.audio_id,
         transcript_id=transcript.id,
         transcript_version=transcript.version,
-        index_version="test-v1",
+        index_version=generation.version,
         ordinal=1,
         content=transcript.text,
         char_start=0,
@@ -415,7 +427,9 @@ async def make_embedding(
     embedding = Embedding(
         user_id=actor.user.id,
         chunk_id=chunk.id,
-        index_version="test-v1",
+        # A2.18: `embeddings.index_version` is part of the FK to the chunk; a vector can only
+        # live under the exact generation of the chunk it belongs to.
+        index_version=chunk.index_version,
         model="test-model",
         dimension=1536,
         vector=[0.0] * 1536,
