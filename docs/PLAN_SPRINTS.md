@@ -433,7 +433,7 @@ routes.
 | Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
 | A4.1 | `notifications` + Gmail/digests extension of `settings` (the Calendar base already exists from S3) | A3.8 | U-S4-AN-01/02 |
-| A4.2 | `PATCH /me/notifications` + `POST /notifications/test` | A4.1 | I-S4-JF-05 |
+| A4.2 | Preferences (`GET/PATCH /me/notifications`), `POST /notifications/test`, cursor listing and warned resend | A4.1 | I-S4-JF-05 |
 | A4.3 | Changing due date/preferences cancels only obsolete future occurrences | A4.1 | U-S4-AN-03 |
 | A4.4 | Account deletion with an observable operation: `DELETE /me` + `GET /me/deletion/{id}` | A3.8, J3.3 | I-S4-AN-04 |
 | A4.5 | D8 already approved: backup and restore validation with reapplied tombstones | A4.4, D8 approved | I-S4-AN-05 |

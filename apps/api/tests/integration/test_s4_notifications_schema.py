@@ -173,6 +173,65 @@ async def test_nulls_not_distinct_dedupes_task_less_digests(
     )
 
 
+async def test_the_audit_sequence_makes_manual_repetitions_insertable(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    task = await make_task(db_session, actor)
+    original = await _reminder(db_session, actor, task)
+    assert original.occurrence_seq == 0
+
+    # A4.2: a manual resend is a new occurrence with the next sequence, same identity.
+    manual = await _reminder(
+        db_session,
+        actor,
+        task,
+        occurrence_seq=1,
+        dedupe_key=dedupe_key(
+            user_id=actor.user_id,
+            type="reminder_t24",
+            task_id=task.id,
+            due_version=task.due_version,
+            occurrence=OCCURRENCE,
+            occurrence_seq=1,
+        ),
+    )
+    assert manual.occurrence_seq == 1
+
+    # Reusing a sequence inside the identity is still impossible by construction.
+    await _expect_integrity_error(
+        db_session,
+        Notification(
+            user_id=actor.user_id,
+            task_id=task.id,
+            type="reminder_t24",
+            occurrence=OCCURRENCE,
+            due_version=task.due_version,
+            scheduled_at=NOW,
+            dedupe_key="another-manual-spelling",
+            occurrence_seq=1,
+        ),
+    )
+
+
+async def test_a_negative_audit_sequence_is_rejected(db_session: AsyncSession) -> None:
+    actor = await make_actor(db_session)
+    task = await make_task(db_session, actor)
+    await _expect_integrity_error(
+        db_session,
+        Notification(
+            user_id=actor.user_id,
+            task_id=task.id,
+            type="reminder_t24",
+            occurrence=OCCURRENCE,
+            due_version=task.due_version,
+            scheduled_at=NOW,
+            dedupe_key="negative-sequence",
+            occurrence_seq=-1,
+        ),
+    )
+
+
 # --- Closed vocabularies ---------------------------------------------------------------
 
 

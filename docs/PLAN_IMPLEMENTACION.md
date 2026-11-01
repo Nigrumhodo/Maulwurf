@@ -264,6 +264,9 @@ clean them up at the end.
   retry. State that an already sent/in-flight email cannot be recalled when deleting a task.
 - [ ] Delivery/failed-sync panel with warned manual resend, preferences, statistics, and
   Ctrl+K. Re-ranker only through a comparative experiment with quality/cost/latency.
+- [ ] Manual repetitions never mutate the original: a test send or an acknowledged resend is
+  a new audited occurrence with its own `occurrence_seq`, while the five-component automatic
+  dedupe of scheduled reminders stays exact.
 - [ ] Runbooks for cleanup, provider outage, budget, revoked tokens, restore, and account
   deletion. D8 is approved (A4.5): encrypted text/metadata backups, a 30-day maximum that
   matches the residual deletion window, and a deletion log reapplied on a clean restore; no
