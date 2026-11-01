@@ -20,15 +20,19 @@ Commands and results
 
 4. cd apps/api && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 \
        uv run pytest tests/unit -q
-   -> 1382 passed, 35 warnings in 29.88s
+   -> 1382 passed, 35 warnings in 14.39s
    (The sanitized proxy environment removes the pre-existing httpx failures; no test or
    production code was changed to hide them.)
 
 5. cd apps/api && NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 \
        uv run pytest -m integration -q
-   -> 646 passed, 1383 deselected, 690 warnings in 175.38s (0:02:55)
-   Includes the 8 I-S4-AN-04 cases in tests/integration/test_account_deletion.py, the
-   migration round-trip/drift suite, the FK-covering-index guard and test_rls.py.
+   -> 647 passed, 1383 deselected, 693 warnings in 139.96s (0:02:19)
+   Includes the 9 I-S4-AN-04/RLS cases (8 in tests/integration/test_account_deletion.py
+   plus the app-role deletion case in test_rls.py), the migration round-trip/drift suite,
+   the FK-covering-index guard and test_rls.py.
+   One intermediate run hit the pre-existing shared-Redis `search:quota:` leftover
+   (37 s TTL) when test_redis_policy scanned DB 0; after that key expired the full suite
+   passed. No code was changed for it.
 
 6. python3 scripts/docs/check_refs.py
    -> OK after this artifact is present (the first run reported the not-yet-created

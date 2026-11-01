@@ -38,7 +38,7 @@ from sqlalchemy.pool import NullPool
 from app.core import db
 from app.core.config import settings
 from app.core.db import get_session
-from app.core.deps import COOKIE_NAME
+from app.core.deps import COOKIE_NAME, CSRF_HEADER
 from app.main import app
 from app.models import Base, GoogleCredential
 from app.models.base import TenantOwned
@@ -549,6 +549,101 @@ async def test_authenticated_reads_run_under_the_app_role(
     assert [item["name"] for item in subjects.json()["items"]] == [name]
     assert me.status_code == 200
     assert me.json()["id"] == str(user_id)
+
+
+async def test_account_deletion_runs_under_the_app_role(
+    migrated_database_url: str,
+) -> None:
+    """A4.4: the tombstone, the purge and the status read work with RLS on.
+
+    The request engine installs the production begin listener, so every transaction runs as
+    `maulwurf_app` with `app.user_id` bound. This proves the new `account_deletions` insert,
+    the `sessions` link, the full tenant purge and the restricted `GET` are reachable under
+    the real policy set, not only through the owner connection used by the main suite.
+    """
+    user_id = uuid.uuid4()
+    token = f"token-{uuid.uuid4().hex}"
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    csrf_token = sessions.csrf_token_for(token)
+    csrf_hash = hashlib.sha256(csrf_token.encode("utf-8")).hexdigest()
+
+    seed = create_async_engine(migrated_database_url, poolclass=NullPool)
+    try:
+        async with seed.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO users (id, google_sub, email) "
+                    "VALUES (:id, :sub, :email)"
+                ),
+                {"id": user_id, "sub": f"sub-{user_id}", "email": "delete@example.test"},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO sessions (user_id, token_hash, csrf_hash, expires_at) "
+                    "VALUES (:user_id, :token_hash, :csrf_hash, now() + interval '1 hour')"
+                ),
+                {"user_id": user_id, "token_hash": token_hash, "csrf_hash": csrf_hash},
+            )
+            await connection.execute(
+                text("INSERT INTO subjects (user_id, name) VALUES (:id, :name)"),
+                {"id": user_id, "name": f"rls-delete-{uuid.uuid4().hex[:10]}"},
+            )
+    finally:
+        await seed.dispose()
+
+    engine = create_async_engine(migrated_database_url)
+    event.listen(engine.sync_engine, "begin", db._apply_tenant_settings)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def override() -> AsyncIterator[AsyncSession]:
+        async with factory() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = override
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url=settings.allowed_origin
+        ) as client:
+            deleted = await client.request(
+                "DELETE",
+                "/me",
+                json={"delete_maulwurf_events": False},
+                cookies={COOKIE_NAME: token},
+                headers={"Origin": settings.allowed_origin, CSRF_HEADER: csrf_token},
+            )
+            assert deleted.status_code == 202
+            deletion_id = deleted.json()["deletion_operation_id"]
+            status = await client.get(
+                f"/me/deletion/{deletion_id}", cookies={COOKIE_NAME: token}
+            )
+            assert status.status_code == 200
+            assert status.json()["status"] == "completed"
+            assert (await client.get("/me", cookies={COOKIE_NAME: token})).status_code == 401
+    finally:
+        app.dependency_overrides.clear()
+        await engine.dispose()
+
+    check = create_async_engine(migrated_database_url, poolclass=NullPool)
+    try:
+        async with check.connect() as connection:
+            subjects = await connection.scalar(
+                text("SELECT count(*) FROM subjects WHERE user_id = :id"), {"id": user_id}
+            )
+            sessions_left = await connection.scalar(
+                text("SELECT count(*) FROM sessions WHERE user_id = :id"), {"id": user_id}
+            )
+            operation = await connection.scalar(
+                text(
+                    "SELECT status FROM account_deletions WHERE former_user_id = :id"
+                ),
+                {"id": user_id},
+            )
+    finally:
+        await check.dispose()
+
+    assert subjects == 0
+    assert sessions_left == 1
+    assert operation == "completed"
 
 
 async def test_commit_emits_with_the_tenant_already_bound(
