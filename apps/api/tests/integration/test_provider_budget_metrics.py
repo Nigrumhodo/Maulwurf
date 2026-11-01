@@ -9,7 +9,7 @@ aggregate; the state transitions and label shape are unit-tested in
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest

@@ -32,13 +32,16 @@ def _load() -> ModuleType:
 budget_check = _load()
 
 
+Sample = tuple[float, float | None, float | None, bool, bool]
+
+
 def _metrics(
     *,
-    llm=(900.0, 1_000.0, 0.9, True, False),
-    asr=(12.0, None, None, False, False),
-    google=(3.0, 10.0, 0.3, False, False),
+    llm: Sample = (900.0, 1_000.0, 0.9, True, False),
+    asr: Sample = (12.0, None, None, False, False),
+    google: Sample = (3.0, 10.0, 0.3, False, False),
 ) -> str:
-    lines = []
+    lines: list[str] = []
     for provider, (usage, limit, ratio, warning, exhausted) in {
         "llm": llm,
         "asr": asr,

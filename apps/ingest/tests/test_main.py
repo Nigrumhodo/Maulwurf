@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from maulwurf_ingest import admission, hardening, main
-from maulwurf_ingest.config import settings
+from maulwurf_ingest.config import Settings, settings
 
 
 async def _ok() -> None:
@@ -41,6 +41,29 @@ async def _skip_reconcile() -> None:
 
 async def _skip_pool(_app: object) -> None:
     return None
+
+
+def test_an_empty_previous_rotation_pair_is_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Compose interpolates an unset optional pair as an empty string; it must not look
+    # like a configured (and invalid) previous key at startup.
+    monkeypatch.setenv("INGEST_CREDENTIAL_PREVIOUS_SECRET", "")
+    monkeypatch.setenv("INGEST_CREDENTIAL_PREVIOUS_KID", "")
+
+    loaded = Settings()
+
+    assert loaded.credential_previous_secret is None
+    assert loaded.credential_previous_kid is None
+
+
+def test_a_previous_rotation_pair_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "credential_secret", "ab" * 32)
+    monkeypatch.setattr(settings, "credential_kid", "k2")
+    monkeypatch.setattr(settings, "credential_previous_secret", "cd" * 32)
+    monkeypatch.setattr(settings, "credential_previous_kid", "k1")
+
+    main.refuse_bad_credential()
+
+    assert settings.credential_previous_kid == "k1"
 
 
 def test_report_mode_starts_but_is_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:

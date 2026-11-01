@@ -11,7 +11,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore")
+    # J4.8: Compose passes the optional previous rotation pair through an interpolation
+    # whose unset value is an empty string. Treat empty as absent so the pair stays
+    # `None`/`None` and startup does not fail on a harmless blank variable.
+    model_config = SettingsConfigDict(extra="ignore", env_ignore_empty=True)
 
     database_url: str | None = Field(default=None, validation_alias="MAULWURF_DATABASE_URL")
     # Stable identifier of the host that owns this ingest tmpfs. `resolve` refuses an

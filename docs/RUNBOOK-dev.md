@@ -384,6 +384,44 @@ row. `GET /audios/{id}` reports `analysis_backfill_available` before the pass an
 `analyze` stage becomes `pending` after it. Until L3.6 lands, the queued job is the existing
 S2 `analyze` no-op: this command proves the queue, not extraction output.
 
+## 11. Provider budgets, alerts and operator runbooks (J4.8)
+
+The API exports the current UTC month's provider usage on `/internal/metrics`:
+
+```bash
+cd apps/api
+uv run python - <<'PY'
+import urllib.request
+print(urllib.request.urlopen('http://127.0.0.1:8000/internal/metrics', timeout=3).read().decode())
+PY
+```
+
+The `maulwurf_budget_*` series are always present for `llm`, `asr` and `google`; the limit,
+ratio, warning and exhausted series appear only when the matching
+`MAULWURF_BUDGET_*` cap is set. Unset means measure-only, never a zero budget. A
+dependency-free check for a cron or an operator shell:
+
+```bash
+python scripts/ops/budget_check.py --url http://127.0.0.1:8000/internal/metrics
+```
+
+The Prometheus rules and scrape example are in
+[`infra/alerting/`](../infra/alerting/README.md); the local eight-service stack does not run
+Prometheus, so the reference deployment (J4.7) owns that wiring. Operator procedures:
+
+- [runbooks/README.md](runbooks/README.md) — index and reference-environment status;
+- [runbooks/budget-alerts.md](runbooks/budget-alerts.md) — budgets, thresholds and escalation;
+- [runbooks/provider-down.md](runbooks/provider-down.md) — Riva/LLM/embeddings/Google outage;
+- [runbooks/tokens.md](runbooks/tokens.md) — revoked or rotated credentials;
+- [runbooks/account-deletion.md](runbooks/account-deletion.md) — account deletion and resume;
+- [runbooks/cleanup.md](runbooks/cleanup.md) and [runbooks/restore.md](runbooks/restore.md) —
+  the S4.1/A4.5 procedures.
+
+The J4.8 execution record is in
+[`docs/sprints/artifacts/J4.8/`](sprints/artifacts/J4.8/). The reference-host drill is
+**NOT RUN** while J4.7 is absent; do not describe a local deterministic result as a provider
+or production verification.
+
 ## Links
 
 - [../README.md](../README.md) — repository vision and status.

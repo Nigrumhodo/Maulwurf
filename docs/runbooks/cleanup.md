@@ -621,6 +621,17 @@ commands and the environment check are captured in
 update; PR #135 records the `quality` run on the final evidence-only head and no code
 changes follow.
 
+### 8.2 J4.8 local execution record
+
+On 2026-11-01 the J4.8 ticket exercised the detection step against a real PostgreSQL 16.15
+database with a seeded `cleanup_status='failed'` attempt:
+`status --check` reported `failed_cleanups=1`, `admission_expected=closed` and exit `3`;
+a `sweep` pass found no new action and exited `0`. The command, output and environment are
+in [`docs/sprints/artifacts/J4.8/cleanup-status.txt`](../sprints/artifacts/J4.8/cleanup-status.txt).
+The compose restart (§5.1) and the host-loss attestation (§7) remain **NOT RUN** in this
+sandbox (no container runtime, no destroyed host); the reference-environment drill still
+requires J4.7.
+
 ## 9. Stop conditions
 
 Stop and escalate to the security/privacy reviewer, keeping admission closed, when:
