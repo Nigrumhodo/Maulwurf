@@ -213,6 +213,9 @@ async def _insert_task(
         "calendar_sync_status": "pending",
         "calendar_id": CALENDAR_ID,
         "calendar_event_id": None,
+        # A3.1 columns the sync path does not use; the Calendar block is set below.
+        "tipo": "entrega",
+        "date_status": "missing",
         "titulo": "Entregar informe",
         "detalle": None,
         "timezone": "America/Bogota",
