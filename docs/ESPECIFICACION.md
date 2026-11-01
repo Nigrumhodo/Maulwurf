@@ -224,6 +224,9 @@ Gmail).
   without necessarily ending the application session.
 - Profile: IANA timezone, local digest time, and opt-in preferences. Each class's timezone is
   captured as a snapshot so profile changes do not alter already-extracted dates.
+  `GET /me` returns that profile plus the non-cacheable CSRF bootstrap and `PATCH /me`
+  updates only the IANA timezone; `display_name` comes from the Google profile and
+  integration state is served by `GET /integrations/status`.
 - All access, SSE, tools, and jobs are isolated by `user_id`; the backend takes it from the
   session, never from the user payload or the LLM.
 
@@ -259,7 +262,12 @@ retained file.
   `privacy_notice_version`, `cloud_processing_accepted=true`, and
   `third_party_voice_acknowledged=true`; the server records user, version, instant, and
   declared providers. A missing or outdated version is rejected before reserving capacity or
-  accepting bytes.
+  accepting bytes. Language codes are compared case-insensitively and stored lowercase.
+- The ephemeral attempt deadlines come from the published capabilities TTL
+  (`upload_start_minutes`, `receive_minutes`, `asr_minutes`): while no publication is
+  validated, only the provisional upload window applies and no receive/ASR deadline is
+  invented. The API and the ingestion service share one byte limit and refuse to start when
+  their two configuration names disagree.
 - `POST /audios` only validates metadata/consent, reserves RAM capacity, and creates the
   attempt; it cannot yet decide deduplication because it has not received the content. The
   binary upload uses `PUT` with `fetch`, not a framework upload helper or `UploadFile` with default spooling to
@@ -274,9 +282,12 @@ retained file.
   with an opaque `variant_confirmation_token`, single use, short expiry, and bound to
   user/hash/metadata/previous class. A second `POST /audios` with that token creates a variant
   reservation and requires uploading again; when the second `PUT` finishes, the server checks
-  that the hash matches before transcribing. Audio is never retained while awaiting a
-  decision. A confirmed variant creates another class without mutating existing evidence or
-  tasks. Transactional uniqueness resolves concurrent uploads toward the canonical class.
+  that the hash matches before transcribing (`422 variant_hash_mismatch` otherwise). An
+  unknown, expired, consumed or mismatched token is rejected with the same opaque
+  `422 validation_failed` so its existence and state are never disclosed. Audio is never
+  retained while awaiting a decision. A confirmed variant creates another class without
+  mutating existing evidence or tasks. Transactional uniqueness resolves concurrent uploads
+  toward the canonical class.
 - Ephemeral ASR:
   `awaiting_upload → receiving → transcribing → transcript_committed_cleanup_pending → succeeded`;
   from the active states it can also end in `requires_reupload | rejected | cancelled`.

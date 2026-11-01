@@ -124,7 +124,8 @@ unreachable. Any detected persistence blocks the delivery.
   no audio storage. Initial single-instance ingestion; scaling with reservation affinity
   remains pending design/testing.
 - [ ] Google OAuth in the backend, opaque session, incremental scopes, encryption/rotation,
-  `GET /me` as a non-cacheable CSRF bootstrap, CSRF/Origin on every mutation, and
+  `GET /me` as a non-cacheable CSRF bootstrap (profile only; integration state is
+  `GET /integrations/status`), CSRF/Origin on every mutation, and
   logout/revocation. Do not condition chat on Calendar/Gmail scopes.
 - [ ] Tenant-aware migrations and subject CRUD. RLS, composite FKs, and pool/worker tests.
   Full model for attempts, transcript/segments, index/analysis versions, and outbox; later
@@ -141,14 +142,19 @@ because this plan exists.
 ### F1.1 Ingestion, text, and library
 
 - [ ] Implement `/ingestion/capabilities` with effective language/formats/limits/TTL. Form
-  without a preselected language, required metadata, and consent.
+  without a preselected language, required metadata, and consent. The attempt's ephemeral
+  deadlines (upload, receive, ASR) come from the published TTL; without a validated
+  publication only the provisional upload window applies. API and ingestion share one byte
+  limit and startup fails when the two configured names disagree.
 - [ ] `POST /audios` records versioned consent and reserves slot + attempt; it does not
   promise deduplication before knowing the hash. Authenticated `PUT` (terminated in the API
   and streamed to ingestion, ADR-0008) computes SHA-256 and
   answers 202 only after reception/admission, or 200/409 from dedup, always after cleanup.
   Compensate reservations if the DB fails.
 - [ ] Exact-identity deduplication in the `PUT`; a variant returns an opaque single-use
-  token, requires a second `POST` and re-upload, and verifies the hash again. Do not retain
+  token, requires a second `POST` and re-upload, and verifies the hash again. An unusable
+  token (unknown, expired, consumed or mismatched) answers the same opaque
+  `422 validation_failed` without disclosing its state. Do not retain
   audio while waiting for confirmation. Test concurrency, token expiration/reuse, and
   separation between users.
 - [ ] Transcribe sequential fragments with backpressure; reconcile boundaries and offsets
