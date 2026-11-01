@@ -470,8 +470,16 @@ dates, recommendations) with traceability to the source.
       "all_day": true,
       "date_status": "resolved",
       "confidence_score": 0.92,
-      "fuente": { "spans": [{ "segment_id": "…", "inicio_char": 0, "fin_char": 48 }] },
-      "cita_textual": "the midterm exam will be on Monday, September 21"
+      "fuente": {
+        "spans": [
+          {
+            "segment_id": "…",
+            "inicio_char": 0,
+            "fin_char": 48,
+            "cita_textual": "the midterm exam will be on Monday, September 21"
+          }
+        ]
+      }
     }
   ],
   "resumen_clase": "…3 to 5 sentences…",
@@ -488,12 +496,14 @@ dates, recommendations) with traceability to the source.
 - `confidence_score` is an uncalibrated signal, **not a certainty probability** and not
   permission to auto-schedule. Pydantic validation plus deterministic rules: dates, enums,
   ranges, and segment membership in class/tenant/version.
-- The LLM returns allowed IDs and spans/literal quote; offsets
-  `[inicio_char, fin_char)` in Unicode code points of each segment's immutable text (not
-  bytes or JavaScript UTF-16 indices). The backend reconstructs the evidence from the ordered
-  spans, checks the quote against the text, and resolves `audio_id` and times from the DB. Do
-  not trust invented timestamps or IDs. The transcript and the teacher's instructions are
-  untrusted data, not instructions for executing tools.
+- The LLM returns allowed IDs and spans/literal quotes; offsets
+  `[inicio_char, fin_char)` are Unicode code points of each segment's immutable text (not
+  bytes or JavaScript UTF-16 indices). Every evidence span carries its own mandatory
+  `cita_textual`, which must be exactly `segment_text[inicio_char:fin_char]`; there is no
+  item-level quote. The backend reconstructs the evidence from the ordered spans, checks
+  each quote against the text, and resolves `audio_id` and times from the DB. Do not trust
+  invented timestamps or IDs. The transcript and the teacher's instructions are untrusted
+  data, not instructions for executing tools.
 - **Recommendations** never go straight to Calendar: they are manually converted into a
   task/study block with a date and explicit confirmation.
 - Generate a summary (3–5 sentences) and topics; keep evidence per item. Windowed analysis
