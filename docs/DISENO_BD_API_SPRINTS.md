@@ -944,7 +944,10 @@ CREATE TABLE notifications (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id             uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   task_id             uuid,                       -- nullable: digests and test do not depend on a task
-  FOREIGN KEY (user_id, task_id) REFERENCES tasks (user_id, id) ON DELETE SET NULL,
+  -- A4.1: CASCADE, not SET NULL. A bare composite SET NULL would try to null the NOT NULL
+  -- user_id; nulling only task_id would leave a reminder without its due generation and two
+  -- deleted tasks would then collide under the NULLS NOT DISTINCT occurrence key.
+  FOREIGN KEY (user_id, task_id) REFERENCES tasks (user_id, id) ON DELETE CASCADE,
   type                text NOT NULL CHECK (type IN
     ('reminder_t48','reminder_t24','reminder_t2',
      'reminder_t3d','reminder_t1d','digest_daily','digest_weekly','test')),
@@ -968,7 +971,9 @@ CREATE INDEX notifications_due ON notifications (status, scheduled_at) WHERE sta
 
 - Persistent dedupe `(user_id, type, task_id, due_version, occurrence)`; changing the due
   date or preferences cancels obsolete future occurrences; **never** a retrospective burst
-  when confirming late.
+  when confirming late. Deleting a task cascades to its reminders (A4.1): an unlinked
+  reminder would be undeliverable and would also collide with another deleted task's
+  occurrence under `NULLS NOT DISTINCT`.
 - DST: nonexistent time → next valid instant; repeated time → a single local occurrence.
   Tasks without a date have no scaled reminders.
 - Gmail does not guarantee exactly-once delivery: lost response or expired `sending` lease

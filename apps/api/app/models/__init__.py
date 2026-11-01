@@ -6,6 +6,7 @@ from app.models.chat import Conversation, Message, MessageSource
 from app.models.chunk import Chunk, ChunkSegment, Embedding, IndexGeneration
 from app.models.core import GoogleCredential, Session, Subject, User
 from app.models.ingestion import Audio, IngestionAttempt, OutboxEvent, VariantConfirmationToken
+from app.models.notification import Notification
 from app.models.processing_run import ProcessingRun
 from app.models.settings import CalendarSettings
 from app.models.task import Task, TaskRevision, TaskSource
@@ -25,6 +26,7 @@ __all__ = [
     "IndexGeneration",
     "Message",
     "MessageSource",
+    "Notification",
     "OutboxEvent",
     "ProcessingRun",
     "Segment",
