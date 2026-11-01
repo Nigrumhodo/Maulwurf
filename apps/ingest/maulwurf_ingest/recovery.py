@@ -11,7 +11,10 @@ Two operations are deliberately separate:
 - ``resolve_attempts`` records an operator attestation for attempts whose audio was
   destroyed with a host or a container. It refuses to write without a destruction
   evidence file and only writes ``cleanup_status = 'verified'`` for attempts whose last
-  heartbeat is covered by that evidence.
+  heartbeat is covered by that evidence. The attestation must name the configured expected
+  host (``INGEST_HOST_ID`` or ``--expected-host``); a missing identifier or any other host
+  is refused without touching the database. ``ingestion_attempts`` has no per-attempt host
+  column, so this binds the file to a configured identifier, not to the attempt's origin.
 
 The service keeps its admission latch in memory. A failed cleanup discovered by this
 external process must therefore be followed by an ingest restart (the runbook contains
@@ -266,6 +269,7 @@ class ResolveReport:
     evidence: DestructionEvidence
     applied: bool
     decisions: tuple[ResolveDecision, ...]
+    expected_host: str | None = None
 
     @property
     def refused(self) -> int:
@@ -275,6 +279,7 @@ class ResolveReport:
         return {
             "applied": self.applied,
             "evidence": self.evidence.as_document(),
+            "expected_host": self.expected_host,
             "decisions": [item.as_document() for item in self.decisions],
         }
 
@@ -528,26 +533,57 @@ def _evidence_covers(evidence: DestructionEvidence, row: asyncpg.Record) -> bool
     return last_activity <= evidence.destroyed_at + CLOCK_SKEW_TOLERANCE
 
 
+def _host_refusal(evidence: DestructionEvidence, expected_host: str | None) -> str | None:
+    """Return the refusal reason when the attestation is not bound to a configured host.
+
+    No expected host fails closed: an operator who forgot the deployment identifier must
+    not be able to attest any host. A configured host must match the evidence exactly.
+    """
+    if expected_host is None or not expected_host.strip():
+        return "expected_host_not_configured"
+    if evidence.host != expected_host:
+        return "host_mismatch"
+    return None
+
+
 async def resolve_attempts(
     pool: asyncpg.Pool,
     *,
     attempt_ids: Sequence[uuid.UUID],
     evidence: DestructionEvidence,
+    expected_host: str | None,
     apply: bool,
     tmp_dir: str | None = None,
 ) -> ResolveReport:
     """Attest that the listed attempts' audio was destroyed with a host or container.
 
-    The default is a dry run. Every attempt is checked before a single row is written:
-    the cleanup must still be pending/failed, the lease must be expired, the last
-    heartbeat must be covered by the evidence, and no local attempt directory may exist.
+    The default is a dry run. The attestation must name ``expected_host``; otherwise every
+    attempt is refused without a database read or write. Every attempt is then checked
+    before a single row is written: the cleanup must still be pending/failed, the lease
+    must be expired, the last heartbeat must be covered by the evidence, and no local
+    attempt directory may exist. That directory check only covers the tmpfs of the host
+    running this tool: on a host loss the new host starts empty, so it proves nothing.
     """
     root = _tmp_root(tmp_dir)
     ordered = tuple(dict.fromkeys(attempt_ids))
+    if expected_host is not None:
+        expected_host = expected_host.strip() or None
+    refusal = _host_refusal(evidence, expected_host)
+    if refusal is not None:
+        return ResolveReport(
+            evidence=evidence,
+            applied=apply,
+            decisions=tuple(_refused(attempt_id, refusal) for attempt_id in ordered),
+            expected_host=expected_host,
+        )
     rows = await rls.fetch(pool, None, RESOLVE_ROWS_SQL, list(ordered))
     by_id = {_uuid_value(row, "id"): row for row in rows}
     decisions: list[ResolveDecision] = []
-    document = {**evidence.as_document(), "recorded_at": datetime.now(UTC).isoformat()}
+    document = {
+        **evidence.as_document(),
+        "expected_host": expected_host,
+        "recorded_at": datetime.now(UTC).isoformat(),
+    }
     encoded = json.dumps(document, sort_keys=True)
     for attempt_id in ordered:
         row = by_id.get(attempt_id)
@@ -587,6 +623,9 @@ async def resolve_attempts(
                          cleanup_status=cleanup_status)
             )
             continue
+        # The directory is checked here, before the UPDATE, and only the lease is repeated
+        # in SQL. A directory that appears afterwards cannot belong to a live writer: the
+        # expired lease plus the fencing token already exclude heartbeat/transition writes.
         if local_workdirs(Path(root), attempt_id):
             decisions.append(
                 _refused(attempt_id, "local_attempt_directory_present", status=status,
@@ -623,13 +662,20 @@ async def resolve_attempts(
                 status=status, cleanup_status="verified",
             )
         )
-    return ResolveReport(evidence=evidence, applied=apply, decisions=tuple(decisions))
+    return ResolveReport(
+        evidence=evidence,
+        applied=apply,
+        decisions=tuple(decisions),
+        expected_host=expected_host,
+    )
 
 
 def render_resolve(report: ResolveReport) -> str:
+    expected_host = report.expected_host if report.expected_host is not None else "unset"
     lines = [
         f"evidence_sha256={report.evidence.sha256}",
         f"evidence_host={report.evidence.host}",
+        f"expected_host={expected_host}",
         f"evidence_destroyed_at={report.evidence.destroyed_at.isoformat()}",
         f"applied={'true' if report.applied else 'false'}",
     ]
@@ -663,6 +709,17 @@ def _optional_str(value: object) -> str | None:
     if not isinstance(value, str):
         raise RecoveryError("an option has an unexpected type")
     return value
+
+
+def _expected_host(args: argparse.Namespace) -> str | None:
+    """The CLI value wins over ``INGEST_HOST_ID``; an empty value means unset."""
+    value = _optional_str(getattr(args, "expected_host", None))
+    if value is None:
+        value = settings.ingest_host_id
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 def _uuid_list(value: object) -> tuple[uuid.UUID, ...]:
@@ -739,6 +796,7 @@ async def _resolve_command(pool: asyncpg.Pool, args: argparse.Namespace) -> int:
         pool,
         attempt_ids=_uuid_list(getattr(args, "attempt", None)),
         evidence=evidence,
+        expected_host=_expected_host(args),
         apply=bool(getattr(args, "apply", False)),
         tmp_dir=_optional_str(getattr(args, "tmp_dir", None)),
     )
@@ -765,7 +823,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="cleanup_recover",
         description=(
             "S4.1 cleanup/recovery operator tool. It reads only attempt metadata and "
-            "never audio or transcript text."
+            "never audio or transcript text. `resolve` requires a configured expected "
+            "host and refuses an attestation that names another host."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -773,7 +832,10 @@ def build_parser() -> argparse.ArgumentParser:
     status = subparsers.add_parser("status", help="read-only recovery state")
     status.add_argument("--check", action="store_true", help="exit 3 when attention is required")
     status.add_argument("--json", action="store_true", help="print a JSON document")
-    status.add_argument("--tmp-dir", default=None, help="attempt tmpfs (default: TMPDIR)")
+    status.add_argument(
+        "--tmp-dir", default=None,
+        help="attempt tmpfs of THIS host (default: TMPDIR)",
+    )
 
     sweep = subparsers.add_parser("sweep", help="run one recovery pass or the 60 s sweeper")
     sweep.add_argument("--watch", action="store_true", help="keep running the 60 s sweeper")
@@ -788,7 +850,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-passes", type=int, default=None, help="bounded number of passes for a drill"
     )
     sweep.add_argument("--json", action="store_true", help="print one JSON object per pass")
-    sweep.add_argument("--tmp-dir", default=None, help="attempt tmpfs (default: TMPDIR)")
+    sweep.add_argument(
+        "--tmp-dir", default=None,
+        help="attempt tmpfs of THIS host (default: TMPDIR)",
+    )
 
     resolve = subparsers.add_parser(
         "resolve", help="record a destruction attestation for pending/failed cleanup"
@@ -796,10 +861,23 @@ def build_parser() -> argparse.ArgumentParser:
     resolve.add_argument("--attempt", action="append", type=uuid.UUID, required=True)
     resolve.add_argument("--evidence-file", required=True)
     resolve.add_argument(
+        "--expected-host", default=None,
+        help=(
+            "host identifier the attestation must name (default: INGEST_HOST_ID); "
+            "refused as host_mismatch when it differs, and fail closed when unset"
+        ),
+    )
+    resolve.add_argument(
         "--apply", action="store_true", help="write the attestation (default: dry run)"
     )
     resolve.add_argument("--json", action="store_true", help="print a JSON document")
-    resolve.add_argument("--tmp-dir", default=None, help="attempt tmpfs (default: TMPDIR)")
+    resolve.add_argument(
+        "--tmp-dir", default=None,
+        help=(
+            "attempt tmpfs of THIS host (default: TMPDIR); after a host loss an empty "
+            "directory is not evidence of destruction"
+        ),
+    )
     return parser
 
 

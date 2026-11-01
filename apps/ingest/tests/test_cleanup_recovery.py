@@ -46,6 +46,7 @@ from maulwurf_ingest.recovery import (
     EvidenceError,
     RecoveryError,
     ResolveAction,
+    ResolveReport,
     StatusReport,
     SweepReport,
     _evidence_covers,
@@ -64,6 +65,7 @@ _ = (audio, tmpfs_dir)
 REPO_ROOT = Path(__file__).resolve().parents[3]
 INGEST_ROOT = REPO_ROOT / "apps" / "ingest"
 SCRIPT = REPO_ROOT / "scripts" / "ops" / "cleanup_recover.py"
+EXPECTED_HOST = "ingest-test-1"
 
 
 @pytest.fixture(autouse=True)
@@ -254,6 +256,140 @@ def test_evidence_coverage_allows_one_minute_of_heartbeat_clock_skew() -> None:
     assert _evidence_covers(evidence, outside) is False
 
 
+class _UnreachablePool:
+    """The host check must refuse before any database read or write."""
+
+    def acquire(self) -> None:
+        raise AssertionError("the host check must not touch the database")
+
+
+async def test_resolve_refuses_an_attestation_for_another_host(
+    tmp_path: Path,
+) -> None:
+    attempt_id = uuid.UUID(int=21)
+    evidence = load_evidence(_write_evidence(tmp_path))
+
+    for apply in (False, True):
+        report = await resolve_attempts(
+            cast(asyncpg.Pool, _UnreachablePool()),
+            attempt_ids=[attempt_id],
+            evidence=evidence,
+            expected_host="ingest-test-2",
+            apply=apply,
+        )
+
+        assert report.expected_host == "ingest-test-2"
+        decision = report.decisions[0]
+        assert decision.action is ResolveAction.REFUSED
+        assert decision.reason == "host_mismatch"
+
+
+async def test_resolve_fails_closed_without_an_expected_host(tmp_path: Path) -> None:
+    attempt_id = uuid.UUID(int=22)
+    evidence = load_evidence(_write_evidence(tmp_path))
+
+    for expected_host in (None, "", "   "):
+        report = await resolve_attempts(
+            cast(asyncpg.Pool, _UnreachablePool()),
+            attempt_ids=[attempt_id],
+            evidence=evidence,
+            expected_host=expected_host,
+            apply=True,
+        )
+
+        assert report.decisions[0].reason == "expected_host_not_configured"
+
+
+async def test_resolve_takes_the_expected_host_from_the_cli(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    captured: dict[str, str | None] = {}
+
+    async def fake_resolve(
+        pool: asyncpg.Pool,
+        *,
+        attempt_ids: tuple[uuid.UUID, ...],
+        evidence: DestructionEvidence,
+        expected_host: str | None,
+        apply: bool,
+        tmp_dir: str | None = None,
+    ) -> ResolveReport:
+        captured["expected_host"] = expected_host
+        return ResolveReport(
+            evidence=evidence,
+            applied=apply,
+            decisions=(),
+            expected_host=expected_host,
+        )
+
+    monkeypatch.setattr(recovery, "resolve_attempts", fake_resolve)
+    monkeypatch.setattr(settings, "ingest_host_id", "ingest-from-config")
+    args = recovery.build_parser().parse_args([
+        "resolve",
+        "--attempt", str(uuid.uuid4()),
+        "--evidence-file", str(_write_evidence(tmp_path)),
+        "--expected-host", "ingest-from-cli",
+    ])
+
+    exit_code = await recovery._resolve_command(cast(asyncpg.Pool, None), args)
+
+    assert exit_code == recovery.EXIT_OK
+    assert captured["expected_host"] == "ingest-from-cli"
+
+
+async def test_resolve_defaults_to_the_configured_host(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    captured: dict[str, str | None] = {}
+
+    async def fake_resolve(
+        pool: asyncpg.Pool,
+        *,
+        attempt_ids: tuple[uuid.UUID, ...],
+        evidence: DestructionEvidence,
+        expected_host: str | None,
+        apply: bool,
+        tmp_dir: str | None = None,
+    ) -> ResolveReport:
+        captured["expected_host"] = expected_host
+        return ResolveReport(
+            evidence=evidence,
+            applied=apply,
+            decisions=(),
+            expected_host=expected_host,
+        )
+
+    monkeypatch.setattr(recovery, "resolve_attempts", fake_resolve)
+    monkeypatch.setattr(settings, "ingest_host_id", "ingest-from-config")
+    args = recovery.build_parser().parse_args([
+        "resolve",
+        "--attempt", str(uuid.uuid4()),
+        "--evidence-file", str(_write_evidence(tmp_path)),
+    ])
+
+    assert await recovery._resolve_command(cast(asyncpg.Pool, None), args) == recovery.EXIT_OK
+    assert captured["expected_host"] == "ingest-from-config"
+
+
+async def test_resolve_cli_fails_closed_without_a_host(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(settings, "ingest_host_id", None)
+    args = recovery.build_parser().parse_args([
+        "resolve",
+        "--attempt", str(uuid.uuid4()),
+        "--evidence-file", str(_write_evidence(tmp_path)),
+        "--apply",
+    ])
+
+    exit_code = await recovery._resolve_command(
+        cast(asyncpg.Pool, _UnreachablePool()), args,
+    )
+
+    assert exit_code == recovery.EXIT_ATTENTION
+    assert "reason=expected_host_not_configured" in capsys.readouterr().out
+
+
 def test_status_text_marks_a_persisted_failure_as_closed() -> None:
     attempt_id = uuid.UUID(int=11)
     report = StatusReport(
@@ -380,6 +516,18 @@ def test_the_operator_script_runs_from_a_checkout() -> None:
     assert "status" in completed.stdout
 
 
+def test_resolve_help_states_the_host_precondition() -> None:
+    completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
+        [sys.executable, str(SCRIPT), "resolve", "--help"],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=60, check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "--expected-host" in completed.stdout
+    assert "THIS host" in completed.stdout
+    assert "not evidence" in completed.stdout
+
+
 def test_the_module_entry_point_runs_inside_the_image() -> None:
     # The runbook calls `python -m maulwurf_ingest.recovery` in the container.
     completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
@@ -462,14 +610,16 @@ async def test_runbook_recovers_a_failed_cleanup_with_attestation(
 
     evidence = load_evidence(_write_evidence(tmp_path))
     dry = await resolve_attempts(
-        pool, attempt_ids=[attempt.attempt_id], evidence=evidence, apply=False,
+        pool, attempt_ids=[attempt.attempt_id], evidence=evidence,
+        expected_host=EXPECTED_HOST, apply=False,
         tmp_dir=str(tmpfs_dir),
     )
     assert dry.decisions[0].action is ResolveAction.WOULD_VERIFY
     assert (await _row(pool, attempt))["cleanup_status"] == "failed"
 
     applied = await resolve_attempts(
-        pool, attempt_ids=[attempt.attempt_id], evidence=evidence, apply=True,
+        pool, attempt_ids=[attempt.attempt_id], evidence=evidence,
+        expected_host=EXPECTED_HOST, apply=True,
         tmp_dir=str(tmpfs_dir),
     )
     assert applied.decisions[0].action is ResolveAction.VERIFIED
@@ -481,10 +631,12 @@ async def test_runbook_recovers_a_failed_cleanup_with_attestation(
     assert isinstance(stored, dict)
     assert stored["source"] == "operator_attestation"
     assert stored["evidence_sha256"] == evidence.sha256
+    assert stored["expected_host"] == EXPECTED_HOST
     assert "notes" not in stored
 
     repeated = await resolve_attempts(
-        pool, attempt_ids=[attempt.attempt_id], evidence=evidence, apply=True,
+        pool, attempt_ids=[attempt.attempt_id], evidence=evidence,
+        expected_host=EXPECTED_HOST, apply=True,
         tmp_dir=str(tmpfs_dir),
     )
     assert repeated.decisions[0].reason == "already_resolved"
@@ -531,7 +683,8 @@ async def test_host_loss_is_held_until_attested_then_enabled(
 
     evidence = load_evidence(_write_evidence(tmp_path))
     applied = await resolve_attempts(
-        pool, attempt_ids=[attempt.attempt_id], evidence=evidence, apply=True,
+        pool, attempt_ids=[attempt.attempt_id], evidence=evidence,
+        expected_host=EXPECTED_HOST, apply=True,
         tmp_dir=str(tmpfs_dir),
     )
     assert applied.decisions[0].action is ResolveAction.VERIFIED
@@ -554,7 +707,8 @@ async def test_resolve_refuses_a_live_lease_and_a_local_directory(
     evidence = load_evidence(_write_evidence(tmp_path))
 
     live = await resolve_attempts(
-        pool, attempt_ids=[attempt.attempt_id], evidence=evidence, apply=True,
+        pool, attempt_ids=[attempt.attempt_id], evidence=evidence,
+        expected_host=EXPECTED_HOST, apply=True,
         tmp_dir=str(tmpfs_dir),
     )
     assert live.decisions[0].reason == "live_lease"
@@ -563,13 +717,56 @@ async def test_resolve_refuses_a_live_lease_and_a_local_directory(
     workdir = cleanup.create_workdir(str(attempt.attempt_id), str(tmpfs_dir))
     try:
         local = await resolve_attempts(
-            pool, attempt_ids=[attempt.attempt_id], evidence=evidence, apply=True,
+            pool, attempt_ids=[attempt.attempt_id], evidence=evidence,
+            expected_host=EXPECTED_HOST, apply=True,
             tmp_dir=str(tmpfs_dir),
         )
         assert local.decisions[0].reason == "local_attempt_directory_present"
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
     assert (await _row(pool, attempt))["cleanup_status"] == "pending"
+
+
+@pytest.mark.integration
+async def test_resolve_refuses_a_host_mismatch_without_writing(
+    pool: asyncpg.Pool, tmpfs_dir: Path, tmp_path: Path,
+) -> None:
+    attempt, _owned, _audio_id = await _ready(pool)
+    await _expire(pool, attempt.attempt_id)
+    evidence = load_evidence(_write_evidence(tmp_path))
+
+    for apply in (False, True):
+        report = await resolve_attempts(
+            pool, attempt_ids=[attempt.attempt_id], evidence=evidence,
+            expected_host="ingest-other", apply=apply, tmp_dir=str(tmpfs_dir),
+        )
+
+        assert report.expected_host == "ingest-other"
+        assert report.decisions[0].reason == "host_mismatch"
+        row = await _row(pool, attempt)
+        assert row["cleanup_status"] == "pending"
+        assert row["cleanup_verified_at"] is None
+        assert row["audio_deleted_at"] is None
+
+
+@pytest.mark.integration
+async def test_resolve_fails_closed_when_no_host_is_configured(
+    pool: asyncpg.Pool, tmpfs_dir: Path, tmp_path: Path,
+) -> None:
+    attempt, _owned, _audio_id = await _ready(pool)
+    await _expire(pool, attempt.attempt_id)
+    evidence = load_evidence(_write_evidence(tmp_path))
+
+    report = await resolve_attempts(
+        pool, attempt_ids=[attempt.attempt_id], evidence=evidence,
+        expected_host=None, apply=True, tmp_dir=str(tmpfs_dir),
+    )
+
+    assert report.decisions[0].reason == "expected_host_not_configured"
+    row = await _row(pool, attempt)
+    assert row["cleanup_status"] == "pending"
+    assert row["cleanup_verified_at"] is None
+    assert row["audio_deleted_at"] is None
 
 
 @pytest.mark.integration
@@ -580,7 +777,8 @@ async def test_resolve_refuses_an_attempt_without_bytes_and_uncovered_evidence(
     await _expire(pool, no_bytes.attempt_id)
     evidence = load_evidence(_write_evidence(tmp_path))
     refused = await resolve_attempts(
-        pool, attempt_ids=[no_bytes.attempt_id], evidence=evidence, apply=True,
+        pool, attempt_ids=[no_bytes.attempt_id], evidence=evidence,
+        expected_host=EXPECTED_HOST, apply=True,
         tmp_dir=str(tmpfs_dir),
     )
     assert refused.decisions[0].reason == "no_audio_received"
@@ -601,7 +799,8 @@ async def test_resolve_refuses_an_attempt_without_bytes_and_uncovered_evidence(
         )
     )
     uncovered = await resolve_attempts(
-        pool, attempt_ids=[failed.attempt_id], evidence=old, apply=True,
+        pool, attempt_ids=[failed.attempt_id], evidence=old,
+        expected_host=EXPECTED_HOST, apply=True,
         tmp_dir=str(tmpfs_dir),
     )
     assert uncovered.decisions[0].reason == "not_covered_by_evidence"
@@ -631,7 +830,8 @@ async def test_resolve_refuses_an_attempt_created_after_the_destruction(
     )
 
     report = await resolve_attempts(
-        pool, attempt_ids=[attempt.attempt_id], evidence=evidence, apply=True,
+        pool, attempt_ids=[attempt.attempt_id], evidence=evidence,
+        expected_host=EXPECTED_HOST, apply=True,
         tmp_dir=str(tmpfs_dir),
     )
 
@@ -658,7 +858,8 @@ async def test_sweep_ends_stranded_attempts_without_retranscribing(
     # swept. The attempt stays requires_reupload; no text is invented or retranscribed.
     evidence = load_evidence(_write_evidence(tmp_path))
     resolved = await resolve_attempts(
-        pool, attempt_ids=[attempt.attempt_id], evidence=evidence, apply=True,
+        pool, attempt_ids=[attempt.attempt_id], evidence=evidence,
+        expected_host=EXPECTED_HOST, apply=True,
         tmp_dir=str(tmpfs_dir),
     )
     assert resolved.decisions[0].action is ResolveAction.VERIFIED
