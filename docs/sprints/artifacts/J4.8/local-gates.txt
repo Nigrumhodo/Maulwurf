@@ -70,3 +70,13 @@ Not run in this sandbox:
   this check.
 - The reference-environment J4.8 drill (J4.7 deployment): NOT RUN.
 - `apps/web` is untouched by this ticket.
+
+Quality CI after the test-isolation fix:
+  Run 41319073318 (workflow quality, head 40736f2) is green in all 17 checks, including
+  python-static (api), python-unit (api), integration (api), integration (ingest),
+  e2e-smoke, compose-ingest-env, docs, secret-scan and build-images. The first CI run of
+  the ticket (41317818217) exposed that the budget aggregate is intentionally global and
+  the integration seed used the current month, so other modules' committed rows leaked
+  into the ASR assertion (7.0 vs 5.0 minutes). The seed moved to 2099 and the endpoint test
+  injects that clock; the targeted module and the full integration job are green after the
+  fix. No production query changed.
