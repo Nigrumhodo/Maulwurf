@@ -46,3 +46,7 @@ the full suite in isolated service containers.
 
 No real Gmail/Google call, no credential, no secret and no class audio are involved.
 `apps/web` and `apps/ingest` are untouched.
+
+Quality CI (PR #147): run 41288354309 (code head 51d5af7) is green in all 17
+checks, including python-static (api), python-unit (api), integration (api),
+integration (ingest), e2e-smoke, docs and secret-scan. Later commits are documentation only.
