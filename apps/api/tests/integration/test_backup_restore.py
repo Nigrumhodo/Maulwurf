@@ -80,6 +80,7 @@ RETENTION_DAYS = 30
 ALICE_MARKER = "alice-deleted-transcript-marker-135"
 BOB_DELETED_MARKER = "bob-tombstoned-transcript-marker-135"
 BOB_KEPT_MARKER = "bob-retained-transcript-marker-135"
+CAROL_MARKER = "carol-user-tombstone-marker-135"
 
 ALICE_TENANT_TABLES = (
     "subjects",
@@ -297,6 +298,15 @@ async def _seed(source_url: str) -> dict[str, Any]:
         db.add_all([bob_deleted_message, bob_kept_message])
         await make_task(db, bob)
 
+        # Carol is tombstoned by a bare `users.status` change, without an account_deletions
+        # residual row. Only the log's `users` array can prove her purge after the restore.
+        carol = await make_actor(db, email="carol-a45@example.test")
+        carol_audio, _carol_attempt, carol_transcript, _ = (
+            await make_class_with_timed_segments(db, carol)
+        )
+        carol_transcript.text = CAROL_MARKER
+        carol_transcript.char_count = len(CAROL_MARKER)
+
         await db.commit()
         ids = {
             "alice_user": alice.user_id,
@@ -311,6 +321,9 @@ async def _seed(source_url: str) -> dict[str, Any]:
             "bob_deleted_conversation": bob_deleted_conversation.id,
             "bob_deleted_subject": bob_deleted_subject.id,
             "bob_kept_conversation": bob_kept_conversation.id,
+            "carol_user": carol.user_id,
+            "carol_audio": carol_audio.id,
+            "carol_transcript": carol_transcript.id,
         }
     await engine.dispose()
     return ids
@@ -333,6 +346,12 @@ async def _apply_deletions(source_url: str, ids: Mapping[str, Any]) -> str:
         subject = await db.get(Subject, ids["bob_deleted_subject"])
         assert subject is not None
         subject.deleted_at = datetime.now(UTC)
+        # A bare tombstone: no account_deletions row, so the log's `users` array is the only
+        # record that Carol must stay deleted after the restore.
+        await db.execute(
+            text("UPDATE users SET status = 'deleted' WHERE id = :id"),
+            {"id": ids["carol_user"]},
+        )
         await db.commit()
         status = await execute_account_deletion(db, deletion.id)
         assert status == "completed"
@@ -354,6 +373,18 @@ async def _count(connection: Any, table: str, user_id: uuid.UUID) -> int:
             user_id=user_id,
         )
     )
+
+
+async def _table_count(url: str) -> int:
+    engine = create_async_engine(url)
+    async with engine.connect() as connection:
+        count = await _scalar(
+            connection,
+            "SELECT count(*) FROM pg_tables "
+            "WHERE schemaname NOT IN ('pg_catalog', 'information_schema')",
+        )
+    await engine.dispose()
+    return int(count)
 
 
 async def test_i_s4_an_05_restore_reapplies_tombstones_on_a_clean_database(
@@ -394,6 +425,7 @@ async def test_i_s4_an_05_restore_reapplies_tombstones_on_a_clean_database(
         assert not dump_bytes.startswith(b"PGDMP")
         assert ALICE_MARKER.encode() not in dump_bytes
         assert BOB_KEPT_MARKER.encode() not in dump_bytes
+        assert CAROL_MARKER.encode() not in dump_bytes
         assert ALICE_MARKER.encode() not in bundled_log.read_bytes()
         manifest_data = json.loads(manifest.read_text())
         assert manifest_data["retention_days"] == RETENTION_DAYS
@@ -413,29 +445,43 @@ async def test_i_s4_an_05_restore_reapplies_tombstones_on_a_clean_database(
         bundled_log.write_bytes(log_bytes)
 
         deletion_id = await _apply_deletions(source_url, ids)
-        exported_log = backups / "post-delete.deletions.json.gpg"
-        exported = _run(
+
+        # The post-deletion log is replayed only after it is attached to this backup: the
+        # refresh replaces the paired log and the manifest SHA-256, so the restore below can
+        # validate it instead of trusting an arbitrary file.
+        refreshed = _run(
             "export-deletions",
             "--database-url",
             _sync_url(source_url),
-            "--out",
-            str(exported_log),
+            "--refresh-backup",
+            str(dump),
         )
-        assert exported.returncode == 0, exported.stderr + exported.stdout
-        assert exported_log.exists()
-        assert ALICE_MARKER.encode() not in exported_log.read_bytes()
+        assert refreshed.returncode == 0, refreshed.stderr + refreshed.stdout
+        assert "refreshed" in refreshed.stdout
+        refreshed_manifest = json.loads(manifest.read_text())
+        assert (
+            refreshed_manifest["deletion_log_sha256"]
+            != manifest_data["deletion_log_sha256"]
+        )
+        assert ALICE_MARKER.encode() not in bundled_log.read_bytes()
+        assert CAROL_MARKER.encode() not in bundled_log.read_bytes()
+        verified_after_refresh = _run("verify", "--backup", str(dump))
+        assert (
+            verified_after_refresh.returncode == 0
+        ), verified_after_refresh.stderr + verified_after_refresh.stdout
 
+        # No --deletion-log: restore defaults to the log paired with the backup and rejects
+        # the run if that log is missing or its checksum is not the one in the manifest.
         restored = _run(
             "restore",
             "--database-url",
             _sync_url(target_url),
             "--backup",
             str(dump),
-            "--deletion-log",
-            str(exported_log),
             "--confirm-clean",
         )
         assert restored.returncode == 0, restored.stderr + restored.stdout
+        assert "reapplied deletion log" in restored.stdout
 
         # The destructive path is guarded: a second restore into the now-populated target is
         # refused, so an operator cannot overwrite a database by mistake.
@@ -500,6 +546,35 @@ async def test_i_s4_an_05_restore_reapplies_tombstones_on_a_clean_database(
                     connection,
                     "SELECT count(*) FROM messages WHERE content = :marker",
                     marker=ALICE_MARKER,
+                )
+            ) == 0
+
+            # Carol had no account_deletions row at backup time; only the log's `users`
+            # array proves the purge. Without consuming it she would return active with her
+            # class, transcript and text.
+            carol_row = (
+                await connection.execute(
+                    text("SELECT status, email, google_sub FROM users WHERE id = :id"),
+                    {"id": ids["carol_user"]},
+                )
+            ).one()
+            assert carol_row.status == "deleted"
+            assert carol_row.email == f"deleted-{ids['carol_user']}@invalid"
+            assert carol_row.google_sub == f"deleted:{ids['carol_user']}"
+            for table in ALICE_TENANT_TABLES:
+                assert await _count(connection, table, ids["carol_user"]) == 0, table
+            assert (
+                await _scalar(
+                    connection,
+                    "SELECT count(*) FROM transcripts WHERE text = :marker",
+                    marker=CAROL_MARKER,
+                )
+            ) == 0
+            assert (
+                await _scalar(
+                    connection,
+                    "SELECT count(*) FROM account_deletions WHERE former_user_id = :id",
+                    id=ids["carol_user"],
                 )
             ) == 0
 
@@ -667,3 +742,160 @@ async def test_i_s4_an_05_restore_reapplies_tombstones_on_a_clean_database(
     finally:
         await _drop_database(source_name)
         await _drop_database(target_name)
+
+
+async def test_i_s4_an_05_restore_rejects_a_missing_or_foreign_deletion_log(
+    tmp_path: Path,
+) -> None:
+    """Fail-closed deletion-log rules from the hoplite review.
+
+    A restore without its paired log must stop before touching the target, an explicit log
+    from another backup must be rejected by checksum, and only the explicit
+    ``--allow-missing-deletion-log`` opt-in may restore without a replay (with a warning).
+    ``verify`` must not report an incomplete backup set as healthy.
+    """
+
+    for command_name in ("pg_dump", "pg_restore", "gpg"):
+        if shutil.which(command_name) is None:
+            pytest.fail(f"I-S4-AN-05 needs `{command_name}` on PATH")
+
+    source_name = f"maulwurf_a45_log_src_{uuid.uuid4().hex[:10]}"
+    source_url = await _create_database(source_name)
+    target_names = {
+        "missing": f"maulwurf_a45_log_missing_{uuid.uuid4().hex[:10]}",
+        "foreign": f"maulwurf_a45_log_foreign_{uuid.uuid4().hex[:10]}",
+        "paired": f"maulwurf_a45_log_paired_{uuid.uuid4().hex[:10]}",
+    }
+    target_urls = {
+        name: await _create_database(database) for name, database in target_names.items()
+    }
+    try:
+        await asyncio.to_thread(command.upgrade, alembic_config(source_url), "head")
+
+        backups = tmp_path / "backups"
+        backups.mkdir(mode=0o700)
+        first = _run(
+            "backup",
+            "--database-url",
+            _sync_url(source_url),
+            "--out",
+            str(backups),
+            "--label",
+            "first",
+        )
+        assert first.returncode == 0, first.stderr + first.stdout
+        dump = next(backups.glob("*.dump.gpg"))
+        manifest = next(backups.glob("*.manifest.json"))
+        paired_log = next(backups.glob("*.deletions.json.gpg"))
+
+        # A second, independent backup set supplies a real foreign log.
+        other = tmp_path / "other"
+        other.mkdir(mode=0o700)
+        second = _run(
+            "backup",
+            "--database-url",
+            _sync_url(source_url),
+            "--out",
+            str(other),
+            "--label",
+            "second",
+        )
+        assert second.returncode == 0, second.stderr + second.stdout
+        foreign_log = next(other.glob("*.deletions.json.gpg"))
+        assert foreign_log.read_bytes() != paired_log.read_bytes()
+
+        # A dump copied without the log its manifest pins: `verify` must fail loudly, and
+        # the opt-in keeps the warning instead of pretending the set is complete.
+        solo = tmp_path / "solo"
+        solo.mkdir(mode=0o700)
+        solo_dump = solo / dump.name
+        shutil.copy2(dump, solo_dump)
+        shutil.copy2(manifest, solo / manifest.name)
+
+        missing_verify = _run("verify", "--backup", str(solo_dump))
+        assert missing_verify.returncode != 0
+        assert "WARNING" in missing_verify.stderr
+        assert "deletion log" in missing_verify.stderr
+        allowed_verify = _run(
+            "verify", "--backup", str(solo_dump), "--allow-missing-deletion-log"
+        )
+        assert allowed_verify.returncode == 0, (
+            allowed_verify.stderr + allowed_verify.stdout
+        )
+        assert "WARNING" in allowed_verify.stderr
+        assert "backup OK" in allowed_verify.stdout
+
+        # The default is fail-closed before pg_restore: the target stays empty.
+        refused_missing = _run(
+            "restore",
+            "--database-url",
+            _sync_url(target_urls["missing"]),
+            "--backup",
+            str(solo_dump),
+            "--confirm-clean",
+        )
+        assert refused_missing.returncode != 0
+        assert "--allow-missing-deletion-log" in refused_missing.stderr
+        assert await _table_count(target_urls["missing"]) == 0
+
+        # The explicit opt-in proceeds with a warning and says what was (not) replayed.
+        allowed_missing = _run(
+            "restore",
+            "--database-url",
+            _sync_url(target_urls["missing"]),
+            "--backup",
+            str(solo_dump),
+            "--allow-missing-deletion-log",
+            "--confirm-clean",
+        )
+        assert allowed_missing.returncode == 0, (
+            allowed_missing.stderr + allowed_missing.stdout
+        )
+        assert "WARNING" in allowed_missing.stderr
+        assert "no deletion log was replayed" in allowed_missing.stdout
+        assert await _table_count(target_urls["missing"]) > 0
+
+        # A valid log from another backup is not the manifest's log: reject it by checksum
+        # before decrypting anything or writing to the target.
+        refused_foreign = _run(
+            "restore",
+            "--database-url",
+            _sync_url(target_urls["foreign"]),
+            "--backup",
+            str(dump),
+            "--deletion-log",
+            str(foreign_log),
+            "--confirm-clean",
+        )
+        assert refused_foreign.returncode != 0
+        assert "checksum" in refused_foreign.stderr
+        assert await _table_count(target_urls["foreign"]) == 0
+
+        # The paired log is the default, and an explicit copy of the pinned log also works.
+        paired = _run(
+            "restore",
+            "--database-url",
+            _sync_url(target_urls["foreign"]),
+            "--backup",
+            str(dump),
+            "--confirm-clean",
+        )
+        assert paired.returncode == 0, paired.stderr + paired.stdout
+        assert "reapplied deletion log" in paired.stdout
+        explicit = _run(
+            "restore",
+            "--database-url",
+            _sync_url(target_urls["paired"]),
+            "--backup",
+            str(dump),
+            "--deletion-log",
+            str(paired_log),
+            "--confirm-clean",
+        )
+        assert explicit.returncode == 0, explicit.stderr + explicit.stdout
+        assert "reapplied deletion log" in explicit.stdout
+        assert await _table_count(target_urls["paired"]) > 0
+    finally:
+        for database in target_names.values():
+            await _drop_database(database)
+        await _drop_database(source_name)
