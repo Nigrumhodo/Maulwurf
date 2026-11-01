@@ -102,7 +102,6 @@ EXPECTED_FILES: dict[str, str] = {
     "apps/api/app/services/reminders.py": "planned by S4/J4.3",
     "apps/api/app/services/scheduler_lease.py": "planned by S4/J4.2",
     "apps/api/app/templates/notifications/": "planned by S4/J4.1",
-    "apps/api/tests/integration/test_isolation_final.py": "planned by S4/A4.7",
     "apps/web/public/": "planned by S4/D4.5 (PWA manifest and service worker)",
     "apps/web/src/components/settings/": "planned by S4/D4.2",
     "apps/web/src/components/search/": "planned by S4/D4.3",
@@ -120,7 +119,6 @@ EXPECTED_FILES: dict[str, str] = {
     "infra/deploy/": "planned by S4/J4.7",
     "infra/docker-compose.prod.yml": "planned by S4/J4.7",
     "scripts/load/g1_load.py": "planned by S4/S4.3",
-    "scripts/maintenance/sweep_orphans.py": "planned by S4/A4.7",
     "scripts/ops/backup_restore.sh": "planned by S4/A4.5",
     "scripts/provider/gmail_send_test.py": "planned by S4/J4.10",
     # Documented paths that are intentionally not tracked.
