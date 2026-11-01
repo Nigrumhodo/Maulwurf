@@ -43,9 +43,12 @@ Out of scope:
 - The frozen dataset at `apps/api/tests/fixtures/g4/datasets/v1` (`g4-v1`, test partition
   50/35/15 per language).
 - A prepared run under `var/eval/g4/<run-id>/` created with the same real providers.
+- A clean git worktree at the commit that will be measured. An official run with uncommitted
+  changes exits `2`; a smoke run may still record `git_dirty`.
 
 The official command rejects a prepared run that used fake providers, a dataset that is not
-exactly 50/35/15, a development-partition run and an inactive index generation.
+exactly 50/35/15, a development-partition run, an inactive index generation and a dirty
+worktree.
 
 ## Commands
 
@@ -100,6 +103,9 @@ For every `test` item:
 3. Consume `stream_events` and stop at the first non-empty `delta`.
 4. Close the stream explicitly; the isolated conversation keeps a cancelled partial.
 5. `source` is `abstention` when `prepared.abstention_text` is set, otherwise `llm`.
+6. If closing the stream fails **after** a non-empty delta, the measured sample is kept and
+   the report records a limitation. A close failure before the first delta still leaves the
+   measurement incomplete.
 
 The timer includes the query embedding, retrieval, prompt assembly, turn persistence and the
 provider's first delta. It excludes conversation creation, HTTP, Caddy and network latency.
@@ -137,6 +143,14 @@ Published artifacts live under `docs/eval/latency/<run-id>/` and contain aggrega
 | `latency.json` | gate, status, date, git commit, environment, dataset version/hash, providers, per-language N/p50/p95/max, cold start, verdict reasons, limitations |
 | `REPORT.md` | the same aggregates rendered for review, plus the method, limitations and reproduction command |
 
+The published environment includes Python and platform, CPU count, total host memory,
+PostgreSQL and pgvector versions, and an explicit note that Redis is not used by this
+in-process path. It never includes a DSN, host name, tenant id or provider credential.
+
+Publication is atomic: both files are written to a sibling temporary directory and the
+complete directory is renamed into place. A failed run leaves no partial `latency.json` or
+`REPORT.md` and preserves any previous report at that path.
+
 Question, answer, quote and transcript text are never copied into the published directory.
 Raw per-item timings, if kept, stay under the gitignored `var/eval/latency/<run-id>/`.
 
@@ -166,19 +180,23 @@ uv run pytest -m integration tests/integration/test_g4_latency.py -q
 uv run ruff check . && uv run mypy .
 ```
 
-The integration suite uses real PostgreSQL/pgvector, the `smoke-v1` corpus, the real
-service paths and deterministic fake providers. It proves sample counts, warm-up reporting,
-inactive-generation and empty-retrieval rejection, official fake-provider/dataset rejection,
-redaction and the published metadata. It does not prove provider latency, provider retention
-or a real L2.8 result.
+The unit suite proves nearest-rank statistics, exact thresholds, duplicate/out-of-corpus
+sample rejection, consistent thresholds, dynamic N limitations and atomic publication. The
+integration suite uses real PostgreSQL/pgvector, the `smoke-v1` corpus, the real service paths
+and deterministic fake providers. It proves sample counts, warm-up reporting,
+inactive-generation and empty-retrieval rejection, official fake-provider/dataset/dirty-tree
+rejection, budget exhaustion, streams without a delta or with an error, close-failure
+robustness, redaction and the published metadata. It does not prove provider latency,
+provider retention or a real L2.8 result.
 
 ## Known limitations
 
 - In-process measurement excludes HTTP, Caddy, authentication, network and provider quota.
 - Concurrency is 1: this is a reference measurement, not a load test.
-- Cold start is one warm-up item per language, not a process-restart benchmark.
-- The p95 uses the frozen test partition (N=50 per language); the result is measured, not an
-  SLA or a provider guarantee.
+- Cold start is one warm-up item per language, not a process-restart benchmark. When no
+  development item exists, the first test item is used and remains in the p95 distribution.
+- The p95 uses the frozen test partition; the report states the actual N per language. The
+  result is measured, not an SLA or a provider guarantee.
 - Provider nondeterminism can change a later run.
 - The corpus is synthetic text only; no real classes, audio or PII are involved.
 - Stopping the chat stream at the first delta persists an isolated cancelled partial.

@@ -13,6 +13,7 @@ import math
 import re
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,8 @@ from app.core.config import settings
 from app.core.db import bind_user
 from app.models import Audio, IndexGeneration, User
 from app.services.llm import ChatMessage
+from app.services.rag import RAGService
+from tools.eval import latency_runner
 from tools.eval.corpus import (
     _reset_tenant,
     eval_google_sub,
@@ -33,7 +36,13 @@ from tools.eval.corpus import (
 )
 from tools.eval.dataset import Dataset, load_dataset
 from tools.eval.latency_runner import measure_latency
-from tools.eval.runner import EXIT_NOT_EVALUATED, EvalExit, RunManifest, prepare_run
+from tools.eval.runner import (
+    EXIT_CONFIG,
+    EXIT_NOT_EVALUATED,
+    EvalExit,
+    RunManifest,
+    prepare_run,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -87,6 +96,47 @@ class ScriptedLLM:
             yield "Respuesta sintética basada en la evidencia [S1]."
             return
         yield "No encuentro evidencia suficiente en tus clases para responder a eso."
+
+
+class EmptyLLM(ScriptedLLM):
+    """Ends the stream without any delta, simulating a provider that produced no text."""
+
+    async def stream(
+        self, messages: Sequence[ChatMessage], *, max_tokens: int
+    ) -> AsyncIterator[str]:
+        self.calls += 1
+        for _ in ():
+            yield ""
+
+
+class FailingLLM(ScriptedLLM):
+    """Raises before the first delta so the stream emits an error event."""
+
+    async def stream(
+        self, messages: Sequence[ChatMessage], *, max_tokens: int
+    ) -> AsyncIterator[str]:
+        self.calls += 1
+        raise RuntimeError("provider down")
+        yield ""  # pragma: no cover - keeps this an async generator
+
+
+class CloseFailingStream:
+    """Yields one valid delta and then fails to close, like a broken cleanup path."""
+
+    def __init__(self) -> None:
+        self.sent = False
+
+    def __aiter__(self) -> CloseFailingStream:
+        return self
+
+    async def __anext__(self) -> str:
+        if self.sent:
+            raise StopAsyncIteration
+        self.sent = True
+        return 'event: delta\ndata: {"text": "hola"}\n\n'
+
+    async def aclose(self) -> None:
+        raise RuntimeError("close failed")
 
 
 @pytest.fixture(scope="module")
@@ -396,3 +446,188 @@ async def test_g4_latency_publish_records_date_environment_and_n(
     assert data["measured_at"] in report
     assert data["dataset_hash"] in report
     assert data["environment"]["python"] in report
+    assert data["environment"]["memory_total_mb"]
+    assert data["environment"]["postgres"].startswith("PostgreSQL")
+    assert data["environment"]["pgvector"]
+    assert data["environment"]["redis"] == "not used by the in-process measurement"
+    assert any("N=4 per language" in limitation for limitation in data["limitations"])
+    assert not any("N=50" in limitation for limitation in data["limitations"])
+
+
+async def test_g4_latency_official_run_rejects_dirty_tree(
+    session_factory: async_sessionmaker[AsyncSession],
+    v1: Dataset,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    _run, embedding, llm = await _prepare(
+        session_factory,
+        v1,
+        run_dir=run_dir,
+        require_nontrivial=True,
+    )
+    publish = tmp_path / "published"
+    monkeypatch.setattr(latency_runner, "_require_official_providers", lambda *args: None)
+    monkeypatch.setattr(latency_runner, "_git_metadata", lambda: ("a" * 40, True))
+
+    with pytest.raises(EvalExit) as rejected:
+        await measure_latency(
+            session_factory,
+            v1,
+            run_dir=run_dir,
+            embedding_provider=embedding,
+            llm_provider=llm,
+            allow_smoke=False,
+            publish_dir=publish,
+        )
+
+    assert rejected.value.exit_code == EXIT_CONFIG
+    assert "árbol de trabajo sucio" in rejected.value.message
+    assert not publish.exists()
+
+
+async def test_g4_latency_budget_exhaustion_publishes_nothing(
+    session_factory: async_sessionmaker[AsyncSession],
+    smoke: Dataset,
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    _run, embedding, llm = await _prepare(session_factory, smoke, run_dir=run_dir)
+    publish = tmp_path / "published"
+
+    with pytest.raises(EvalExit) as exhausted:
+        await measure_latency(
+            session_factory,
+            smoke,
+            run_dir=run_dir,
+            embedding_provider=embedding,
+            llm_provider=llm,
+            allow_smoke=True,
+            max_provider_calls=1,
+            publish_dir=publish,
+        )
+
+    assert exhausted.value.exit_code == EXIT_CONFIG
+    assert "presupuesto" in exhausted.value.message
+    assert not publish.exists()
+
+
+async def test_g4_latency_stream_without_delta_is_not_evaluated(
+    session_factory: async_sessionmaker[AsyncSession],
+    smoke: Dataset,
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    _run, embedding, _llm = await _prepare(session_factory, smoke, run_dir=run_dir)
+    publish = tmp_path / "published"
+
+    with pytest.raises(EvalExit) as missing:
+        await measure_latency(
+            session_factory,
+            smoke,
+            run_dir=run_dir,
+            embedding_provider=embedding,
+            llm_provider=EmptyLLM(),
+            allow_smoke=True,
+            publish_dir=publish,
+        )
+
+    assert missing.value.exit_code == EXIT_NOT_EVALUATED
+    assert "sin primer delta" in missing.value.message
+    assert not publish.exists()
+
+
+async def test_g4_latency_stream_error_is_not_evaluated(
+    session_factory: async_sessionmaker[AsyncSession],
+    smoke: Dataset,
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    _run, embedding, _llm = await _prepare(session_factory, smoke, run_dir=run_dir)
+    publish = tmp_path / "published"
+
+    with pytest.raises(EvalExit) as failed:
+        await measure_latency(
+            session_factory,
+            smoke,
+            run_dir=run_dir,
+            embedding_provider=embedding,
+            llm_provider=FailingLLM(),
+            allow_smoke=True,
+            publish_dir=publish,
+        )
+
+    assert failed.value.exit_code == EXIT_NOT_EVALUATED
+    assert "error" in failed.value.message
+    assert not publish.exists()
+
+
+async def test_g4_latency_close_failure_does_not_discard_first_delta(
+    session_factory: async_sessionmaker[AsyncSession],
+    smoke: Dataset,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    _run, embedding, llm = await _prepare(session_factory, smoke, run_dir=run_dir)
+    publish = tmp_path / "published"
+    monkeypatch.setattr(
+        RAGService,
+        "stream_events",
+        lambda self, prepared, **kwargs: CloseFailingStream(),
+    )
+
+    outcome = await measure_latency(
+        session_factory,
+        smoke,
+        run_dir=run_dir,
+        embedding_provider=embedding,
+        llm_provider=llm,
+        allow_smoke=True,
+        publish_dir=publish,
+    )
+
+    assert outcome.exit_code == EXIT_NOT_EVALUATED
+    assert outcome.payload["status"] == "SMOKE"
+    assert outcome.payload["languages"]["es"]["first_token"]["n"] == len(
+        smoke.test_items("es")
+    )
+    assert any(
+        "failed to close" in limitation for limitation in outcome.payload["limitations"]
+    )
+
+
+async def test_g4_latency_without_development_item_keeps_first_test_item(
+    session_factory: async_sessionmaker[AsyncSession],
+    smoke: Dataset,
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    _run, embedding, llm = await _prepare(session_factory, smoke, run_dir=run_dir)
+    without_development = replace(
+        smoke,
+        items={
+            language: tuple(item for item in items if item.partition != "development")
+            for language, items in smoke.items.items()
+        },
+    )
+    publish = tmp_path / "published"
+
+    outcome = await measure_latency(
+        session_factory,
+        without_development,
+        run_dir=run_dir,
+        embedding_provider=embedding,
+        llm_provider=llm,
+        allow_smoke=True,
+        publish_dir=publish,
+    )
+
+    assert outcome.payload["languages"]["es"]["retrieval"]["n"] == len(
+        smoke.test_items("es")
+    )
+    assert "first test item" in outcome.payload["cold_start"]
+    assert any(
+        "no development item" in limitation for limitation in outcome.payload["limitations"]
+    )

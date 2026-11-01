@@ -72,6 +72,7 @@ class LanguageLatency:
 
     language: str
     expected_items: int
+    expected_item_ids: tuple[str, ...] = ()
     retrieval: tuple[RetrievalSample, ...] = ()
     first_token: tuple[FirstTokenSample, ...] = ()
     cold_retrieval_ms: float | None = None
@@ -86,6 +87,11 @@ class LanguageLatency:
             raise ValueError("expected_items no puede ser negativo")
         if self.retrieval_target_ms <= 0 or self.first_token_target_ms <= 0:
             raise ValueError("los umbrales deben ser positivos")
+        if self.expected_item_ids:
+            if len(set(self.expected_item_ids)) != len(self.expected_item_ids):
+                raise ValueError("expected_item_ids contiene ids duplicados")
+            if self.expected_items != len(self.expected_item_ids):
+                raise ValueError("expected_items no coincide con expected_item_ids")
         for retrieval_sample in self.retrieval:
             if retrieval_sample.language != self.language:
                 raise ValueError("una muestra de recuperación pertenece a otro idioma")
@@ -103,6 +109,26 @@ class LanguageLatency:
                 self,
                 "cold_first_token_ms",
                 _validated_ms(self.cold_first_token_ms, what="cold_first_token_ms"),
+            )
+        self._validate_sample_ids("recuperación", [sample.item_id for sample in self.retrieval])
+        self._validate_sample_ids(
+            "primer token", [sample.item_id for sample in self.first_token]
+        )
+
+    def _validate_sample_ids(self, what: str, item_ids: Sequence[str]) -> None:
+        """A duplicate or an out-of-corpus id cannot count as a complete sample set."""
+        if len(set(item_ids)) != len(item_ids):
+            raise ValueError(f"{what} contiene item_id duplicados")
+        if not self.expected_item_ids:
+            return
+        expected = set(self.expected_item_ids)
+        actual = set(item_ids)
+        if actual != expected:
+            missing = len(expected - actual)
+            extra = len(actual - expected)
+            raise ValueError(
+                f"{what} no cubre exactamente los ítems esperados "
+                f"(faltan {missing}, sobran {extra})"
             )
 
     @property
@@ -249,24 +275,50 @@ class LatencyMetadata:
     concurrency: int = DEFAULT_CONCURRENCY
     language_metadata: Mapping[str, Mapping[str, int]] = field(default_factory=dict)
     cold_start: str = (
-        "One warm-up retrieval and one warm-up chat per language from the development "
-        "partition; excluded from the p95 distributions."
+        "One warm-up retrieval and one warm-up chat per language, reported separately and "
+        "excluded from the p95 distributions unless no development item exists, in which "
+        "case the first test item remains in the distribution."
     )
     limitations: tuple[str, ...] = ()
 
 
-def default_limitations() -> tuple[str, ...]:
-    """Limitations that must accompany every published latency measurement."""
+def _sample_size_limitation(sample_sizes: Mapping[str, int] | None) -> str:
+    if not sample_sizes:
+        detail = "N is reported per language"
+    else:
+        sizes = {language: int(count) for language, count in sample_sizes.items()}
+        distinct = sorted(set(sizes.values()))
+        if len(distinct) == 1:
+            detail = f"N={distinct[0]} per language"
+        else:
+            rendered = ", ".join(
+                f"{language}={count}" for language, count in sorted(sizes.items())
+            )
+            detail = f"N varies by language ({rendered})"
+    return (
+        f"The p95 uses nearest-rank over the frozen test partition ({detail}); the result "
+        "is measured, not an SLA or a provider guarantee."
+    )
+
+
+def default_limitations(
+    *, sample_sizes: Mapping[str, int] | None = None
+) -> tuple[str, ...]:
+    """Limitations that must accompany every published latency measurement.
+
+    ``sample_sizes`` keeps the report honest for smoke runs and partial language sets: the
+    text must never claim the official N=50 when the measured sample is smaller.
+    """
     return (
         "In-process measurement: it excludes HTTP, Caddy, authentication, network and "
         "provider quota enforcement.",
         "Concurrency is 1; this is a reference measurement, not a load test.",
-        "Cold start is one warm-up item per language and is excluded from p95; it is not a "
-        "process-restart benchmark.",
+        "Cold start is one warm-up item per language, reported separately; it is not a "
+        "process-restart benchmark. When no development item exists, the first test item "
+        "serves as cold start and remains in the p95 distribution.",
         "Chat first-token timing stops at the first non-empty delta; closing the stream early "
         "persists an isolated cancelled partial for that item's conversation.",
-        "The p95 uses nearest-rank over the frozen test partition (N=50 per language); the "
-        "result is measured, not an SLA or a provider guarantee.",
+        _sample_size_limitation(sample_sizes),
         "Synthetic text corpus only: no real classes, audio or personally identifiable data.",
         "Provider nondeterminism can change a later run.",
         "Every enabled language must pass on its own; a macro average never compensates a "
@@ -319,18 +371,26 @@ def _language_payload(
     }
 
 
+def _consistent_thresholds(
+    languages: Sequence[LanguageLatency],
+) -> tuple[float, float]:
+    """The global payload cannot silently publish the first language's targets."""
+    if not languages:
+        return RETRIEVAL_P95_TARGET_MS, FIRST_TOKEN_P95_TARGET_MS
+    retrieval = {language.retrieval_target_ms for language in languages}
+    first_token = {language.first_token_target_ms for language in languages}
+    if len(retrieval) != 1 or len(first_token) != 1:
+        raise ValueError("todos los idiomas deben usar los mismos umbrales de latencia")
+    return retrieval.pop(), first_token.pop()
+
+
 def build_payload(
     metadata: LatencyMetadata,
     languages: Sequence[LanguageLatency],
     verdict: LatencyVerdict,
 ) -> dict[str, Any]:
     """JSON-safe, redacted publication payload."""
-    retrieval_target = (
-        languages[0].retrieval_target_ms if languages else RETRIEVAL_P95_TARGET_MS
-    )
-    first_token_target = (
-        languages[0].first_token_target_ms if languages else FIRST_TOKEN_P95_TARGET_MS
-    )
+    retrieval_target, first_token_target = _consistent_thresholds(languages)
     return {
         "gate": LATENCY_GATE,
         "status": _status(verdict),

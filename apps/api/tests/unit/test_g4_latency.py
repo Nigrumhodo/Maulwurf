@@ -25,6 +25,7 @@ from tools.eval.latency import (
     LatencyMetadata,
     RetrievalSample,
     build_payload,
+    default_limitations,
     overall_verdict,
 )
 from tools.eval.latency_runner import publish_latency
@@ -256,11 +257,12 @@ def test_g4_latency_llm_only_p95_is_diagnostic() -> None:
 def test_g4_latency_publish_writes_redacted_json_and_markdown(tmp_path: Path) -> None:
     latency = _language([10.0] * 20)
     payload = build_payload(_metadata(), [latency], overall_verdict([latency]))
+    target = tmp_path / "published"
 
-    publish_latency(tmp_path, payload)
+    publish_latency(target, payload)
 
-    data = json.loads((tmp_path / "latency.json").read_text(encoding="utf-8"))
-    report = (tmp_path / "REPORT.md").read_text(encoding="utf-8")
+    data = json.loads((target / "latency.json").read_text(encoding="utf-8"))
+    report = (target / "REPORT.md").read_text(encoding="utf-8")
     assert data["status"] == "PASS"
     assert data["languages"]["es"]["retrieval"]["p95_ms"] == 10.0
     assert "L2.8 latency report" in report
@@ -268,3 +270,104 @@ def test_g4_latency_publish_writes_redacted_json_and_markdown(tmp_path: Path) ->
     assert "question" not in _keys(data)
     assert "answer" not in _keys(data)
     assert "quote" not in _keys(data)
+
+
+def test_g4_latency_rejects_duplicate_item_samples() -> None:
+    retrieval = RetrievalSample(item_id="r1", language="es", took_ms=1.0)
+    first_token = FirstTokenSample(
+        item_id="r1",
+        language="es",
+        first_token_ms=1.0,
+        source="llm",
+    )
+
+    with pytest.raises(ValueError, match="item_id duplicados"):
+        LanguageLatency(
+            language="es",
+            expected_items=2,
+            expected_item_ids=("r1", "r2"),
+            retrieval=(retrieval, retrieval),
+        )
+    retrieval_ok = (
+        RetrievalSample(item_id="r1", language="es", took_ms=1.0),
+        RetrievalSample(item_id="r2", language="es", took_ms=1.0),
+    )
+    with pytest.raises(ValueError, match="item_id duplicados"):
+        LanguageLatency(
+            language="es",
+            expected_items=2,
+            expected_item_ids=("r1", "r2"),
+            retrieval=retrieval_ok,
+            first_token=(first_token, first_token),
+        )
+
+
+def test_g4_latency_rejects_samples_outside_expected_items() -> None:
+    retrieval = (
+        RetrievalSample(item_id="r1", language="es", took_ms=1.0),
+        RetrievalSample(item_id="r3", language="es", took_ms=1.0),
+    )
+    first_token = (
+        FirstTokenSample(item_id="r1", language="es", first_token_ms=1.0, source="llm"),
+        FirstTokenSample(item_id="r3", language="es", first_token_ms=1.0, source="llm"),
+    )
+
+    with pytest.raises(ValueError, match="no cubre exactamente"):
+        LanguageLatency(
+            language="es",
+            expected_items=2,
+            expected_item_ids=("r1", "r2"),
+            retrieval=retrieval,
+            first_token=first_token,
+        )
+
+
+def test_g4_latency_limitations_match_measured_n() -> None:
+    same_size = default_limitations(sample_sizes={"es": 3, "en": 3})
+    mixed_size = default_limitations(sample_sizes={"es": 3, "en": 50})
+    generic = default_limitations()
+
+    assert any("N=3 per language" in limitation for limitation in same_size)
+    assert not any("N=50" in limitation for limitation in same_size)
+    assert any(
+        "N varies by language" in limitation and "es=3" in limitation and "en=50" in limitation
+        for limitation in mixed_size
+    )
+    assert not any("N=50" in limitation for limitation in generic)
+
+
+def test_g4_latency_global_thresholds_reject_mixed_targets() -> None:
+    spanish = _language([10.0] * 20, language="es")
+    english = replace(
+        _language([10.0] * 20, language="en"),
+        retrieval_target_ms=600.0,
+    )
+
+    with pytest.raises(ValueError, match="mismos umbrales"):
+        build_payload(_metadata(), [spanish, english], overall_verdict([spanish, english]))
+
+
+def test_g4_latency_publish_is_atomic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    latency = _language([10.0] * 20)
+    payload = build_payload(_metadata(), [latency], overall_verdict([latency]))
+    target = tmp_path / "published"
+    target.mkdir()
+    (target / "previous.txt").write_text("previous evidence", encoding="utf-8")
+    original = Path.write_text
+
+    def fail_on_report(self: Path, data: str, *args: Any, **kwargs: Any) -> int:
+        if self.name == "REPORT.md":
+            raise OSError("disk full")
+        return original(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_on_report)
+
+    with pytest.raises(OSError, match="disk full"):
+        publish_latency(target, payload)
+
+    assert (target / "previous.txt").read_text(encoding="utf-8") == "previous evidence"
+    assert not (target / "latency.json").exists()
+    assert not (target / "REPORT.md").exists()
+    assert not list(tmp_path.glob(".published.*"))

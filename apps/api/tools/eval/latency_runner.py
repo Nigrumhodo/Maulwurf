@@ -21,7 +21,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
+import shutil
 import sys
 import uuid
 from collections.abc import Mapping, Sequence
@@ -32,6 +34,7 @@ from time import perf_counter
 from typing import Any
 
 from pydantic import ValidationError
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
@@ -92,6 +95,8 @@ DEFAULT_PUBLISH_ROOT = REPO_ROOT / "docs" / "eval" / "latency"
 DEFAULT_MAX_PROVIDER_CALLS = 600
 SMOKE_STATUS = "SMOKE"
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class LatencyOutcome:
@@ -108,6 +113,16 @@ class _FirstToken:
 
     took_ms: float
     source: FirstTokenSource
+    close_failed: bool = False
+
+
+@dataclass(frozen=True)
+class _LanguageMeasurement:
+    """One language's samples plus the limitations discovered while measuring it."""
+
+    latency: LanguageLatency
+    limitations: tuple[str, ...]
+    cold_start_fallback: bool
 
 
 def _split_languages(raw: str) -> tuple[str, ...]:
@@ -312,6 +327,8 @@ async def _measure_first_token(
             "abstention" if prepared.abstention_text is not None else "llm"
         )
         stream = service.stream_events(prepared)
+        measured_ms: float | None = None
+        close_failed = False
         try:
             async for frame in stream:
                 event = parse_sse(frame)
@@ -320,10 +337,8 @@ async def _measure_first_token(
                 if event.name == "delta":
                     text = event.data.get("text")
                     if isinstance(text, str) and text:
-                        return _FirstToken(
-                            took_ms=(perf_counter() - started) * 1000.0,
-                            source=source,
-                        )
+                        measured_ms = (perf_counter() - started) * 1000.0
+                        break
                 elif event.name == "error":
                     raise EvalExit(
                         EXIT_NOT_EVALUATED,
@@ -333,15 +348,22 @@ async def _measure_first_token(
                     break
         finally:
             # Stop the producer and persist the isolated cancelled partial immediately.
-            await stream.aclose()
+            # A close failure after a valid delta must not discard an already measured sample.
+            try:
+                await stream.aclose()
+            except Exception:  # noqa: BLE001 - cleanup must not hide a valid first delta
+                if measured_ms is not None:
+                    close_failed = True
+        if measured_ms is None:
+            raise EvalExit(
+                EXIT_NOT_EVALUATED,
+                f"{index.language}: el stream terminó sin primer delta en {item_id}",
+            )
+        return _FirstToken(took_ms=measured_ms, source=source, close_failed=close_failed)
     except EvalExit:
         raise
     except Exception as exc:  # noqa: BLE001 - a failed sample makes the measurement incomplete
         raise _measurement_error(index.language, item_id, "primer token", exc) from exc
-    raise EvalExit(
-        EXIT_NOT_EVALUATED,
-        f"{index.language}: el stream terminó sin primer delta en {item_id}",
-    )
 
 
 async def _measure_language(
@@ -354,8 +376,8 @@ async def _measure_language(
     run_id: str,
     retrieval_target_ms: float,
     first_token_target_ms: float,
-) -> tuple[LanguageLatency, str | None]:
-    """Measure every test item of one language and return its samples plus a limitation."""
+) -> _LanguageMeasurement:
+    """Measure every test item of one language and return its samples plus limitations."""
     language = index.language
     bind_user(index.user_id)
     test_items = dataset.test_items(language)
@@ -386,6 +408,7 @@ async def _measure_language(
         question=warm_item.question,
         run_id=run_id,
     )
+    close_failures = 1 if cold_first_token.close_failed else 0
 
     retrieval_samples: list[RetrievalSample] = []
     first_token_samples: list[FirstTokenSample] = []
@@ -430,6 +453,7 @@ async def _measure_language(
             question=item.question,
             run_id=run_id,
         )
+        close_failures += 1 if first_token.close_failed else 0
         first_token_samples.append(
             FirstTokenSample(
                 item_id=item.id,
@@ -439,15 +463,21 @@ async def _measure_language(
             )
         )
 
-    limitation = None
+    limitations: list[str] = []
     if warm_in_samples:
-        limitation = (
+        limitations.append(
             f"{language}: no development item was available; the first test item served as "
             "cold start and remains in the p95 distribution."
+        )
+    if close_failures:
+        limitations.append(
+            f"{language}: {close_failures} chat stream(s) failed to close after the first "
+            "delta; those samples were kept."
         )
     latency = LanguageLatency(
         language=language,
         expected_items=len(test_items),
+        expected_item_ids=tuple(item.id for item in test_items),
         retrieval=tuple(retrieval_samples),
         first_token=tuple(first_token_samples),
         cold_retrieval_ms=cold_retrieval_ms,
@@ -455,7 +485,51 @@ async def _measure_language(
         retrieval_target_ms=retrieval_target_ms,
         first_token_target_ms=first_token_target_ms,
     )
-    return latency, limitation
+    return _LanguageMeasurement(
+        latency=latency,
+        limitations=tuple(limitations),
+        cold_start_fallback=warm_in_samples,
+    )
+
+
+def _host_memory_mb() -> str:
+    """Best-effort total host memory; never include process, host or user identifiers."""
+    sysconf = getattr(os, "sysconf", None)
+    if sysconf is not None:
+        try:
+            pages = int(sysconf("SC_PHYS_PAGES"))
+            page_size = int(sysconf("SC_PAGE_SIZE"))
+            if pages > 0 and page_size > 0:
+                return str(round(pages * page_size / (1024 * 1024)))
+        except (ValueError, OSError):
+            pass
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemTotal:"):
+                return str(round(int(line.split()[1]) / 1024))
+    except (OSError, ValueError, IndexError):
+        pass
+    return "unknown"
+
+
+async def _database_environment(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> dict[str, str]:
+    """Record database context without exposing the DSN or any connection secret."""
+    environment = {"postgres": "unknown", "pgvector": "unknown"}
+    try:
+        async with session_factory() as db:
+            version = await db.scalar(text("SELECT version()"))
+            if version:
+                environment["postgres"] = str(version).split(" on ")[0].strip()
+            extension = await db.scalar(
+                text("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
+            )
+            if extension:
+                environment["pgvector"] = str(extension)
+    except Exception as exc:  # noqa: BLE001 - best-effort metadata; never publish the DSN
+        logger.warning("l2.8.environment.database_metadata_failed error=%s", type(exc).__name__)
+    return environment
 
 
 def _metadata(
@@ -465,10 +539,18 @@ def _metadata(
     languages: Sequence[str],
     *,
     limitations: Sequence[str],
+    cold_start: str,
+    database_environment: Mapping[str, str],
 ) -> LatencyMetadata:
     environment = dict(_environment())
     environment["cpu_count"] = str(os.cpu_count() or 0)
+    environment["memory_total_mb"] = _host_memory_mb()
+    environment.update(database_environment)
+    environment["redis"] = "not used by the in-process measurement"
     commit, dirty = _git_metadata()
+    sample_sizes = {
+        language: len(dataset.test_items(language)) for language in languages
+    }
     return LatencyMetadata(
         measured_at=datetime.now(UTC).isoformat(timespec="seconds"),
         run_id=run.run_id,
@@ -489,18 +571,50 @@ def _metadata(
             }
             for language in languages
         },
-        limitations=tuple(default_limitations()) + tuple(limitations),
+        limitations=default_limitations(sample_sizes=sample_sizes) + tuple(limitations),
+        cold_start=cold_start,
     )
+
+
+def _require_clean_tree() -> None:
+    """Official evidence must be reproducible from the exact committed tree."""
+    _, dirty = _git_metadata()
+    if dirty is not False:
+        detail = "no se pudo determinar" if dirty is None else "hay cambios sin commitear"
+        raise EvalExit(
+            EXIT_CONFIG,
+            f"medición oficial rechazada: árbol de trabajo sucio ({detail})",
+        )
 
 
 def publish_latency(publish_dir: Path, payload: Mapping[str, Any]) -> None:
-    """Write the redacted JSON payload and its Markdown rendering."""
-    publish_dir.mkdir(parents=True, exist_ok=True)
-    (publish_dir / "latency.json").write_text(
-        json.dumps(dict(payload), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    (publish_dir / "REPORT.md").write_text(render_report(payload), encoding="utf-8")
+    """Publish both artifacts through a sibling directory swap.
+
+    A reader never sees a half-written ``latency.json`` or ``REPORT.md``: both files are
+    written to a temporary sibling first and the complete directory is renamed into place.
+    """
+    parent = publish_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    temporary = parent / f".{publish_dir.name}.tmp-{uuid.uuid4().hex}"
+    backup = parent / f".{publish_dir.name}.old-{uuid.uuid4().hex}"
+    report = render_report(payload)
+    try:
+        temporary.mkdir()
+        (temporary / "latency.json").write_text(
+            json.dumps(dict(payload), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        (temporary / "REPORT.md").write_text(report, encoding="utf-8")
+        if publish_dir.exists():
+            os.replace(publish_dir, backup)
+        os.replace(temporary, publish_dir)
+    except BaseException:
+        shutil.rmtree(temporary, ignore_errors=True)
+        if backup.exists() and not publish_dir.exists():
+            os.replace(backup, publish_dir)
+        raise
+    finally:
+        shutil.rmtree(backup, ignore_errors=True)
 
 
 async def measure_latency(
@@ -539,19 +653,21 @@ async def measure_latency(
             )
         _require_official_dataset(dataset)
         _require_official_providers(run, embedding_provider, llm_provider)
+        _require_clean_tree()
 
     _check_provider_compatibility(run, embedding_provider, llm_provider)
     prepared = _prepared_index(run, enabled)
     await _require_active_generations(session_factory, prepared, enabled)
+    database_environment = await _database_environment(session_factory)
 
     budget = _Budget(limit=max_provider_calls, calls=run.budget.provider_calls)
     counting_embedding = _CountingEmbedding(embedding_provider, budget)
     counting_llm = _CountingLLM(llm_provider, budget)
 
-    language_latencies: list[LanguageLatency] = []
+    measurements: list[_LanguageMeasurement] = []
     limitations: list[str] = []
     for language in enabled:
-        latency, limitation = await _measure_language(
+        measurement = await _measure_language(
             session_factory,
             dataset,
             prepared.languages[language],
@@ -561,13 +677,39 @@ async def measure_latency(
             retrieval_target_ms=retrieval_target_ms,
             first_token_target_ms=first_token_target_ms,
         )
-        language_latencies.append(latency)
-        if limitation is not None:
-            limitations.append(limitation)
+        measurements.append(measurement)
+        limitations.extend(measurement.limitations)
+
+    language_latencies = [measurement.latency for measurement in measurements]
+    fallback_languages = [
+        measurement.latency.language
+        for measurement in measurements
+        if measurement.cold_start_fallback
+    ]
+    if fallback_languages:
+        cold_start = (
+            "At least one language had no development item; its first test item served as "
+            "cold start and remains in the p95 distribution: "
+            + ", ".join(fallback_languages)
+            + "."
+        )
+    else:
+        cold_start = (
+            "One warm-up retrieval and one warm-up chat per language from the development "
+            "partition; excluded from the p95 distributions."
+        )
 
     verdict: LatencyVerdict = overall_verdict(language_latencies)
     payload = build_payload(
-        _metadata(run, dataset, prepared, enabled, limitations=limitations),
+        _metadata(
+            run,
+            dataset,
+            prepared,
+            enabled,
+            limitations=limitations,
+            cold_start=cold_start,
+            database_environment=database_environment,
+        ),
         language_latencies,
         verdict,
     )
