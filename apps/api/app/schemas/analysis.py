@@ -53,8 +53,9 @@ class SourceSpan(BaseModel):
 
     Offsets are Python string indices (Unicode code points) over the immutable text of
     `segment_id`, never UTF-16 units or bytes. `cita_textual` must be exactly
-    `segment_text[inicio_char:fin_char]`: the length check rejects a paraphrase before the
-    segment is loaded, and `check_against` confirms the content once it is.
+    `segment_text[inicio_char:fin_char]`: the length check rejects a quote that cannot be
+    the slice before the segment is loaded, and `check_against` confirms the content once
+    it is.
     """
 
     model_config = _NO_STRIP
