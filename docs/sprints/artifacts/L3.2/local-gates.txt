@@ -1,0 +1,58 @@
+# L3.2 (MAULW-92) local gates
+
+Captured: 2026-11-01T01:30:15Z
+Host: Linux 7.0.0-39-generic x86_64 | Python 3.12.3 | uv 0.13.1 (x86_64-unknown-linux-gnu) | code head eff78c0
+No provider call, no real class text, no audio and no secret are involved.
+
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 239 source files
+
+$ uv run pytest tests/unit/test_schema_analysis.py -q
+.............................................................            [100%]
+61 passed in 0.60s
+
+$ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 uv run pytest tests/unit -q
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1320 passed, 35 warnings in 25.77s
+
+$ uv run pytest tests/unit -q   # raw sandbox environment
+=========================== short test summary info ============================
+FAILED tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured
+FAILED tests/unit/test_llm.py::test_shared_http_client_is_bounded_reused_and_closed
+2 failed, 1318 passed, 35 warnings in 22.16s
+  (pre-existing: httpx 0.28 rejects the sandbox NO_PROXY bracket entries '[::1]' with
+   'Invalid port: :1]'; the sanitized run above is green and the two tests do not touch this diff.)
+
+$ cd apps/ingest && uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 80 source files
+
+$ uv run pytest -q   # raw sandbox environment (espeak-ng absent)
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_asr_cost.py::test_concurrent_audio_path_measures_and_cleans_up
+FAILED tests/test_synthetic_audio.py::test_same_seed_is_byte_identical - Runt...
+FAILED tests/test_synthetic_audio.py::test_different_seed_changes_bytes - Run...
+FAILED tests/test_synthetic_audio.py::test_wav_is_pcm_s16_mono - RuntimeError...
+FAILED tests/test_synthetic_audio.py::test_expected_text_is_the_requested_phrase
+FAILED tests/test_synthetic_audio.py::test_spectrum_is_not_a_pure_tone - Runt...
+FAILED tests/test_synthetic_audio.py::test_does_not_write_wav_to_disk - Runti...
+FAILED tests/test_synthetic_audio.py::test_leading_dash_is_spoken_not_espeak_flags
+FAILED tests/test_synthetic_audio.py::test_rejects_overlong_utterance - Asser...
+9 failed, 238 passed, 78 skipped, 2 warnings in 18.19s
+  (all nine failures are caused by the absent `espeak-ng` binary: eight raise
+   'RuntimeError: espeak-ng is required for synthetic audio' and the overlong-utterance
+   case sees that message where it expected 'too long'. apps/ingest is untouched by this
+   diff. The deselected run below is green.)
+
+$ uv run pytest -q --deselect tests/test_asr_cost.py::test_concurrent_audio_path_measures_and_cleans_up --deselect tests/test_synthetic_audio.py
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+237 passed, 78 skipped, 10 deselected, 2 warnings in 15.31s
+
+$ cd ../.. && python3 scripts/docs/check_refs.py
+OK: 831 documented repository paths exist or are expected.
