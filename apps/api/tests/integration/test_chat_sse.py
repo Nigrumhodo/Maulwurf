@@ -99,15 +99,20 @@ class BlockingLLM(FakeLLM):
         super().__init__()
         self.started = asyncio.Event()
         self.release = asyncio.Event()
+        self.closed = asyncio.Event()
 
     async def stream(
         self, messages: Sequence[ChatMessage], *, max_tokens: int
     ) -> AsyncIterator[str]:
         self.calls += 1
         self.last_messages = list(messages)
-        yield "parcial"
-        self.started.set()
-        await self.release.wait()
+        try:
+            yield "parcial"
+            self.started.set()
+            await self.release.wait()
+            yield "texto que no debe consumirse"
+        finally:
+            self.closed.set()
 
 
 class GatedCitationLLM(FakeLLM):
@@ -437,6 +442,52 @@ async def test_chat_stream_emits_ordered_deltas_citations_and_one_done(
     assert done["status"] == "completed"
     assert done["conversation_id"] == str(conversation.id)
     assert done["sources"] == [{"kind": "transcript", "audio_id": str(citation["audio_id"])}]
+
+
+async def test_chat_prepare_timestamps_come_from_the_database_clock(
+    chat_sse: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    actor, conversation, _, _ = await _setup_corpus(chat_sse.factory)
+    before = datetime.now(UTC)
+
+    class SkewedDatetime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            # A process whose clock is 26 years behind must not reorder persisted turns.
+            return datetime(2000, 1, 1, tzinfo=UTC)
+
+    monkeypatch.setattr("app.services.rag.datetime", SkewedDatetime)
+    service = RAGService(
+        session_factory=chat_sse.factory,
+        embedding_provider=chat_sse.embeddings,
+        llm_provider=FakeLLM(),
+    )
+    prepared = await service.prepare(
+        user_id=actor.user_id,
+        conversation_id=conversation.id,
+        content="¿Qué hace la integral?",
+        client_message_id="clock-1",
+    )
+    assert prepared.assistant_message_id is not None
+
+    async with chat_sse.factory() as db:
+        rows = (
+            (
+                await db.execute(
+                    select(Message)
+                    .where(Message.conversation_id == conversation.id)
+                    .order_by(Message.created_at, Message.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert [row.role for row in rows] == ["user", "assistant"]
+    # The turn clock is read from PostgreSQL after the conversation lock; Python clock skew
+    # cannot move it to the mocked 2000-01-01.
+    assert rows[0].created_at >= before - timedelta(seconds=5)
+    assert rows[0].created_at <= datetime.now(UTC) + timedelta(seconds=5)
+    assert rows[1].created_at - rows[0].created_at == timedelta(microseconds=1)
 
 
 async def test_chat_history_returns_the_real_turn_user_before_assistant(
@@ -1268,7 +1319,7 @@ async def test_chat_client_disconnect_leaves_partial_cancelled(chat_sse: Harness
         assert row.content == "parcial"
 
 
-async def test_chat_delete_during_stream_ignores_checkpoints_and_does_not_resurrect(
+async def test_chat_delete_during_stream_signals_cancel_and_stops_the_producer(
     chat_sse: Harness, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.ERROR)
@@ -1278,9 +1329,11 @@ async def test_chat_delete_during_stream_ignores_checkpoints_and_does_not_resurr
         session_factory=chat_sse.factory,
         embedding_provider=chat_sse.embeddings,
         llm_provider=blocking,
+        # A short heartbeat keeps the loop ticking while the checkpoint and the DB status
+        # poll stay 30 s away: only `signal_cancel` can close the stream in this test.
         cancel_poll_seconds=30.0,
-        heartbeat_seconds=10.0,
-        checkpoint_seconds=0.01,
+        heartbeat_seconds=0.01,
+        checkpoint_seconds=30.0,
     )
     prepared = await service.prepare(
         user_id=actor.user_id,
@@ -1322,12 +1375,15 @@ async def test_chat_delete_during_stream_ignores_checkpoints_and_does_not_resurr
         assert tombstone is not None
         assert tombstone.deleted_at is not None
 
-    # The generator is suspended at the delta yield. Resuming it runs the next checkpoint
-    # against the purged row; the zero-row UPDATE is tolerated and closes the stream.
-    done = await anext(stream)
-    blocking.release.set()
+    # The generator is suspended at the delta yield and the producer is still blocked in the
+    # LLM. DELETE must signal the live stream, so resuming it closes without waiting for the
+    # DB poll; the released producer is cancelled before it can yield more content.
+    done = await asyncio.wait_for(anext(stream), timeout=2)
     assert _event_name(done) == "done"
     assert _event_data(done)["status"] == "cancelled"
+    assert blocking.calls == 1
+    assert blocking.closed.is_set()
+    assert not blocking.release.is_set()
     await stream.aclose()
 
     assert [record for record in caplog.records if record.levelno >= logging.ERROR] == []
