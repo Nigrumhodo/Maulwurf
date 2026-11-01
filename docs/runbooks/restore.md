@@ -90,9 +90,9 @@ scripts/ops/backup_restore.sh verify \
   --backup /srv/maulwurf-backups/maulwurf-20261101T070000Z-daily.dump.gpg
 ```
 
-`verify` checks the manifest SHA-256 and the 30-day window without opening a database. It
-exits non-zero for a modified, missing or expired archive. A backup is not restorable after
-the window even if the file still exists.
+`verify` checks the manifest SHA-256 of the dump and of the bundled deletion log, and the
+30-day window, without opening a database. It exits non-zero for a modified, missing or
+expired archive. A backup is not restorable after the window even if the file still exists.
 
 ## 6. Clean restore
 

@@ -12,9 +12,10 @@ The suite runs the real ``scripts/ops/backup_restore.sh`` against PostgreSQL:
   tombstone plus the residual operation.
 
 It also pins the D8 retention (30 days), the pruning of older files, the refusal to restore
-an expired backup, and the fail-closed refusal to dump an unexpected binary column (the
-no-audio contract). No real audio is generated or stored: the only payload is text in the
-database, and both the dump and the deletion log are encrypted before they are written.
+an expired or tampered archive (both the dump and the deletion log are checksummed), and the
+fail-closed refusal to dump an unexpected binary column (the no-audio contract). No real
+audio is generated or stored: the only payload is text in the database, and both the dump
+and the deletion log are encrypted before they are written.
 """
 
 import asyncio
@@ -397,6 +398,19 @@ async def test_i_s4_an_05_restore_reapplies_tombstones_on_a_clean_database(
         manifest_data = json.loads(manifest.read_text())
         assert manifest_data["retention_days"] == RETENTION_DAYS
         assert manifest_data["dump_sha256"]
+        assert manifest_data["deletion_log_sha256"]
+
+        # `verify` accepts an intact pair and refuses a tampered deletion log: the manifest
+        # pins both encrypted files, so a swapped log cannot silently change the replay.
+        verified = _run("verify", "--backup", str(dump))
+        assert verified.returncode == 0, verified.stderr + verified.stdout
+        assert "backup OK" in verified.stdout
+        log_bytes = bundled_log.read_bytes()
+        bundled_log.write_bytes(log_bytes + b"tampered")
+        tampered = _run("verify", "--backup", str(dump))
+        assert tampered.returncode != 0
+        assert "deletion log checksum" in tampered.stderr
+        bundled_log.write_bytes(log_bytes)
 
         deletion_id = await _apply_deletions(source_url, ids)
         exported_log = backups / "post-delete.deletions.json.gpg"

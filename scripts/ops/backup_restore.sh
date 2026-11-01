@@ -216,6 +216,7 @@ verify_archive() {
   python3 - "${manifest}" "${backup}" <<'PY'
 import hashlib
 import json
+import os
 import sys
 from datetime import UTC, datetime
 
@@ -239,6 +240,18 @@ with open(backup_path, "rb") as handle:
     digest = hashlib.file_digest(handle, "sha256").hexdigest()
 if digest != manifest["dump_sha256"]:
     raise SystemExit("backup_restore: backup checksum does not match the manifest")
+# The deletion log is pinned by the same manifest. A bundled log that no longer matches is
+# refused; a dump copied on its own is still verifiable when the log is not next to it.
+log_name = manifest.get("deletion_log")
+if log_name:
+    log_path = os.path.join(os.path.dirname(backup_path), log_name)
+    if os.path.exists(log_path):
+        with open(log_path, "rb") as handle:
+            log_digest = hashlib.file_digest(handle, "sha256").hexdigest()
+        if log_digest != manifest.get("deletion_log_sha256"):
+            raise SystemExit(
+                "backup_restore: deletion log checksum does not match the manifest"
+            )
 print(
     f"backup_restore: backup OK ({age_days:.1f} days old, "
     f"retention {MAX_RETENTION_DAYS} days)"

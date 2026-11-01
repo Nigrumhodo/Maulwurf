@@ -1105,8 +1105,8 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   `POST /me/deletion/{id}/resume` (CSRF/Origin checked, owner-scoped). An already-succeeded
   remote delete is never repeated. The residual record keeps only remote IDs, authorization,
   status, redacted error, and expiration; an hourly batched job deletes both residual tables
-  (`account_deletions`, `google_remote_operations`) once `expires_at` passes (provisional
-  30-day window pending D8). Once that job removes the operation row, the session link is
+  (`account_deletions`, `google_remote_operations`) once `expires_at` passes (30-day window,
+  D8 approved in A4.5). Once that job removes the operation row, the session link is
   cleared and the restricted cookie gets `401` instead of `404`. `delete_maulwurf_events`
   defaults to `false`: local tasks and
   links are purged, but Maulwurf-created events remain in the user's Google calendar unless
