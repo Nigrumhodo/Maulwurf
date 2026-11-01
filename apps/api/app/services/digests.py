@@ -34,7 +34,6 @@ history is preserved.
 """
 
 import uuid
-from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Final, Self, cast
@@ -45,7 +44,6 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import CalendarSettings, Notification, Task, User
-from app.models.notification import DIGEST_TYPES
 from app.services.conflicts import (
     ACTIVE_TASK_STATUSES,
     ConflictReport,
@@ -440,15 +438,7 @@ async def materialize_due_digests(
     instant = now if now is not None else await _database_clock(db)
     _require_aware(instant, field="now", code="clock_invalid")
     query = (
-        select(
-            User.id,
-            User.timezone,
-            CalendarSettings.gmail_opt_in,
-            CalendarSettings.digest_daily_enabled,
-            CalendarSettings.digest_daily_time,
-            CalendarSettings.digest_weekly_enabled,
-            CalendarSettings.digest_weekday,
-        )
+        select(User.id, User.timezone, CalendarSettings)
         .join(CalendarSettings, CalendarSettings.user_id == User.id)
         .where(
             User.status == "active",
@@ -466,23 +456,9 @@ async def materialize_due_digests(
     written = 0
     cancelled = 0
     skipped = 0
-    for (
-        user_id,
-        timezone,
-        gmail_opt_in,
-        daily_enabled,
-        daily_time,
-        weekly_enabled,
-        weekday,
-    ) in (await db.execute(query)).all():
+    for user_id, timezone, settings_row in (await db.execute(query)).all():
         users += 1
-        preferences = DigestPreferences(
-            gmail_opt_in=bool(gmail_opt_in),
-            digest_daily_enabled=bool(daily_enabled),
-            digest_daily_time=daily_time,
-            digest_weekly_enabled=bool(weekly_enabled),
-            digest_weekday=int(weekday),
-        )
+        preferences = DigestPreferences.from_settings(settings_row)
         try:
             occurrences = plan_digest_occurrences(
                 preferences,
@@ -528,34 +504,44 @@ async def materialize_due_digests(
     )
 
 
-def _task_item(task: Task, zone: ZoneInfo) -> DigestTaskItem | None:
+def _task_item(
+    *,
+    task_id: uuid.UUID,
+    titulo: str,
+    tipo: str,
+    status: str,
+    all_day: bool,
+    due_date: date | None,
+    due_at: datetime | None,
+    zone: ZoneInfo,
+) -> DigestTaskItem | None:
     """Project one task onto its user-local day, failing closed on an incoherent row.
 
     The database CHECK guarantees exactly one due representation for a resolved task. An
     incoherent in-memory row is a programming error, so it is omitted instead of inventing
     a midnight or an instant. A naive instant is likewise not trusted.
     """
-    if task.due_date is not None and task.due_at is None:
-        local_day = task.due_date
-        due_date: date | None = task.due_date
-        due_at: datetime | None = None
-    elif task.due_at is not None and task.due_date is None:
-        if task.due_at.tzinfo is None:
+    if due_date is not None and due_at is None:
+        local_day = due_date
+        stored_date: date | None = due_date
+        stored_instant: datetime | None = None
+    elif due_at is not None and due_date is None:
+        if due_at.tzinfo is None:
             return None
-        due_date = None
-        due_at = task.due_at.astimezone(UTC)
-        local_day = task.due_at.astimezone(zone).date()
+        stored_date = None
+        stored_instant = due_at.astimezone(UTC)
+        local_day = due_at.astimezone(zone).date()
     else:
         return None
     return DigestTaskItem(
-        task_id=task.id,
-        titulo=task.titulo,
-        tipo=task.tipo,
-        status=task.status,
-        all_day=task.all_day,
+        task_id=task_id,
+        titulo=titulo,
+        tipo=tipo,
+        status=status,
+        all_day=all_day,
         local_day=local_day,
-        due_date=due_date,
-        due_at=due_at,
+        due_date=stored_date,
+        due_at=stored_instant,
     )
 
 
@@ -577,8 +563,16 @@ async def _upcoming_tasks(
     start = _local_instant(window_start, time.min, zone)
     end = _local_instant(window_end + timedelta(days=1), time.min, zone)
     rows = (
-        await db.scalars(
-            select(Task).where(
+        await db.execute(
+            select(
+                Task.id,
+                Task.titulo,
+                Task.tipo,
+                Task.status,
+                Task.all_day,
+                Task.due_date,
+                Task.due_at,
+            ).where(
                 Task.user_id == user_id,
                 Task.status.in_(sorted(ACTIVE_TASK_STATUSES)),
                 Task.date_status == "resolved",
@@ -599,8 +593,20 @@ async def _upcoming_tasks(
     ).all()
     items = [
         item
-        for task in rows
-        if (item := _task_item(task, zone)) is not None
+        for task_id, titulo, tipo, status, all_day, due_date, due_at in rows
+        if (
+            item := _task_item(
+                task_id=task_id,
+                titulo=titulo,
+                tipo=tipo,
+                status=status,
+                all_day=all_day,
+                due_date=due_date,
+                due_at=due_at,
+                zone=zone,
+            )
+        )
+        is not None
         and window_start <= item.local_day <= window_end
     ]
     return tuple(sorted(items, key=_task_sort_key))
@@ -645,17 +651,3 @@ async def build_digest_content(
         conflicts=conflicts.report,
     )
 
-
-def is_digest_type(type_: str) -> bool:
-    """True for the two scheduled digest types the materializer owns."""
-    return type_ in DIGEST_TYPES
-
-
-def due_digest_occurrences(
-    occurrences: Iterable[DigestOccurrence], *, now: datetime
-) -> tuple[DigestOccurrence, ...]:
-    """Filter a plan to the occurrences J4.2 may already claim (test/utility seam)."""
-    instant = _require_aware(now, field="now", code="clock_invalid")
-    return tuple(
-        occurrence for occurrence in occurrences if occurrence.scheduled_at <= instant
-    )

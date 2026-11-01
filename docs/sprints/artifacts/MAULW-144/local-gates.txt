@@ -1,0 +1,118 @@
+# J4.6 / MAULW-144 local gates
+
+Date (UTC): 2026-11-01
+Environment: Linux (Ubuntu 24.04), Python 3.12.3, uv 0.13.1, PostgreSQL 16.15,
+Redis 7.0.15. Deterministic tests only: no Riva, LLM, Google, Gmail, real class audio,
+credential or secret. `apps/web` is untouched.
+
+Base: `origin/develop@44c39ec` (merge of J4.4 / PR #155).
+
+## apps/api static
+
+```text
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 291 source files
+```
+
+## apps/api unit
+
+Raw sandbox environment (the two failures are the pre-existing bracketed-IPv6 `httpx` cases
+in `test_ingest_sink`/`test_llm`, unrelated to this diff):
+
+```text
+$ uv run pytest tests/unit -q
+2 failed, 1683 passed, 35 warnings
+
+FAILED tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured
+FAILED tests/unit/test_llm.py::test_shared_http_client_is_bounded_reused_and_closed
+```
+
+With `NO_PROXY`/`no_proxy` sanitized to `localhost,127.0.0.1,::1`:
+
+```text
+$ uv run pytest tests/unit -q
+1685 passed, 35 warnings
+```
+
+## J4.6 planner (unit)
+
+```text
+$ uv run pytest tests/unit/test_digests.py -q
+31 passed
+```
+
+Cases: the frozen 07:00/Sunday defaults; daily local date in Bogota and the UTC/Tokyo date
+crossing; configurable hour; strictly-next occurrence (today/tomorrow, this/next week);
+weekly weekday identity (a change inside the same week keeps the same dedupe key); both
+digests coexisting; DST spring-forward (02:30 -> 03:00 EDT / 07:00 UTC) and fall-back
+(01:30 at its first fold, 05:30 UTC); deterministic replanning; the opt-in gate; the
+canonical `dedupe_key`; and the closed validation surface (clock, timezone, HH:MM,
+weekday 0-6, digest type).
+
+## I-S4-JF-06 (PostgreSQL)
+
+```text
+$ uv run pytest tests/integration/test_digest_schedule.py -q
+14 passed
+```
+
+Cases: optional daily+weekly materialization at 07:00 local with the canonical keys and
+`occurrence_seq=0`; idempotent second tick and exactly one J4.2 claim; tomorrow's row armed
+after today's local hour; Gmail opt-in gate; disabled digests; configurable 09:30/Tokyo
+hour; pending `scheduled_at` recomputed after a time change; a cancelled digest reopened
+when the preference returns; stale pending daily periods cancelled instead of sent late;
+`sent` history never rewritten; a future weekly row follows a weekday change into the next
+period; the cross-tenant `maulwurf_jobs` role under RLS; and both content windows with
+upcoming tasks, the M5 `time_conflicts` pair and same-day `deadline_clashes`.
+
+## Integration regressions
+
+```text
+$ uv run pytest tests/integration/test_digest_schedule.py \
+    tests/integration/test_notification_scheduler.py \
+    tests/integration/test_reminders_schedule.py \
+    tests/integration/test_reminder_dst_schedule.py \
+    tests/integration/test_notifications_endpoints.py \
+    tests/integration/test_s4_notification_cancellation.py -q
+86 passed
+```
+
+Full API integration suite (same sanitized proxy):
+
+```text
+$ uv run pytest tests/integration -q
+798 passed, 833 warnings in 159.72s
+```
+
+## apps/ingest regression
+
+```text
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 83 source files
+
+$ uv run pytest -m "not integration and not provider and not load" -q \
+    --ignore=tests/test_synthetic_audio.py
+297 passed, 93 deselected, 2 warnings
+```
+
+`tests/test_synthetic_audio.py` is excluded because this sandbox has no `espeak-ng`; the
+other ingest unit cases are unaffected by this API-only change.
+
+## Documentation
+
+```text
+$ python3 scripts/docs/check_refs.py
+OK: 973 documented repository paths exist or are expected.
+```
+
+## Scope
+
+No migration, provider call, credential, secret, class audio or `apps/web` change. The
+Gmail render/send remains J4.1 and the protected end-to-end send remains J4.10; this ticket
+stops at the pending occurrence and the content seam J4.1 consumes.
