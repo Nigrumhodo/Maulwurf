@@ -280,6 +280,7 @@ async def claim_due_notifications(
 async def run_notification_scheduler(
     db: AsyncSession,
     *,
+    enabled: bool = False,
     now: datetime | None = None,
     holder: str | None = None,
     role: str = SCHEDULER_ROLE,
@@ -291,7 +292,13 @@ async def run_notification_scheduler(
 
     The caller owns the transaction. The cron commits through `session_scope`, which keeps
     the election row locked until the claim is durable.
+
+    Disabled by default (`MAULWURF_NOTIFICATION_SCHEDULER_ENABLED`): J4.1 owns the Gmail
+    consumer of `sending`, and claiming before it exists would expire every claim into a
+    false `delivery_unknown`. A disabled tick touches neither the election nor any row.
     """
+    if not enabled:
+        return SchedulerReport(active=False)
     instant = _require_instant(now or datetime.now(UTC))
     lease = await acquire_scheduler_lease(
         db,

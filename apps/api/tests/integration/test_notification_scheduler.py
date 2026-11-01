@@ -159,7 +159,9 @@ async def _run(
     now: datetime = NOW,
 ) -> SchedulerReport:
     async with factory() as db:
-        report = await run_notification_scheduler(db, now=now, holder=holder, role=role)
+        report = await run_notification_scheduler(
+            db, enabled=True, now=now, holder=holder, role=role
+        )
         await db.commit()
         return report
 
@@ -488,7 +490,7 @@ async def test_the_scheduler_claims_under_the_cross_tenant_jobs_role(
                 )
                 try:
                     report = await run_notification_scheduler(
-                        session, now=NOW, holder="host-a", role=role
+                        session, enabled=True, now=NOW, holder="host-a", role=role
                     )
                     await session.flush()
                 finally:

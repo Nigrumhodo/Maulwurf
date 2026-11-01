@@ -74,13 +74,22 @@ async def schedule_notifications(ctx: dict[str, Any]) -> None:
     elected role claims and the election is durable before the next tick. A failure is logged
     by type only; the next minute retries, and an expired delivery lease is closed as
     `delivery_unknown` instead of being retried automatically.
+
+    Disabled by default (`MAULWURF_NOTIFICATION_SCHEDULER_ENABLED=false`): J4.1 (Gmail) owns
+    the consumer of `sending`, and claiming before it is deployed would turn due rows into a
+    false, terminal `delivery_unknown` after the delivery lease expires. With the flag off
+    the cron returns before opening a session: it neither elects nor moves any row.
     """
     del ctx  # The cron needs no Redis; delivery is J4.1's job.
+    if not settings.notification_scheduler_enabled:
+        return
     token = bind_cross_tenant()
     try:
         try:
             async with session_scope() as db:
-                report = await run_notification_scheduler(db)
+                report = await run_notification_scheduler(
+                    db, enabled=settings.notification_scheduler_enabled
+                )
         except Exception as exc:
             # Only the type: an error message can carry a DSN or a row value.
             logger.warning("schedule_notifications.failed error=%s", type(exc).__name__)

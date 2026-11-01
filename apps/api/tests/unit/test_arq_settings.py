@@ -98,6 +98,7 @@ async def test_notification_scheduler_cron_survives_a_database_failure(
         yield
 
     monkeypatch.setattr(arq_app, "session_scope", broken_scope)
+    monkeypatch.setattr(arq_app.settings, "notification_scheduler_enabled", True)
 
     await schedule_notifications({})
 
@@ -122,11 +123,12 @@ async def test_notification_scheduler_cron_uses_the_cross_tenant_jobs_policy(
     async def scope() -> AsyncIterator[object]:
         yield object()
 
-    async def fake_run(db: object) -> SchedulerReport:
+    async def fake_run(db: object, *, enabled: bool) -> SchedulerReport:
         del db
-        events.append("run")
+        events.append(("run", enabled))
         return SchedulerReport(active=True, claimed=1)
 
+    monkeypatch.setattr(arq_app.settings, "notification_scheduler_enabled", True)
     monkeypatch.setattr(arq_app, "bind_cross_tenant", _bind)
     monkeypatch.setattr(arq_app, "reset_cross_tenant", _reset)
     monkeypatch.setattr(arq_app, "session_scope", scope)
@@ -134,7 +136,33 @@ async def test_notification_scheduler_cron_uses_the_cross_tenant_jobs_policy(
 
     await schedule_notifications({})
 
-    assert events == ["bind", "run", True]
+    assert events == ["bind", ("run", True), True]
+
+
+async def test_notification_scheduler_cron_is_a_no_op_while_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """J4.1 owns the consumer of `sending`; a disabled tick must not claim any row."""
+    events: list[str] = []
+
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[object]:
+        events.append("session")
+        yield object()
+
+    async def fake_run(db: object, *, enabled: bool) -> SchedulerReport:
+        del db, enabled
+        events.append("run")
+        return SchedulerReport(active=True, claimed=1)
+
+    monkeypatch.setattr(arq_app.settings, "notification_scheduler_enabled", False)
+    monkeypatch.setattr(arq_app, "bind_cross_tenant", lambda: events.append("bind"))
+    monkeypatch.setattr(arq_app, "session_scope", scope)
+    monkeypatch.setattr(arq_app, "run_notification_scheduler", fake_run)
+
+    await schedule_notifications({})
+
+    assert events == []
 
 
 def test_dispatch_cron_runs_every_minute_at_second_zero() -> None:

@@ -2,6 +2,9 @@
 
 import os
 from datetime import timedelta
+from typing import cast
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.scheduler_lease import (
     BATCH_SIZE,
@@ -11,6 +14,7 @@ from app.services.scheduler_lease import (
     SCHEDULER_ROLE,
     SchedulerReport,
     process_holder,
+    run_notification_scheduler,
 )
 
 
@@ -54,3 +58,11 @@ def test_an_inactive_report_carries_no_claim_counts() -> None:
     assert report.claimed == 0
     assert report.expired == 0
     assert report.lease is None
+
+
+async def test_a_disabled_scheduler_never_touches_the_database() -> None:
+    # The flag is the fail-closed gate before J4.1 exists: an inactive tick must not elect,
+    # expire or claim. `object()` is enough because no attribute may be read.
+    report = await run_notification_scheduler(cast(AsyncSession, object()))
+
+    assert report == SchedulerReport(active=False)

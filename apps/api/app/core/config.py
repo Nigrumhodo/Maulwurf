@@ -179,6 +179,10 @@ class Settings(BaseSettings):
     # with SET LOCAL ROLE before touching tenant rows; migrations keep the DSN owner.
     database_role: str = Field(default="maulwurf_app", pattern=r"^[a-z_][a-z0-9_]{0,62}$")
     redis_url: RedisDsn = cast(RedisDsn, "redis://localhost:6379/0")
+    # J4.2/J4.1: without a deployed Gmail consumer, claiming due rows would move them to
+    # `sending` only to expire them as a false `delivery_unknown` (terminal). The scheduler
+    # therefore starts disabled and must only be enabled once J4.1 consumes `sending`.
+    notification_scheduler_enabled: bool = False
 
     @property
     def allowed_origin(self) -> str:
