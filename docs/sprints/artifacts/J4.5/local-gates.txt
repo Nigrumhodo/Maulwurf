@@ -41,10 +41,10 @@ $ env -u no_proxy -u NO_PROXY uv run pytest \
     tests/integration/test_notification_delivery_unknown.py \
     tests/integration/test_notifications_endpoints.py \
     tests/integration/test_notification_scheduler.py -q
-60 passed
+61 passed
 ```
 
-The 10 new cases in `tests/integration/test_notification_delivery_unknown.py` prove:
+The 11 new cases in `tests/integration/test_notification_delivery_unknown.py` prove:
 
 - a lost response is terminal `delivery_unknown` (`response_lost`), the at-least-once
   retry is a `skipped` no-op and the sender is called once;
@@ -52,6 +52,8 @@ The 10 new cases in `tests/integration/test_notification_delivery_unknown.py` pr
 - a sender that exceeds the caller-supplied `sender_timeout` is cancelled by the settlement
   and ends `delivery_unknown` (`response_lost`), so a hung adapter cannot hold the row lock
   indefinitely;
+- when the delivery lease has less time left than the caller timeout, the settlement uses
+  the remaining lease as the effective bound and the call ends `delivery_unknown`;
 - an expired `sending` lease is closed as `delivery_unknown` (`lease_expired`) without
   calling the sender and never returns to `pending`;
 - a `CancelledError` is not swallowed: the row stays `sending` and the lease closes it as
@@ -66,7 +68,7 @@ The 10 new cases in `tests/integration/test_notification_delivery_unknown.py` pr
   attempts, `updated_at`), and the new occurrence can be delivered on its own.
 
 The same targeted run was repeated after the immutable `DeliveryRequest`, the enforced
-`sender_timeout` and the `CancelledError` case: **60 passed** on head `d5e6d91`.
+`sender_timeout`/lease bound and the `CancelledError` case: **61 passed** on head `d5e6d91`.
 
 ## Migration module (isolated run)
 
@@ -93,7 +95,7 @@ alone (above). This is the documented sibling-worktree race on one PostgreSQL cl
 a failure of this diff; CI uses isolated service containers.
 
 The DTO/timeout/cancellation follow-up (`d5e6d91`) only touches the new sender boundary and
-two new integration cases; the targeted suite is 60 passed on that head. Later commits are
+three new integration cases; the targeted suite is 61 passed on that head. Later commits are
 documentation only; Quality CI is green in all 17 checks on the PR head, including
 `integration (api)`. A post-restart repeat on the rebuilt local
 PostgreSQL (pgvector 0.6.0 instead of the earlier 0.8) reproduces the documented

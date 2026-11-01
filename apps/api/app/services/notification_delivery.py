@@ -30,7 +30,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -79,7 +79,8 @@ class NotificationSender(Protocol):
     the settlement treats it as uncertain and never retries it. The settlement applies the
     caller-provided ``sender_timeout``; the owner (J4.1) must configure it below the J4.2
     delivery lease, because `settle_delivery` holds the occurrence row lock while the call
-    runs and a hung call would hold that connection and lock.
+    runs and a hung call would hold that connection and lock. The adapter must not retry
+    internally: a retry is a manual action and would bypass the duplicate-risk warning.
     """
 
     async def send(self, request: DeliveryRequest) -> str: ...
@@ -113,7 +114,9 @@ async def settle_delivery(
     sender is invoked, because the previous attempt may already have reached Gmail. The
     caller supplies ``sender_timeout`` (no default: the operational bound is J4.1's budget,
     not a number invented here); a timeout is an ambiguous outcome and ends
-    `delivery_unknown`, never `failed` or a retry.
+    `delivery_unknown`, never `failed` or a retry. The effective bound is the earlier of
+    the caller timeout and the delivery lease remaining, so a slow adapter cannot keep the
+    row lock beyond the claim it is allowed to own.
     """
     if sender_timeout <= timedelta(0):
         raise ValueError("the sender timeout must be positive")
@@ -149,9 +152,22 @@ async def settle_delivery(
         scheduled_at=row.scheduled_at,
         attempts=row.attempts,
     )
+    # The lease is the ownership proof; the network call cannot outlive it. `lease_expired`
+    # above guarantees a non-NULL deadline in the future.
+    remaining = cast(datetime, row.lease_expires_at) - instant
+    effective_timeout = min(sender_timeout, remaining)
+    if effective_timeout <= timedelta(0):
+        expire_lease(row, now=instant)
+        await db.flush()
+        return DeliveryReport(
+            notification_id=notification_id,
+            outcome=DELIVERY_UNKNOWN,
+            status=row.status,
+            error_code=LEASE_EXPIRED,
+        )
     try:
         provider_message_id = await asyncio.wait_for(
-            sender.send(request), timeout=sender_timeout.total_seconds()
+            sender.send(request), timeout=effective_timeout.total_seconds()
         )
     except Exception as error:  # noqa: BLE001 - any sender failure is conservatively uncertain
         outcome, error_code = delivery_error_outcome(error)

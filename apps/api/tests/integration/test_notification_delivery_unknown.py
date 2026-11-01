@@ -330,6 +330,41 @@ async def test_a_sender_that_exceeds_its_timeout_is_uncertain(
     assert await _count(db_session, actor, status="pending") == 0
 
 
+async def test_the_effective_timeout_never_outlives_the_delivery_lease(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    row = await _store(
+        db_session,
+        _notification(
+            actor,
+            status="sending",
+            attempts=1,
+            lease_expires_at=NOW + timedelta(milliseconds=10),
+        ),
+    )
+    notification_id = row.id
+    # The caller allows 10 s and the sender succeeds after 50 ms, but the lease only has
+    # 10 ms left: the settlement must cut the call at the lease, not at the caller bound.
+    sender = StubSender("slow")
+
+    report = await settle_delivery(
+        db_session,
+        notification_id,
+        sender=sender,
+        sender_timeout=timedelta(seconds=10),
+        now=NOW,
+    )
+
+    stored = await db_session.get(Notification, notification_id)
+    assert stored is not None
+    assert report.outcome == "delivery_unknown"
+    assert report.error_code == "response_lost"
+    assert stored.status == "delivery_unknown"
+    assert stored.sent_at is None
+    assert sender.calls == [notification_id]
+
+
 async def test_only_a_proven_rejection_is_failed(
     db_session: AsyncSession,
 ) -> None:
