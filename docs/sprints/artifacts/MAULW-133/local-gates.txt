@@ -1,0 +1,10 @@
+A4.3 — local gate evidence (MAULW-133)
+Date: 2026-11-01 (UTC)
+Host: Linux sandbox, PostgreSQL 16.15 (localhost:5432), Redis 7.0.15
+Worktree: task/MAULW-133
+Scope: U-S4-AN-03 cancellation core, PostgreSQL persistence adapter, documentation.
+apps/web untouched; no route, migration, provider or Gmail call.
+
+Commands and results
+--------------------
+(Final capture is written after the local gates and the develop sync; see the PR body.)

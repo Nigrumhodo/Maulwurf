@@ -971,7 +971,12 @@ CREATE INDEX notifications_due ON notifications (status, scheduled_at) WHERE sta
 
 - Persistent dedupe `(user_id, type, task_id, due_version, occurrence)`; changing the due
   date or preferences cancels obsolete future occurrences; **never** a retrospective burst
-  when confirming late. Deleting a task cascades to its reminders (A4.1): an unlinked
+  when confirming late. A4.3 owns the rule: only `pending` rows are cancelled (a `sending`
+  row may already be leaving through Gmail, and `sent`/`failed`/`delivery_unknown` are
+  history); a new `due_version` retires the pending reminders of the previous generation of
+  **that** task, and a preference change retires the reminder/digest types no longer
+  enabled. A stale pending row whose instant already passed is cancelled too, so it can
+  never fire late. Deleting a task cascades to its reminders (A4.1): an unlinked
   reminder would be undeliverable and would also collide with another deleted task's
   occurrence under `NULLS NOT DISTINCT`.
 - DST: nonexistent time → next valid instant; repeated time → a single local occurrence.

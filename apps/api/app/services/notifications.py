@@ -321,7 +321,9 @@ def enabled_preference_types(
     The result is the complete set a preference-driven cancellation compares against: it
     includes both reminder families (timed and all-day) and both digest types, so a caller
     never has to decide which family a stored row belongs to. An offset without a frozen
-    type (for example ``12`` hours) enables nothing; it does not invent a new type.
+    type (for example ``12`` hours) enables nothing; it does not invent a new type. The Gmail
+    opt-in is a delivery gate owned by J4.1/J4.6, not a cancellation rule: opting out pauses
+    delivery without irreversibly cancelling a still-valid occurrence.
     """
     hours = _offset_set(reminder_offsets_hours, field="reminder_offsets_hours")
     days = _offset_set(reminder_allday_offsets_days, field="reminder_allday_offsets_days")

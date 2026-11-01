@@ -189,12 +189,13 @@ def test_a_generation_rule_never_cancels_a_task_less_digest() -> None:
     assert digest.status == "pending"
 
 
-def test_a_generation_rule_keeps_an_older_pending_reminder_its_task_does_not_own() -> None:
+def test_a_generation_rule_never_reaches_another_task() -> None:
     # The same due_version value is per task: checking one task must not sweep another.
     other = _row(task_id=OTHER_TASK, due_version=1)
     own = _row(task_id=TASK, due_version=1)
-    assert obsolete_pending([other, own], task_id=TASK, due_version=1) == ()
-    assert own.status == other.status == "pending"
+
+    assert cancel_obsolete([other, own], task_id=TASK, due_version=2) == (own,)
+    assert (other.status, own.status) == ("pending", "cancelled")
 
 
 # --- Preferences -----------------------------------------------------------------------
@@ -212,6 +213,20 @@ def test_disabling_a_threshold_cancels_only_its_pending_occurrences() -> None:
 
     assert cancelled == (t2,)
     assert _statuses([t48, t24, t2]) == ["pending", "pending", "cancelled"]
+
+
+def test_disabling_the_all_day_offsets_cancels_that_family_only() -> None:
+    t3d = _row(type="reminder_t3d")
+    t1d = _row(type="reminder_t1d")
+    t24 = _row(type="reminder_t24")
+
+    cancelled = cancel_obsolete(
+        [t3d, t1d, t24],
+        enabled_types=_enabled(reminder_allday_offsets_days=[]),
+    )
+
+    assert cancelled == (t3d, t1d)
+    assert _statuses([t3d, t1d, t24]) == ["cancelled", "cancelled", "pending"]
 
 
 def test_disabling_one_digest_keeps_the_other_and_never_touches_a_test_send() -> None:
