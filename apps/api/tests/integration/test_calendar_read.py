@@ -42,7 +42,7 @@ from app.services.calendar_sync import (
     sync_calendar_window,
 )
 from app.services.google_calendar import GoogleCalendarService
-from tests.integration.actors import Actor, make_actor
+from tests.integration.actors import Actor, make_actor, make_task
 
 pytestmark = pytest.mark.integration
 
@@ -345,6 +345,7 @@ async def test_rows_before_the_window_are_pruned_only_for_the_republished_calend
             )
         )
     # A task-linked row belongs to the write path, not to the refresh.
+    task = await make_task(db_session, actor)
     db_session.add(
         CalendarEvent(
             user_id=actor.user_id,
@@ -354,7 +355,7 @@ async def test_rows_before_the_window_are_pruned_only_for_the_republished_calend
             start_at=old,
             end_at=old + timedelta(hours=1),
             last_synced_at=old,
-            task_id=uuid.uuid4(),
+            task_id=task.id,
         )
     )
     await db_session.flush()
@@ -394,7 +395,8 @@ async def test_a_deselected_calendar_stops_being_returned_and_is_pruned_on_refre
     )
     await db_session.refresh(settings_row)
     # A linked row of the deselected calendar belongs to the write path: it must survive.
-    task_id = uuid.uuid4()
+    task = await make_task(db_session, actor)
+    task_id = task.id
     db_session.add(
         CalendarEvent(
             user_id=actor.user_id,
@@ -453,7 +455,8 @@ async def test_a_task_linked_row_inside_the_window_keeps_its_link_across_refresh
     await _settings(db_session, actor)
     now = datetime.now(UTC)
     start = now + timedelta(days=2)
-    task_id = uuid.uuid4()
+    task = await make_task(db_session, actor)
+    task_id = task.id
     db_session.add(
         CalendarEvent(
             user_id=actor.user_id,
@@ -486,7 +489,8 @@ async def test_a_task_linked_row_inside_the_window_survives_a_refresh_without_it
     await _settings(db_session, actor)
     now = datetime.now(UTC)
     start = now + timedelta(days=2)
-    task_id = uuid.uuid4()
+    task = await make_task(db_session, actor)
+    task_id = task.id
     db_session.add(
         CalendarEvent(
             user_id=actor.user_id,
@@ -542,7 +546,8 @@ async def test_a_cancelled_task_linked_event_is_marked_cancelled_and_keeps_the_l
     await _settings(db_session, actor)
     now = datetime.now(UTC)
     start = now + timedelta(days=2)
-    task_id = uuid.uuid4()
+    task = await make_task(db_session, actor)
+    task_id = task.id
     db_session.add(
         CalendarEvent(
             user_id=actor.user_id,
