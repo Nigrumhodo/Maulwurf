@@ -10,6 +10,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from functools import partial
 
 import httpx
 import pytest
@@ -33,9 +34,11 @@ from app.services.provider_budget import collect_budget_samples, collect_usage
 
 pytestmark = pytest.mark.integration
 
-NOW = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
-IN_MONTH = datetime(2026, 11, 10, 9, 0, tzinfo=UTC)
-LAST_MONTH = datetime(2026, 10, 10, 9, 0, tzinfo=UTC)
+# A month no other test uses: the usage query is deliberately cross-tenant, so a shared
+# test database with committed rows from another module must not leak into the assertion.
+NOW = datetime(2099, 11, 15, 12, 0, tzinfo=UTC)
+IN_MONTH = datetime(2099, 11, 10, 9, 0, tzinfo=UTC)
+LAST_MONTH = datetime(2099, 10, 10, 9, 0, tzinfo=UTC)
 
 
 async def _user(db: AsyncSession) -> User:
@@ -224,6 +227,11 @@ async def test_internal_metrics_endpoint_includes_budget_samples(
         yield db_session
 
     monkeypatch.setattr(internal_metrics, "session_scope", _over_test_transaction)
+    # The endpoint uses the real clock; inject the seeded month so the assertion does not
+    # depend on when the suite runs.
+    monkeypatch.setattr(
+        internal_metrics, "collect_budget_samples", partial(collect_budget_samples, now=NOW)
+    )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/internal/metrics")
