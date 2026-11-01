@@ -47,6 +47,14 @@ before and after the audio path, so the delta is the CPU actually consumed by th
 `ffprobe`/`ffmpeg` processes it waited for. The Python worker CPU, the provider and the
 network are excluded by design.
 
+Worker peak RSS comes from `VmHWM` in `/proc/self/status`. Some sandboxes (gVisor, for
+example) hide that field, so the harness falls back to
+`getrusage(RUSAGE_SELF).ru_maxrss`, the same kernel peak expressed in KiB on Linux. If
+neither source exists, the RAM term and the total stay `NO VERIFICADO` and the `load` case
+skips with that reason instead of failing or publishing an invented zero. The fallback and
+the skip were validated with a test-only shim that hides `/proc/self/status`
+([capture](../sprints/artifacts/S4.5/peak-rss-fallback.txt)).
+
 Definitions used in the tables:
 
 ```
@@ -222,6 +230,9 @@ limits.
 - RAM GiB-hours multiply the peak working set by the local audio-path wall time. They are
   a lower bound: provider waiting, idle reservation, page cache and post-processing are
   excluded.
+- Peak RSS prefers `VmHWM` and falls back to `ru_maxrss` when a sandbox hides the former;
+  without either source RAM is `NO VERIFICADO`, never zero. `ru_maxrss` is a per-process
+  peak, so it still excludes the ffmpeg child and the Riva SDK buffer.
 - The 300 s class-hour projection is linear and ignores silence, questions and non-speech
   audio; the 60 s run shows how fixed overhead distorts short clips.
 - Two slots of 300 s are not a 1 h/200 MiB class under compose. S4.3 owns the G1 load with

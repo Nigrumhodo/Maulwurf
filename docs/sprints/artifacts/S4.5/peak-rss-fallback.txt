@@ -1,0 +1,127 @@
+S4.5 — peak-RSS portability validation (Hoplite review fix1), 2026-11-01T02:46:58Z
+Host: Linux 7.0.0-39-generic x86_64 · Python 3.12.3 · ffmpeg 8.1.2 · espeak-ng 1.51
+
+Problem: the S4.5 load case measured worker peak RSS only from VmHWM in
+/proc/self/status. gVisor hides VmHWM, so the value was None and the test failed instead
+of reporting RAM as NO VERIFICADO. Fix: process_hwm_bytes() falls back to
+getrusage(RUSAGE_SELF).ru_maxrss (the same kernel peak, in KiB on Linux), and the load
+case skips with an explicit reason when neither source exists.
+
+Validation method: a test-only LD_PRELOAD shim, never committed, makes
+/proc/self/status unreadable (open/open64/openat/fopen return ENOENT). With
+MAULWURF_TEST_HIDE_MAXRSS=1 it also zeroes getrusage(RUSAGE_SELF).ru_maxrss. This
+simulates the gVisor condition; it was not run on a real gVisor host.
+
+Shim source (peak_rss_shim.c):
+
+    #define _GNU_SOURCE
+    #include <dlfcn.h>
+    #include <errno.h>
+    #include <fcntl.h>
+    #include <stdarg.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <sys/resource.h>
+    #include <sys/stat.h>
+    #include <sys/types.h>
+
+    static int is_target(const char *path) {
+        return path != NULL && strcmp(path, "/proc/self/status") == 0;
+    }
+
+    int open(const char *path, int flags, ...) {
+        static int (*real)(const char *, int, ...) = NULL;
+        if (!real) real = (int (*)(const char *, int, ...))dlsym(RTLD_NEXT, "open");
+        if (is_target(path)) { errno = ENOENT; return -1; }
+        mode_t mode = 0;
+        if (flags & O_CREAT) {
+            va_list ap; va_start(ap, flags); mode = va_arg(ap, mode_t); va_end(ap);
+        }
+        return real(path, flags, mode);
+    }
+
+    int open64(const char *path, int flags, ...) {
+        static int (*real)(const char *, int, ...) = NULL;
+        if (!real) real = (int (*)(const char *, int, ...))dlsym(RTLD_NEXT, "open64");
+        if (is_target(path)) { errno = ENOENT; return -1; }
+        mode_t mode = 0;
+        if (flags & O_CREAT) {
+            va_list ap; va_start(ap, flags); mode = va_arg(ap, mode_t); va_end(ap);
+        }
+        return real(path, flags, mode);
+    }
+
+    int openat(int dirfd, const char *path, int flags, ...) {
+        static int (*real)(int, const char *, int, ...) = NULL;
+        if (!real) real = (int (*)(int, const char *, int, ...))dlsym(RTLD_NEXT, "openat");
+        if (is_target(path)) { errno = ENOENT; return -1; }
+        mode_t mode = 0;
+        if (flags & O_CREAT) {
+            va_list ap; va_start(ap, flags); mode = va_arg(ap, mode_t); va_end(ap);
+        }
+        return real(dirfd, path, flags, mode);
+    }
+
+    FILE *fopen(const char *path, const char *mode) {
+        static FILE *(*real)(const char *, const char *) = NULL;
+        if (!real) real = (FILE *(*)(const char *, const char *))dlsym(RTLD_NEXT, "fopen");
+        if (is_target(path)) { errno = ENOENT; return NULL; }
+        return real(path, mode);
+    }
+
+    int getrusage(int who, struct rusage *usage) {
+        static int (*real)(int, struct rusage *) = NULL;
+        if (!real) real = (int (*)(int, struct rusage *))dlsym(RTLD_NEXT, "getrusage");
+        if (who == RUSAGE_SELF && getenv("MAULWURF_TEST_HIDE_MAXRSS") != NULL) {
+            memset(usage, 0, sizeof(*usage));
+            return 0;
+        }
+        return real(who, usage);
+    }
+
+Build and probe:
+    $ gcc -shared -fPIC -O2 -o /tmp/peak_rss_shim.so peak_rss_shim.c -ldl
+    $ cd apps/ingest && LD_PRELOAD=/tmp/peak_rss_shim.so uv run python - <<'PY'
+    ... load scripts/load/asr_cost.py and print Path("/proc/self/status").read_text()
+    ... plus self_maxrss_bytes() and process_hwm_bytes()
+    PY
+
+Case A — VmHWM hidden, ru_maxrss available (the gVisor shape):
+    status read: FileNotFoundError
+    self_maxrss_bytes: 33792000
+    process_hwm_bytes: 33792000          # fallback used, not None and not zero
+
+    $ LD_PRELOAD=... uv run pytest tests/test_cost_table.py -q -m load
+    1 passed, 15 deselected in 2.29s
+
+    $ LD_PRELOAD=... uv run python ../../scripts/load/cost_table.py --slots 1 --clip-seconds 5
+    S4.5 real cost per class hour (basis for C-S4-SG-04)
+    Load: 1 concurrent slot(s), 5.0 s synthetic clip, fragment cap 30 s, overlap 0.25 s
+    Measured: ASR 60.000 effective minutes/class-hour; ffmpeg CPU 183.231 s/class-hour
+    (0.565 cores); peak working set 35.45 MiB; wall 324.534 s/class-hour; RAM
+    0.003121103 GiB-hours/class-hour
+    Cleanup verified: yes; no Riva call, no key, no audio kept
+    ... rates stay NO VERIFICADO (no rate was supplied)
+
+Case B — neither source available:
+    $ LD_PRELOAD=... MAULWURF_TEST_HIDE_MAXRSS=1 uv run python ... (same probe)
+    status read: FileNotFoundError
+    self_maxrss_bytes: None
+    process_hwm_bytes: None
+
+    $ LD_PRELOAD=... MAULWURF_TEST_HIDE_MAXRSS=1 uv run pytest tests/test_cost_table.py -q -m load -rs
+    SKIPPED [1] tests/test_cost_table.py:308: peak RSS unavailable: neither
+    /proc/self/status VmHWM nor getrusage(RUSAGE_SELF).ru_maxrss reports a peak
+    1 skipped, 15 deselected in 0.45s
+
+Case C — the normal host (VmHWM present), regression after the change:
+    $ cd apps/ingest && uv run pytest tests/test_asr_cost.py -q -k peak_rss
+    3 passed, 18 deselected in 0.38s
+    $ uv run pytest tests/test_asr_cost.py tests/test_cost_table.py -q -m 'not load'
+    35 passed, 2 deselected in 0.53s
+
+Conclusion: VmHWM remains the primary source; ru_maxrss is used only when VmHWM is
+unavailable, and the RAM term stays NO VERIFICADO with an explicit skip when neither
+exists. The load case never fails because of a missing kernel field and never publishes
+an invented zero. No repository file is written by the shim; it is validation-only.

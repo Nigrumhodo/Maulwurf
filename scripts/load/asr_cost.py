@@ -630,6 +630,9 @@ def _limitations() -> list[str]:
         "not provider latency, provider RAM or ASR quality.",
         "Worker RSS excludes the ffmpeg child peak (reported separately) and any Riva SDK "
         "buffer; it is not a full slot budget.",
+        "Worker peak RSS prefers /proc/self/status VmHWM and falls back to "
+        "getrusage(RUSAGE_SELF).ru_maxrss when a sandbox hides it; with neither source "
+        "the RAM term stays NO VERIFICADO and the load case skips instead of reporting 0.",
         "ffmpeg CPU is the user+system time of the ffprobe/ffmpeg children decoded from the "
         "host's RUSAGE_CHILDREN; provider CPU, network and wall-time contention are not "
         "included.",
@@ -741,8 +744,30 @@ def process_rss_bytes() -> int | None:
 
 
 def process_hwm_bytes() -> int | None:
-    """Peak resident set size from ``VmHWM``; ``None`` when unavailable."""
-    return _status_kib("VmHWM")
+    """Peak resident set size in bytes, or ``None`` when no source is available.
+
+    ``VmHWM`` in ``/proc/self/status`` is the primary source. Some sandboxes (gVisor,
+    for example) hide that field, so fall back to ``ru_maxrss`` from
+    ``getrusage(RUSAGE_SELF)``, which is the same kernel peak expressed in KiB on Linux.
+    A missing peak stays unknown instead of becoming a fabricated value.
+    """
+    vm_hwm = _status_kib("VmHWM")
+    if vm_hwm is not None:
+        return vm_hwm
+    return self_maxrss_bytes()
+
+
+def self_maxrss_bytes() -> int | None:
+    """Peak RSS from ``getrusage(RUSAGE_SELF)``; Linux reports KiB, else ``None``."""
+    if sys.platform != "linux":
+        return None
+    import resource
+
+    try:
+        value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    except (OSError, ValueError):
+        return None
+    return value * 1024 if value > 0 else None
 
 
 def _status_kib(name: str) -> int | None:

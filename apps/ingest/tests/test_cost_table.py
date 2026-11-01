@@ -303,7 +303,12 @@ def test_the_real_audio_path_produces_a_reproducible_cost_table(
     harness: tuple[ModuleType, ModuleType],
 ) -> None:
     """Real ffprobe/ffmpeg path with a stub transcriber; no Riva and no key."""
-    _, cost = harness
+    asr, cost = harness
+    if asr.process_hwm_bytes() is None:
+        pytest.skip(
+            "peak RSS unavailable: neither /proc/self/status VmHWM nor "
+            "getrusage(RUSAGE_SELF).ru_maxrss reports a peak"
+        )
     table = cost.run_cost_table(slots=1, clip_seconds=5.0, worker_timeout_s=120.0)
 
     assert table.slots == 1

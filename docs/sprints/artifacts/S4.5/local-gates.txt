@@ -48,3 +48,50 @@ OK: 868 documented repository paths exist or are expected.
 
 Note: no Riva/LLM/Google call, no PostgreSQL/Redis requirement for the S4.5 harness, no
 real class audio, and no `apps/web` change.
+
+---
+
+S4.5 — review fix1 local gates (peak-RSS portability + claim status), 2026-11-01T02:52Z
+Host: Linux 7.0.0-39-generic x86_64 · Python 3.12.3 · ffmpeg 8.1.2 · espeak-ng 1.51
+
+Scope of this pass: `scripts/load/asr_cost.py` (peak-RSS source), its tests,
+`apps/ingest/tests/test_cost_table.py` (explicit skip), and docs. `apps/api` is untouched,
+so the API capture above remains the latest for that app.
+
+$ cd apps/ingest && uv run ruff check .
+All checks passed!
+
+$ cd apps/ingest && uv run mypy .
+Success: no issues found in 83 source files
+
+# apps/ingest has no tests/unit directory; this is the equivalent unit/non-integration run.
+$ cd apps/ingest && uv run pytest tests -q -m 'not integration and not provider and not load'
+303 passed, 93 deselected, 2 warnings
+
+$ cd apps/ingest && uv run pytest tests/test_asr_cost.py -q -k peak_rss
+3 passed, 18 deselected
+
+$ cd apps/ingest && uv run pytest tests/test_asr_cost.py tests/test_cost_table.py -q -m 'not load'
+35 passed, 2 deselected
+
+$ cd apps/ingest && uv run pytest tests/test_asr_cost.py tests/test_cost_table.py -q -m load
+2 passed, 35 deselected
+
+# Fallback validation in a process where /proc/self/status is unreadable (gVisor shape);
+# test-only LD_PRELOAD shim, never committed, source in peak-rss-fallback.txt.
+$ cd apps/ingest && LD_PRELOAD=/tmp/peak_rss_shim.so uv run pytest tests/test_cost_table.py -q -m load
+1 passed, 15 deselected
+
+# Neither source: /proc/self/status hidden and ru_maxrss zeroed.
+$ cd apps/ingest && LD_PRELOAD=/tmp/peak_rss_shim.so MAULWURF_TEST_HIDE_MAXRSS=1 \
+    uv run pytest tests/test_cost_table.py -q -m load -rs
+SKIPPED [1] tests/test_cost_table.py:308: peak RSS unavailable: neither
+/proc/self/status VmHWM nor getrusage(RUSAGE_SELF).ru_maxrss reports a peak
+1 skipped, 15 deselected
+
+$ python3 scripts/docs/check_refs.py
+OK: 870 documented repository paths exist or are expected.
+
+Note: no Riva/LLM/Google call, no real class audio, no PostgreSQL/Redis requirement for
+this harness and no `apps/web` change.
+

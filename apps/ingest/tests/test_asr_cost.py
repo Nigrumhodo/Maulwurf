@@ -245,6 +245,46 @@ def test_cli_rejects_an_out_of_range_slot_count(capsys: pytest.CaptureFixture[st
     assert "between 1 and" in capsys.readouterr().err
 
 
+def test_peak_rss_falls_back_to_self_maxrss_without_vmhwm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _load()
+    expected = harness.self_maxrss_bytes()
+    if expected is None:
+        pytest.skip("this host exposes neither VmHWM nor ru_maxrss")
+    monkeypatch.setattr(harness, "_status_kib", lambda _name: None)
+
+    measured = harness.process_hwm_bytes()
+
+    assert measured is not None
+    assert measured >= expected
+
+
+def test_peak_rss_prefers_vmhwm_over_self_maxrss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _load()
+    vm_hwm_bytes = 4 * 1024 * 1024
+    monkeypatch.setattr(
+        harness,
+        "_status_kib",
+        lambda name: vm_hwm_bytes if name == "VmHWM" else None,
+    )
+    monkeypatch.setattr(harness, "self_maxrss_bytes", lambda: 10)
+
+    assert harness.process_hwm_bytes() == vm_hwm_bytes
+
+
+def test_peak_rss_stays_unknown_without_either_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _load()
+    monkeypatch.setattr(harness, "_status_kib", lambda _name: None)
+    monkeypatch.setattr(harness, "self_maxrss_bytes", lambda: None)
+
+    assert harness.process_hwm_bytes() is None
+
+
 @pytest.mark.load
 def test_concurrent_audio_path_measures_and_cleans_up() -> None:
     """Real ffmpeg/ffprobe path with the stub transcriber; no Riva and no key."""
