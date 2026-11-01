@@ -1,0 +1,103 @@
+A4.6 — local gate evidence (MAULW-136)
+Date: 2026-11-01 (UTC)
+Host: Linux sandbox, PostgreSQL 16.15 (localhost:5432), pgvector 0.8.0, Redis 7.0.15
+Worktree: /home/hatch/workspace/repos/mwt-136, branch task/MAULW-136 (from develop
+2d4bc2d, after A4.4 #145 and J4.2 #151)
+Scope: structural `Cache-Control: no-store`, fixed-window auth/consent limits, Retry-After
+on every active limit, ownership re-verified on API/SSE/jobs. No migration, provider call,
+audio, credential or apps/web change.
+
+Environment note: the sandbox restarted during the work and reverted PostgreSQL to the
+system pgvector 0.6.0 package, which reproduces the documented 37 search/chat/G4 failures
+(the tests need `hnsw.iterative_scan` from >= 0.8). pgvector 0.8.0 was rebuilt from the
+upstream `v0.8.0` tag and installed locally before the final runs; no repository file or
+test was changed to hide an environment failure. The local `maulwurf` role password and
+SUPERUSER (needed by `CREATE EXTENSION vector` in the test databases) were restored with
+sandbox-only SQL.
+
+Commands and results
+--------------------
+1. cd apps/api && uv run ruff check .
+   -> All checks passed!
+
+2. cd apps/api && uv run mypy .
+   -> Success: no issues found in 288 source files
+
+3. cd apps/api && uv run pytest tests/unit -q
+   -> 2 failed, 1596 passed, 35 warnings in 24.20s
+   The two failures are the pre-existing bracketed-IPv6 NO_PROXY parsing failures also
+   recorded for A3.8/A4.1/S4.5:
+     tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured
+     tests/unit/test_llm.py::test_shared_http_client_is_bounded_reused_and_closed
+
+4. cd apps/api && NO_PROXY=...(bracketed entries removed) no_proxy=... \
+       uv run pytest tests/unit -q
+   -> 1598 passed, 35 warnings in 20.87s
+   Includes the 16 new A4.6 cases:
+     tests/unit/test_limits.py          10 passed
+     tests/unit/test_cache_control.py    6 passed
+   plus the two new outage-header assertions in test_chat_stream_limit.py and
+   test_search_quota.py.
+
+5. cd apps/api && uv run pytest tests/integration/test_hardening.py -q
+   -> 10 passed, 24 warnings. I-S4-AN-06:
+     test_private_reads_and_error_envelopes_forbid_caching
+     test_progress_sse_is_no_store_and_refuses_a_foreign_class
+     test_chat_third_concurrent_stream_is_429_with_retry_after
+     test_upload_quota_is_429_with_retry_after
+     test_search_quota_is_429_with_retry_after
+     test_auth_start_and_consent_are_429_with_retry_after_when_configured
+     test_auth_limit_is_per_peer_address
+     test_limiter_outage_is_a_typed_503_with_retry_after
+     test_ownership_is_reverified_by_the_index_job
+     test_the_calendar_cooldown_is_documented_and_has_a_retry_hint
+
+6. cd apps/api && NO_PROXY=...(bracketed entries removed) no_proxy=... \
+       uv run pytest -m integration -q
+   -> 1 failed, 776 passed, 1599 deselected, 855 warnings in 157.09s
+   The only failure is the shared-host role race already documented for A4.2:
+     test_migrations.py::test_calendar_task_link_revision_rejects_blank_event_identity
+     asyncpg.exceptions.InternalServerError: tuple concurrently updated (from a parallel
+     `ALTER ROLE "maulwurf_app"` executed by another agent session on the same cluster).
+   Re-run in isolation:
+     uv run pytest "tests/integration/test_migrations.py::test_calendar_task_link_revision_rejects_blank_event_identity" -q
+     -> 9 passed
+     uv run pytest tests/integration/test_migrations.py -q
+     -> 30 passed
+   A raw (non-sanitized) full run reproduced the other known environment class: 18
+   `test_ingest_reception.py` failures from httpx parsing the bracketed `NO_PROXY` entries;
+   there is no product failure in the diff.
+
+7. cd apps/ingest && uv run ruff check . -> All checks passed!
+   uv run mypy . -> Success: no issues found in 83 source files
+   uv run pytest tests -m "not integration and not provider and not load" \
+       -q --ignore=tests/test_synthetic_audio.py
+   -> 297 passed, 93 deselected
+   (apps/ingest is untouched; the ignored synthetic-audio suite needs espeak-ng, absent
+   in this sandbox and installed by CI.)
+
+8. python3 scripts/docs/check_refs.py
+   -> OK: 957 documented repository paths exist or are expected.
+
+9. git diff --check
+   -> no whitespace errors.
+
+What the new evidence proves
+----------------------------
+- `NoStoreMiddleware` rewrites the header on every HTTP response, including a route that
+  tries to set `Cache-Control: public`, redirects, framework 404/405 and rate-limit
+  rejections; `_response` repeats it for the unhandled 500 built outside the user
+  middleware. The progress SSE is no-store and foreign ids answer 404 before streaming.
+- The fixed-window limiter allows exactly `limit` requests in a window and rejects the next
+  with `429 rate_limited`, `Retry-After` and `{limit, window_seconds, scope}`; identities,
+  scopes and windows are independent; a Redis failure answers `503 capacity_unavailable`
+  with `Retry-After` without leaking the identity.
+- The auth limiter is keyed by a SHA-256 of the peer address (no raw IP in Redis) and the
+  consent limiter by the authenticated user; an unset limit returns before touching Redis.
+  Both are documented as configuration because D4/D5 publish no number.
+- Chat (two-stream M7), search (provisional 30/min M6/D5), upload (A2.3/A2.14) and the
+  Calendar cooldown (M5) are the documented active limits; every rejection carries
+  `Retry-After` and `no-store`.
+- `index_job.revalidate` returns no owner for a tombstoned class or a revoked user, so a
+  queued job cannot index a deleted/foreign resource.
+- `apps/web` is untouched and no secret, audio or provider credential was handled.
