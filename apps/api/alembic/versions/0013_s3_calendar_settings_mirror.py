@@ -60,63 +60,75 @@ EVENT_CHECKS = (
 
 
 def _normalize_legacy_rows() -> None:
-    """Make existing rows satisfy the new CHECKs without inventing coverage."""
-    op.execute(
-        """
-        UPDATE calendar_events
-        SET task_id = NULL, updated_at = now()
-        WHERE task_id IS NOT NULL
-          AND NOT EXISTS (
-              SELECT 1 FROM tasks
-              WHERE tasks.user_id = calendar_events.user_id
-                AND tasks.id = calendar_events.task_id
-          )
-        """
-    )
-    op.execute("UPDATE calendar_events SET etag = NULL WHERE etag = ''")
-    op.execute(
-        """
-        UPDATE settings
-        SET calendar_write_calendar_id = NULL
-        WHERE calendar_write_calendar_id IS NOT NULL
-          AND btrim(calendar_write_calendar_id) = ''
-        """
-    )
-    op.execute(
-        """
-        UPDATE settings
-        SET calendar_read_calendar_ids =
-                array_remove(array_remove(calendar_read_calendar_ids, NULL), ''),
-            calendar_coverage_calendar_ids =
-                array_remove(array_remove(calendar_coverage_calendar_ids, NULL), '')
-        WHERE array_position(calendar_read_calendar_ids, NULL) IS NOT NULL
-           OR array_position(calendar_read_calendar_ids, '') IS NOT NULL
-           OR array_position(calendar_coverage_calendar_ids, NULL) IS NOT NULL
-           OR array_position(calendar_coverage_calendar_ids, '') IS NOT NULL
-        """
-    )
-    # An incomplete or inverted coverage window cannot be trusted: reporting it as covered
-    # would present a partial mirror as complete. Reset it to "never synced".
-    op.execute(
-        """
-        UPDATE settings
-        SET calendar_coverage_from = NULL,
-            calendar_coverage_to = NULL,
-            calendar_coverage_calendar_ids = '{}',
-            calendar_last_synced_at = NULL
-        WHERE NOT (
-            (calendar_coverage_from IS NULL
-             AND calendar_coverage_to IS NULL
-             AND cardinality(calendar_coverage_calendar_ids) = 0
-             AND calendar_last_synced_at IS NULL)
-            OR (calendar_coverage_from IS NOT NULL
-                AND calendar_coverage_to IS NOT NULL
-                AND calendar_coverage_from < calendar_coverage_to
-                AND cardinality(calendar_coverage_calendar_ids) > 0
-                AND calendar_last_synced_at IS NOT NULL)
+    """Make existing rows satisfy the new CHECKs without inventing coverage.
+
+    The tables force RLS for the runtime roles, which also binds a non-superuser owner.
+    The migration temporarily drops only FORCE (the ACCESS EXCLUSIVE lock keeps the
+    transaction private) so the cleanup can see every tenant's row; the outer transaction
+    restores it before any new CHECK or FK is validated.
+    """
+    for table in ("calendar_events", "settings"):
+        op.execute(f'ALTER TABLE "{table}" NO FORCE ROW LEVEL SECURITY')
+    try:
+        op.execute(
+            """
+            UPDATE calendar_events
+            SET task_id = NULL, updated_at = now()
+            WHERE task_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM tasks
+                  WHERE tasks.user_id = calendar_events.user_id
+                    AND tasks.id = calendar_events.task_id
+              )
+            """
         )
-        """
-    )
+        op.execute("UPDATE calendar_events SET etag = NULL WHERE etag = ''")
+        op.execute(
+            """
+            UPDATE settings
+            SET calendar_write_calendar_id = NULL
+            WHERE calendar_write_calendar_id IS NOT NULL
+              AND btrim(calendar_write_calendar_id) = ''
+            """
+        )
+        op.execute(
+            """
+            UPDATE settings
+            SET calendar_read_calendar_ids =
+                    array_remove(array_remove(calendar_read_calendar_ids, NULL), ''),
+                calendar_coverage_calendar_ids =
+                    array_remove(array_remove(calendar_coverage_calendar_ids, NULL), '')
+            WHERE array_position(calendar_read_calendar_ids, NULL) IS NOT NULL
+               OR array_position(calendar_read_calendar_ids, '') IS NOT NULL
+               OR array_position(calendar_coverage_calendar_ids, NULL) IS NOT NULL
+               OR array_position(calendar_coverage_calendar_ids, '') IS NOT NULL
+            """
+        )
+        # An incomplete or inverted coverage window cannot be trusted: reporting it as
+        # covered would present a partial mirror as complete. Reset it to "never synced".
+        op.execute(
+            """
+            UPDATE settings
+            SET calendar_coverage_from = NULL,
+                calendar_coverage_to = NULL,
+                calendar_coverage_calendar_ids = '{}',
+                calendar_last_synced_at = NULL
+            WHERE NOT (
+                (calendar_coverage_from IS NULL
+                 AND calendar_coverage_to IS NULL
+                 AND cardinality(calendar_coverage_calendar_ids) = 0
+                 AND calendar_last_synced_at IS NULL)
+                OR (calendar_coverage_from IS NOT NULL
+                    AND calendar_coverage_to IS NOT NULL
+                    AND calendar_coverage_from < calendar_coverage_to
+                    AND cardinality(calendar_coverage_calendar_ids) > 0
+                    AND calendar_last_synced_at IS NOT NULL)
+            )
+            """
+        )
+    finally:
+        for table in ("calendar_events", "settings"):
+            op.execute(f'ALTER TABLE "{table}" FORCE ROW LEVEL SECURITY')
 
 
 def _add_settings_checks() -> None:

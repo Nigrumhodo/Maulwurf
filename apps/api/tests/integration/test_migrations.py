@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from collections.abc import Iterator
 from typing import Any
 
@@ -508,6 +509,88 @@ def test_calendar_task_link_revision_round_trips(empty_schema: str) -> None:
     assert "calendar_events_by_task" not in indexes
 
     command.upgrade(cfg, "head")
+
+
+def test_calendar_task_link_revision_normalizes_legacy_rows(empty_schema: str) -> None:
+    """A3.8 keeps rows that predate the FK/CHECKs loadable instead of failing the upgrade."""
+    cfg = alembic_config(empty_schema)
+    command.upgrade(cfg, "0012")
+
+    async def seed() -> tuple[uuid.UUID, uuid.UUID]:
+        engine = create_async_engine(empty_schema)
+        async with engine.begin() as conn:
+            user_id, event_id = uuid.uuid4(), uuid.uuid4()
+            await conn.execute(
+                text(
+                    "INSERT INTO users (id, google_sub, email) "
+                    "VALUES (:id, :google_sub, :email)"
+                ),
+                {
+                    "id": user_id,
+                    "google_sub": f"sub-{user_id}",
+                    "email": f"{user_id.hex[:8]}@example.test",
+                },
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO calendar_events "
+                    "(id, user_id, calendar_id, event_id, title, start_at, end_at, "
+                    "task_id, etag, last_synced_at) "
+                    "VALUES (:id, :user_id, 'primary', 'orphan', 'Orphan', now(), "
+                    "now() + interval '1 hour', :task_id, '', now())"
+                ),
+                {"id": event_id, "user_id": user_id, "task_id": uuid.uuid4()},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO settings "
+                    "(user_id, calendar_write_calendar_id, calendar_read_calendar_ids, "
+                    "calendar_last_synced_at, calendar_coverage_from, calendar_coverage_to, "
+                    "calendar_coverage_calendar_ids) "
+                    "VALUES (:user_id, '  ', ARRAY['primary', NULL, '']::text[], now(), "
+                    "now() - interval '1 day', now(), '{}'::text[])"
+                ),
+                {"user_id": user_id},
+            )
+        await engine.dispose()
+        return user_id, event_id
+
+    user_id, event_id = asyncio.run(seed())
+    command.upgrade(cfg, "head")
+
+    async def read() -> tuple[Any, Any]:
+        engine = create_async_engine(empty_schema)
+        async with engine.connect() as conn:
+            event = (
+                await conn.execute(
+                    text("SELECT task_id, etag FROM calendar_events WHERE id = :id"),
+                    {"id": event_id},
+                )
+            ).one()
+            settings_row = (
+                await conn.execute(
+                    text(
+                        "SELECT calendar_write_calendar_id, "
+                        "calendar_read_calendar_ids, calendar_last_synced_at, "
+                        "calendar_coverage_from, calendar_coverage_to, "
+                        "calendar_coverage_calendar_ids "
+                        "FROM settings WHERE user_id = :id"
+                    ),
+                    {"id": user_id},
+                )
+            ).one()
+        await engine.dispose()
+        return event, settings_row
+
+    event, settings_row = asyncio.run(read())
+    assert event.task_id is None
+    assert event.etag is None
+    assert settings_row.calendar_write_calendar_id is None
+    assert list(settings_row.calendar_read_calendar_ids) == ["primary"]
+    assert settings_row.calendar_last_synced_at is None
+    assert settings_row.calendar_coverage_from is None
+    assert settings_row.calendar_coverage_to is None
+    assert list(settings_row.calendar_coverage_calendar_ids) == []
 
 
 def _fk_index_gaps(url: str) -> list[str]:
