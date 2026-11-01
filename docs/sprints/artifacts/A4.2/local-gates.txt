@@ -38,11 +38,16 @@ All 17 failures are the pre-existing `tests/integration/test_ingest_reception.py
 the sandbox default ingest sink answers `503 capacity_unavailable` without
 MAULWURF_INGEST_URL/credential. The same set is recorded by A4.1 on pristine develop.
 
-Post-merge full integration: not run cleanly on this shared host. Sibling agent
-worktrees (mwt-133/mwt-135) kept full integration suites running against the same
-PostgreSQL cluster, so the migration fixture's `ALTER ROLE` intermittently raised
-`tuple concurrently updated`. The post-merge targeted suites above are green; CI runs
-the full suite in isolated service containers.
+Post-merge full integration, isolated pair (UTF-8 PostgreSQL 16.15 on 127.0.0.1:5433 and
+Redis 7.0.15 on 127.0.0.1:6390, so sibling agent worktrees could not race this run):
+$ MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:***@127.0.0.1:5433/maulwurf \
+  MAULWURF_REDIS_URL=redis://127.0.0.1:6390/0 uv run pytest -m integration -q
+699 passed, 17 failed in 458.14s
+The 17 failures are the same pre-existing `tests/integration/test_ingest_reception.py`
+cases listed above, so this diff adds no integration failure. On the shared default host
+the same suite intermittently raised `tuple concurrently updated` while sibling worktrees
+migrated concurrently against one PostgreSQL cluster; the race does not reproduce with the
+isolated pair. CI runs the full suite in isolated service containers too.
 
 No real Gmail/Google call, no credential, no secret and no class audio are involved.
 `apps/web` and `apps/ingest` are untouched.
