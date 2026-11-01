@@ -81,6 +81,15 @@ $ uv run pytest tests/integration/test_reminder_dst_schedule.py \
 95 passed
 ```
 
+## Full integration suite
+
+```text
+$ uv run pytest -m integration -q
+783 passed, 1651 deselected, 835 warnings in 154.53s
+```
+
+No sandbox failure appeared in this run (PostgreSQL 16.15 + Redis 7.0.15).
+
 ## Documentation
 
 ```text
