@@ -85,3 +85,11 @@ Scope/security notes
 - The passphrase in the test is a literal test-only value, passed through the environment
   and never printed. No secret is committed.
 - `apps/web` was not touched.
+
+Quality CI
+----------
+PR #148 Quality CI run 41289101762 (head ecfc7da) is green in all 17 checks,
+including `python-static (api)`, `python-unit (api)`, `integration (api)` with the new
+I-S4-AN-05 case, `integration (ingest)`, `e2e-smoke`, `docs`, `secret-scan` and
+`build-images`. The isolated service containers remove the shared-cluster contention
+described above. No merge was performed; the claim stays `in progress` until review.
