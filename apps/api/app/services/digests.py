@@ -646,4 +646,3 @@ async def build_digest_content(
         upcoming_tasks=tasks,
         conflicts=conflicts.report,
     )
-
