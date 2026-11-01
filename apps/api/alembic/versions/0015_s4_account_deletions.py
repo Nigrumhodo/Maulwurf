@@ -18,8 +18,8 @@ the worker role may bind a tenant or use the explicit cross-tenant switch, like 
 S3/S4 tenant tables. The downgrade removes the tables and the session link; it cannot restore
 a purged account.
 
-Revision ID: 0014
-Revises: 0013
+Revision ID: 0015
+Revises: 0014
 Create Date: 2026-11-01
 """
 
@@ -29,8 +29,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0014"
-down_revision: str | None = "0013"
+revision: str = "0015"
+down_revision: str | None = "0014"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

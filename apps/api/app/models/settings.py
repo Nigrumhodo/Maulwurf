@@ -1,8 +1,13 @@
-"""Per-user Calendar settings (J3.3; shape frozen by DISENO §2.9 / A3.8).
+"""Per-user Calendar and notification preferences (J3.3/A3.8/A4.1; DISENO §2.9).
 
 `settings` is keyed by `user_id`: one row per user, created lazily when the Calendar
-integration is connected. Only the Calendar columns exist today; S4 extends this same row
-with the Gmail/digest preferences (it does not create a second settings table).
+integration is connected. A4.1 extends this same row with the Gmail opt-in, the digest
+preferences and the reminder thresholds; there is deliberately no second settings table.
+
+The notification preferences only describe **intent**. Gmail remains opt-in
+(`gmail_opt_in=false` by default) and nothing here grants a scope, sends mail or enables a
+digest by itself: J4.1 requires the incremental `gmail.send` grant and J4.3/J4.6 read these
+values when they schedule occurrences.
 
 J3.7 adds the coverage columns: they record which absolute window and which calendar set the
 last *atomic* publication covered, so `GET /calendar/events` can be honest about a stale or
@@ -22,10 +27,19 @@ helpers created by migration `0013` because a CHECK cannot contain `unnest()`.
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, time
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Text, text
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Text,
+    Time,
+    text,
+)
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, created_at, updated_at
@@ -67,6 +81,17 @@ class CalendarSettings(Base):
             "AND calendar_last_synced_at IS NOT NULL)",
             name="coverage_window",
         ),
+        # A4.1: digest weekday stays in the closed 0–6 range the §2.9 contract freezes, and
+        # both threshold lists are JSON arrays, never a scalar or an object.
+        CheckConstraint("digest_weekday BETWEEN 0 AND 6", name="digest_weekday"),
+        CheckConstraint(
+            "jsonb_typeof(reminder_offsets_hours) = 'array'",
+            name="reminder_offsets_hours",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(reminder_allday_offsets_days) = 'array'",
+            name="reminder_allday_offsets_days",
+        ),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -93,6 +118,36 @@ class CalendarSettings(Base):
     calendar_coverage_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     calendar_coverage_calendar_ids: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, server_default=text("'{}'")
+    )
+    # --- A4.1: Gmail/digest preferences and reminder thresholds -----------------------
+    # Opt-in only: false until the user enables Gmail in `/settings` and J4.1 completes the
+    # incremental `gmail.send` grant. No mail is sent from this flag alone.
+    gmail_opt_in: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    digest_daily_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    # Local wall-clock time of the daily digest; the scheduler resolves it in the user's zone.
+    digest_daily_time: Mapped[time] = mapped_column(
+        Time, nullable=False, server_default=text("'07:00'")
+    )
+    digest_weekly_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    # 0–6 per DISENO §2.9. M8 fixes the weekly digest on Sunday; J4.6 resolves how the
+    # frozen range maps to that day when it reads the preference.
+    digest_weekday: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    # Timed reminders: hours before the instant (T-48/T-24/T-2 by default). All-day
+    # reminders: days before the local day (T-3d/T-1d). Both are JSON arrays; A4.3/J4.3 own
+    # the interpretation and the cancellation of obsolete occurrences.
+    reminder_offsets_hours: Mapped[list[int]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[48, 24, 2]'::jsonb")
+    )
+    reminder_allday_offsets_days: Mapped[list[int]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[3, 1]'::jsonb")
     )
     created_at: Mapped[datetime] = created_at()
     updated_at: Mapped[datetime] = updated_at()
