@@ -670,7 +670,7 @@ def test_notification_manual_occurrences_revision_round_trips(empty_schema: str)
 
 
 def test_scheduler_lease_revision_round_trips(empty_schema: str) -> None:
-    """J4.2: `0017` adds the global election row and keeps the API role out of it."""
+    """J4.2: `0017` adds the global election row and keeps the other roles out of it."""
     cfg = alembic_config(empty_schema)
     command.upgrade(cfg, "0016")
     assert "scheduler_leases" not in _state(empty_schema)[0]
@@ -678,7 +678,7 @@ def test_scheduler_lease_revision_round_trips(empty_schema: str) -> None:
     command.upgrade(cfg, "head")
     assert "scheduler_leases" in _state(empty_schema)[0]
 
-    async def lease_shape() -> tuple[str, set[str], bool, bool]:
+    async def lease_shape() -> tuple[str, set[str], bool, bool, bool]:
         engine = create_async_engine(empty_schema)
         try:
             async with engine.connect() as conn:
@@ -700,22 +700,30 @@ def test_scheduler_lease_revision_round_trips(empty_schema: str) -> None:
                         )
                     ).scalars()
                 )
-                app_select, jobs_select = (
+                app_select, jobs_select, ingest_select = (
                     await conn.execute(
                         text(
                             "SELECT "
                             "has_table_privilege('maulwurf_app', "
                             "'public.scheduler_leases', 'SELECT'), "
                             "has_table_privilege('maulwurf_jobs', "
+                            "'public.scheduler_leases', 'SELECT'), "
+                            "has_table_privilege('maulwurf_ingest', "
                             "'public.scheduler_leases', 'SELECT')"
                         )
                     )
                 ).one()
         finally:
             await engine.dispose()
-        return str(default), columns, bool(app_select), bool(jobs_select)
+        return (
+            str(default),
+            columns,
+            bool(app_select),
+            bool(jobs_select),
+            bool(ingest_select),
+        )
 
-    default, columns, app_select, jobs_select = asyncio.run(lease_shape())
+    default, columns, app_select, jobs_select, ingest_select = asyncio.run(lease_shape())
     assert default.startswith("'1'")
     assert {
         "name",
@@ -726,9 +734,10 @@ def test_scheduler_lease_revision_round_trips(empty_schema: str) -> None:
         "created_at",
         "updated_at",
     } <= columns
-    # Scheduling belongs to the worker/scheduler role; the API never reads the election.
+    # Scheduling belongs to the worker/scheduler role; neither the API nor ingest reads it.
     assert app_select is False
     assert jobs_select is True
+    assert ingest_select is False
 
     command.downgrade(cfg, "0016")
     assert "scheduler_leases" not in _state(empty_schema)[0]

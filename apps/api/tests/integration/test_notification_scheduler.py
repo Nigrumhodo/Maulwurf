@@ -199,6 +199,36 @@ async def test_a_live_holder_blocks_a_second_scheduler_and_renews_in_place(
     assert renewed.expires_at == NOW + timedelta(seconds=30) + DEFAULT_LEASE_TTL
 
 
+async def test_a_live_lease_stops_the_scheduler_tick_before_any_claim(
+    committed_db: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
+    actor: Actor,
+) -> None:
+    """The elected role is the only one that reaches the claim, not just the acquire."""
+    _engine, factory = committed_db
+    due = _notification(actor, scheduled_at=NOW - timedelta(minutes=1), sequence=0)
+    (notification_id,) = await _store(factory, due)
+    role = _role()
+
+    async with factory() as db:
+        lease = await acquire_scheduler_lease(db, holder="host-a", role=role, now=NOW)
+        await db.commit()
+    assert isinstance(lease, SchedulerLeaseClaim)
+
+    blocked = await _run(factory, role=role, holder="host-b")
+    assert blocked.active is False
+    assert (blocked.claimed, blocked.expired, blocked.lease) == (0, 0, None)
+    stored = await _get(factory, notification_id)
+    assert stored[notification_id].status == "pending"
+
+    elected = await _run(
+        factory, role=role, holder="host-a", now=NOW + timedelta(seconds=1)
+    )
+    assert elected.active is True
+    assert elected.claimed == 1
+    stored = await _get(factory, notification_id)
+    assert stored[notification_id].status == "sending"
+
+
 async def test_only_one_candidate_takes_over_an_expired_lease(
     committed_db: tuple[AsyncEngine, async_sessionmaker[AsyncSession]],
 ) -> None:
