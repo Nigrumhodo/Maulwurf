@@ -10,6 +10,10 @@ Seed (deterministic, synthetic):
 - one sent test notification, one `sync_task_event` outbox row and one authorized
   `delete_event` remote operation -> 3 recorded Google operations.
 
+Fix1 regression (integration test, not this live drill): an audio uploaded 2099-10-31 23:30
+with its transcript committed 2099-11-01 00:15 contributes 2.0 minutes to November. The ASR
+aggregate is keyed only by `transcripts.created_at`; the upload date is not a filter.
+
 Command:
   cd apps/api && uv run uvicorn app.main:app --host 127.0.0.1 --port 18080
   (MAULWURF_BUDGET_LLM_TOKENS=1000, MAULWURF_BUDGET_ASR_MINUTES=10,

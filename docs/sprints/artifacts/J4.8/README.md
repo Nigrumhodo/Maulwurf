@@ -11,7 +11,7 @@ Every reference-only step is marked **NOT RUN**, not reported as passed.
 
 | Runbook | Command / artifact | Local result | Reference step |
 |---|---|---|---|
-| Budget and alerts | [`budget-alerts.txt`](budget-alerts.txt) | Usage, warning, exhausted and unconfigured states on `/internal/metrics`; `budget_check.py` exits 1/2/0/1 as expected | **NOT RUN**: real Prometheus/Alertmanager, real billing account and approved caps |
+| Budget and alerts | [`budget-alerts.txt`](budget-alerts.txt) | Usage, warning, exhausted and unconfigured states on `/internal/metrics`; `budget_check.py` exits 1/2/0/1 as expected; fix1 adds the transcript-month ASR regression | **NOT RUN**: real Prometheus/Alertmanager, real billing account and approved caps; compose `exec` route (no Docker here) |
 | Cleanup/recovery (S4.1) | [`cleanup-status.txt`](cleanup-status.txt) | `status --check` detected a persisted `cleanup_status=failed` attempt and exited 3; no audio/path printed | **NOT RUN**: compose restart and host-loss attestation |
 | Restore (A4.5) | [`restore-drill.txt`](restore-drill.txt) | Encrypted backup + deletion log, `export-deletions --refresh-backup`, `verify`, clean restore and tombstone reapply; deleted account did not reappear | **NOT RUN**: real backup volume, secret store and retention policy |
 | Provider down | [`provider-down.txt`](provider-down.txt) | Closed-port LLM/embeddings probes return typed errors; Riva/Google deterministic suites 27 + 59 passed | **NOT RUN**: real Riva/LLM/embeddings/Google outage or quota |
@@ -34,6 +34,22 @@ Local gates for the code, tests and documentation are in
   and A4.5 procedures and are exercised here.
 - `infra/docker-compose.yml` — passes the ingest previous-key pair for rotation; `api`
   never receives it.
+
+## Review fix1 (2026-11-01, hoplite findings on head `45c1415`)
+
+- **ASR month:** `collect_usage` now defines the month only by `transcripts.created_at`; the
+  upload date no longer filters the aggregate. The integration regression seeds an audio
+  uploaded on 31 October with its transcript committed on 1 November and asserts the minutes
+  belong to November.
+- **Scrape cost:** migration `0019_s4_budget_aggregate_indexes` adds the range indexes used by
+  the cross-tenant aggregates (`messages.created_at`, `transcripts(created_at, audio_id)`,
+  `notifications(status, sent_at)`, `outbox_events(type, created_at)`,
+  `google_remote_operations.created_at`). `prometheus.example.yml` scrapes every 60 s and
+  states that the endpoint has no cache.
+- **Operator path:** the runbook and `budget_check.py` now document the real compose route
+  (`docker compose exec -T api python - < ../scripts/ops/budget_check.py`), because `api`
+  only declares `expose: ["8000"]` and Caddy answers 404 to `/internal/*`. The compose
+  `exec` command stays **NOT RUN** here: this sandbox has no Docker daemon.
 
 ## Explicit non-claims
 

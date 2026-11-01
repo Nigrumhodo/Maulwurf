@@ -91,3 +91,71 @@ Quality CI (GitHub Actions, workflow `quality.yml`):
   - python-static (api) and python-static (ingest) clean
   - compose-ingest-env passed (the check this sandbox cannot run without Docker)
   - docs, secret-scan, e2e-smoke, build-images, web and the license reports passed.
+
+Review fix1 (2026-11-01, hoplite findings on head 45c1415):
+  API:
+    $ cd apps/api && uv run ruff check .
+    All checks passed!
+
+    $ uv run mypy .
+    Success: no issues found in 304 source files
+
+    $ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 MAULWURF_ENV=local \
+        uv run pytest tests/unit -q
+    1752 passed, 35 warnings in 23.16s
+
+  Ingest:
+    $ cd apps/ingest && uv run ruff check .
+    All checks passed!
+
+    $ uv run mypy .
+    Success: no issues found in 83 source files
+
+    $ MAULWURF_ENV=local uv run pytest -m "not integration and not provider and not load" -q
+    308 passed, 93 deselected, 2 warnings in 16.70s
+
+  Targeted integration (PostgreSQL 16.15 + Redis 7.0.15):
+    $ cd apps/api && ... uv run pytest \
+        tests/integration/test_migrations.py \
+        tests/integration/test_provider_budget_metrics.py \
+        tests/integration/test_observability_metrics.py -q -m integration
+    39 passed, 156 warnings in 100.89s
+    (The first run failed one pre-existing guard that hardcoded the previous migration head:
+    `test_downgrade_and_upgrade_again` asserted parent `0017`; it now asserts `0019 -> 0018`
+    and the rerun above is green. No production code was involved.)
+
+  New coverage:
+    - audio uploaded 2099-10-31 23:30 + transcript committed 2099-11-01 00:15 contributes
+      2.0 ASR minutes to November (regression for the hoplite finding).
+    - the five 0019 range indexes exist with the expected columns.
+    - upgrade -> downgrade -> upgrade through 0019 is clean.
+
+  Documentation and configuration:
+    $ python3 scripts/docs/check_refs.py
+    OK: 1024 documented repository paths exist or are expected.
+
+    $ python3 - <<'PY'  # yaml.safe_load of infra/alerting/*.yml
+    prometheus.example.yml OK; maulwurf.rules.yml OK; scrape_interval=60s
+    PY
+
+    $ python3 -m py_compile scripts/ops/budget_check.py
+    exit 0
+
+    $ git diff --check
+    no output (exit 0)
+
+  Not run in this sandbox:
+    - `docker compose exec -T api python - < ../scripts/ops/budget_check.py`: no Docker
+      daemon. The route is derived from `infra/docker-compose.yml` (`api` has only
+      `expose: ["8000"]`, no `ports`) and `infra/Caddyfile` (404 for `/internal/*`).
+    - The J4.8 reference-environment drill (J4.7 deployment): NOT RUN.
+
+  Quality CI for fix1:
+    Run 41321532815 (workflow quality, head 17500c6, code + tests + docs) is green in all
+    16 jobs, including `python-static (api)`, `python-unit (api)` 1752 passed,
+    `integration (api)` 829 passed, `python-unit (ingest)` 302 passed / 6 skipped,
+    `integration (ingest)` 77 passed / 11 skipped, `compose-ingest-env`, `e2e-smoke`,
+    `docs`, `secret-scan` and `build-images`.
+    The previous run 41321079970 failed only `integration (api)` on the old hardcoded
+    migration-head guard; the guard update in 17500c6 fixed it (the same 39-case local
+    module above is green). The final evidence commit gets its own CI run before merge.
