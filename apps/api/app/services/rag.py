@@ -23,11 +23,11 @@ import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
-from sqlalchemy import and_, select, update
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -595,11 +595,16 @@ class RAGService:
                     return await self._replay_prepared(db, existing)
 
             model = self._llm.model if self._llm is not None else None
-            # The turn is persisted under the conversation row lock (see
-            # `_owned_conversation`), so taking the clock here orders turns by insertion.
-            # The assistant is marked one microsecond later: both rows otherwise share the
-            # transaction `now()` and the random UUID would decide question-vs-answer order.
-            turn_created_at = datetime.now(UTC)
+            # The turn clock comes from the database, not from this process: `CLOCK_TIMESTAMP`
+            # is read after `_owned_conversation` took the row lock, so a turn that waited
+            # for the lock is still ordered after the previous one even when the API hosts'
+            # clocks disagree. `now()` would be wrong here because it is fixed when this
+            # transaction started, before a lock wait. The assistant is marked one
+            # microsecond later, since both rows otherwise share the transaction timestamp
+            # and the random UUID would decide question-vs-answer order.
+            turn_created_at = await db.scalar(select(func.clock_timestamp()))
+            if turn_created_at is None:  # pragma: no cover - PostgreSQL always returns one row
+                raise RuntimeError("clock_timestamp() returned no value")
             user_message = Message(
                 user_id=user_id,
                 conversation_id=conversation_id,

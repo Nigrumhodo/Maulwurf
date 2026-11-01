@@ -51,6 +51,7 @@ from app.services.rag import (
     ChatMessageNotFound,
     RAGService,
     cancel_message,
+    signal_cancel,
 )
 from app.services.rate_limiter import (
     MAX_STREAMS_PER_USER,
@@ -263,8 +264,12 @@ async def delete_conversation(
     conversation_id: uuid.UUID, session: MutationSession, db: DbSession
 ) -> Response:
     """Tombstone the conversation and purge its messages and message sources."""
-    await conversations.delete_conversation(db, session.user_id, conversation_id)
+    cancelled = await conversations.delete_conversation(db, session.user_id, conversation_id)
     await db.commit()
+    # The transaction already cancelled these turns; the wake-up is only sent once the purge
+    # is durable, so a rollback can never stop a stream whose rows still exist.
+    for message_id in cancelled:
+        signal_cancel(message_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

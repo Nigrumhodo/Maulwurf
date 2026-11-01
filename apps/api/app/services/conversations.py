@@ -363,12 +363,16 @@ async def page_messages(
 
 async def delete_conversation(
     db: AsyncSession, user_id: uuid.UUID, conversation_id: uuid.UUID
-) -> None:
+) -> list[uuid.UUID]:
     """Tombstone the conversation and purge its messages and sources in one transaction.
 
     The conditional UPDATE decides the race against a second DELETE (ADR-0006: "already
     gone" is 404). The title is content, so the tombstone clears it. Sources are removed
     before messages for verifiable counts even though the FK cascade would also delete them.
+
+    Assistant messages still `streaming` are transitioned to `cancelled` by the same
+    transaction and their ids are returned. The caller signals them only after the commit:
+    waking a producer before the rollback point could cancel a turn that is still persisted.
     """
     now = datetime.now(UTC)
     marked = await db.execute(
@@ -383,6 +387,18 @@ async def delete_conversation(
     )
     if _rowcount(marked) != 1:
         raise not_found()
+    streaming = await db.execute(
+        update(Message)
+        .where(
+            Message.user_id == user_id,
+            Message.conversation_id == conversation_id,
+            Message.status == "streaming",
+        )
+        .execution_options(synchronize_session=False)
+        .values(status="cancelled")
+        .returning(Message.id)
+    )
+    cancelled_ids = list(streaming.scalars().all())
     message_ids = select(Message.id).where(
         Message.user_id == user_id,
         Message.conversation_id == conversation_id,
@@ -403,6 +419,7 @@ async def delete_conversation(
         )
         .execution_options(synchronize_session=False)
     )
+    return cancelled_ids
 
 
 def _rowcount(result: Result[Any]) -> int:

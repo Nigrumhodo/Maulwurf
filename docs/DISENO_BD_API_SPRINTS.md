@@ -1609,13 +1609,17 @@ Contract rules:
   ranges and schemas validated by the backend.
 - Modes validated by the `conversations` CHECK; everything within the tenant.
 - L2.5 implements `POST .../messages` and `.../cancel` with the minimal turn persistence;
-  A2.12 adds conversation create/list/paginated history/delete over the same tables.
+  A2.12 adds conversation create/list/paginated history/delete over the same tables; `DELETE`
+  cancels assistant rows still `streaming` in the same transaction and signals their
+  producers after the commit, so an in-flight answer stops consuming model tokens.
   `Last-Event-ID` is the last received
   character offset: every connect/reconnect re-sends `snapshot` and skips that prefix from the
   persisted message.
 - A turn's two rows are inserted in one transaction, so ordering by `created_at` alone can
-  interleave a question and its answer. `RAGService.prepare` writes the user row at the turn
-  clock and the assistant one microsecond later; the history query, its keyset cursor and
+  interleave a question and its answer. `RAGService.prepare` reads the turn clock from
+  PostgreSQL (`clock_timestamp()`) after taking the conversation lock and writes the user row
+  at that mark and the assistant one microsecond later; the database clock keeps turns
+  ordered across API hosts whose clocks disagree. The history query, its keyset cursor and
   the RAG history also break a legacy equal-timestamp tie with a `user < system < assistant`
   role rank. The v2 history cursor carries that role, so v1 cursors are rejected instead of
   silently skipping or duplicating a message.

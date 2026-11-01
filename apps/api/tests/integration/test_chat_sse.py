@@ -452,9 +452,9 @@ async def test_chat_prepare_timestamps_come_from_the_database_clock(
 
     class SkewedDatetime(datetime):
         @classmethod
-        def now(cls, tz: Any = None) -> datetime:
+        def now(cls, tz: Any = None) -> "SkewedDatetime":
             # A process whose clock is 26 years behind must not reorder persisted turns.
-            return datetime(2000, 1, 1, tzinfo=UTC)
+            return SkewedDatetime(2000, 1, 1, tzinfo=UTC)
 
     monkeypatch.setattr("app.services.rag.datetime", SkewedDatetime)
     service = RAGService(
