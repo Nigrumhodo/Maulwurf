@@ -30,6 +30,12 @@ a mutable "last notification" per task. The frozen shape is DISENO §2.9 / ESPEC
   frozen `SET NULL` sketch does not survive a composite FK) or make two deleted tasks collide
   under `UNIQUE NULLS NOT DISTINCT`. The delivery audit belongs to a task that still exists;
   account deletion already cascades from `users`.
+- `claimed_by_fence` records the `scheduler_leases.fencing_token` of the election that moved
+  the row to `sending`. It is NULL until the first claim. The sender (J4.1) must compare it
+  with the live election fence before delivering: a mismatch means the claim belongs to a
+  superseded scheduler, and the row must not be sent under that authority. Terminal rows keep
+  the fence of the attempt that ended them, exactly like the delivery lease, so the decision
+  stays explainable.
 - `notifications_due` serves the scheduler's due claim; `notifications_by_task` is the
   non-partial covering index the composite FK needs (I-S2-AN-17).
 
@@ -43,6 +49,7 @@ from datetime import date, datetime
 from typing import Final
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     Date,
     DateTime,
@@ -122,6 +129,9 @@ class Notification(TenantOwned, Base):
         CheckConstraint(_in("type", NOTIFICATION_TYPES), name="type"),
         CheckConstraint(_in("status", NOTIFICATION_STATUSES), name="status"),
         CheckConstraint("attempts >= 0", name="attempts"),
+        CheckConstraint(
+            "claimed_by_fence IS NULL OR claimed_by_fence >= 1", name="claimed_by_fence"
+        ),
         CheckConstraint("due_version IS NULL OR due_version >= 1", name="due_version"),
         CheckConstraint("occurrence_seq >= 0", name="occurrence_seq"),
         # Digests/test sends never belong to a task; a reminder always carries its task and
@@ -196,6 +206,8 @@ class Notification(TenantOwned, Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # Fence of the election that claimed the row; NULL until the first claim.
+    claimed_by_fence: Mapped[int | None] = mapped_column(BigInteger)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     provider_message_id: Mapped[str | None] = mapped_column(Text)
     last_error_code: Mapped[str | None] = mapped_column(Text)

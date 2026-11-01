@@ -758,7 +758,13 @@ consults the persisted message; it does not re-run the LLM with the same
 
 - Native ARQ cron scheduler with a single active role; it computes due dates/local times
   every minute and claims rows atomically. Target send SLA within 15 min, not second-level
-  exactness; multiple workers protected by uniqueness and leases.
+  exactness; multiple workers protected by uniqueness and leases. Lease expiry and due
+  comparisons use the database clock, not each host's wall clock.
+- Every atomic claim persists the election's fencing token on the occurrence
+  (`claimed_by_fence`). The sender validates it against the live election before delivering,
+  so a row claimed by a superseded scheduler cannot be sent under the current authority.
+  Until the Gmail sender consumes `sending`, the scheduler runs disabled so no occurrence is
+  labeled `delivery_unknown` for a send that never started.
 - HTML + plain-text templates, escaped content and minimal data; recipient limited to the
   user's verified email in MVP. Do not expose arbitrary sending to the LLM.
 - `notifications`: `scheduled_at`, `due_version`, `dedupe_key`,

@@ -975,6 +975,7 @@ CREATE TABLE notifications (
     CHECK (status IN ('pending','sending','sent','failed','delivery_unknown','cancelled')),
   lease_expires_at    timestamptz,                -- expired 'sending' = uncertain delivery
   attempts            integer NOT NULL DEFAULT 0,
+  claimed_by_fence    bigint,                     -- election that moved the row to 'sending'
   sent_at             timestamptz,
   provider_message_id text,
   last_error_code     text,                       -- redacted, no PII
@@ -1006,6 +1007,38 @@ CREATE INDEX notifications_due ON notifications (status, scheduled_at) WHERE sta
 - Gmail does not guarantee exactly-once delivery: lost response or expired `sending` lease
   → `delivery_unknown`, **no automatic retry**; visible in the panel; manual resending
   warns about the risk.
+
+J4.2 elects the scheduler role with a global row:
+
+```sql
+CREATE TABLE scheduler_leases (
+  name              text PRIMARY KEY,          -- notification_scheduler
+  holder            text NOT NULL,             -- host:pid:nonce
+  fencing_token     bigint NOT NULL DEFAULT 1, -- grows on takeover
+  lease_expires_at  timestamptz NOT NULL,
+  heartbeat_at      timestamptz NOT NULL DEFAULT now(),
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  CHECK (lease_expires_at > heartbeat_at),
+  CHECK (fencing_token >= 1)
+);
+```
+
+- There is no tenant column and no RLS: the row is infrastructure state, never user data.
+  The `maulwurf_jobs` role owns access; the API and ingest roles cannot read or rewrite the
+  election.
+- The same holder renews in place and keeps the fence; only an expired row can be taken
+  over, and a takeover increments the fence. The cron runs every minute and at startup.
+  Election, expiry and due comparisons use PostgreSQL's clock (`now()`), not each host's
+  wall clock.
+- The claim keeps the occurrence's `dedupe_key` unique and adds a bounded delivery lease;
+  `FOR UPDATE SKIP LOCKED` lets multiple workers drain a backlog without claiming twice. It
+  also copies the elected `fencing_token` into `notifications.claimed_by_fence` (migration
+  `0018`); the J4.1 sender must compare it with the live election before delivering, and a
+  row claimed by a superseded scheduler must not be sent.
+- The scheduler is disabled by default (`MAULWURF_NOTIFICATION_SCHEDULER_ENABLED=false`)
+  until J4.1 consumes `sending`: a disabled tick elects no role and moves no row, so no
+  occurrence becomes a false terminal `delivery_unknown` before delivery exists.
 
 ### 2.10 State machines (frozen contracts)
 

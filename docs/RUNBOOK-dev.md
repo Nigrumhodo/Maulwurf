@@ -205,6 +205,12 @@ The API user also needs `maulwurf_jobs` because `/internal/metrics` performs its
 aggregate under that role. When running the ARQ worker or scheduler outside compose, set
 `MAULWURF_DATABASE_ROLE=maulwurf_jobs`; the default is `maulwurf_app`.
 
+The notification scheduler (`schedule_notifications`) is disabled by default with
+`MAULWURF_NOTIFICATION_SCHEDULER_ENABLED=false`. Keep it disabled until J4.1 (Gmail delivery)
+is deployed: a disabled tick does not elect the role and claims no rows. Enabling it without
+the consumer of `sending` would expire every claim into a false `delivery_unknown`; enable
+the flag only once that consumer runs.
+
 **Never reuse the migration owner DSN for a runtime outside local development.** The local
 compose stack does (its PostgreSQL image makes that user a superuser), which is why RLS is
 defense in depth there rather than a boundary. In staging/production, create one `LOGIN` role

@@ -336,7 +336,7 @@ approval per language, not by global average.
 | U-S4-JF-01 | U | T-48/T-24/T-2 h escalation (instants) and T-3d/T-1d at local time (all-day); undated tasks without reminders | M8 |
 | U-S4-JF-02 | U | DST: nonexistent time → next valid instant; repeated time → a single notification | M8 |
 | U-S4-JF-03 | U | HTML + escaped plain-text templates; fixed recipient to the verified email; no mail GET mutates state | M8/security |
-| I-S4-JF-04 | I | Scheduler: single active role; atomic row claiming with multiple workers; target SLA 15 min | M8 |
+| I-S4-JF-04 | I | Scheduler: single active role; database clock for election/expiry; atomic row claiming with multiple workers; persisted claim fence; target SLA 15 min | M8 |
 | I-S4-JF-05 | I | `delivery_unknown`: lost response or expired lease → **no automatic retry**; the A4.2 suite also covers preferences, the Gmail-gated test send and the cursor listing; `POST /notifications/{id}/resend` requires `acknowledge_duplicate_risk=true`, creates a new audited occurrence and does not set the original back to `pending` | M8/G7-MAIL |
 | I-S4-JF-06 | I | Daily 07:00 configurable digest and weekly (Sunday) by local date, with the week's conflicts | M8 |
 | P-S4-JF-07 | P | Real Gmail delivery observed end to end with an authorized account + subsequent cleanup (once, controlled) | G7-MAIL/G8 |

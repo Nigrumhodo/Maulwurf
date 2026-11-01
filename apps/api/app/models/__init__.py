@@ -9,6 +9,7 @@ from app.models.core import GoogleCredential, Session, Subject, User
 from app.models.ingestion import Audio, IngestionAttempt, OutboxEvent, VariantConfirmationToken
 from app.models.notification import Notification
 from app.models.processing_run import ProcessingRun
+from app.models.scheduler_lease import SchedulerLease
 from app.models.settings import CalendarSettings
 from app.models.task import Task, TaskRevision, TaskSource
 from app.models.transcript import Segment, Transcript
@@ -32,6 +33,7 @@ __all__ = [
     "Notification",
     "OutboxEvent",
     "ProcessingRun",
+    "SchedulerLease",
     "Segment",
     "Session",
     "Subject",

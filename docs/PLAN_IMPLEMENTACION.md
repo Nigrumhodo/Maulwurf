@@ -256,8 +256,11 @@ clean them up at the end.
 
 - [ ] Incremental/opt-in Gmail; recipient fixed to the verified email. Escaped templates with
   authenticated links; no email GET mutates tasks.
-- [ ] Single ARQ scheduler with atomic claim/leases and persistent dedupe. T-48/T-24/T-2 h for
-  instants; T-3d/T-1d at local time for all-day; no retrospective burst.
+- [ ] Single ARQ scheduler with atomic claim/leases and persistent dedupe; election, expiry
+  and due comparisons use the database clock. The claim persists the election fence on the
+  row for send-time validation, and the cron stays disabled until the Gmail consumer is
+  deployed. T-48/T-24/T-2 h for instants; T-3d/T-1d at local time for all-day; no
+  retrospective burst.
 - [ ] Digests by local date; DST, due-date/preference changes, and cancellation of stale
   occurrences. Confirm task deletion/completion immediately before claiming a send.
 - [ ] Ambiguous Gmail failure or expired `sending` lease → `delivery_unknown`, no blind

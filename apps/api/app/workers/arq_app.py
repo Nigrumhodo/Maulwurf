@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.core.db import bind_cross_tenant, reset_cross_tenant, session_scope
 from app.core.logging import configure_logging
 from app.services.deletion import purge_expired_residuals
+from app.services.scheduler_lease import run_notification_scheduler
 from app.workers.dispatcher import dispatch_pending
 from app.workers.index_job import JOB_TIMEOUT_S, MAX_TRIES, index
 from app.workers.jobs.calendar_sync import JOB_TIMEOUT_S as CALENDAR_SYNC_TIMEOUT_S
@@ -64,6 +65,43 @@ async def dispatch_outbox(ctx: dict[str, Any]) -> None:
         reset_cross_tenant(token)
     if report:
         logger.info("dispatch_outbox %s", dict(report))
+
+
+async def schedule_notifications(ctx: dict[str, Any]) -> None:
+    """Scheduler cron (J4.2): the elected scheduler claims due M8 occurrences.
+
+    The lease and the claim share one transaction (the `session_scope` commit), so only the
+    elected role claims and the election is durable before the next tick. A failure is logged
+    by type only; the next minute retries, and an expired delivery lease is closed as
+    `delivery_unknown` instead of being retried automatically.
+
+    Disabled by default (`MAULWURF_NOTIFICATION_SCHEDULER_ENABLED=false`): J4.1 (Gmail) owns
+    the consumer of `sending`, and claiming before it is deployed would turn due rows into a
+    false, terminal `delivery_unknown` after the delivery lease expires. With the flag off
+    the cron returns before opening a session: it neither elects nor moves any row.
+    """
+    del ctx  # The cron needs no Redis; delivery is J4.1's job.
+    if not settings.notification_scheduler_enabled:
+        return
+    token = bind_cross_tenant()
+    try:
+        try:
+            async with session_scope() as db:
+                report = await run_notification_scheduler(
+                    db, enabled=settings.notification_scheduler_enabled
+                )
+        except Exception as exc:
+            # Only the type: an error message can carry a DSN or a row value.
+            logger.warning("schedule_notifications.failed error=%s", type(exc).__name__)
+            return
+    finally:
+        reset_cross_tenant(token)
+    if report.active and (report.claimed or report.expired):
+        logger.info(
+            "schedule_notifications claimed=%d expired=%d",
+            report.claimed,
+            report.expired,
+        )
 
 
 async def reconcile(ctx: dict[str, Any]) -> None:
@@ -133,6 +171,9 @@ class SchedulerSettings:
     # Cada minuto en el segundo 0: latencia máxima de despacho ~60 s.
     cron_jobs: ClassVar[list[CronJob]] = [
         cron(dispatch_outbox, second=0, run_at_startup=True),
+        # J4.2: one elected role claims due occurrences every minute. Running at startup
+        # drains whatever became due while the scheduler was down, inside the 15 min SLA.
+        cron(schedule_notifications, second=0, run_at_startup=True),
         cron(
             reconcile,
             minute=set(range(0, 60, RECONCILE_EVERY_MINUTES)),
