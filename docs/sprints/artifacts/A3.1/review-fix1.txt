@@ -8,7 +8,7 @@ This review closes the three hoplite findings on `e1d6d00`:
 
 1. **H1 (critical):** `task_sources` could cite a segment of another transcript of the same
    user, and neither `audio_id` nor `transcript_version` was tied to the cited transcript.
-   New migration `0011_s3_task_source_membership` (not an edit of `0002`/`0010`, both already
+   New migration `0012_s3_task_source_membership` (not an edit of `0002`/`0011`, both already
    applied in the chain) adds `segments (user_id, transcript_id, id)` and
    `transcripts (user_id, audio_id, id)`, and replaces the two 2-column FKs with
    `(user_id, audio_id, transcript_id)`, `(user_id, transcript_id, transcript_version)` and
@@ -59,7 +59,8 @@ the previous capture (`test_ingest_sink.py` and `test_llm.py`, bracketed IPv6 en
 ## Integration against PostgreSQL 16.15
 
 The test session creates its own database and runs Alembic from empty through
-`0010_s3_tasks` and `0011_s3_task_source_membership`.
+`0011_s3_tasks` and `0012_s3_task_source_membership` (renumbered after A2.12's `0010`
+landed on develop).
 
 ```
 $ uv run pytest tests/integration/test_s3_tasks_schema.py \
@@ -75,7 +76,7 @@ Included:
   requested) and `test_a_task_source_cannot_mismatch_the_cited_transcript[audio_id|
   transcript_version]`.
 - `test_the_unresolved_tray_has_a_plain_status_index` (catalog + `pg_indexes`).
-- The `0010 -> 0011` round trip and the linear-chain assertion in
+- The `0011 -> 0012` round trip and the linear-chain assertion in
   `test_downgrade_and_upgrade_again`; `test_every_foreign_key_has_a_non_partial_covering_index`
   covers the three new FKs; `test_alembic_check_reports_no_schema_drift` is green.
 - `test_delete_purges_every_derivative_and_keeps_google_by_default` now proves that the

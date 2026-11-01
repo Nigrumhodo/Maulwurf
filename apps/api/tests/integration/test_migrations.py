@@ -293,18 +293,21 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     revision = ScriptDirectory.from_config(cfg).get_revision(_head(empty_schema))
     assert revision is not None
     parent = revision.down_revision
-    assert parent == "0010"  # this chain is linear
+    assert parent == "0011"  # this chain is linear
     command.upgrade(cfg, "head")
 
-    # `0011` only adds constraints and indexes (no table/column change); `0010` only adds
-    # the M4 task tables; `0009` only adds indexes, FKs and CHECKs (no table/column change);
-    # `0008` only adds the manual-sync cooldown column; `0007` only adds the mirror and the
-    # coverage columns; `0006` only adds `settings`; `0005` only changes roles, policies and
-    # RLS flags; `0003` only backfills `chunks.tsv` (data, not schema) and `0004` only adds
-    # the run fencing token, so the steps back stay on the previous schemas and only remove
-    # those additions.
+    # `0012` only adds constraints and indexes (no table/column change); `0011` only adds
+    # the M4 task tables; `0010` only swaps one index on `messages` (no table/column change);
+    # `0009` only adds indexes, FKs and CHECKs (no table/column change); `0008` only adds the
+    # manual-sync cooldown column; `0007` only adds the mirror and the coverage columns;
+    # `0006` only adds `settings`; `0005` only changes roles, policies and RLS flags; `0003`
+    # only backfills `chunks.tsv` (data, not schema) and `0004` only adds the run fencing
+    # token, so the steps back stay on the previous schemas and only remove those additions.
     command.downgrade(cfg, "-1")
-    assert _state(empty_schema) == (A31_TABLES, ["0010"])
+    assert _state(empty_schema) == (A31_TABLES, ["0011"])
+
+    command.downgrade(cfg, "-1")
+    assert _state(empty_schema) == (S3_TABLES, ["0010"])
 
     command.downgrade(cfg, "-1")
     assert _state(empty_schema) == (S3_TABLES, ["0009"])

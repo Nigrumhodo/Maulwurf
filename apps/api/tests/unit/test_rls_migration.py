@@ -3,7 +3,7 @@
 I-S2-AN-16 reads the real catalog; this guard catches the cheaper mistake of adding a
 `TenantOwned` model without extending `0005` (or a later migration) while the integration
 suite cannot run. `0006` (J3.3) adds `settings` and `0007` (J3.7) adds `calendar_events`,
-each with their own policies; `0010` (A3.1) adds the three M4 task tables.
+each with their own policies; `0011` (A3.1) adds the three M4 task tables.
 """
 import importlib.util
 from pathlib import Path
@@ -15,7 +15,7 @@ VERSIONS = Path(__file__).resolve().parents[2] / "alembic" / "versions"
 MIGRATION_0005 = VERSIONS / "0005_s2_row_level_security.py"
 MIGRATION_0006 = VERSIONS / "0006_s3_calendar_settings.py"
 MIGRATION_0007 = VERSIONS / "0007_s3_calendar_mirror.py"
-MIGRATION_0010 = VERSIONS / "0010_s3_tasks.py"
+MIGRATION_0011 = VERSIONS / "0011_s3_tasks.py"
 
 
 def _migration(path: Path, name: str) -> ModuleType:
@@ -30,7 +30,7 @@ def test_every_tenant_model_has_a_policy_in_the_migrations() -> None:
     base = _migration(MIGRATION_0005, "rls_0005")
     settings = _migration(MIGRATION_0006, "rls_0006")
     calendar = _migration(MIGRATION_0007, "rls_0007")
-    tasks = _migration(MIGRATION_0010, "rls_0010")
+    tasks = _migration(MIGRATION_0011, "rls_0011")
     # `TenantOwned` is a mixin, but a few tenant tables (chunk_segments, embeddings,
     # google_credentials, settings) declare `user_id` directly; the `user_id` column is the
     # contract every RLS migration follows.

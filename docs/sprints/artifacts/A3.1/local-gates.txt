@@ -53,7 +53,7 @@ state/`proposed_fields`/`base_task_version` and the nullable `calendar_etag`.
 ## Integration against the migrated PostgreSQL schema
 
 The database was created from empty by the test session's Alembic upgrade (`-> 0001` through
-`0010_s3_tasks`). `tests/integration/test_migrations.py::test_alembic_check_reports_no_schema_drift`
+`0011_s3_tasks`; the revision was `0010` before the develop merge brought A2.12's `0010`). `tests/integration/test_migrations.py::test_alembic_check_reports_no_schema_drift`
 proves `Base.metadata` matches the chain.
 
 ```
@@ -73,7 +73,7 @@ $ uv run pytest tests/integration/test_isolation.py tests/integration/test_migra
 64 passed in 53.72s
 ```
 
-Includes the `0009 -> 0010` round trip (`test_tasks_revision_round_trips`), the RLS catalog
+Includes the `0009 -> 0011` round trip (renumbered from `0010` after A2.12 landed) (`test_tasks_revision_round_trips`), the RLS catalog
 for the three new tables, the composite-FK index guard, the Alembic drift check and the new
 `Task`/`TaskRevision` tenant factories.
 

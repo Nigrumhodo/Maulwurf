@@ -1,14 +1,15 @@
 """A3.1 review fix: a `task_source` cites one transcript's segment, audio and version.
 
-`0010` gave `task_sources` independent tenant-aware FKs to `transcripts` and `segments`.
+`0011` gave `task_sources` independent tenant-aware FKs to `transcripts` and `segments`.
 Because `segments` only exposed `(user_id, id)`, a row could cite a segment that belongs to
 a *different* transcript of the same user, and neither `audio_id` nor `transcript_version`
 was tied to the cited transcript. That is exactly the corruption the provenance table must
 make impossible (ESPECIFICACION §M4, DISENO §2.8).
 
-A new revision rather than an edit of `0002` or `0010`: `0002` is already applied in every
-deployed chain and `0010` may already be applied where this branch was tested; rewriting
-either would leave environments with a schema that does not match its recorded revision.
+A new revision rather than an edit of `0002` or `0011`: `0002` is already applied in every
+deployed chain and `0011` may already be applied in the databases used to test this branch;
+rewriting either would leave an environment whose schema does not match its recorded
+revision.
 `0009` set the same precedent when it added parent unique keys and replaced composite FKs.
 
 What this revision enforces:
@@ -23,7 +24,7 @@ What this revision enforces:
   belongs to the transcript, the transcript belongs to the audio and the version is the
   transcript's version. A wrong audio cannot be hidden behind a valid transcript pair.
 - `tasks (user_id, status)` gives the unresolved tray (`ambiguous`/`missing`, no due
-  column) a usable index; the two partial due indexes from `0010` cannot serve those rows.
+  column) a usable index; the two partial due indexes from `0011` cannot serve those rows.
 - The three 2-column `task_sources` indexes grow by the column each new FK needs, so every
   composite FK still has a non-partial covering index (A2.18's guard) while the previous
   audio/transcript/segment lookups keep their prefix.
@@ -35,8 +36,8 @@ proposals until one is confirmed. The decision is documented in ESPECIFICACION �
 future "one edit per base version" contract would need `NULLS NOT DISTINCT` (PG 15+) and a
 new revision of that contract, not a silent constraint change here.
 
-Revision ID: 0011
-Revises: 0010
+Revision ID: 0012
+Revises: 0011
 Create Date: 2026-11-01
 """
 
@@ -44,8 +45,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0011"
-down_revision: str | None = "0010"
+revision: str = "0012"
+down_revision: str | None = "0011"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -92,7 +93,7 @@ def upgrade() -> None:
         ["user_id", "transcript_id", "segment_id"],
         ["user_id", "transcript_id", "id"],
     )
-    # One supporting index per new FK (A2.18 guard): the 2-column indexes from `0010` are
+    # One supporting index per new FK (A2.18 guard): the 2-column indexes from `0011` are
     # prefixes, not covers, of these keys. The same indexes still serve the audio,
     # transcript and segment lookups they served before.
     op.drop_index("task_sources_by_audio", table_name="task_sources")

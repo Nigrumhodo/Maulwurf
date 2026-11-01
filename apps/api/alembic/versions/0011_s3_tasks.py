@@ -8,6 +8,9 @@ a later end), the separate `calendar_sync_status`, the optimistic-locking `versi
 reminder `due_version`, and the nullable `calendar_etag` baseline J3.6 needs before a
 conditional PATCH.
 
+This revision follows A2.12's `0010_s2_messages_history_order` on the linear chain;
+the two `0010` revisions of parallel branches were renumbered before merge.
+
 Deliberate boundaries:
 
 - `task_evidence` (the literal quote beside each span) is A3.2's table; this migration
@@ -25,8 +28,8 @@ tenant-bound, and `maulwurf_jobs` may work on one bound tenant or with the expli
 `app.cross_tenant='on'` switch (the Calendar sync job and the analysis worker). The ingest
 role has no access to task data.
 
-Revision ID: 0010
-Revises: 0009
+Revision ID: 0011
+Revises: 0010
 Create Date: 2026-11-01
 """
 
@@ -37,8 +40,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "0010"
-down_revision: str | None = "0009"
+revision: str = "0011"
+down_revision: str | None = "0010"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
