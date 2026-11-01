@@ -29,7 +29,7 @@ accepts an explicit override. A future preference can pass its own `local_time` 
 changing the scheduling contract; reusing `digest_daily_time` would couple two unrelated
 preferences.
 
-DST follows J4.4's rule in `_resolve_local_wall`: a repeated wall clock (fall back) is
+DST follows J4.4's rule in `resolve_local_wall`: a repeated wall clock (fall back) is
 armed once at its first fold, and a nonexistent one (spring forward) moves to the first
 valid instant after the gap. `zoneinfo` alone would keep the "ghost" instant obtained with
 the offset in force before the transition, which is not the next valid instant. Both
@@ -254,7 +254,7 @@ _ONE_SECOND: Final = timedelta(seconds=1)
 _EPOCH: Final = datetime(1970, 1, 1, tzinfo=UTC)
 
 
-def _resolve_local_wall(wall: datetime, zone: ZoneInfo) -> datetime:
+def resolve_local_wall(wall: datetime, zone: ZoneInfo) -> datetime:
     """Resolve a naive local wall clock to an instant, normalising both DST edges.
 
     A repeated wall clock (fall back) has two instants; `fold=0` keeps the first one, so the
@@ -289,7 +289,7 @@ def _local_target(
     day: date, *, local_time: time, zone: ZoneInfo
 ) -> datetime:
     """Resolve one local target day at the configured wall clock (J4.4 DST rules)."""
-    return _resolve_local_wall(datetime.combine(day, local_time), zone)
+    return resolve_local_wall(datetime.combine(day, local_time), zone)
 
 
 def plan_task_reminders(
