@@ -13,7 +13,9 @@ retries: the sender returns the provider message id on success, raises
 message was accepted, or raises anything else (a timeout, a reset connection, an unexpected
 adapter error) when the message may already have left. Only the proven rejection becomes
 `failed`; every other failure becomes terminal `delivery_unknown`. Gmail offers no
-exactly-once delivery, so an automatic retry could send the email twice.
+exactly-once delivery, so an automatic retry could send the email twice. The provider call
+is bounded by the caller-supplied `sender_timeout`, so a hung adapter cannot hold the row
+lock until the process is killed.
 
 The caller owns the transaction. The occurrence row is locked for the whole settlement so a
 duplicate worker cannot send the same claim concurrently, and a retried settlement of a
@@ -24,9 +26,10 @@ or commit failure: the sender may already have been called, so the row must be l
 delivery lease, which closes it as `delivery_unknown` and never as `pending`.
 """
 
+import asyncio
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Literal, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,9 +76,10 @@ class NotificationSender(Protocol):
     ``send`` returns the provider message id only after the provider confirmed the message.
     An adapter that loses the response must raise
     :class:`~app.services.notifications.NotificationDeliveryAmbiguous` (or any exception):
-    the settlement treats it as uncertain and never retries it. The adapter must bound its
-    own HTTP call well below the J4.2 delivery lease: `settle_delivery` holds the occurrence
-    row lock while the call runs, and a hung call would hold that connection and lock.
+    the settlement treats it as uncertain and never retries it. The settlement applies the
+    caller-provided ``sender_timeout``; the owner (J4.1) must configure it below the J4.2
+    delivery lease, because `settle_delivery` holds the occurrence row lock while the call
+    runs and a hung call would hold that connection and lock.
     """
 
     async def send(self, request: DeliveryRequest) -> str: ...
@@ -98,6 +102,7 @@ async def settle_delivery(
     notification_id: uuid.UUID,
     *,
     sender: NotificationSender,
+    sender_timeout: timedelta,
     now: datetime | None = None,
 ) -> DeliveryReport:
     """Settle one claimed occurrence exactly once; never retry an uncertain delivery.
@@ -105,8 +110,13 @@ async def settle_delivery(
     Only a `sending` row is sent. Any other state is skipped, which makes an at-least-once
     job safe: the second delivery of the same job finds the terminal outcome and does not
     call the provider again. An expired lease is closed as `delivery_unknown` before the
-    sender is invoked, because the previous attempt may already have reached Gmail.
+    sender is invoked, because the previous attempt may already have reached Gmail. The
+    caller supplies ``sender_timeout`` (no default: the operational bound is J4.1's budget,
+    not a number invented here); a timeout is an ambiguous outcome and ends
+    `delivery_unknown`, never `failed` or a retry.
     """
+    if sender_timeout <= timedelta(0):
+        raise ValueError("the sender timeout must be positive")
     instant = now or datetime.now(UTC)
     if instant.tzinfo is None:
         raise ValueError("the settlement instant must be timezone-aware")
@@ -140,7 +150,9 @@ async def settle_delivery(
         attempts=row.attempts,
     )
     try:
-        provider_message_id = await sender.send(request)
+        provider_message_id = await asyncio.wait_for(
+            sender.send(request), timeout=sender_timeout.total_seconds()
+        )
     except Exception as error:  # noqa: BLE001 - any sender failure is conservatively uncertain
         outcome, error_code = delivery_error_outcome(error)
         if outcome == DELIVERY_FAILED:

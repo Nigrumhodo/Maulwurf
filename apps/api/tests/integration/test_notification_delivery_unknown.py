@@ -47,6 +47,7 @@ pytestmark = pytest.mark.integration
 NOTIFICATIONS = "/notifications"
 NOW = datetime(2026, 11, 2, 12, 0, tzinfo=UTC)
 OCCURRENCE = date(2026, 11, 9)
+SENDER_TIMEOUT = timedelta(seconds=5)
 
 
 @pytest.fixture
@@ -84,6 +85,9 @@ class StubSender:
             return "   "
         if self.outcome == "cancelled":
             raise asyncio.CancelledError()
+        if self.outcome == "slow":
+            await asyncio.sleep(0.05)
+            return f"gmail-{request.notification_id}"
         raise AssertionError(f"unknown stub outcome: {self.outcome}")
 
 
@@ -169,7 +173,7 @@ async def test_a_lost_response_is_terminal_uncertainty_and_the_retry_is_a_no_op(
     sender = StubSender("lost")
 
     report = await settle_delivery(
-        db_session, notification_id, sender=sender, now=NOW
+        db_session, notification_id, sender=sender, sender_timeout=SENDER_TIMEOUT, now=NOW
     )
 
     stored = await db_session.get(Notification, notification_id)
@@ -185,7 +189,7 @@ async def test_a_lost_response_is_terminal_uncertainty_and_the_retry_is_a_no_op(
     assert sender.calls == [notification_id]
 
     retry = await settle_delivery(
-        db_session, notification_id, sender=sender, now=NOW
+        db_session, notification_id, sender=sender, sender_timeout=SENDER_TIMEOUT, now=NOW
     )
     assert retry.outcome == "skipped"
     assert retry.status == "delivery_unknown"
@@ -222,7 +226,7 @@ async def test_an_unexpected_sender_exception_is_uncertain_delivery(
     sender = StubSender("timeout")
 
     report = await settle_delivery(
-        db_session, notification_id, sender=sender, now=NOW
+        db_session, notification_id, sender=sender, sender_timeout=SENDER_TIMEOUT, now=NOW
     )
 
     stored = await db_session.get(Notification, notification_id)
@@ -249,7 +253,7 @@ async def test_an_expired_lease_is_uncertain_without_calling_the_sender(
     sender = StubSender()
 
     report = await settle_delivery(
-        db_session, notification_id, sender=sender, now=NOW
+        db_session, notification_id, sender=sender, sender_timeout=SENDER_TIMEOUT, now=NOW
     )
 
     stored = await db_session.get(Notification, notification_id)
@@ -274,7 +278,13 @@ async def test_a_cancelled_send_waits_for_the_lease_and_never_returns_to_pending
 
     # CancelledError is a BaseException: it must not be swallowed as a normal outcome.
     with pytest.raises(asyncio.CancelledError):
-        await settle_delivery(db_session, notification_id, sender=sender, now=NOW)
+        await settle_delivery(
+            db_session,
+            notification_id,
+            sender=sender,
+            sender_timeout=SENDER_TIMEOUT,
+            now=NOW,
+        )
 
     stored = await db_session.get(Notification, notification_id)
     assert stored is not None
@@ -293,6 +303,33 @@ async def test_a_cancelled_send_waits_for_the_lease_and_never_returns_to_pending
     assert stored.status != "pending"
 
 
+async def test_a_sender_that_exceeds_its_timeout_is_uncertain(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    row = await _store(db_session, _notification(actor))
+    await _claim(db_session, row)
+    notification_id = row.id
+    sender = StubSender("slow")
+
+    report = await settle_delivery(
+        db_session,
+        notification_id,
+        sender=sender,
+        sender_timeout=timedelta(milliseconds=10),
+        now=NOW,
+    )
+
+    stored = await db_session.get(Notification, notification_id)
+    assert stored is not None
+    # A timeout is ambiguous: the request may have left before the response was lost.
+    assert report.outcome == "delivery_unknown"
+    assert report.error_code == "response_lost"
+    assert stored.status == "delivery_unknown"
+    assert sender.calls == [notification_id]
+    assert await _count(db_session, actor, status="pending") == 0
+
+
 async def test_only_a_proven_rejection_is_failed(
     db_session: AsyncSession,
 ) -> None:
@@ -303,7 +340,7 @@ async def test_only_a_proven_rejection_is_failed(
     sender = StubSender("rejected")
 
     report = await settle_delivery(
-        db_session, notification_id, sender=sender, now=NOW
+        db_session, notification_id, sender=sender, sender_timeout=SENDER_TIMEOUT, now=NOW
     )
 
     stored = await db_session.get(Notification, notification_id)
@@ -316,7 +353,7 @@ async def test_only_a_proven_rejection_is_failed(
     assert sender.calls == [notification_id]
 
     retry = await settle_delivery(
-        db_session, notification_id, sender=sender, now=NOW
+        db_session, notification_id, sender=sender, sender_timeout=SENDER_TIMEOUT, now=NOW
     )
     assert retry.outcome == "skipped"
     assert sender.calls == [notification_id]
@@ -332,7 +369,7 @@ async def test_a_confirmed_send_is_recorded_once(
     sender = StubSender("sent")
 
     report = await settle_delivery(
-        db_session, notification_id, sender=sender, now=NOW
+        db_session, notification_id, sender=sender, sender_timeout=SENDER_TIMEOUT, now=NOW
     )
 
     stored = await db_session.get(Notification, notification_id)
@@ -344,7 +381,7 @@ async def test_a_confirmed_send_is_recorded_once(
     assert stored.last_error_code is None
 
     retry = await settle_delivery(
-        db_session, notification_id, sender=sender, now=NOW
+        db_session, notification_id, sender=sender, sender_timeout=SENDER_TIMEOUT, now=NOW
     )
     assert retry.outcome == "skipped"
     assert retry.status == "sent"
@@ -361,7 +398,7 @@ async def test_a_success_without_a_provider_identity_is_uncertain(
     sender = StubSender("blank")
 
     report = await settle_delivery(
-        db_session, notification_id, sender=sender, now=NOW
+        db_session, notification_id, sender=sender, sender_timeout=SENDER_TIMEOUT, now=NOW
     )
 
     stored = await db_session.get(Notification, notification_id)
@@ -383,7 +420,7 @@ async def test_a_row_that_was_never_claimed_is_not_sent_by_a_settlement(
     sender = StubSender()
 
     report = await settle_delivery(
-        db_session, notification_id, sender=sender, now=NOW
+        db_session, notification_id, sender=sender, sender_timeout=SENDER_TIMEOUT, now=NOW
     )
 
     stored = await db_session.get(Notification, notification_id)
@@ -423,7 +460,13 @@ async def test_a_lost_response_can_only_return_through_the_warned_resend(
     original_id = row.id
     original_key = row.dedupe_key
     original_sender = StubSender("lost")
-    await settle_delivery(db_session, original_id, sender=original_sender, now=NOW)
+    await settle_delivery(
+        db_session,
+        original_id,
+        sender=original_sender,
+        sender_timeout=SENDER_TIMEOUT,
+        now=NOW,
+    )
 
     original = await _reload(db_session, original_id)
     original_updated_at = original.updated_at
@@ -466,7 +509,7 @@ async def test_a_lost_response_can_only_return_through_the_warned_resend(
     new_sender = StubSender("sent")
     await _claim(db_session, new_row)
     report = await settle_delivery(
-        db_session, new_id, sender=new_sender, now=NOW
+        db_session, new_id, sender=new_sender, sender_timeout=SENDER_TIMEOUT, now=NOW
     )
     assert report.outcome == "sent"
     assert await _count(db_session, actor, status="sent") == 1
