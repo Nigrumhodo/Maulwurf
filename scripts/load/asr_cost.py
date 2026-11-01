@@ -41,7 +41,7 @@ import tempfile
 import threading
 import time
 import wave
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -82,6 +82,7 @@ DEFAULT_WORKER_TIMEOUT_S = 300.0
 SAMPLE_INTERVAL_S = 0.01
 _TMPFS_PREFIX = "mw-s35-"
 _MIB = 1024 * 1024
+_GIB = 1024 * _MIB
 
 
 @dataclass(frozen=True)
@@ -228,12 +229,29 @@ class SlotMeasurement:
     rss_after_bytes: int | None
     ffmpeg_child_maxrss_bytes: int | None
     cleanup_removed: bool
+    # CPU consumed by the ffmpeg/ffprobe children; ``None`` on platforms without
+    # ``RUSAGE_CHILDREN`` or in captures taken before S4.5.
+    cpu_user_seconds: float | None = None
+    cpu_system_seconds: float | None = None
 
     @property
     def rss_delta_bytes(self) -> int | None:
         if self.rss_before_bytes is None or self.rss_peak_bytes is None:
             return None
         return max(0, self.rss_peak_bytes - self.rss_before_bytes)
+
+    @property
+    def cpu_total_seconds(self) -> float | None:
+        if self.cpu_user_seconds is None or self.cpu_system_seconds is None:
+            return None
+        return self.cpu_user_seconds + self.cpu_system_seconds
+
+    @property
+    def peak_working_set_bytes(self) -> int | None:
+        """RAM held by the slot: worker RSS plus the tmpfs original/fragment peak."""
+        if self.rss_peak_bytes is None:
+            return None
+        return self.rss_peak_bytes + self.tmpfs_peak_bytes
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -249,6 +267,9 @@ class SlotMeasurement:
             "rss_delta_bytes": self.rss_delta_bytes,
             "ffmpeg_child_maxrss_bytes": self.ffmpeg_child_maxrss_bytes,
             "cleanup_removed": self.cleanup_removed,
+            "cpu_user_seconds": _rounded_optional(self.cpu_user_seconds, 6),
+            "cpu_system_seconds": _rounded_optional(self.cpu_system_seconds, 6),
+            "cpu_total_seconds": _rounded_optional(self.cpu_total_seconds, 6),
         }
 
     @classmethod
@@ -270,8 +291,12 @@ class SlotMeasurement:
             rss_peak = _optional_int(payload, "rss_peak_bytes")
             rss_after = _optional_int(payload, "rss_after_bytes")
             child_maxrss = _optional_int(payload, "ffmpeg_child_maxrss_bytes")
+            cpu_user = _optional_float(payload, "cpu_user_seconds")
+            cpu_system = _optional_float(payload, "cpu_system_seconds")
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("worker measurement is incomplete") from exc
+        if (cpu_user is None) != (cpu_system is None):
+            raise ValueError("cpu seconds must be both present or both absent")
         return cls(
             slot=slot,
             fragments=fragments,
@@ -284,6 +309,8 @@ class SlotMeasurement:
             rss_after_bytes=rss_after,
             ffmpeg_child_maxrss_bytes=child_maxrss,
             cleanup_removed=cleanup_removed,
+            cpu_user_seconds=cpu_user,
+            cpu_system_seconds=cpu_system,
         )
 
 
@@ -332,6 +359,80 @@ class LoadReport:
         return max(values) if values else None
 
     @property
+    def ffmpeg_cpu_user_seconds(self) -> float | None:
+        return _sum_optional(
+            measurement.cpu_user_seconds for measurement in self.measurements
+        )
+
+    @property
+    def ffmpeg_cpu_system_seconds(self) -> float | None:
+        return _sum_optional(
+            measurement.cpu_system_seconds for measurement in self.measurements
+        )
+
+    @property
+    def ffmpeg_cpu_total_seconds(self) -> float | None:
+        """CPU of every ffmpeg/ffprobe child in the concurrent run (all slots)."""
+        return _sum_optional(
+            measurement.cpu_total_seconds for measurement in self.measurements
+        )
+
+    def _per_class_hour(self, value: float) -> float:
+        return value / (self.clip_seconds / 3600)
+
+    @property
+    def ffmpeg_cpu_seconds_per_class_hour(self) -> float | None:
+        """CPU seconds a single class hour needs, max across slots (conservative)."""
+        values = [
+            measurement.cpu_total_seconds for measurement in self.measurements
+        ]
+        if any(value is None for value in values):
+            return None
+        return self._per_class_hour(max(value for value in values if value is not None))
+
+    @property
+    def cpu_ratio(self) -> float | None:
+        """Cores busy per slot at the peak: CPU seconds per wall second."""
+        values = [
+            measurement.cpu_total_seconds for measurement in self.measurements
+        ]
+        if any(value is None for value in values):
+            return None
+        ratios = [
+            measurement.cpu_total_seconds / measurement.wall_seconds
+            for measurement in self.measurements
+            if measurement.cpu_total_seconds is not None
+            and measurement.wall_seconds > 0
+        ]
+        return max(ratios) if ratios else None
+
+    @property
+    def wall_seconds_per_class_hour(self) -> float:
+        """Local audio-path seconds per source hour, max across slots."""
+        return self._per_class_hour(
+            max(measurement.wall_seconds for measurement in self.measurements)
+        )
+
+    @property
+    def peak_working_set_bytes(self) -> int | None:
+        """Largest slot working set (worker RSS + tmpfs), the RAM cost driver."""
+        values = [
+            measurement.peak_working_set_bytes
+            for measurement in self.measurements
+            if measurement.peak_working_set_bytes is not None
+        ]
+        return max(values) if values else None
+
+    @property
+    def ram_gib_hours_per_class_hour(self) -> float | None:
+        """GiB-hours held per class hour of local processing (lower bound)."""
+        peak = self.peak_working_set_bytes
+        if peak is None:
+            return None
+        wall_hours = self.wall_seconds_per_class_hour / 3600
+        return (peak / _GIB) * wall_hours
+
+    @property
     def worker_cleanup_all_removed(self) -> bool:
         return all(measurement.cleanup_removed for measurement in self.measurements)
 
@@ -357,6 +458,26 @@ class LoadReport:
                 "worker_rss_peak_sum_bytes": self.worker_rss_peak_sum_bytes,
                 "worker_rss_delta_sum_bytes": self.worker_rss_delta_sum_bytes,
                 "ffmpeg_child_maxrss_bytes": self.ffmpeg_child_maxrss_bytes,
+                "ffmpeg_cpu_user_seconds": _rounded_optional(
+                    self.ffmpeg_cpu_user_seconds, 6
+                ),
+                "ffmpeg_cpu_system_seconds": _rounded_optional(
+                    self.ffmpeg_cpu_system_seconds, 6
+                ),
+                "ffmpeg_cpu_total_seconds": _rounded_optional(
+                    self.ffmpeg_cpu_total_seconds, 6
+                ),
+                "ffmpeg_cpu_seconds_per_class_hour": _rounded_optional(
+                    self.ffmpeg_cpu_seconds_per_class_hour, 6
+                ),
+                "cpu_ratio": _rounded_optional(self.cpu_ratio, 6),
+                "wall_seconds_per_class_hour": round(
+                    self.wall_seconds_per_class_hour, 6
+                ),
+                "peak_working_set_bytes": self.peak_working_set_bytes,
+                "ram_gib_hours_per_class_hour": _rounded_optional(
+                    self.ram_gib_hours_per_class_hour, 9
+                ),
                 "fits_provisional_tmpfs_upper_bound": (
                     self.tmpfs_peak_sum_bytes <= PROVISIONAL_TMPFS_BYTES
                 ),
@@ -470,6 +591,27 @@ class LoadReport:
                     f"{_bytes_text(self.ffmpeg_child_maxrss_bytes)}"
                 ),
                 (
+                    "ffmpeg CPU (children): user "
+                    f"{_seconds_text(self.ffmpeg_cpu_user_seconds)}, system "
+                    f"{_seconds_text(self.ffmpeg_cpu_system_seconds)}, total "
+                    f"{_seconds_text(self.ffmpeg_cpu_total_seconds)} for the "
+                    f"{self.slots}-slot run"
+                ),
+                (
+                    "ffmpeg CPU per class hour (max slot): "
+                    f"{_seconds_text(self.ffmpeg_cpu_seconds_per_class_hour)}, "
+                    f"ratio {_ratio_text(self.cpu_ratio)} cores"
+                ),
+                (
+                    "peak working set (worker RSS + tmpfs, max slot): "
+                    f"{_bytes_text(self.peak_working_set_bytes)}"
+                ),
+                (
+                    "wall per class hour (max slot): "
+                    f"{self.wall_seconds_per_class_hour:.3f} s; RAM "
+                    f"{_gib_hours_text(self.ram_gib_hours_per_class_hour)} per class hour"
+                ),
+                (
                     "Limits: 200 MiB and 3 h are not approved; D4 is blocked. "
                     "No Riva call, no key and no audio kept."
                 ),
@@ -488,6 +630,14 @@ def _limitations() -> list[str]:
         "not provider latency, provider RAM or ASR quality.",
         "Worker RSS excludes the ffmpeg child peak (reported separately) and any Riva SDK "
         "buffer; it is not a full slot budget.",
+        "Worker peak RSS prefers /proc/self/status VmHWM and falls back to "
+        "getrusage(RUSAGE_SELF).ru_maxrss when a sandbox hides it; with neither source "
+        "the RAM term stays NO VERIFICADO and the load case skips instead of reporting 0.",
+        "ffmpeg CPU is the user+system time of the ffprobe/ffmpeg children decoded from the "
+        "host's RUSAGE_CHILDREN; provider CPU, network and wall-time contention are not "
+        "included.",
+        "RAM GiB-hours multiply the peak working set by the local audio-path wall time; "
+        "they are a lower bound that excludes provider waiting and idle reservation.",
         "The class-hour ASR projection is linear from the measured clip; real classes have "
         "silence, questions and non-speech audio.",
         "200 MiB and 3 h remain unapproved. D4 is blocked; the provisional tmpfs and memory "
@@ -497,6 +647,17 @@ def _limitations() -> list[str]:
 
 def _rounded(value: float | str, digits: int) -> float | str:
     return value if isinstance(value, str) else round(value, digits)
+
+
+def _rounded_optional(value: float | None, digits: int) -> float | None:
+    return None if value is None else round(value, digits)
+
+
+def _sum_optional(values: Iterable[float | None]) -> float | None:
+    items = list(values)
+    if not items or any(value is None for value in items):
+        return None
+    return sum(value for value in items if value is not None)
 
 
 def _require_int(payload: dict[str, Any], key: str) -> int:
@@ -525,6 +686,18 @@ def _optional_int(payload: dict[str, Any], key: str) -> int | None:
     return value
 
 
+def _optional_float(payload: dict[str, Any], key: str) -> float | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise TypeError(f"{key} must be a number or null")
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        raise ValueError(f"{key} must be a non-negative finite number")
+    return number
+
+
 def _bytes_text(value: int | None) -> str:
     if value is None:
         return NOT_VERIFIED
@@ -535,6 +708,24 @@ def _money_text(value: float | str) -> str:
     if isinstance(value, str):
         return value
     return f"{value:.6f} USD"
+
+
+def _seconds_text(value: float | None) -> str:
+    if value is None:
+        return NOT_VERIFIED
+    return f"{value:.6f} s"
+
+
+def _ratio_text(value: float | None) -> str:
+    if value is None:
+        return NOT_VERIFIED
+    return f"{value:.6f}"
+
+
+def _gib_hours_text(value: float | None) -> str:
+    if value is None:
+        return NOT_VERIFIED
+    return f"{value:.9f} GiB-hours"
 
 
 def _yes_no(value: bool) -> str:
@@ -553,8 +744,30 @@ def process_rss_bytes() -> int | None:
 
 
 def process_hwm_bytes() -> int | None:
-    """Peak resident set size from ``VmHWM``; ``None`` when unavailable."""
-    return _status_kib("VmHWM")
+    """Peak resident set size in bytes, or ``None`` when no source is available.
+
+    ``VmHWM`` in ``/proc/self/status`` is the primary source. Some sandboxes (gVisor,
+    for example) hide that field, so fall back to ``ru_maxrss`` from
+    ``getrusage(RUSAGE_SELF)``, which is the same kernel peak expressed in KiB on Linux.
+    A missing or zero peak stays unknown instead of becoming a fabricated value.
+    """
+    vm_hwm = _status_kib("VmHWM")
+    if vm_hwm is not None and vm_hwm > 0:
+        return vm_hwm
+    return self_maxrss_bytes()
+
+
+def self_maxrss_bytes() -> int | None:
+    """Peak RSS from ``getrusage(RUSAGE_SELF)``; Linux reports KiB, else ``None``."""
+    if sys.platform != "linux":
+        return None
+    import resource
+
+    try:
+        value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    except (OSError, ValueError):
+        return None
+    return value * 1024 if value > 0 else None
 
 
 def _status_kib(name: str) -> int | None:
@@ -577,6 +790,20 @@ def children_maxrss_bytes() -> int | None:
 
     value = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
     return value * 1024 if value > 0 else None
+
+
+def children_cpu_seconds() -> tuple[float | None, float | None]:
+    """Cumulative user/system CPU of waited children, in seconds.
+
+    The audio path waits on ffprobe/ffmpeg, so the delta around ``process`` is the
+    ffmpeg CPU cost. Non-Linux platforms return ``None`` instead of guessing.
+    """
+    if sys.platform != "linux":
+        return None, None
+    import resource
+
+    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return float(usage.ru_utime), float(usage.ru_stime)
 
 
 class _DirectorySampler(threading.Thread):
@@ -705,6 +932,7 @@ def measure_slot(
     """
     workdir.mkdir(parents=True, exist_ok=True)
     rss_before = process_rss_bytes()
+    cpu_user_before, cpu_system_before = children_cpu_seconds()
     sampler = _DirectorySampler(workdir)
     billed_seconds = 0.0
     peak_bytes = directory_bytes(workdir)
@@ -732,6 +960,7 @@ def measure_slot(
     rss_peak = process_hwm_bytes()
     rss_after = process_rss_bytes()
     child_maxrss = children_maxrss_bytes()
+    cpu_user_after, cpu_system_after = children_cpu_seconds()
     shutil.rmtree(workdir, ignore_errors=True)
     return SlotMeasurement(
         slot=slot,
@@ -745,7 +974,15 @@ def measure_slot(
         rss_after_bytes=rss_after,
         ffmpeg_child_maxrss_bytes=child_maxrss,
         cleanup_removed=not workdir.exists(),
+        cpu_user_seconds=_cpu_delta(cpu_user_before, cpu_user_after),
+        cpu_system_seconds=_cpu_delta(cpu_system_before, cpu_system_after),
     )
+
+
+def _cpu_delta(before: float | None, after: float | None) -> float | None:
+    if before is None or after is None:
+        return None
+    return max(0.0, after - before)
 
 
 def _environment() -> dict[str, str]:
