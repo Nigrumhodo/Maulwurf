@@ -2,7 +2,7 @@ A4.3 — local gate evidence (MAULW-133)
 Date: 2026-11-01 (UTC)
 Host: Linux 7.0.0-39-generic sandbox, PostgreSQL 16.15 (localhost:5432), Redis 7.0.15
 Worktree: task/MAULW-133
-Head: 7d5603d (merge of origin/develop after PR #145/MAULW-134)
+Head: feed05c (gates 1–6 on 7d5603d; step 7 after the adapter rename)
 Scope: U-S4-AN-03 cancellation core, PostgreSQL persistence adapter, documentation.
 apps/web untouched; no route, migration, provider, Gmail or credential involved.
 
@@ -38,6 +38,14 @@ Commands and results
 
 6. python3 scripts/docs/check_refs.py
    -> OK: 912 documented repository paths exist or are expected.
+
+7. Post-rename rerun on feed05c (only the adapter class name changed to
+   SqlNotificationCancellationStore):
+   - uv run ruff check .                  -> All checks passed!
+   - uv run mypy .                        -> Success: no issues found in 265 source files
+   - pytest tests/unit -q                 -> 1513 passed, 35 warnings in 16.13s
+   - pytest tests/integration/test_s4_notification_cancellation.py -q
+                                          -> 6 passed, 1 warning in 4.53s
 
 Shared-environment note
 -----------------------
