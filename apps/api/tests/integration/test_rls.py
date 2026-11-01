@@ -57,9 +57,13 @@ TENANT_MODELS: list[type[TenantOwned]] = sorted(
 )
 TENANT_TABLES = {str(cast(Any, model).__tablename__) for model in TENANT_MODELS}
 # `settings` (J3.3/J3.7) keys its tenant by `user_id` without the `TenantOwned.id` shape used
-# by `get_owned`; it still gets forced RLS and is asserted here explicitly.
-RLS_TABLES = TENANT_TABLES | {"users", "settings"}
-JOBS_TABLES = (TENANT_TABLES | {"users", "settings"}) - {"sessions", "google_credentials"}
+# by `get_owned`; `task_sources` (A3.1) has a composite primary key and no `id` column. Both
+# still get forced RLS and are asserted here explicitly.
+RLS_TABLES = TENANT_TABLES | {"users", "settings", "task_sources"}
+JOBS_TABLES = (TENANT_TABLES | {"users", "settings", "task_sources"}) - {
+    "sessions",
+    "google_credentials",
+}
 
 
 @pytest.fixture(autouse=True)

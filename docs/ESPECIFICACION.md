@@ -1008,10 +1008,21 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   source, but normative provenance lives in `task_sources` to support chat proposals with
   zero, one, or several classes.
 - `task_sources` links task, audio, transcript version, segment, and validated span;
-  deleting a source invalidates/purges pending proposals that depend on it.
+  deleting a source invalidates/purges pending proposals that depend on it. The reference is
+  self-consistent, not merely same-tenant: `(user_id, audio_id, transcript_id)` pins the
+  class of the cited transcript, `(user_id, transcript_id, transcript_version)` pins that
+  transcript's version, and `(user_id, transcript_id, segment_id)` pins a segment that
+  belongs to it, so a citation can never mix another class, version or transcript of the
+  same user.
   `task_revisions` stores `base_task_version`, proposed fields, state
   `pending_confirmation|activated|discarded`, and a tenant-aware relation to the run that
-  produced it.
+  produced it. Its unique key `(task_id, base_task_version, revision_type, run_id)` is
+  intentionally NULL-distinct: `run_id` is NULL for `edit_of_confirmed`, so several pending
+  edits of the same base version are legitimate proposals until one is confirmed; a repeated
+  reanalysis of the same run is still rejected. Only the explicit confirm promotes one
+  revision and bumps `tasks.version`, so the rest answer `409 version_conflict`. Enforcing
+  one edit per base version would require `NULLS NOT DISTINCT` (PostgreSQL 15+) and a new
+  revision of this contract.
 - Date CHECK: resolved all-day → only `due_date`; resolved with time → only `due_at`;
   ambiguous/no date → both null. Store the original date text, review reason, due version,
   and timezone snapshot. Persist `event_start_at/event_end_at` or
