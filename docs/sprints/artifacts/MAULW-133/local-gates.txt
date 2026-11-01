@@ -1,10 +1,51 @@
 A4.3 — local gate evidence (MAULW-133)
 Date: 2026-11-01 (UTC)
-Host: Linux sandbox, PostgreSQL 16.15 (localhost:5432), Redis 7.0.15
+Host: Linux 7.0.0-39-generic sandbox, PostgreSQL 16.15 (localhost:5432), Redis 7.0.15
 Worktree: task/MAULW-133
+Head: 7d5603d (merge of origin/develop after PR #145/MAULW-134)
 Scope: U-S4-AN-03 cancellation core, PostgreSQL persistence adapter, documentation.
-apps/web untouched; no route, migration, provider or Gmail call.
+apps/web untouched; no route, migration, provider, Gmail or credential involved.
 
 Commands and results
 --------------------
-(Final capture is written after the local gates and the develop sync; see the PR body.)
+1. cd apps/api && uv run ruff check .
+   -> All checks passed!
+
+2. cd apps/api && uv run mypy .
+   -> Success: no issues found in 265 source files
+
+3. cd apps/api && env -u no_proxy -u NO_PROXY uv run pytest tests/unit -q
+   -> 1513 passed, 35 warnings in 25.64s
+   (the sanitized proxy removes the two pre-existing bracketed-IPv6 httpx failures of
+   test_ingest_sink/test_llm; no test or production code was changed to hide them)
+
+4. cd apps/api && env -u no_proxy -u NO_PROXY uv run pytest \
+       tests/integration/test_s4_notification_cancellation.py \
+       tests/integration/test_s4_notifications_schema.py \
+       tests/integration/test_calendar_revision_patch.py -q
+   -> 36 passed, 1 warning in 12.05s
+   The 6 new A4.3 cases are:
+     test_a_new_due_generation_cancels_only_the_older_pending_rows
+     test_a_stale_occurrence_past_its_instant_is_cancelled_and_cannot_be_claimed
+     test_a_sending_occurrence_is_never_rewritten_by_a_generation_change
+     test_a_second_cancellation_is_idempotent
+     test_a_preference_change_cancels_disabled_reminders_and_digests
+     test_cancelling_without_a_rule_is_rejected_and_writes_nothing
+
+5. cd apps/api && env -u no_proxy -u NO_PROXY uv run pytest \
+       tests/integration/test_rls.py -q
+   -> 13 passed, 7 warnings in 9.55s
+
+6. python3 scripts/docs/check_refs.py
+   -> OK: 912 documented repository paths exist or are expected.
+
+Shared-environment note
+-----------------------
+This host runs several Maulwurf worktrees at the same time. A full `pytest -m integration`
+run overlapped with other worktrees that were also running `alembic upgrade head`; those
+migrations execute `ALTER ROLE "maulwurf_app" ...` and PostgreSQL answered
+`tuple concurrently updated`, failing the session-scoped migration fixture before any A4.3
+test ran. The same collisions hit `test_migrations.py`/`test_rls.py` when run together.
+The A4.3-specific integration module and the notification schema/lifecycle modules pass in
+isolation once the other suites release the shared database; the full-suite result is
+recorded in the PR body with that contention, not presented as an A4.3 failure.

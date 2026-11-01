@@ -291,7 +291,6 @@ def cancel(notification: NotificationRow) -> str:
     return _set_status(notification, "cancelled")
 
 
-
 def _offset_set(values: Iterable[int], *, field: str) -> set[int]:
     """Validate one preference array; a malformed value must not mean "cancel all"."""
     if isinstance(values, (str, bytes)):

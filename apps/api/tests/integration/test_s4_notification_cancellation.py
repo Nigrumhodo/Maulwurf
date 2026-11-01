@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Notification, Task
-from app.services.notification_cancellation import NotificationCancellationStore
+from app.services.notification_cancellation import SqlNotificationCancellationStore
 from app.services.notifications import (
     NotificationTransitionError,
     claim,
@@ -142,7 +142,7 @@ async def test_a_new_due_generation_cancels_only_the_older_pending_rows(
     digest = await _task_less(db_session, actor)
     rows = [old_pending, old_sent, current, other_task_row, digest]
 
-    store = NotificationCancellationStore(db_session)
+    store = SqlNotificationCancellationStore(db_session)
     assert (
         await store.cancel_obsolete(actor.user_id, task_id=task.id, due_version=2) == 1
     )
@@ -165,7 +165,7 @@ async def test_a_stale_occurrence_past_its_instant_is_cancelled_and_cannot_be_cl
         db_session, actor, task, due_version=1, scheduled_at=NOW - timedelta(hours=3)
     )
 
-    store = NotificationCancellationStore(db_session)
+    store = SqlNotificationCancellationStore(db_session)
     assert (
         await store.cancel_obsolete(actor.user_id, task_id=task.id, due_version=2) == 1
     )
@@ -186,7 +186,7 @@ async def test_a_sending_occurrence_is_never_rewritten_by_a_generation_change(
     task = await make_task(db_session, actor)
     in_flight = await _reminder(db_session, actor, task, due_version=1, status="sending")
 
-    store = NotificationCancellationStore(db_session)
+    store = SqlNotificationCancellationStore(db_session)
     assert await store.cancel_obsolete(actor.user_id, task_id=task.id, due_version=2) == 0
     assert (await _stored_statuses(db_session, [in_flight]))[in_flight.id] == "sending"
 
@@ -196,7 +196,7 @@ async def test_a_second_cancellation_is_idempotent(db_session: AsyncSession) -> 
     task = await make_task(db_session, actor)
     row = await _reminder(db_session, actor, task, due_version=1)
 
-    store = NotificationCancellationStore(db_session)
+    store = SqlNotificationCancellationStore(db_session)
     assert await store.cancel_obsolete(actor.user_id, task_id=task.id, due_version=2) == 1
     assert await store.cancel_obsolete(actor.user_id, task_id=task.id, due_version=2) == 0
     assert (await _stored_statuses(db_session, [row]))[row.id] == "cancelled"
@@ -222,7 +222,7 @@ async def test_a_preference_change_cancels_disabled_reminders_and_digests(
     foreign = await _reminder(db_session, other_actor, other_task, row_type="reminder_t2")
     rows = [t48, t24, t2, daily, weekly, test_send, foreign]
 
-    store = NotificationCancellationStore(db_session)
+    store = SqlNotificationCancellationStore(db_session)
     enabled = _enabled(reminder_offsets_hours=(48, 24), digest_weekly_enabled=False)
     assert await store.cancel_obsolete(actor.user_id, enabled_types=enabled) == 2
 
@@ -251,7 +251,7 @@ async def test_cancelling_without_a_rule_is_rejected_and_writes_nothing(
         await _task_less(db_session, actor),
     ]
 
-    store = NotificationCancellationStore(db_session)
+    store = SqlNotificationCancellationStore(db_session)
     with pytest.raises(ValueError):
         await store.cancel_obsolete(actor.user_id)
     with pytest.raises(ValueError):

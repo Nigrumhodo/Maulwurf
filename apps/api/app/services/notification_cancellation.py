@@ -27,7 +27,7 @@ from app.services.notifications import obsolete_pending
 NOTIFICATIONS = cast(Table, Notification.__table__)
 
 
-class NotificationCancellationStore:
+class SqlNotificationCancellationStore:
     """Apply the A4.3 cancellation to PostgreSQL; the caller commits the transaction."""
 
     def __init__(self, db: AsyncSession) -> None:
