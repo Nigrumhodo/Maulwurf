@@ -102,7 +102,7 @@ Per-slot measurements from the same capture:
   budget.
 - **ASR: 60 min is justified.** The 3 h projection is 788.08 s. The old 600 s supervisor
   cap was shorter than that projection, so the live child cap now follows the published
-  TTL: `INGEST_ASR_TIMEOUT_S` defaults to **3,600 s** and refuses a value below 3,600 s.
+  TTL: `INGEST_ASR_TIMEOUT_S` defaults to **3,600 s** and refuses any other value.
   This is an enforcement alignment, not a TTL change: the TTL stays at the proposed 60 min.
 - **Cleanup:** every attempt directory was deleted and verified absent, and the harness
   root was empty. No audio is kept.
