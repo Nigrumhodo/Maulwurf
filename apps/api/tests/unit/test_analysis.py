@@ -4,6 +4,7 @@ Also covers the L3.6 rules that sit next to that decision: the model's clock is 
 a failed window publishes nothing, and a replay of the same run does not insert again.
 """
 
+import asyncio
 import json
 from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
@@ -23,6 +24,7 @@ from app.services.analysis import (
     parse_extraction_payload,
     plan_task_writes,
     proposal_fields,
+    update_is_safe,
 )
 from app.services.analysis_validation import ClassTranscript
 from app.services.analysis_windows import AggregatedProposal, EvidenceSpan
@@ -213,6 +215,31 @@ async def test_a_later_window_failure_returns_no_batch() -> None:
             target_tokens=4,
             overlap_tokens=1,
         )
+
+
+async def test_the_provider_loop_stops_at_the_deadline() -> None:
+    class _Slow:
+        async def complete(self, *, system: str, user: str) -> str:
+            await asyncio.sleep(5)
+            return "{}"
+
+    with pytest.raises(TimeoutError):
+        await analyze_transcript(
+            _context(),
+            _Slow(),
+            now=NOW,
+            count_tokens=lambda text: max(1, len(text.split())),
+            deadline_seconds=0.05,
+        )
+
+
+def test_a_confirmed_or_moved_task_is_not_updated_in_place() -> None:
+    assert update_is_safe("needs_review", 1, 1) is True
+    assert update_is_safe("confirmed", 1, 1) is False
+    assert update_is_safe("dismissed", 1, 1) is False
+    assert update_is_safe("completed", 1, 1) is False
+    assert update_is_safe("needs_review", 2, 1) is False
+    assert update_is_safe("needs_review", 2, 2) is False
 
 
 async def test_a_transcript_over_the_window_budget_is_rejected() -> None:

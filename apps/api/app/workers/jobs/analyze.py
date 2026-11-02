@@ -9,6 +9,7 @@ with the S3.6 delay. `LLMNotConfigured` fails the run and writes no tasks.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import Callable
@@ -138,6 +139,11 @@ async def run_analyze(
         await _extract_and_publish(sessions, models, claimed, clock)
     except RunFenced:
         logger.info("analyze.noop reason=run_fenced run_id=%s", claimed.run.run_id)
+    except asyncio.CancelledError as exc:
+        # ARQ's job timeout cancels the task. That is not an Exception, so without this
+        # branch the run stays `running` until the lease expires.
+        await _record(sessions, claimed.run, retry_decision(exc, job_try=job_try).error_code)
+        raise
     except Exception as exc:
         await _record(sessions, claimed.run, retry_decision(exc, job_try=job_try).error_code)
         raise

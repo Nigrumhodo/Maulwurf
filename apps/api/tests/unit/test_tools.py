@@ -52,3 +52,10 @@ async def test_the_budget_follows_the_clock_not_the_request_instant() -> None:
     )
     assert result[0].ok is False
     assert result[0].payload["code"] == "tool_budget_exceeded"
+
+
+def test_pending_tasks_handed_to_the_model_are_capped() -> None:
+    from app.services.tools import PENDING_TASK_LIMIT, pending_tasks_statement
+
+    statement = pending_tasks_statement(uuid4())
+    assert statement._limit_clause.value == PENDING_TASK_LIMIT

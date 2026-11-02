@@ -171,10 +171,10 @@ class Settings(BaseSettings):
     llm_context_margin_tokens: int = Field(default=512, ge=0)
     llm_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
     llm_max_retries: int = Field(default=2, ge=0, le=5)
-    # Provisional until a measured extraction profile replaces it (L3.6). The job timeout
-    # is 600 s and each provider call can use the 60 s LLM timeout, so the window count is
-    # what keeps one class inside that job. The token budget is this count times the
-    # per-window target.
+    # Provisional until a measured extraction profile replaces it (L3.6). This caps how many
+    # windows (and therefore how many tokens) one class may send. It does not bound wall
+    # time: each call can take llm_timeout_seconds, so analyze_transcript enforces its own
+    # deadline below the 600 s job timeout.
     analysis_max_windows: int = Field(default=24, ge=1, le=64)
     # D3-Texto: models/providers whose decision is closed (ESPECIFICACION §12). Empty by
     # default — fail closed: with the decision open only synthetic or redacted text is

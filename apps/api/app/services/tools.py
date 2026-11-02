@@ -40,9 +40,22 @@ from app.services.date_resolution import DateResolutionError, MentionKind, resol
 
 MAX_TOOL_ROUNDS = 4
 TOOL_BUDGET_SECONDS = 15.0
+# Provisional. The payload goes back to the model, so an unbounded inbox would blow the
+# context window. The tray itself is not truncated; this is only the tool response.
+PENDING_TASK_LIMIT = 50
 _ALLOWED = frozenset({"get_calendar_events", "get_pending_tasks", "propose_task"})
 _PENDING_STATUSES = ("needs_review", "pending")
 _STRICT = ConfigDict(extra="forbid")
+
+
+def pending_tasks_statement(user_id: UUID) -> Any:
+    """The inbox slice a tool may hand back to the model. Capped, oldest first."""
+    return (
+        select(Task)
+        .where(Task.user_id == user_id, Task.status.in_(_PENDING_STATUSES))
+        .order_by(Task.created_at)
+        .limit(PENDING_TASK_LIMIT)
+    )
 
 
 class ToolError(Exception):
@@ -220,13 +233,7 @@ class ToolOrchestrator:
         }
 
     async def _pending(self, user_id: UUID) -> dict[str, Any]:
-        rows = (
-            await self._db.scalars(
-                select(Task)
-                .where(Task.user_id == user_id, Task.status.in_(_PENDING_STATUSES))
-                .order_by(Task.created_at)
-            )
-        ).all()
+        rows = (await self._db.scalars(pending_tasks_statement(user_id))).all()
         return {
             "source": "tasks",
             "tasks": [

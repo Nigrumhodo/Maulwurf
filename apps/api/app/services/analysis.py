@@ -15,6 +15,7 @@ overwritten, and a revision is never activated here.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -62,6 +63,11 @@ from app.services.llm import ChatMessage, LLMProvider
 from prompts.registry import load_extraction_prompts, render_window_prompt
 
 logger = logging.getLogger(__name__)
+
+# Below the analyze job timeout (600 s). Each provider call may use the 60 s LLM timeout,
+# so the window count does not bound wall time; this deadline does, and it leaves room to
+# record the run as failed before ARQ cancels the job.
+ANALYSIS_DEADLINE_S = 540.0
 
 # Provisional output budget until a measured extraction profile replaces it.
 EXTRACTION_MAX_TOKENS = 2048
@@ -289,11 +295,13 @@ async def analyze_transcript(
     target_tokens: int | None = None,
     overlap_tokens: int | None = None,
     max_windows: int | None = None,
+    deadline_seconds: float | None = None,
 ) -> AnalysisBatch:
     """Extract every window, then return one batch. A failed window raises before return.
 
-    The window count and the token budget are the same cap: one class must stay inside
-    the analyze job timeout. A transcript that cannot fit raises and writes nothing.
+    The window count bounds tokens. Wall time is a separate deadline, below the analyze
+    job timeout, around the provider calls only. If it expires, nothing is returned and
+    nothing is written. A transcript that cannot fit the token budget raises the same way.
     """
     prompts = load_extraction_prompts()
     cap = live_settings.analysis_max_windows if max_windows is None else max_windows
@@ -313,34 +321,37 @@ async def analyze_transcript(
     if plan.window_count > cap:
         raise AnalysisPayloadError("the transcript exceeds the analysis window budget")
     logger.info("analyze.windows count=%d tokens=%d", plan.window_count, plan.total_tokens)
+    deadline = ANALYSIS_DEADLINE_S if deadline_seconds is None else deadline_seconds
     WindowBatch = tuple[PreparedProposal, tuple[WindowCitation, ...]]
     batches: list[tuple[AnalysisWindow, list[WindowBatch]]] = []
     summaries: list[str] = []
     topics: list[str] = []
-    for window in plan.windows:
-        if not window.segments:
-            continue
-        raw = await model.complete(
-            system=prompts.system,
-            user=render_window_prompt(
-                subject=context.subject,
-                teacher=context.teacher,
+    async with asyncio.timeout(deadline):
+        for window in plan.windows:
+            if not window.segments:
+                continue
+            raw = await model.complete(
+                system=prompts.system,
+                user=render_window_prompt(
+                    subject=context.subject,
+                    teacher=context.teacher,
+                    class_date=context.class_date,
+                    class_timezone=context.class_timezone,
+                    segments=tuple(
+                        (part.segment_id, part.text, part.local_char_start)
+                        for part in window.segments
+                    ),
+                ),
+            )
+            parsed = parse_extraction_payload(
+                raw,
                 class_date=context.class_date,
                 class_timezone=context.class_timezone,
-                segments=tuple(
-                    (part.segment_id, part.text, part.local_char_start) for part in window.segments
-                ),
-            ),
-        )
-        parsed = parse_extraction_payload(
-            raw,
-            class_date=context.class_date,
-            class_timezone=context.class_timezone,
-            now=now,
-        )
-        summaries.append(parsed.result.resumen_clase)
-        topics.extend(parsed.result.temas)
-        batches.append((window, _accepted(parsed, window, context.view)))
+                now=now,
+            )
+            summaries.append(parsed.result.resumen_clase)
+            topics.extend(parsed.result.temas)
+            batches.append((window, _accepted(parsed, window, context.view)))
     aggregated = aggregate_window_citations(batches)
     seen: set[str] = set()
     unique_topics: list[str] = []
@@ -526,8 +537,23 @@ async def apply_task_writes(
             continue
         if write.task_id is None:
             continue
-        if write.kind is WriteKind.UPDATE:
-            await _update_task(db, user_id=user_id, task_id=write.task_id, proposal=write.proposal)
+        if write.kind is WriteKind.UPDATE and write.base_version is not None:
+            updated = await _update_task(
+                db,
+                user_id=user_id,
+                task_id=write.task_id,
+                base_version=write.base_version,
+                proposal=write.proposal,
+            )
+            if updated == "revise":
+                await _revise_task(
+                    db,
+                    user_id=user_id,
+                    task_id=write.task_id,
+                    run_id=run_id,
+                    base_version=write.base_version,
+                    proposal=write.proposal,
+                )
             continue
         if write.kind is WriteKind.REVISE and write.base_version is not None:
             await _revise_task(
@@ -746,16 +772,41 @@ async def _insert_task(
     )
 
 
+def update_is_safe(status: str, version: int, base_version: int) -> bool:
+    """An in-place update is only safe while the row is still the unedited proposal.
+
+    The plan read a snapshot. A confirm or edit between that read and this write changes
+    the status or the version, and the active columns must stay as the user left them.
+    """
+    if status in _PROTECTED_STATUSES or version != base_version or version > 1:
+        return False
+    return True
+
+
 async def _update_task(
     db: AsyncSession,
     *,
     user_id: UUID,
     task_id: UUID,
+    base_version: int,
     proposal: AggregatedProposal[PreparedProposal],
-) -> None:
+) -> str:
+    """Lock the row. Return ``updated``, ``revise``, or ``missing``.
+
+    ``revise`` keeps the proposal as a pending revision and does not touch active columns.
+    ``missing`` means the task disappeared; the caller must not invent a revision.
+    """
     task = (
-        await db.execute(select(Task).where(Task.user_id == user_id, Task.id == task_id))
-    ).scalar_one()
+        await db.execute(
+            select(Task)
+            .where(Task.user_id == user_id, Task.id == task_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if task is None:
+        return "missing"
+    if not update_is_safe(task.status, task.version, base_version):
+        return "revise"
     fields = proposal_fields(proposal)
     task.tipo = fields.tipo
     task.titulo = fields.titulo
@@ -767,6 +818,7 @@ async def _update_task(
     task.date_status = fields.date_status
     task.date_reason = fields.date_reason
     task.confidence_score = fields.confidence_score
+    return "updated"
 
 
 async def _revise_task(

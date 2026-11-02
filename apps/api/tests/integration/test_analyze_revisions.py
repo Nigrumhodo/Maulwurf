@@ -22,7 +22,17 @@ from app.models import (
     TaskSource,
     Transcript,
 )
-from app.services.analysis import ExtractionModel
+from app.services.analysis import (
+    ExistingProposal,
+    ExtractionModel,
+    PreparedProposal,
+    WriteKind,
+    apply_task_writes,
+    parse_extraction_payload,
+    plan_task_writes,
+    proposal_fields,
+)
+from app.services.analysis_windows import AggregatedProposal, EvidenceSpan
 from app.workers.jobs.analyze import run_analyze
 from tests.integration import actors
 
@@ -204,3 +214,92 @@ async def test_cleanup_pending_writes_nothing(db_session: AsyncSession) -> None:
     assert (
         await db_session.execute(select(func.count()).select_from(Task))
     ).scalar_one() == 0
+
+
+async def test_confirming_between_the_plan_and_the_write_keeps_the_title(
+    db_session: AsyncSession,
+) -> None:
+    actor, audio = await _class(db_session)
+    segment = (
+        await db_session.execute(select(Segment).where(Segment.user_id == actor.user_id))
+    ).scalar_one()
+    run = ProcessingRun(
+        user_id=actor.user_id,
+        audio_id=audio.id,
+        stage="analyze",
+        transcript_version=1,
+        config_version="test-config",
+        prompt_version="v1",
+        status="running",
+    )
+    task = Task(
+        user_id=actor.user_id,
+        audio_id=audio.id,
+        subject_id=audio.subject_id,
+        source="extraction",
+        tipo="examen",
+        titulo="Original",
+        timezone=audio.class_timezone,
+        all_day=False,
+        date_status="missing",
+        status="needs_review",
+    )
+    db_session.add(run)
+    db_session.add(task)
+    await db_session.flush()
+    parsed = parse_extraction_payload(
+        _document("Replacement") % str(segment.id),
+        class_date=audio.class_date,
+        class_timezone=audio.class_timezone,
+        now=NOW,
+    )
+    item = parsed.result.items[0]
+    span = EvidenceSpan(
+        segment_id=segment.id, char_start=0, char_end=len(QUOTE), quote=QUOTE
+    )
+    proposal = AggregatedProposal(
+        value=PreparedProposal(item=item, date_reason=parsed.reasons[0]),
+        evidence=(span,),
+    )
+    stale = proposal_fields(proposal)
+    existing = ExistingProposal(
+        task_id=task.id,
+        identity=proposal.identity,
+        status="needs_review",
+        version=1,
+        fields=type(stale)(
+            tipo=stale.tipo,
+            titulo="Original",
+            detalle=stale.detalle,
+            due_date=stale.due_date,
+            due_at=stale.due_at,
+            timezone=stale.timezone,
+            all_day=stale.all_day,
+            date_status=stale.date_status,
+            confidence_score=stale.confidence_score,
+            date_reason=stale.date_reason,
+        ),
+    )
+    writes = plan_task_writes(run.id, (proposal,), (existing,), set())
+    assert writes[0].kind is WriteKind.UPDATE
+    task.status = "confirmed"
+    task.confirmed_at = NOW
+    await db_session.flush()
+    await apply_task_writes(
+        db_session,
+        user_id=actor.user_id,
+        audio_id=audio.id,
+        subject_id=audio.subject_id,
+        transcript_id=segment.transcript_id,
+        transcript_version=1,
+        run_id=run.id,
+        writes=writes,
+    )
+    await db_session.refresh(task)
+    assert task.titulo == "Original"
+    assert task.status == "confirmed"
+    revision = (
+        await db_session.execute(select(TaskRevision).where(TaskRevision.task_id == task.id))
+    ).scalar_one()
+    assert revision.status == "pending_confirmation"
+    assert revision.proposed_fields["titulo"] == "Replacement"
