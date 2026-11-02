@@ -633,7 +633,11 @@ export function ChatWorkspace({
                     ? message.content
                     : message.status === "streaming"
                       ? "▍"
-                      : "—"}
+                      : message.status === "failed"
+                        ? "la respuesta falló; vuelve a preguntar."
+                        : message.status === "cancelled"
+                          ? "respuesta cancelada."
+                          : "—"}
                 </div>
                 {message.citations.length > 0 && (
                   <ul className="flex flex-col gap-1 text-xs text-lavender/60">
