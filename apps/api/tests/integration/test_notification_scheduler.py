@@ -416,25 +416,25 @@ async def test_the_claim_persists_the_elected_fence_and_a_stale_row_keeps_it(
     stored = await _get(factory, first_id)
     assert stored[first_id].claimed_by_fence == 1
 
-        # The holder dies without renewing. Expiry is the tick's own instant: the
-        # takeover compares against the `now` passed to the scheduler, not the database
-        # wall clock. `now()` is later than that frozen instant once the wall clock
-        # passes it, so the lease would still look live.
-        expired = NOW - timedelta(seconds=1)
-        async with factory() as db:
-            await db.execute(
-                text(
-                    "UPDATE scheduler_leases "
-                    "SET lease_expires_at = :expired, "
-                    "heartbeat_at = :heartbeat "
-                    "WHERE name = :name"
-                ),
-                {
-                    "expired": expired,
-                    "heartbeat": expired - timedelta(seconds=1),
-                    "name": role,
-                },
-            )
+    # The holder dies without renewing. Expiry is the tick's own instant: the
+    # takeover compares against the `now` passed to the scheduler, not the database
+    # wall clock. `now()` is later than that frozen instant once the wall clock
+    # passes it, so the lease would still look live.
+    expired = NOW - timedelta(seconds=1)
+    async with factory() as db:
+        await db.execute(
+            text(
+                "UPDATE scheduler_leases "
+                "SET lease_expires_at = :expired, "
+                "heartbeat_at = :heartbeat "
+                "WHERE name = :name"
+            ),
+            {
+                "expired": expired,
+                "heartbeat": expired - timedelta(seconds=1),
+                "name": role,
+            },
+        )
         await db.commit()
 
     second_due = _notification(actor, scheduled_at=NOW - timedelta(minutes=1), sequence=1)
