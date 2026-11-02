@@ -23,7 +23,7 @@ from app.core.config import settings
 from app.core.db import get_session
 from app.main import app
 from app.models import ProcessingRun
-from app.services.runs import RUN_CONFIG_VERSION
+from app.services.runs import INDEX_CONFIG_VERSION
 from tests.integration import actors
 
 pytestmark = pytest.mark.integration
@@ -98,7 +98,7 @@ async def test_detail_reports_per_stage_aggregate_attempt_and_exports(
             audio_id=audio.id,
             stage="index",
             transcript_version=1,
-            config_version=RUN_CONFIG_VERSION,
+            config_version=INDEX_CONFIG_VERSION,
             status="succeeded",
         )
     )
@@ -121,9 +121,34 @@ async def test_detail_reports_per_stage_aggregate_attempt_and_exports(
         "version": transcript.version,
         "timestamp_precision": "none",
         "char_count": transcript.char_count,
+        "quality_warnings": [],
     }
     # No segments and precision `none`: TXT yes, SRT no.
     assert body["exports"] == {"txt": True, "srt": False}
+
+
+async def test_detail_exposes_only_non_sensitive_quality_warnings(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    audio, _, transcript = await actors.make_class_with_transcript(db_session, actor)
+    transcript.quality_flags = [
+        {"code": "repetition", "count": 3, "text": "texto de prueba"},
+        {"code": "low_confidence", "count": 2, "total": 4},
+        {"code": "empty_segments", "count": 1},
+        {"code": 3, "count": 1},
+    ]
+    await db_session.flush()
+
+    response = await client.get(f"/audios/{audio.id}", cookies=actor.cookies)
+
+    assert response.status_code == 200
+    assert response.json()["transcript"]["quality_warnings"] == [
+        {"code": "repetition", "count": 3},
+        {"code": "low_confidence", "count": 2, "total": 4},
+        {"code": "empty_segments", "count": 1},
+    ]
+    assert "texto de prueba" not in response.text
 
 
 async def test_detail_and_exports_are_404_for_foreign_or_tombstoned(

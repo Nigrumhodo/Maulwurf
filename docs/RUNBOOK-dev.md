@@ -94,25 +94,142 @@ sudo cp /tmp/maulwurf-root.crt /usr/local/share/ca-certificates/maulwurf-root.cr
 sudo update-ca-certificates
 ```
 
+### 4.1 Edge limits (J2.10)
+
+Caddy is the only HTTP ingress ([ADR-0010](adr/ADR-0010-ingress.md)). It caps the upload at
+220,000,000 bytes and JSON bodies at 10,000,000; `read_body` is 20m, `read_header` 30s,
+`write` stays 0 because `/audios/*/progress` is SSE, and `idle` is 5m. The contract limit is
+still `GET /ingestion/capabilities.max_upload_bytes` (`null` until D4 approves it); the Caddy
+ceiling must stay above it so the API answers with its `413` envelope.
+
+```bash
+python3 scripts/ci/check_caddy_limits.py        # static guard; no Docker needed
+bash scripts/load/ingress_limits.sh             # Docker backend (throw-away network)
+MODE=native CADDY_BIN=/path/to/caddy bash scripts/load/ingress_limits.sh
+```
+
+The 220 MB case streams synthetic bytes from `/dev/zero`; no audio is written. The dated
+record and status codes are in
+[J2.10-ingress-limits.md](spike/J2.10-ingress-limits.md) (C-S2-JF-13).
+
 ## 5. Migrations (A1.7)
 
 The `api` container runs `alembic upgrade head` before uvicorn, so
 `docker compose up` leaves the DB at `head` with no manual step. If several replicas start at
-the same time, an advisory lock serializes them; the one waiting more than 120 s fails instead
-of hanging.
+the same time, a session-scoped advisory lock serializes them; a replica that cannot take it
+within 120 s fails instead of hanging. The lock is session-scoped (not transaction-scoped) so
+it survives `0019`'s autocommit block, and it is taken with short `pg_try_advisory_lock`
+polls instead of a blocking `pg_advisory_lock()`: a waiting transaction would deadlock with
+`CREATE INDEX CONCURRENTLY`, which waits for every older snapshot.
+
+`0019` builds its five budget indexes with `CREATE INDEX CONCURRENTLY`, outside the migration
+transaction, so a deploy over live traffic does not hold a SHARE lock on `messages`,
+`transcripts`, `notifications`, `outbox_events` or `google_remote_operations`. The trade-off
+is that the build is not atomic: if it fails or the process is killed, the version stays at
+`0018` and the indexes already built may remain. Rerun `alembic upgrade head`; the migration
+drops its own index names first (`DROP INDEX CONCURRENTLY IF EXISTS`), so it converges
+instead of failing with "already exists" (it rebuilds the indexes a previous attempt had
+finished).
 
 ```bash
-docker compose exec api alembic current            # applied revision (0001 in S1)
+docker compose exec api alembic current            # applied revision (head; 0001–0019)
 docker compose exec api alembic upgrade head       # apply manually, e.g. after a pull
 docker compose exec api alembic downgrade -1       # rollback to the previous revision
 docker compose exec api alembic history            # revision chain
 ```
 
-Rolling back `0001` drops all the app tables and their local data: use it only in
-development. A schema change is always a new revision
+Rolling back to `base` (or below `0001`) drops all the app tables and their local data: use
+it only in development. A schema change is always a new revision
 (`uv run alembic revision --autogenerate -m "..."` from `apps/api`, reviewed by hand);
 an already-applied revision is never edited. `uv run alembic check` must answer "No new
 upgrade operations detected" before opening the PR.
+
+### 5.1 Row-level security roles (A2.17)
+
+Revision `0005` creates three cluster-wide `NOLOGIN` roles without `BYPASSRLS`:
+`maulwurf_app` (API), `maulwurf_jobs` (worker/scheduler) and `maulwurf_ingest` (ingest).
+The DSN user keeps the table ownership and migration privileges; each runtime transaction
+starts with `SET LOCAL ROLE` and binds `app.user_id` (or, for the jobs role, the explicit
+`app.cross_tenant` switch). `SET LOCAL` ends with the transaction, so pooled connections do
+not carry a tenant. `MAULWURF_DATABASE_ROLE` selects the API role; compose overrides it to
+`maulwurf_jobs` for the two ARQ processes and ingest uses `maulwurf_ingest` unconditionally.
+
+**Data migrations under `FORCE ROW LEVEL SECURITY` (staging and production):** `FORCE` makes
+the table owner subject to the RLS policies too, so an owner connection without `BYPASSRLS`
+does not see tenant rows (and a policy that reads `app.user_id` can raise instead of
+returning zero rows). `alembic upgrade head` runs as the DSN owner. In local compose that
+user is a superuser, which bypasses RLS. Staging and production follow this procedure:
+
+1. Classify the revision. DDL-only revisions (new columns, indexes, policies, grants) run
+   as the owner and need no bypass. A revision that reads or rewrites tenant rows in
+   `upgrade()` or `downgrade()` needs the bypass window below.
+2. Preflight the account:
+
+   ```sql
+   SELECT current_user, rolsuper, rolbypassrls
+   FROM pg_roles WHERE rolname = current_user;
+   ```
+
+   The migration account needs `CREATEROLE`, or the three runtime roles must be pre-created.
+   The API, worker and ingest accounts must never hold `BYPASSRLS`.
+3. If the revision touches tenant rows, open the window as a superuser:
+
+   ```sql
+   ALTER ROLE "<migration_account>" BYPASSRLS;
+   ```
+
+4. Apply the revision and keep the migration log as evidence:
+
+   ```bash
+   alembic upgrade head
+   ```
+
+5. Close the window in a `finally`/same change window, even if the revision fails:
+
+   ```sql
+   ALTER ROLE "<migration_account>" NOBYPASSRLS;
+   ```
+
+6. Verify before declaring the deployment done:
+
+   ```sql
+   SELECT rolname, rolsuper, rolbypassrls FROM pg_roles
+   WHERE rolname IN ('<migration_account>', 'maulwurf_app', 'maulwurf_jobs', 'maulwurf_ingest');
+   ```
+
+   ```bash
+   alembic current   # expected: head
+   ```
+
+   A tenant-bound read as the app role (`SET LOCAL ROLE maulwurf_app` plus
+   `set_config('app.user_id', '<uuid>', true)`) must still return only that tenant's rows.
+   Never leave `BYPASSRLS` granted after the window closes, and never grant it to a runtime
+   role. The runtime grants also exclude write access to `alembic_version` (SELECT only).
+
+The dedicated production deployment runbook is still pending (J4.x); until it lands, this
+section is the canonical staging/production procedure for RLS and data migrations.
+
+The migration account also needs `CREATEROLE` (or the three roles must be pre-created), and
+the DSN user of each runtime must be a member of its role: the migration grants membership
+to the migration user, so a deployment that authenticates `api`, `worker` and `ingest` with
+different users must grant `maulwurf_app`/`maulwurf_jobs`/`maulwurf_ingest` to each one.
+The API user also needs `maulwurf_jobs` because `/internal/metrics` performs its read-only
+aggregate under that role. When running the ARQ worker or scheduler outside compose, set
+`MAULWURF_DATABASE_ROLE=maulwurf_jobs`; the default is `maulwurf_app`.
+
+The notification scheduler (`schedule_notifications`) is disabled by default with
+`MAULWURF_NOTIFICATION_SCHEDULER_ENABLED=false`. Keep it disabled until J4.1 (Gmail delivery)
+is deployed: a disabled tick does not elect the role and claims no rows. Enabling it without
+the consumer of `sending` would expire every claim into a false `delivery_unknown`; enable
+the flag only once that consumer runs.
+
+**Never reuse the migration owner DSN for a runtime outside local development.** The local
+compose stack does (its PostgreSQL image makes that user a superuser), which is why RLS is
+defense in depth there rather than a boundary. In staging/production, create one `LOGIN` role
+per runtime, grant it only its own runtime role, and keep ownership, `CREATEROLE`,
+`BYPASSRLS` and superuser off it. A runtime DSN that is the table owner or a superuser
+silently bypasses `FORCE ROW LEVEL SECURITY` outside the `SET LOCAL ROLE` block.
+
 
 ## 6. Tests and lint
 
@@ -133,6 +250,10 @@ uv run pytest -m "not integration and not provider and not load"
 cd apps/web
 npm ci
 npm run lint && npm run typecheck && npm test && npm run build
+
+# Documentation
+cd ../..
+python3 scripts/docs/check_refs.py
 ```
 
 Local integration (Redis is published on loopback only; PostgreSQL is not published
@@ -174,6 +295,28 @@ services:
 The `P-*` (provider) and `load` suites do not run on MRs; they require a protected
 account and budget, and are run separately.
 
+## 6.1 E2E smoke (E-S2-JF-06, J2.6)
+
+The MR smoke runs the whole S2 pipeline against compose with deterministic local doubles
+for Riva, embeddings and the LLM: upload → transcript → verified cleanup → index → question
+with a validated citation. It uses synthetic audio generated in RAM and fixed non-secret CI
+placeholders; no NVIDIA, LLM or Google credential is involved. Details and limitations:
+[scripts/e2e/README.md](../scripts/e2e/README.md).
+
+```bash
+# From the repository root: the override defaults E2E_TLS_DIR to ../.e2e-tls.
+bash scripts/e2e/gen_riva_tls.sh .e2e-tls
+cd infra
+docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
+  up -d --build --wait postgres redis e2e-provider e2e-asr ingest worker scheduler api
+docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
+  exec -T api python - < ../scripts/e2e/smoke_pipeline.py
+docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v
+```
+
+The doubles are not provider-contract evidence and D3-Texto stays open; the smoke only
+indexes its synthetic fixture.
+
 ## 7. Shutting down and cleaning up
 
 ```bash
@@ -183,7 +326,9 @@ docker compose down -v     # destructive: deletes volumes
 ```
 
 There is no persisted audio to delete: ingestion temporaries are `tmpfs` and
-disappear when the container is recreated.
+disappear when the container is recreated. For a failed cleanup, a stopped admission
+latch or a lost host, follow the [cleanup/recovery runbook](runbooks/cleanup.md); do not
+copy or inspect the attempt directory.
 
 ## 8. Common issues
 
@@ -198,20 +343,105 @@ disappear when the container is recreated.
   or `api` was not recreated after editing `.env`.
 - **`/login?error=oauth_failed`**: see `docker compose logs api`; common causes are an
   unverified Google email or a login attempt older than 10 minutes.
-- **The API does not start**: a `MAULWURF_ENV` other than `local` with
-  `change-me` secrets fails on purpose (fail-fast in `app/core/config.py`).
+- **The API does not start**: `MAULWURF_ENV` is required with no default; a non-`local`
+  environment with `change-me`, too short or reused secrets also fails on purpose (fail-fast
+  in `app/core/config.py`).
 - **Certificate warning**: trust the CA (§4) or use `curl -k`.
 - **Slow first build**: it downloads ffmpeg, Python dependencies, and `npm ci`.
 - **`api` replicas failing at startup**: when scaling `api`, all replicas try to migrate.
   One applies the migration and the others wait for the lock; the one waiting more than 120 s fails and
   Docker restarts it (`restart: unless-stopped`). This is expected, not an app error. In a
   real deployment (S4) the migration will be a single step, separate from the replicas.
+- **Ingest answers `503 capacity_unavailable` for every upload**: the admission latch is
+  closed. `docker compose logs ingest` carries `ingest.alert code=cleanup_failed` when a
+  durable `cleanup_status=failed` row exists (a clean latch read never reopens it) and
+  `ingest.alert code=cleanup_unrecorded` when a run could not persist its unverified
+  cleanup because a newer owner had already moved the fencing token. The second case is
+  the documented S4.2 decision: the row stays `pending`, admission stays open, and the
+  occurrence is observable through that alert and
+  `maulwurf_ingest_failures_total{stage="cleanup",error_code="cleanup_unrecorded"}` on
+  `/internal/metrics`; the operator procedure belongs to S4.1. If PostgreSQL was down when
+  `ingest` started, the sweeper retries `open_service_pool` every
+  `INGEST_SWEEP_INTERVAL_S` (60 s) and starts recovery once the database answers, so no
+  container restart is required. Never paste attempt paths, transcripts, or audio into a
+  ticket.
 
 ## 9. Local environment privacy rules
 
-- No real class recordings or durable audio: real ingestion arrives in S2.
+- No real class recordings or durable audio: real-class ingestion remains blocked until the
+  F0 decisions close and the API-to-ingest transport is configured.
 - No `NVIDIA_API_KEY` in logs, the frontend, or commits.
 - The `P-*` suites only with an authorized account and a documented budget.
+
+## 10. Explicit analysis backfill (S3.1)
+
+F1 classes transcribed in S2 keep `analyze=not_requested`. The backfill queues the analysis
+run from the **persisted transcript**; it never re-uploads audio or re-runs ASR. It is
+tenant-scoped, idempotent and dry-run by default:
+
+```bash
+cd apps/api
+uv run python ../../scripts/backfill_analysis.py --user-id <uuid>
+uv run python ../../scripts/backfill_analysis.py --user-id <uuid> --apply
+```
+
+Narrow the pass with `--subject-id`, `--from-date`/`--to-date`, repeated `--audio-id`, or
+`--limit` (default 500, maximum 2000). The command prints only class IDs, transcript
+versions and statuses. `queued` is the only writing outcome: `already_analyzed`,
+`already_queued` and `unknown_run_state` never modify `required_stages`, and
+`already_f2_no_run` marks a class that already owes analysis but has no `analyze` run row
+(queue it with `POST /audios/{id}/retry`, not with this script). Only the branch that really
+queues persists the F1 → F2 upgrade, so an `--apply` pass that queues nothing changes no
+row. `GET /audios/{id}` reports `analysis_backfill_available` before the pass and the
+`analyze` stage becomes `pending` after it. Until L3.6 lands, the queued job is the existing
+S2 `analyze` no-op: this command proves the queue, not extraction output.
+
+## 11. Provider budgets, alerts and operator runbooks (J4.8)
+
+The API exports the current UTC month's provider usage on `/internal/metrics`:
+
+```bash
+cd apps/api
+uv run python - <<'PY'
+import urllib.request
+print(urllib.request.urlopen('http://127.0.0.1:8000/internal/metrics', timeout=3).read().decode())
+PY
+```
+
+The `maulwurf_budget_*` series are always present for `llm`, `asr` and `google`; the limit,
+ratio, warning and exhausted series appear only when the matching
+`MAULWURF_BUDGET_*` cap is set. Unset means measure-only, never a zero budget. A
+dependency-free check for a cron or an operator shell:
+
+```bash
+# API running standalone on the host:
+python scripts/ops/budget_check.py --url http://127.0.0.1:8000/internal/metrics
+
+# API from the compose stack (the service only exposes its port internally):
+cd infra
+docker compose exec -T api python - < ../scripts/ops/budget_check.py
+```
+
+From a private-network host that resolves the service name, pass
+`--url http://api:8000/internal/metrics`. The full operator procedure is
+[`runbooks/budget-alerts.md`](runbooks/budget-alerts.md) §3.2.
+
+The Prometheus rules and scrape example are in
+[`infra/alerting/`](../infra/alerting/README.md); the local eight-service stack does not run
+Prometheus, so the reference deployment (J4.7) owns that wiring. Operator procedures:
+
+- [runbooks/README.md](runbooks/README.md) — index and reference-environment status;
+- [runbooks/budget-alerts.md](runbooks/budget-alerts.md) — budgets, thresholds and escalation;
+- [runbooks/provider-down.md](runbooks/provider-down.md) — Riva/LLM/embeddings/Google outage;
+- [runbooks/tokens.md](runbooks/tokens.md) — revoked or rotated credentials;
+- [runbooks/account-deletion.md](runbooks/account-deletion.md) — account deletion and resume;
+- [runbooks/cleanup.md](runbooks/cleanup.md) and [runbooks/restore.md](runbooks/restore.md) —
+  the S4.1/A4.5 procedures.
+
+The J4.8 execution record is in
+[`docs/sprints/artifacts/J4.8/`](sprints/artifacts/J4.8/). The reference-host drill is
+**NOT RUN** while J4.7 is absent; do not describe a local deterministic result as a provider
+or production verification.
 
 ## Links
 

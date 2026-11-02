@@ -30,12 +30,16 @@ from app.models import (
     ChunkSegment,
     Conversation,
     Embedding,
+    IndexGeneration,
     IngestionAttempt,
     Message,
     MessageSource,
     OutboxEvent,
     ProcessingRun,
     Segment,
+    Task,
+    TaskRevision,
+    TaskSource,
     Transcript,
 )
 from app.routers import audios as audios_router
@@ -78,6 +82,9 @@ class SeededClass:
     conversation: Conversation
     message: Message
     source: MessageSource
+    task: Task
+    task_source: TaskSource
+    task_revision: TaskRevision
 
 
 async def _seed_class(
@@ -113,12 +120,23 @@ async def _seed_class(
     )
     db.add(segment)
     await db.flush()
+    # A2.18: `chunks.index_version` references a generation; the purge must handle both.
+    # The version is unique per seed: a test may seed two classes for the same actor.
+    generation = IndexGeneration(
+        user_id=actor.user_id,
+        version=f"test-{uuid.uuid4().hex}",
+        model="test-model",
+        dimension=1536,
+        status="building",
+    )
+    db.add(generation)
+    await db.flush()
     chunk = Chunk(
         user_id=actor.user_id,
         audio_id=audio.id,
         transcript_id=transcript.id,
         transcript_version=1,
-        index_version="test-v1",
+        index_version=generation.version,
         ordinal=1,
         content=TEXT,
         char_start=0,
@@ -190,6 +208,42 @@ async def _seed_class(
     )
     db.add(source)
     await db.flush()
+    # A3.1: la clase tiene una tarea extraída y una revisión pendiente; el tombstone debe
+    # borrarlas antes de `segments`/`transcripts` (tasks.audio_id no tiene ON DELETE).
+    task = Task(
+        user_id=actor.user_id,
+        audio_id=audio.id,
+        subject_id=subject.id,
+        source="extraction",
+        tipo="tarea",
+        titulo=f"Tarea de {TEXT}",
+        timezone="America/Bogota",
+        all_day=True,
+        date_status="missing",
+    )
+    db.add(task)
+    await db.flush()
+    task_source = TaskSource(
+        user_id=actor.user_id,
+        task_id=task.id,
+        audio_id=audio.id,
+        transcript_id=transcript.id,
+        transcript_version=transcript.version,
+        segment_id=segment.id,
+        char_start=0,
+        char_end=5,
+    )
+    db.add(task_source)
+    await db.flush()
+    task_revision = TaskRevision(
+        user_id=actor.user_id,
+        task_id=task.id,
+        base_task_version=task.version,
+        revision_type="edit_of_confirmed",
+        proposed_fields={"titulo": "Tarea revisada"},
+    )
+    db.add(task_revision)
+    await db.flush()
     return SeededClass(
         audio=audio,
         attempt=attempt,
@@ -204,6 +258,9 @@ async def _seed_class(
         conversation=conversation,
         message=message,
         source=source,
+        task=task,
+        task_source=task_source,
+        task_revision=task_revision,
     )
 
 
@@ -247,6 +304,9 @@ async def test_delete_purges_every_derivative_and_keeps_google_by_default(
         "attempts_cancelled": 0,  # el intento ya era final: su causa se preserva
         "outbox_events_skipped": 1,
         "processing_runs_cancelled": 1,
+        "tasks_deleted": 1,
+        "task_sources_deleted": 1,
+        "task_revisions_deleted": 1,
         "message_sources_deleted": 1,
         "messages_tombstoned": 1,
         "embeddings_deleted": 1,
@@ -259,7 +319,17 @@ async def test_delete_purges_every_derivative_and_keeps_google_by_default(
     await db_session.refresh(seeded.audio)
     assert seeded.audio.deleted_at is not None
     assert seeded.audio.active_transcript_version is None
-    for model in (Transcript, Segment, Chunk, ChunkSegment, Embedding, MessageSource):
+    for model in (
+        Transcript,
+        Segment,
+        Chunk,
+        ChunkSegment,
+        Embedding,
+        MessageSource,
+        Task,
+        TaskSource,
+        TaskRevision,
+    ):
         assert await _count(db_session, model, user_id) == 0, model.__name__
     await db_session.refresh(seeded.attempt)
     assert seeded.attempt.status == "succeeded"  # final intacto, sin reescribir error_code

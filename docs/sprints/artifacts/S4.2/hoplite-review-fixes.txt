@@ -1,0 +1,206 @@
+# S4.2 Hoplite review fixes — 2026-10-31
+
+Review: Hoplite over head `07494bf`, 2026-10-31T22:06:19Z. Verdict: no blockers for the
+single-instance path; findings 1 and 2 to resolve before marking S4.2 done.
+
+## Findings and code changes
+
+1. Admission not synchronized across instances.
+   - `supervisor.sweep_pass` now calls `admission.restore_from_database(pool)` before
+     `sweep_once` on every periodic pass; `run_sweeper` calls `sweep_pass`.
+   - `docs/ESPECIFICACION.md` (F1 ingestion) still describes a single ingestion instance;
+     the per-pass read is kept because the durable row is authoritative and the extra
+     query is one indexed lookup per 60 s pass.
+   - Tests: `tests/test_sweeper.py::test_every_pass_resyncs_the_persisted_latch`,
+     `test_sweep_pass_reads_the_latch_before_recovering`, and the integration case
+     `tests/test_reception_latch.py::test_foreign_failed_cleanup_closes_admission_on_the_next_sweep_pass`.
+
+2. A database outage closed admission with no reopen path.
+   - `admission` now separates the durable latch (`_halted`, sticky, only a persisted
+     `cleanup_status=failed` sets it) from the transient close (`_transient_closed`,
+     set by a failed/unreadable read). A successful read with no `failed` row clears only
+     the transient close; the durable latch stays closed. `halt` is idempotent per
+     attempt so repeated reads do not duplicate alerts.
+   - Tests: `test_a_clean_pass_reopens_a_transient_close`,
+     `test_a_persisted_failed_latch_is_not_reopened_by_clean_passes`,
+     `test_transient_close_reopens_after_a_readable_latch`,
+     `test_durable_halt_survives_a_clean_latch_read`.
+
+3. Recovery lease (30 s) vs heartbeat (10 s).
+   - `SupervisorConfig` validates `3 * heartbeat_interval_s <= lease_ttl`; the defaults
+     (10 s / 30 s) leave one missed beat plus the next one before expiry. An unsafe
+     interval fails at construction.
+   - Tests: `test_default_heartbeat_leaves_three_beats_before_lease_expiry`,
+     `test_a_heartbeat_without_margin_is_rejected`.
+
+4. `record_cleanup(verified=False)` left a previous `audio_deleted_at`.
+   - `lease.record_cleanup` now sets `cleanup_verified_at` and `audio_deleted_at` to NULL
+     on the `failed` transition (the `verified` transition still stamps them).
+   - Test: `tests/test_cleanup_admission.py::test_failed_cleanup_clears_a_previous_audio_deleted_at`.
+
+## Local gates (apps/ingest)
+
+environment: Linux, Python 3.12.3; no Docker/PostgreSQL/Redis in this sandbox;
+espeak-ng not on PATH.
+
+```text
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 78 source files
+
+$ uv run pytest -m "not integration and not provider and not load" -q
+8 failed, 211 passed, 78 deselected
+```
+
+The 8 failures are the pre-existing `test_synthetic_audio.py` cases that need
+`espeak-ng` (installed by CI); the baseline before these fixes had the same 8 failures and
+203 passed. Integration cases above run in the Quality CI job `integration (ingest)`;
+they were skipped locally because `MAULWURF_DATABASE_URL` is unset.
+
+## CI
+
+Quality run `41247655096` on head `e7f0c18` (before this evidence-only commit) is green in
+all 16 jobs: `python-unit (ingest)` 213 passed/6 skipped and `integration (ingest)`
+65 passed/11 skipped/1 xfailed, plus `python-static (ingest)`, `docs`, `web`,
+`e2e-smoke`, `integration (api)` and `build-images`.
+
+No provider or Riva call.
+
+## Fix2 review (head `4d93399`, 2026-10-31T22:25:41Z)
+
+Findings left open by Hoplite and their corrections:
+
+1. The sweeper did not start when the service pool failed at startup.
+   - `main.start_sweeper` now always starts `main.run_sweeper_when_pool_ready`.
+     The new loop retries `open_service_pool` every `INGEST_SWEEP_INTERVAL_S`
+     until `app.state.pool` is a pool, then calls `run_sweeper`; a pool-open
+     exception is logged by type and retried too. The startup pass may still close
+     admission, but the first successful pass re-reads the latch and reopens the
+     transient close.
+   - Tests: `tests/test_sweeper.py::test_start_sweeper_retries_the_pool_until_it_opens`
+     (unit) and `test_the_sweeper_starts_after_a_failed_pool_open_at_startup`
+     (integration: the first open fails, the second sets the real pool, and a
+     stranded attempt is ended by the real sweeper).
+
+2. An unverified cleanup that could not persist `failed` (token moved by
+   `sweep_stranded`/reclaim) only logged.
+   - Chosen option: explicit alert + metric, not "pending + lost lease blocks
+     admission". The row stays `pending` because there is no durable `failed` row
+     to reopen admission from; `admission.flag_unrecorded_cleanup` appends
+     `Alert("cleanup_unrecorded", attempt_id)`, logs
+     `ingest.alert code=cleanup_unrecorded`, and the supervisor increments
+     `maulwurf_ingest_failures_total{stage="cleanup",error_code="cleanup_unrecorded"}`.
+     Admission stays open. The decision is documented in `docs/plan/S4.md` (S4.2)
+     and `docs/RUNBOOK-dev.md` §8.
+   - Tests: `tests/test_cleanup_admission.py::test_unrecorded_unverified_evidence_alerts_without_closing_admission`,
+     `test_unrecorded_cleanup_exception_alerts_without_closing_admission` (unit) and
+     `test_unrecorded_cleanup_on_a_moved_token_stays_pending_and_alerts`
+     (integration: `sweep_stranded` moves the token, the old lease's unverified
+     evidence writes no row, admission stays open and the alert is recorded).
+
+3. A raising `leases.record_cleanup` inside the cleanup-error branch aborted the
+   whole recovery pass, including `sweep_stranded`.
+   - `reconciler._record_cleanup` wraps both evidence writes (the exception branch
+     and the normal branch), logs `reconciler.cleanup_record_failed` with the
+     exception type only and returns `None`; the pass continues with the next
+     attempt. The docs only reach the log, never the DSN.
+   - Tests: `tests/test_reconciler.py::test_a_raising_record_cleanup_does_not_skip_the_stranded_sweep`
+     and `test_a_raising_record_after_verified_evidence_also_continues`
+     (integration: the stranded attempt is still ended).
+
+No `apps/web` change and no provider/Riva call.
+
+## Fix2 local gates (apps/ingest)
+
+environment: Linux, Python 3.12.3; no PostgreSQL/Redis/Docker in this sandbox;
+`espeak-ng` not on PATH.
+
+```text
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 78 source files
+
+$ uv run pytest -m "not integration and not provider and not load" -q
+8 failed, 213 passed, 82 deselected
+```
+
+The 8 failures are the pre-existing `test_synthetic_audio.py` cases that need
+`espeak-ng` (installed by CI); the baseline before fix2 was 8 failed / 211 passed.
+The new integration cases are collected but skipped locally (`MAULWURF_DATABASE_URL`
+is unset).
+
+Quality CI run `41249178989` (code head `1d1663f`) is green in all 17 checks:
+`python-unit (ingest)` **215 passed / 6 skipped** and `integration (ingest)`
+**69 passed / 11 skipped / 1 xfailed**, including the four new integration cases
+(the sweeper pool retry, the moved-token unrecorded cleanup, and the two
+`record_cleanup` failure paths). No provider or Riva call.
+
+## Fix3 — hoplite review on `d03168d` (2026-11-01T00:40:52Z)
+
+Sync first: merged `origin/develop@7ce32ea` (after #135) into the branch. The only
+conflict was `docs/sprints/CLAIMS.md`; the resolution keeps the S4.1, S4.2 and S4.3
+rows. The PR is `MERGEABLE` again and `apps/web` is untouched.
+
+1. `reconciler.reconcile_committed` did not alert when `_record_cleanup` returned
+   `None` (driver error) or `False` in its exception, unverified-evidence and
+   verified-evidence branches. Each non-`True` write now calls
+   `admission.flag_unrecorded_cleanup(attempt_id)` and
+   `metrics.record_failure("cleanup", "cleanup_unrecorded")`. The row stays
+   `pending`, admission stays open (no durable `failed` row exists) and the case is
+   observable. `supervisor._note_cancelled_cleanup` does the same when
+   `cancel.record_cancelled_cleanup` cannot persist.
+   - Tests: `tests/test_cleanup_admission.py::test_reconciler_alerts_a_cleanup_exception_that_cannot_be_recorded`,
+     `test_reconciler_alerts_unverified_evidence_that_cannot_be_recorded`,
+     `test_reconciler_alerts_verified_evidence_that_cannot_be_recorded` and
+     `test_cancelled_cleanup_that_cannot_be_recorded_alerts`.
+2. Contract documents updated in the same revision:
+   `docs/ESPECIFICACION.md` (60 s pass from the lifespan, per-pass durable-latch
+   read, 30 s lease / 10 s heartbeat with three renewals, absence proof for
+   `verified`, durable `failed` latch vs transient close, fail-closed
+   unreadable/malformed latch, `cleanup_unrecorded` alert and metric) and
+   `docs/PLAN_IMPLEMENTACION.md` (F0.2 checklist and §9).
+3. A row with `cleanup_status=failed` whose `id` is not a `UUID` now fails closed in
+   `admission.restore_from_database` (`admission.restore_malformed` + `close()`)
+   instead of reopening admission.
+   - Test: `test_a_malformed_failed_latch_keeps_admission_closed`.
+4. `admission._alerts` is bounded to `MAX_ALERTS=256` through an `OrderedDict`
+   keyed by `(code, attempt_id)`: O(1) dedupe and the oldest entry is evicted.
+   - Test: `test_the_alert_buffer_is_bounded`.
+5. Follow-up (not claimed here): a live run whose heartbeat is delayed beyond the
+   30 s lease can end as `technical_loss`. The live 60 s sweeper risk is validated by
+   S4.3 / `L-S4-SG-01`; the three-heartbeats-per-lease construction guard is covered
+   by unit tests.
+6. Follow-up (not changed here): long docstrings in `admission.py`, `supervisor.py`
+   and `lease.py`, and the Spanish/English mix in `lease.py`, remain as documented
+   debt because the Spanish comments predate this branch and the repo rules forbid
+   rewriting them in bulk.
+
+### Fix3 local gates (apps/ingest)
+
+environment: Linux, Python 3.12.3; no PostgreSQL/Redis/Docker; `espeak-ng` absent.
+
+```text
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 81 source files
+
+$ uv run pytest tests -q -m "not integration" \
+    --ignore=tests/test_synthetic_audio.py --ignore=tests/test_asr_cost.py
+249 passed, 89 deselected, 2 warnings
+```
+
+Without the two ignores the only failures are the pre-existing `espeak-ng`
+environment cases in `tests/test_synthetic_audio.py` and `tests/test_asr_cost.py`;
+CI installs `espeak-ng`.
+
+Quality CI run `41259864534` (head final `6b7969b`, `develop@7ce32ea` included) is
+green in all 17 checks: `python-unit (ingest)` **268 passed / 6 skipped** and
+`integration (ingest)` **77 passed / 11 skipped / 1 xfailed**, plus `docs`, `web`,
+`e2e-smoke`, `integration (api)`, `build-images`, `secret-scan` and the compose/Caddy
+checks. No provider/Riva call, no secret and no `apps/web` change.

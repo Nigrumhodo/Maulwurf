@@ -6,11 +6,12 @@ import json
 import uuid
 from dataclasses import replace
 from datetime import timedelta
+from itertools import pairwise
 from pathlib import Path
 
 import asyncpg
 import pytest
-from test_supervisor import Attempt, _seed  # noqa: E402
+from test_supervisor import PROVEN_CLEANUP, Attempt, _seed  # noqa: E402
 
 from maulwurf_ingest import lease
 from maulwurf_ingest.asr_job import STUB_TRANSCRIPT_NAME, _read_stub
@@ -91,9 +92,33 @@ def test_word_offsets_count_unicode_code_points() -> None:
     ))
     assert prepared is not None
     assert prepared.text == "café niño"
-    assert (prepared.segments[0].char_start, prepared.segments[0].char_end) == (0, 4)
+    assert (prepared.segments[0].char_start, prepared.segments[0].char_end) == (0, 5)
     assert (prepared.segments[1].char_start, prepared.segments[1].char_end) == (5, 9)
+    assert prepared.segments[0].text == "café "
+    assert prepared.segments[1].text == "niño"
     assert prepared.segments[0].t_start == 0.0
+
+
+def test_word_segments_partition_the_text_for_the_chunker() -> None:
+    """The committed segments must be contiguous slices of the transcript (chunker contract)."""
+    prepared = prepare_transcript(TranscriptDraft(
+        text="", precision="word",
+        words=(
+            TranscriptWord("La", 0.0, 0.2),
+            TranscriptWord("fotosíntesis", 0.3, 0.9),
+            TranscriptWord("¡convierte!", 1.0, 1.5),
+        ),
+        model="whisper-large-v3",
+    ))
+    assert prepared is not None
+    assert prepared.text == "La fotosíntesis ¡convierte!"
+    assert "".join(segment.text for segment in prepared.segments) == prepared.text
+    assert prepared.segments[0].char_start == 0
+    for previous, segment in pairwise(prepared.segments):
+        assert segment.char_start == previous.char_end
+    assert prepared.segments[-1].char_end == len(prepared.text)
+    for segment in prepared.segments:
+        assert segment.text == prepared.text[segment.char_start:segment.char_end]
 
 
 def test_fts_config_follows_the_selected_language() -> None:
@@ -181,7 +206,7 @@ async def test_commit_persists_one_transcript_and_a_disabled_outbox(pool: asyncp
     offsets = [
         (row["ordinal"], row["text"], row["char_start"], row["char_end"]) for row in segments
     ]
-    assert offsets == [(0, "Hoy", 0, 3), (1, "repasamos", 4, 13)]
+    assert offsets == [(0, "Hoy ", 0, 4), (1, "repasamos", 4, 13)]
     assert segments[0]["t_start"] == 0.0 and segments[1]["t_end"] == 1.1
 
     active = await pool.fetchval(
@@ -304,7 +329,7 @@ async def test_enable_waits_for_verified_cleanup_and_leaves_other_events(
     ]
     assert await enable_text_outbox(pool, owned, audio_id=audio_id, version=version) is False
 
-    assert await lease.record_cleanup(pool, owned, verified=True, evidence={"verified": True})
+    assert await lease.record_cleanup(pool, owned, verified=True, evidence=PROVEN_CLEANUP)
     await pool.execute(
         "UPDATE ingestion_attempts SET lease_expires_at = now() - interval '1 second'"
         " WHERE id = $1",

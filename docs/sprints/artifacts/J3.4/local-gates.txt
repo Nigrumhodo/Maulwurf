@@ -1,0 +1,123 @@
+J3.4 (MAULW-117) local gates — 2026-10-31 UTC (after merging develop #125)
+Host: Linux sandbox, Python 3.12.3, uv 0.13.1
+
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ cd apps/api && uv run mypy .
+Success: no issues found in 210 source files
+
+$ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 uv run pytest tests/unit -q
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1096 passed, 35 warnings in 9.57s
+
+$ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 uv run pytest tests/unit/test_task_event_sync.py -q
+...................                                                      [100%]
+19 passed in 0.91s
+
+Integration executed before the sandbox reset (PostgreSQL 16.15 + Redis local):
+$ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 uv run pytest tests/integration/test_calendar_sync_job.py -q
+7 passed, 1 warning in 2.66s
+
+Re-run in this sandbox after reprovisioning PostgreSQL 16.15 (pgvector 0.6.0) and
+Redis 7.0.15, covering the new module plus the dispatcher/commit-gate files edited for
+the new consumer:
+
+$ MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@127.0.0.1:5432/maulwurf \
+  MAULWURF_REDIS_URL=redis://127.0.0.1:6379/0 \
+  uv run pytest tests/integration/test_calendar_sync_job.py \
+  tests/integration/test_dispatcher.py tests/integration/test_transcript_commit_gate.py -q
+43 passed, 1 warning in 5.32s
+
+The full API integration suite is not green in this sandbox because the distro pgvector
+is 0.6.0 (<0.8, search/G4 suites); those modules are outside this diff and Quality CI
+'integration (api)' runs the whole suite with pgvector/pg16.
+
+--- Review fix (hoplite findings 1-2), 2026-10-31 UTC, head of task/MAULW-117 after
+--- merging origin/develop (J3.5 #129). Same sandbox: PostgreSQL 16.15 (pgvector 0.6.0),
+--- Redis 7.0.15. No real Google call, credential or secret.
+
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ cd apps/api && uv run mypy .
+Success: no issues found in 216 source files
+
+$ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 uv run pytest tests/unit -q
+1152 passed, 35 warnings in 19.44s
+
+Without the workaround the same run reports 1150 passed and these two failures, both the
+pre-existing sandbox issue (httpx 0.28 parses the bracketed IPv6 entries of this host's
+NO_PROXY as host:port): tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured
+and tests/unit/test_llm.py::test_shared_http_client_is_bounded_reused_and_closed.
+
+$ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 uv run pytest \
+    tests/unit/test_task_event_sync.py tests/unit/test_google_tokens.py \
+    tests/unit/test_calendar_gateway.py -q
+44 passed
+
+$ uv run pytest tests/integration/test_calendar_sync_job.py \
+    tests/integration/test_dispatcher.py tests/integration/test_transcript_commit_gate.py -q
+46 passed, 1 warning in 13.22s
+
+New cases for the fix:
+- test_task_event_sync.py: test_a_newer_version_repairs_the_body_left_by_the_older_one
+  (v1 inserts, v2 wins the CAS, v2's delivery leaves v2's body), the identical-body
+  reconcile now asserts no PATCH, and the content comparison covers Google's offset
+  timestamps, the exclusive all-day date and a changed detail.
+- test_google_tokens.py: fresh token, 60 s window, expired refresh, missing refresh token,
+  invalid_grant disconnects, transient 503, invalid_client, rotated/kept refresh token,
+  missing OAuth client.
+- test_calendar_gateway.py: PATCH with sendUpdates=none, description clearing, one refresh
+  + retry on 401, and 401 without a refresher.
+- test_calendar_sync_job.py: the stale body is patched at the HTTP boundary and the task is
+  synced; an expired access token refreshes before the call; a 401 refreshes once and the
+  delivery succeeds.
+
+Quality CI run 41219465169 (head d67d249, 2026-10-31) is green in all 17 checks:
+python-unit (api) 1152 passed; integration (api) 443 passed (10 I-S3-JF-03 cases);
+integration (ingest) 58 passed; e2e-smoke, docs, secret-scan and build-images green.
+
+--- Review fix 2 (hoplite findings on head 99b5826), 2026-10-31 UTC. Same sandbox:
+--- PostgreSQL 16.15 (pgvector 0.6.0), Redis 7.0.15. No real Google call, credential or
+--- secret.
+
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ cd apps/api && uv run mypy .
+Success: no issues found in 216 source files
+
+$ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 uv run pytest tests/unit -q
+1154 passed, 35 warnings in 8.36s
+
+The required command without the two NO_PROXY overrides still reports 1152 passed and the
+two pre-existing bracketed-IPv6 failures (test_ingest_sink, test_llm) documented above.
+
+$ MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@127.0.0.1:5432/maulwurf \
+  MAULWURF_REDIS_URL=redis://127.0.0.1:6379/0 \
+  uv run pytest tests/integration/test_calendar_sync_job.py \
+  tests/integration/test_dispatcher.py tests/integration/test_transcript_commit_gate.py -q
+49 passed, 1 warning in 7.09s
+
+$ python3 scripts/docs/check_refs.py
+OK: 763 documented repository paths exist or are expected.
+
+New cases for this fix:
+- test_task_event_sync.py: test_a_stale_delivery_does_not_overwrite_an_event_settled_by_a_newer_version
+  (v2 settled first; v1's 409 must not call update_event) and
+  test_a_version_bump_during_the_patch_repairs_the_event_to_the_newest_body (the edit lands
+  between the pre-PATCH reload and the write; the event is repaired to the newest body).
+- test_calendar_sync_job.py: the initial and the reactive (401) refresh of a revoked refresh
+  token disconnect the credential through a real commit/rollback session scope, and an
+  unexpected job failure is re-raised for ARQ's bounded retry.
+
+Red verification before the fix (files restored afterwards): both unit regressions fail against
+head 99b5826 (`RECONCILED` instead of `STALE_VERSION`), and all three new integration cases
+fail too (the credential stays `connected` after the rollback; RuntimeError is swallowed).
+
+QUALITY CI (2026-10-31): run 41221377990 on head 558bd74 is green in all 17 checks,
+including python-unit (api) 1154 passed and integration (api) 446 passed (the 13
+I-S3-JF-03 cases included), integration (ingest), e2e-smoke, docs, secret-scan and
+build-images. The code head 11d0c95 was cancelled by the docs push, not by a failure.

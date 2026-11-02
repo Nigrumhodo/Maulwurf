@@ -3,7 +3,8 @@
 - Measured contract first: the F0.1 spike (S1) fixes languages, limits, and timestamps
   (`docs/NVIDIA_RIVA.md`). No hardcoded constants until the report exists.
 - Bounded tmpfs per attempt, cleanup in `finally`, lease/fencing, post-commit reconciler.
-- `GET /ingestion/capabilities` will expose only measured limits (U-S2-SG-01).
+- `GET /ingestion/capabilities` (API) publishes only measured limits; until D4 closes it
+  returns `null`/empty limits and the web disables upload.
 - Per-ticket ownership in [docs/sprints/CLAIMS.md](../../docs/sprints/CLAIMS.md).
 - S1.A1 (RAM synthetic generator) requires the `espeak-ng` (or `espeak`) system binary
   on `PATH` for the tests. On Windows, WSL can be used (`sudo apt

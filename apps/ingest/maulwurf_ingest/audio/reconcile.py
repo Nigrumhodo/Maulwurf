@@ -8,6 +8,7 @@ Sin palabras no se inventan tiempos.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -16,11 +17,28 @@ from maulwurf_ingest.audio.timestamps import global_time_s
 _EPS_S = 1e-3
 
 
+def parse_confidence(raw: object) -> float | None:
+    """Provider confidence in [0, 1], or None when absent/malformed.
+
+    A missing value is «unknown», never «low»: inventing a confidence would turn a provider
+    that does not report it into a permanent quality warning.
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    if not isinstance(raw, int | float):
+        return None
+    value = float(raw)
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        return None
+    return value
+
+
 @dataclass(frozen=True)
 class LocalWord:
     text: str
     start_s: float
     end_s: float
+    confidence: float | None = None
 
 
 @dataclass(frozen=True)
@@ -36,6 +54,7 @@ class GlobalWord:
     text: str
     start_s: float
     end_s: float
+    confidence: float | None = None
 
 
 @dataclass(frozen=True)
@@ -61,7 +80,7 @@ def reconcile(fragments: Sequence[FragmentTranscript]) -> ReconciledTranscript:
                     continue
                 if _duplicate(kept, word.text, start_s, end_s, previous_end):
                     continue
-                kept.append(GlobalWord(word.text, start_s, end_s))
+                kept.append(GlobalWord(word.text, start_s, end_s, word.confidence))
                 pieces.append(word.text.strip())
         else:
             saw_text_only = True

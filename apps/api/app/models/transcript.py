@@ -1,4 +1,4 @@
-"""Transcript, segmentos y ejecuciones durables de procesamiento (A2.1)."""
+"""Transcript y segmentos (A2.1)."""
 
 import uuid
 from datetime import datetime
@@ -6,9 +6,9 @@ from typing import Any
 
 from sqlalchemy import (
     CheckConstraint,
-    DateTime,
     Double,
     ForeignKeyConstraint,
+    Index,
     Integer,
     Text,
     UniqueConstraint,
@@ -24,6 +24,12 @@ class Transcript(TenantOwned, Base):
     __tablename__ = "transcripts"
     __table_args__ = (
         UniqueConstraint("user_id", "id"),
+        # Target of the 3-column FKs that pin a child row to this exact transcript version.
+        UniqueConstraint("user_id", "id", "version"),
+        # Target of the provenance FK that pins a citation to the transcript's class.
+        # `(user_id, id)` cannot serve a 3-column reference and `(audio_id, version)` is not
+        # tenant-scoped.
+        UniqueConstraint("user_id", "audio_id", "id"),
         UniqueConstraint("audio_id", "version"),
         ForeignKeyConstraint(
             ["user_id", "audio_id"], ["audios.user_id", "audios.id"], ondelete="CASCADE"
@@ -32,6 +38,13 @@ class Transcript(TenantOwned, Base):
             "timestamp_precision IN ('word', 'segment', 'none')", name="timestamp_precision"
         ),
         CheckConstraint("char_count = char_length(text)", name="char_count_matches_text"),
+        # ESPECIFICACION §M2: silence or empty text ends `rejected`; a blank transcript must
+        # never reach the durable text table (defense in depth next to S2.10).
+        CheckConstraint("btrim(text) <> ''", name="nonblank_text"),
+        Index("transcripts_by_audio", "user_id", "audio_id"),
+        # J4.8: the internal budget aggregate starts from the month's committed classes
+        # (`created_at`) and pairs the audio id to count each class once.
+        Index("transcripts_by_created_at", "created_at", "audio_id"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -62,6 +75,9 @@ class Segment(TenantOwned, Base):
     __tablename__ = "segments"
     __table_args__ = (
         UniqueConstraint("user_id", "id"),
+        # Target of `task_sources`' 3-column FK: the cited segment must belong to the
+        # cited transcript, not merely to the same tenant.
+        UniqueConstraint("user_id", "transcript_id", "id"),
         UniqueConstraint("transcript_id", "ordinal"),
         ForeignKeyConstraint(
             ["user_id", "transcript_id"],
@@ -74,6 +90,9 @@ class Segment(TenantOwned, Base):
             "(t_start IS NOT NULL AND t_end IS NOT NULL AND 0 <= t_start AND t_start < t_end)",
             name="time_range",
         ),
+        # Supporting index for the composite FK (DISENO §2.1.8); the unique key starts with
+        # `transcript_id`, so it cannot serve the tenant-prefixed lookup.
+        Index("segments_by_transcript", "user_id", "transcript_id"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -84,29 +103,3 @@ class Segment(TenantOwned, Base):
     char_end: Mapped[int] = mapped_column(Integer, nullable=False)
     t_start: Mapped[float | None] = mapped_column(Double)
     t_end: Mapped[float | None] = mapped_column(Double)
-
-
-class ProcessingRun(TenantOwned, Base):
-    __tablename__ = "processing_runs"
-    __table_args__ = (
-        UniqueConstraint("user_id", "id"),
-        UniqueConstraint("audio_id", "stage", "transcript_version", "config_version"),
-        ForeignKeyConstraint(["user_id", "audio_id"], ["audios.user_id", "audios.id"]),
-        CheckConstraint("stage IN ('index', 'analyze')", name="stage"),
-        CheckConstraint(
-            "status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')", name="status"
-        ),
-    )
-
-    id: Mapped[uuid.UUID] = uuid_pk()
-    audio_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    stage: Mapped[str] = mapped_column(Text, nullable=False)
-    transcript_version: Mapped[int] = mapped_column(Integer, nullable=False)
-    config_version: Mapped[str] = mapped_column(Text, nullable=False)
-    prompt_version: Mapped[str | None] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
-    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    error_code: Mapped[str | None] = mapped_column(Text)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = created_at()

@@ -10,17 +10,43 @@ La evidencia contiene solo booleanos y conteos, nunca rutas de ficheros ni conte
 """
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import signal
 import tempfile
 import time
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from maulwurf_ingest import hardening
+from maulwurf_ingest import hardening, metrics
 
 PROC = Path("/proc")
+logger = logging.getLogger(__name__)
+
+_ABSENCE_FLAGS = ("workdir_absent", "tmp_is_tmpfs")
+_ABSENCE_COUNTERS = (
+    "live_processes", "open_descriptors", "mounts_under_workdir", "unreadable_processes",
+)
+
+
+def absence_verified(evidence: Mapping[str, object]) -> bool:
+    """True only when the evidence proves that no temporary survived.
+
+    A deleted file can stay readable through an open descriptor, an orphan ffmpeg can
+    keep writing into the tmpfs, and a mount can hide the directory. File names alone
+    are not proof, so every descriptor/process/mount check must be present and exact.
+    A missing or malformed counter means "unknown", never zero.
+    """
+    if any(evidence.get(name) is not True for name in _ABSENCE_FLAGS):
+        return False
+    for name in _ABSENCE_COUNTERS:
+        value = evidence.get(name)
+        # bool is an int subclass: `False` must not pass as a zero counter.
+        if isinstance(value, bool) or not isinstance(value, int) or value != 0:
+            return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -48,6 +74,25 @@ class CleanupEvidence:
 
     def as_json(self) -> dict[str, object]:
         return {**asdict(self), "verified": self.verified}
+
+
+def log_cleanup_failed(
+    attempt_id: str, evidence: CleanupEvidence | None, *, error_type: str | None = None
+) -> None:
+    """Raise the immediate `cleanup.failed` ERROR alert with counters, never paths or content.
+
+    Admission is closed separately by `admission.halt`; this function only alerts and counts.
+    """
+    counters: dict[str, object] = (
+        evidence.as_json() if evidence is not None else {"verified": False}
+    )
+    if error_type is not None:
+        counters["error"] = error_type
+    metrics.record_cleanup_failure()
+    logger.error(
+        "cleanup.failed attempt_id=%s", attempt_id,
+        extra={"attempt_id": attempt_id, "fields": counters},
+    )
 
 
 def create_workdir(attempt_id: str, tmp_dir: str | None = None) -> Path:
@@ -108,11 +153,33 @@ def live_group_members(pgid: int) -> int:
     return count
 
 
+def _state(pid: int) -> str | None:
+    """Process state from `/proc/<pid>/stat`; None when it cannot be read."""
+    try:
+        stat = (PROC / str(pid) / "stat").read_text()
+    except OSError:
+        return None
+    try:
+        return stat[stat.rindex(")") + 2 :].split()[0]
+    except (ValueError, IndexError):
+        return None
+
+
+def _inspectable_pids() -> list[int]:
+    """Visible PIDs whose descriptors can be inspected; zombies are excluded."""
+    return [pid for pid in _pids() if _state(pid) not in {"Z", "X"}]
+
+
 def open_descriptors_under(root: Path) -> tuple[int, int]:
-    """(descriptores bajo `root`, procesos ilegibles) en todos los procesos visibles."""
+    """(descriptores bajo `root`, procesos ilegibles) en todos los procesos visibles.
+
+    A zombie has already released every descriptor, so it is skipped instead of counted
+    as an unreadable process: reading `/proc/<pid>/fd` of a zombie is denied even for its
+    own UID, and counting it used to fail cleanup verification closed on a harmless race.
+    """
     prefix = str(root).rstrip("/") + "/"
     found = unreadable = 0
-    for pid in _pids():
+    for pid in _inspectable_pids():
         fd_dir = PROC / str(pid) / "fd"
         try:
             entries = list(fd_dir.iterdir())

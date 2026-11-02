@@ -3,18 +3,23 @@
 > **Status: design document.** Derived from
 > [ESPECIFICACION.md](ESPECIFICACION.md) (source of truth for contracts),
 > [PLAN_IMPLEMENTACION.md](PLAN_IMPLEMENTACION.md) (gates G1–G8, decisions D1–D8), and
-> [PLAN_SPRINTS.md](PLAN_SPRINTS.md) (per-sprint backlog with claiming). Nothing that
-> follows is implemented; this document defines **what is going to be built**, not evidence
-> that it exists. If it contradicts the specification, the specification wins and this file
+> [PLAN_SPRINTS.md](PLAN_SPRINTS.md) (per-sprint backlog with claiming). This document defines
+> the design contracts; implementation status is tracked in
+> [sprints/CLAIMS.md](sprints/CLAIMS.md) and [../README.md](../README.md), not inferred from the
+> schemas below. If it contradicts the specification, the specification wins and this file
 > is corrected in the same revision.
 
 ---
 
-## 1. Current project status (review 2026-09-19)
+## 1. Current project status (review 2026-09-19; historical)
+
+> This snapshot predates S1. For the current state see
+> [sprints/CLAIMS.md](sprints/CLAIMS.md) and [../README.md](../README.md). The web stack is
+> Vite + React (ADR-0007), not the Next.js scaffold named below.
 
 | Area | Status observed in the repository |
 |---|---|
-| Application code | Minimal skeleton: `apps/api` exposes health checks and configuration; `apps/ingest` is an empty package; `apps/web` is a Next.js scaffold. There is no functionality, compose, migrations, test suites, or quality CI pipeline. |
+| Application code | Historical snapshot: the tree now has the S1 foundation and part of S2 (API, ingestion, web, migrations, compose and CI). See `CLAIMS.md` for ticket state. |
 | Manifests and dependencies | `apps/api/pyproject.toml` + `uv.lock`, `apps/ingest/pyproject.toml` + `uv.lock`, `apps/web/package.json` + `package-lock.json`, and `requirements-riva.txt` exist. The Riva client is pinned to `2.27.0`; the other ranges belong to the scaffold and do not demonstrate installation, build, or E2E compatibility. |
 | Functional contracts | `docs/ESPECIFICACION.md` — modules M1–M9, data model §6, NFRs §8 |
 | Delivery plan | `docs/PLAN_IMPLEMENTACION.md` — phases F0–F3, gates G1–G8, decisions D1–D8 |
@@ -98,6 +103,31 @@ Same `FOR ALL` template on `subjects`, `audios`, `transcripts`, `segments`, `chu
 (transactional, hence pool-compatible); workers set it the same way, covered by
 I-S1-AN-05 and G3.
 
+Implementation (A2.17, revision `0005`): the runtime roles are `maulwurf_app` (API),
+`maulwurf_jobs` (worker/scheduler) and `maulwurf_ingest`; all are `NOLOGIN`, not table
+owners and have no `BYPASSRLS`. The DSN owner runs migrations and each transaction
+downgrades itself with `SET LOCAL ROLE`. `users` and `sessions` add the only bootstrap
+policies (verified Google `sub` and presented session-token hash) because login and session
+resolution run before `app.user_id` exists. The dispatcher, reconciler and index claim use
+a `jobs_cross_tenant` policy gated by `app.cross_tenant='on'`; the ingest attempt queue has
+its own documented policy, recorded in ADR-0006 as an explicit accepted cross-tenant risk.
+Runtime grants cover the tenant tables but revoke write access to `alembic_version` (SELECT
+stays for diagnostics). S3/S4 tables add their policies and grants in their migrations.
+
+Implementation (A2.18, revision `0009`): every FK now has a non-partial covering index on its
+child columns, checked from `pg_index` by I-S2-AN-17. `chunks.index_version` references
+`index_generations(user_id, version)`; `chunks` and `message_sources` pin the exact transcript
+version; `embeddings.index_version` is part of the FK to its chunk. `dimension` is fixed to the
+vector column's 1536 and a transcript's `text` must not be blank. `0009_s2_schema_integrity`
+follows `0008`; `alembic check` runs in the integration suite and fails on metadata drift.
+
+Implementation (A2.12, revision `0010`): `messages_by_conversation_order`
+`(user_id, conversation_id, created_at, id)` replaces the FK-only
+`messages_by_conversation` index. It backs the paginated history order and the
+`max(created_at)` aggregate that orders the conversation listing; its prefix still covers the
+`(user_id, conversation_id)` FK. The revision only swaps indexes, so no table or column is
+added.
+
 ### 2.1.1 Extensions
 
 ```sql
@@ -166,7 +196,9 @@ CREATE TABLE sessions (
   created_at   timestamptz NOT NULL DEFAULT now(),
   expires_at   timestamptz NOT NULL,
   revoked_at   timestamptz,
-  last_seen_at timestamptz
+  last_seen_at timestamptz,
+  deletion_operation_id uuid                     -- A4.4: restricted initiator only
+    REFERENCES account_deletions(id) ON DELETE SET NULL
 );
 CREATE INDEX sessions_user ON sessions (user_id, expires_at);
 
@@ -345,15 +377,18 @@ Design notes ([ESPECIFICACION.md](ESPECIFICACION.md) §6.2):
   not exposed as success. An expired lease does not prove deletion: without evidence,
   `cleanup_status` stays `pending` and only the index/analyze outbox remains blocked.
   `cleanup_status='failed'` stops local admission and raises an alert.
-- Candidate TTLs are set only after the F0 benchmark; until then
-  `GET /ingestion/capabilities` returns `null` and `limits_validated=false`.
+- The effective TTLs (10/30/60 min) are published only with the S4.4 benchmark behind
+  them; the size/duration limits stay `null` and `limits_validated=false` while D4 is
+  blocked.
 - Class purge order, fixed by `DELETE /audios/{id}` (A2.7, one transaction, always explicit
   deletes and never the FK cascade, so every count in the `202` body is verifiable):
   conditional `audios.deleted_at` (a second concurrent DELETE loses and gets `404`) →
   active `ingestion_attempts` to `cancelled` with `fencing_token + 1` (a late `ingest`
   commit fails its token check) → `outbox_events` `pending` to `skipped` (never
   `enabled=false`, which the `cleanup_gate` CHECK would reject as a lie) →
-  `processing_runs` `pending|running` to `cancelled` → `message_sources` of the class →
+  `processing_runs` `pending|running` to `cancelled` → `task_revisions` and
+  `task_sources` of the class → `tasks` with `audio_id` = the class (so `tasks.audio_id`
+  never blocks the purge) → `message_sources` of the class →
   content-free `messages` (`content=''`, `citas='[]'`) → `embeddings` → `chunk_segments`
   → `chunks` → `segments` → `transcripts` (summary and topics go with the transcript).
   Final attempts keep their `error_code`; existing Google events are kept by default.
@@ -442,7 +477,8 @@ CREATE TABLE chunk_segments (
   segment_id   uuid NOT NULL,
   FOREIGN KEY (user_id, segment_id)
     REFERENCES segments (user_id, id) ON DELETE CASCADE,
-  overlap_span jsonb,                           -- overlap offsets, for evidence
+  overlap_span jsonb,                           -- {segment_ordinal, inicio_char, fin_char,
+                                                 --  overlap?: {inicio_char, fin_char, tokens}}
   PRIMARY KEY (user_id, chunk_id, segment_id)
 );
 CREATE INDEX chunk_segments_by_segment ON chunk_segments (user_id, segment_id);
@@ -503,7 +539,10 @@ CREATE TABLE processing_runs (
 Notes:
 
 - A chunk is **not** the minimal unit of evidence: `chunk_segments` keeps the segments and
-  their spans even when chunks overlap.
+  their spans even when chunks overlap. Each link's `overlap_span` is the validated
+  `{segment_ordinal, inicio_char, fin_char, overlap?}` object (segment-local offsets; the
+  optional `overlap` region is `{inicio_char, fin_char, tokens}`), matching the §M6
+  `Chunk` contract in `apps/api/app/schemas/chunk.py`.
 - Chunks and generations: reindexing with a new `index_version` re-chunks — it creates new
   `chunks`/`chunk_segments` rows for that generation and **retires** the previous one
   (`status = 'retired'`). The retired generation keeps its chunks and embeddings
@@ -623,6 +662,10 @@ CREATE TABLE messages (
 CREATE UNIQUE INDEX messages_client_idem
   ON messages (conversation_id, client_message_id)
   WHERE client_message_id IS NOT NULL;
+-- A2.12, revision 0010: replaces the FK-only (user_id, conversation_id) index. The trailing
+-- keys serve history pagination and `max(created_at)` per conversation.
+CREATE INDEX messages_by_conversation_order
+  ON messages (user_id, conversation_id, created_at, id);
 
 CREATE TABLE message_sources (
   id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -699,6 +742,9 @@ CREATE TABLE tasks (
   event_end_date_exclusive   date,
   calendar_id text,
   calendar_event_id text,
+  -- ETag of the last successful Calendar write: the baseline the reconcile must match
+  -- before a conditional PATCH. NULL fails closed (no write) until adopt/review (J3.6).
+  calendar_etag text,
   confirmed_at timestamptz,
   completed_at timestamptz,
   dismissed_at timestamptz,
@@ -728,6 +774,8 @@ CREATE TABLE tasks (
 -- be ambiguous.
 CREATE INDEX tasks_inbox_due_at ON tasks (user_id, status, due_at) WHERE due_at IS NOT NULL;
 CREATE INDEX tasks_inbox_due_date ON tasks (user_id, status, due_date) WHERE due_date IS NOT NULL;
+-- `ambiguous`/`missing` carry no due column, so the unresolved tray needs the plain key.
+CREATE INDEX tasks_inbox_status ON tasks (user_id, status);
 
 CREATE TABLE task_evidence (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -747,6 +795,8 @@ CREATE TABLE task_evidence (
 CREATE INDEX task_evidence_by_task ON task_evidence (user_id, task_id, task_version);
 
 -- A transcript/chat-based proposal may reference several classes; the manual task uses zero rows.
+-- Parent keys added by A3.1/0012: segments UNIQUE (user_id, transcript_id, id) and
+-- transcripts UNIQUE (user_id, audio_id, id); transcripts (user_id, id, version) came from A2.18.
 CREATE TABLE task_sources (
   user_id            uuid NOT NULL,
   task_id            uuid NOT NULL,
@@ -754,16 +804,23 @@ CREATE TABLE task_sources (
   audio_id           uuid NOT NULL,
   FOREIGN KEY (user_id, audio_id) REFERENCES audios (user_id, id) ON DELETE CASCADE,
   transcript_id      uuid NOT NULL,
-  FOREIGN KEY (user_id, transcript_id) REFERENCES transcripts (user_id, id),
   transcript_version integer NOT NULL,
+  FOREIGN KEY (user_id, audio_id, transcript_id)
+    REFERENCES transcripts (user_id, audio_id, id),
+  FOREIGN KEY (user_id, transcript_id, transcript_version)
+    REFERENCES transcripts (user_id, id, version),
   segment_id         uuid NOT NULL,
-  FOREIGN KEY (user_id, segment_id) REFERENCES segments (user_id, id),
+  FOREIGN KEY (user_id, transcript_id, segment_id)
+    REFERENCES segments (user_id, transcript_id, id),
   char_start         integer NOT NULL,
   char_end           integer NOT NULL,
   PRIMARY KEY (user_id, task_id, segment_id, char_start, char_end),
   CHECK (char_start < char_end)
 );
-CREATE INDEX task_sources_by_audio ON task_sources (user_id, audio_id);
+CREATE INDEX task_sources_by_audio ON task_sources (user_id, audio_id, transcript_id);
+CREATE INDEX task_sources_by_transcript
+  ON task_sources (user_id, transcript_id, transcript_version);
+CREATE INDEX task_sources_by_segment ON task_sources (user_id, transcript_id, segment_id);
 
 CREATE TABLE task_revisions (
   id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -781,6 +838,8 @@ CREATE TABLE task_revisions (
                        CHECK (status IN ('pending_confirmation','activated','discarded')),
   activated_at       timestamptz,
   created_at         timestamptz NOT NULL DEFAULT now(),
+  -- NULL-distinct on purpose: several pending `edit_of_confirmed` rows may share a base
+  -- version; a repeated reanalysis of the same run is rejected. See ESPECIFICACION §M4.
   UNIQUE (task_id, base_task_version, revision_type, run_id)
 );
 
@@ -791,7 +850,8 @@ CREATE TABLE calendar_events (
   event_id           text NOT NULL,              -- remote Google ID
   source             text NOT NULL CHECK (source IN ('google','maulwurf')),
   task_id            uuid,                       -- nullable: most events have no task
-  FOREIGN KEY (user_id, task_id) REFERENCES tasks (user_id, id),
+  FOREIGN KEY (user_id, task_id) REFERENCES tasks (user_id, id)
+    ON DELETE SET NULL (task_id),                -- class purge unlinks, keeps the event
   title              text NOT NULL,
   start_at           timestamptz,                -- pairs with end_at: events with time
   end_at             timestamptz,
@@ -817,7 +877,7 @@ CREATE UNIQUE INDEX calendar_events_one_link
 
 CREATE TABLE google_remote_operations (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id     uuid NOT NULL,                     -- no FK: survives the purge (A4.4)
   kind        text NOT NULL CHECK (kind IN ('delete_event','delete_calendar','account_cleanup')),
   calendar_id text,
   event_id    text,
@@ -826,21 +886,25 @@ CREATE TABLE google_remote_operations (
   attempts    integer NOT NULL DEFAULT 0,
   error_code  text,
   created_at  timestamptz NOT NULL DEFAULT now(),
-  finished_at timestamptz
+  finished_at timestamptz,
+  expires_at  timestamptz NOT NULL               -- deleted by the retention job
 );
+CREATE INDEX google_remote_operations_expiry ON google_remote_operations (expires_at);
 
 -- Residual record without FK: it survives the purge to report the outcome without retaining
--- profile/text.
+-- profile/text. `claimed_at` is the execution lease; a crashed process is reclaimable.
 CREATE TABLE account_deletions (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   former_user_id uuid NOT NULL,
   status        text NOT NULL
-    CHECK (status IN ('pending','completed','completed_with_remote_failures')),
+    CHECK (status IN ('pending','running','completed','completed_with_remote_failures')),
   delete_events boolean NOT NULL DEFAULT false,
   error_summary text,
   expires_at    timestamptz NOT NULL,
   created_at    timestamptz NOT NULL DEFAULT now(),
-  completed_at  timestamptz
+  completed_at  timestamptz,
+  claimed_at    timestamptz,
+  attempts      integer NOT NULL DEFAULT 0
 );
 CREATE INDEX account_deletions_expiry ON account_deletions (expires_at);
 ```
@@ -854,9 +918,18 @@ CREATE INDEX account_deletions_expiry ON account_deletions (expires_at);
   receives `revision_id` and `expected_version`, activates exactly that revision, bumps the
   version, and creates/reuses the Calendar outbox in a single transaction.
 - Remote class/task deletion lives in `google_remote_operations` and **survives** its purge
-  until resolved. Account deletion creates `account_deletions`, which keeps only the former
-  ID, status, redacted error, and expiry; it allows `GET /me/deletion/{id}` after profile
-  and tokens are purged.
+  until resolved (A4.4 resolves the illustrative `ON DELETE CASCADE` by keeping `user_id` as
+  an opaque UUID without a FK). Account deletion creates `account_deletions`, which keeps only
+  the former ID, status, redacted error, and expiry; it allows `GET /me/deletion/{id}` after
+  profile and tokens are purged. The initiating session is linked through
+  `sessions.deletion_operation_id` and stays in restricted mode (status, authorized resume,
+  and logout only). Execution uses an atomic `pending -> running` claim with a bounded lease;
+  a purge failure after the tombstone leaves a resumable `pending` operation and still answers
+  `202`. An hourly scheduled job runs as the cross-tenant jobs role and deletes both residual
+  tables once `expires_at` passes; the window is 30 days (D8, A4.5) and matches the backup
+  retention.
+  `delete_maulwurf_events` defaults to `false`, so Maulwurf-created Google events stay in the
+  user's calendar unless the deletion explicitly opts in (the UI must say so; A4.5).
 - Complete/dismiss cancels future reminders but keeps the event with a notice, unless
   remote deletion is explicitly requested.
 
@@ -886,36 +959,100 @@ CREATE TABLE notifications (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id             uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   task_id             uuid,                       -- nullable: digests and test do not depend on a task
-  FOREIGN KEY (user_id, task_id) REFERENCES tasks (user_id, id) ON DELETE SET NULL,
+  -- A4.1: CASCADE, not SET NULL. A bare composite SET NULL would try to null the NOT NULL
+  -- user_id; nulling only task_id would leave a reminder without its due generation and two
+  -- deleted tasks would then collide under the NULLS NOT DISTINCT occurrence key.
+  FOREIGN KEY (user_id, task_id) REFERENCES tasks (user_id, id) ON DELETE CASCADE,
   type                text NOT NULL CHECK (type IN
     ('reminder_t48','reminder_t24','reminder_t2',
      'reminder_t3d','reminder_t1d','digest_daily','digest_weekly','test')),
   occurrence          date,                       -- target local date
   due_version         integer,
   scheduled_at        timestamptz NOT NULL,
-  dedupe_key          text NOT NULL,              -- (user_id, type, task_id, due_version, occurrence)
+  dedupe_key          text NOT NULL,              -- canonical identity (occurrence_seq suffix if > 0)
+  occurrence_seq      integer NOT NULL DEFAULT 0, -- 0 = scheduled; > 0 = manual test/resend
   status              text NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending','sending','sent','failed','delivery_unknown','cancelled')),
   lease_expires_at    timestamptz,                -- expired 'sending' = uncertain delivery
   attempts            integer NOT NULL DEFAULT 0,
+  claimed_by_fence    bigint,                     -- election that moved the row to 'sending'
   sent_at             timestamptz,
   provider_message_id text,
   last_error_code     text,                       -- redacted, no PII
   created_at          timestamptz NOT NULL DEFAULT now(),
   updated_at          timestamptz NOT NULL DEFAULT now(),
-  UNIQUE NULLS NOT DISTINCT (user_id, type, task_id, due_version, occurrence)
+  UNIQUE NULLS NOT DISTINCT
+    (user_id, type, task_id, due_version, occurrence, occurrence_seq)
 );
 CREATE INDEX notifications_due ON notifications (status, scheduled_at) WHERE status = 'pending';
 ```
 
 - Persistent dedupe `(user_id, type, task_id, due_version, occurrence)`; changing the due
   date or preferences cancels obsolete future occurrences; **never** a retrospective burst
-  when confirming late.
+  when confirming late. A4.3 owns the rule: only `pending` rows are cancelled (a `sending`
+  row may already be leaving through Gmail, and `sent`/`failed`/`delivery_unknown` are
+  history); a new `due_version` retires the pending reminders of the previous generation of
+  **that** task, and a preference change retires the reminder/digest types no longer
+  enabled. The task scope belongs to the due-date rule only: digests are user-level and a
+  preference change still evaluates them when both rules are applied together. A stale
+  pending row whose instant already passed is cancelled too, so it can
+  never fire late. Deleting a task cascades to its reminders (A4.1): an unlinked
+  reminder would be undeliverable and would also collide with another deleted task's
+  occurrence under `NULLS NOT DISTINCT`. A **scheduled** occurrence that A4.3 cancelled can
+  be re-armed when the same task generation is scheduled again and the threshold is enabled
+  (for example after disabling and re-enabling a preference): it was never claimed or
+  delivered. The re-arm targets `uq_notifications_dedupe_key` and only reopens `cancelled`
+  rows; `sending`, `sent`, `failed` and `delivery_unknown` keep their history, and a manual
+  resend of a cancelled row remains forbidden.
+- J4.3 resolves `occurrence` as the user-local target day of the delivery: the local date of
+  `due_at - threshold` for timed reminders and `due_date - offset` for all-day ones. A4.1
+  freezes no reminder wall-clock preference (only the digest time), so the all-day default is
+  09:00 local with an explicit override; the digest preference is not reused. Thresholds
+  already past at confirmation are not inserted, so a late confirmation never fires a
+  retrospective burst. J4.4 normalizes both DST edges in `_resolve_local_wall`: a repeated
+  wall clock is armed once at its first fold, and a nonexistent one moves to the first valid
+  instant after the gap; the identity keeps the user-local target day, so the transition
+  cannot duplicate an occurrence.
+- A manual test send or warned resend is a new audited occurrence of the same identity; it
+  carries `occurrence_seq` 1, 2, … (0 is the scheduled row). Automatic dedupe is unchanged,
+  and the original `delivery_unknown` row is never mutated to `pending`.
 - DST: nonexistent time → next valid instant; repeated time → a single local occurrence.
   Tasks without a date have no scaled reminders.
 - Gmail does not guarantee exactly-once delivery: lost response or expired `sending` lease
   → `delivery_unknown`, **no automatic retry**; visible in the panel; manual resending
   warns about the risk.
+
+J4.2 elects the scheduler role with a global row:
+
+```sql
+CREATE TABLE scheduler_leases (
+  name              text PRIMARY KEY,          -- notification_scheduler
+  holder            text NOT NULL,             -- host:pid:nonce
+  fencing_token     bigint NOT NULL DEFAULT 1, -- grows on takeover
+  lease_expires_at  timestamptz NOT NULL,
+  heartbeat_at      timestamptz NOT NULL DEFAULT now(),
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  CHECK (lease_expires_at > heartbeat_at),
+  CHECK (fencing_token >= 1)
+);
+```
+
+- There is no tenant column and no RLS: the row is infrastructure state, never user data.
+  The `maulwurf_jobs` role owns access; the API and ingest roles cannot read or rewrite the
+  election.
+- The same holder renews in place and keeps the fence; only an expired row can be taken
+  over, and a takeover increments the fence. The cron runs every minute and at startup.
+  Election, expiry and due comparisons use PostgreSQL's clock (`now()`), not each host's
+  wall clock.
+- The claim keeps the occurrence's `dedupe_key` unique and adds a bounded delivery lease;
+  `FOR UPDATE SKIP LOCKED` lets multiple workers drain a backlog without claiming twice. It
+  also copies the elected `fencing_token` into `notifications.claimed_by_fence` (migration
+  `0018`); the J4.1 sender must compare it with the live election before delivering, and a
+  row claimed by a superseded scheduler must not be sent.
+- The scheduler is disabled by default (`MAULWURF_NOTIFICATION_SCHEDULER_ENABLED=false`)
+  until J4.1 consumes `sending`: a disabled tick elects no role and moves no row, so no
+  occurrence becomes a false terminal `delivery_unknown` before delivery exists.
 
 ### 2.10 State machines (frozen contracts)
 
@@ -1005,12 +1142,12 @@ assign a person or ticket ownership. The effective owner is looked up in
 | Origin | Same-origin behind Caddy; absolute routes as in the specification (no `/api` prefix) |
 | Session | Opaque cookie `mw_session` (`Secure`, `HttpOnly`, `SameSite=Lax`); the server stores only the hash |
 | CSRF | `GET /me` delivers the plain token under `Cache-Control: no-store`; the server keeps only `csrf_hash`. Every mutation (`POST`/`PUT`/`PATCH`/`DELETE`, including binary) requires a valid `X-CSRF-Token` and a matching `Origin`. Rotates with the session, not per read. |
-| HTTP privacy | `Cache-Control: no-store` on private content; the service worker (if any, S4) excludes upload/API/transcripts/chat/SSE |
+| HTTP privacy | `Cache-Control: no-store` on private content, enforced structurally on every API response (routes, errors, redirects and SSE); the service worker (if any, S4) excludes upload/API/transcripts/chat/SSE |
 | Identity | `user_id` always from backend session state; never from a payload or LLM output |
 | Tracing | JSON logs with `request_id`, `audio_id`, `attempt_id`, `run_id`; no sensitive payloads |
 | Pagination | `limit` (1–200, default 50) + opaque `cursor` |
-| Quotas | `429` with `Retry-After` for per-user quota; `503` with `Retry-After` for ingestion capacity. Effective values TBD after F0 |
-| Language | No preselection or autodetection; `multi` and translation out of MVP/v1 |
+| Quotas | `429` with `Retry-After` for per-user quota; `503` with `Retry-After` for ingestion capacity or a limiter outage (fail closed). Active values come only from recorded decisions: M5/M6/M7 and D4/D5. Authentication and incremental consent have no published number yet, so their fixed-window mechanism is configuration-driven and unset means no limit |
+| Language | No preselection or autodetection; `multi` and translation out of MVP/v1. Codes are compared case-insensitively (BCP-47) and stored lowercase |
 
 ### 3.2 Error envelope and codes
 
@@ -1036,11 +1173,14 @@ Typed codes (no PII or sensitive content):
 
 | Code | HTTP | Usage |
 |---|---|---|
+| `bad_request` | 400 | Framework-level client error without a more specific code |
 | `auth_required` | 401 | No session or expired |
 | `csrf_invalid` | 403 | Missing/invalid `X-CSRF-Token` or Origin |
 | `forbidden` | 403 | Another tenant's resource |
-| `not_found` | 404 | Nonexistent or tombstoned |
+| `not_found` | 404 | Nonexistent, tombstoned, or unknown route |
+| `method_not_allowed` | 405 | HTTP method not allowed on an existing route |
 | `validation_failed` | 422 | Invalid fields (per-field detail) |
+| `chat_mode_invalid` | 422 | Conversation `mode`/scope mismatch or unknown mode (M7) |
 | `language_not_allowed` | 422 | Code outside the tested allowlist |
 | `consent_required` | 422 | Missing cloud-processing acceptance |
 | `upload_expired` | 410 | Ingestion session TTL expired |
@@ -1055,6 +1195,7 @@ Typed codes (no PII or sensitive content):
 | `invalid_transition` | 409 | Target status not allowed |
 | `transcript_unavailable` | 409 | No usable transcript (re-upload); 404 if the resource does not exist for the tenant |
 | `srt_unavailable` | 409 | Invalid timestamps for SRT |
+| `variant_hash_mismatch` | 422 | The second `PUT` hash does not match the confirmed variant |
 | `session_conflict` | 409 | The session was already rotated or revoked by another request; repeat `GET /me` |
 | `subject_name_taken` | 409 | The user already has an active subject with that name (case-insensitive) |
 | `subject_has_active_audios` | 409 | The subject has active classes; `details.class_count` says how many |
@@ -1063,6 +1204,13 @@ Typed codes (no PII or sensitive content):
 | `date_unresolved` | 422 | Confirming requires a valid date |
 | `provider_unavailable` | 503 | LLM/embeddings/Google down |
 | `internal_error` | 500 | No sensitive details |
+
+Errors raised by the framework before a router runs use the same envelope: an unknown
+route is `404 not_found`, a wrong method is `405 method_not_allowed`, an unmapped 4xx keeps
+its status with `bad_request`, and any unhandled exception is `500 internal_error`. The
+framework `detail` is never forwarded (it can echo request input) and the 500 body never
+carries exception text; the request id is logged with the failure. Uvicorn's own error
+logger is redacted too, because it prints the traceback outside the application logger.
 
 Ingest persists a smaller set (S2.13, `maulwurf_ingest/outcomes.py`). The public `PUT`
 uses the row below; the stored `error_code` can be more specific than the public code.
@@ -1080,27 +1228,39 @@ uses the row below; the stored `error_code` can be more specific than the public
 
 `401 internal_credential_invalid` is not stored and is not shown to the browser; the public
 answer is `500 internal_error`. `409 wrong_instance` and `409 reception_not_held` on admit
-are `503 capacity_unavailable`.
+are `503 capacity_unavailable`. A capacity `503` always carries `Retry-After` and never marks
+itself `retryable=false` in `details`: the header is the retry signal (A2.19).
 
 ### 3.3 M1 — Authentication, profile, and integrations (S1; connect/reconnect in S3)
 
 | Method | Route | Sprint | Description | Response |
 |---|---|---|---|---|
-| `GET` | `/auth/google/start` | S1 | OAuth Authorization Code with `state`, PKCE, and `nonce`; scopes `openid email profile` | `302` to Google |
-| `GET` | `/auth/google/callback` | S1 | Validates `nonce`/issuer/audience; creates the user by `sub`; issues an opaque session | `302` to `/` with cookie |
+| `GET` | `/auth/google/start` | S1 | OAuth Authorization Code with `state`, PKCE, and `nonce`; scopes `openid email profile` | `302` to Google · `429` conditional · `503` |
+| `GET` | `/auth/google/callback` | S1 | Validates `nonce`/issuer/audience; creates the user by `sub`; issues an opaque session | `302` to `/` with cookie · `429` conditional · `503` |
 | `POST` | `/auth/logout` | S1 | Revokes the session | `204` |
-| `GET` | `/me` | S1 | Profile + integrations + non-cacheable CSRF bootstrap | `200` (shape below) |
-| `PATCH` | `/me` | S1 | Updates `timezone` (IANA), `display_name` | `200` |
+| `GET` | `/me` | S1 | Profile + non-cacheable CSRF bootstrap; integration status is `GET /integrations/status` | `200` (shape below) |
+| `PATCH` | `/me` | S1 | Updates `timezone` (IANA) only | `200` |
 | `GET` | `/integrations/status` | S1 | Login/Calendar/Gmail status, scopes, freshness | `200` |
-| `POST` | `/integrations/google/connect` | S3 | Incremental OAuth with Calendar scopes (real verification D7) | `302` to Google |
-| `POST` | `/integrations/google/reconnect` | S3 | Re-authorization after `invalid_grant` (Testing expires after 7 days) | `302` to Google |
+| `POST` | `/integrations/google/connect` | S3 | Incremental OAuth with Calendar scopes (real verification D7) | `302` to Google · `429` conditional · `503` |
+| `POST` | `/integrations/google/reconnect` | S3 | Re-authorization after `invalid_grant` (Testing expires after 7 days) | `302` to Google · `429` conditional · `503` |
+| `GET` | `/me/notifications` | S4 | Current M8 preferences (read companion of the PATCH) | `200` |
 | `PATCH` | `/me/notifications` | S4 | M8 preferences (Gmail opt-in, digests, thresholds) | `200` |
 | `POST` | `/notifications/test` | S4 | Test send to the verified email | `202` |
-| `DELETE` | `/me` | S4 | Account deletion; accepts explicit `delete_maulwurf_events`, creates the operation, and requests remote deletions before revoking tokens | `202 {deletion_operation_id}` |
-| `GET` | `/me/deletion/{id}` | S4 | Non-sensitive deletion status; accepts the restricted initiator session | `pending\|completed\|completed_with_remote_failures` |
+| `DELETE` | `/me` | S4 | Account deletion; accepts explicit `delete_maulwurf_events` (default `false` keeps Maulwurf-created Google events), creates the operation, claims it atomically, and requests remote deletions before revoking tokens; a post-tombstone failure still answers `202` and stays resumable | `202 {deletion_operation_id}` |
+| `GET` | `/me/deletion/{id}` | S4 | Non-sensitive deletion status; accepts the restricted initiator session | `pending\|running\|completed\|completed_with_remote_failures` |
+| `POST` | `/me/deletion/{id}/resume` | S4 | Authorized retry of a `pending`/`running` operation; accepts the restricted initiator session with Origin/CSRF; an already-closed operation is a no-op | `202` (still open) · `200` (closed) · `403` · `404` |
+
+The four OAuth entry points carry A4.6's fixed-window abuse guard. `/auth/google/start`
+and `/auth/google/callback` are keyed by a hash of the peer address; `connect`/`reconnect`
+are keyed by the authenticated user. No numeric decision exists yet (D4/D5 open), so the
+limits are configuration (`MAULWURF_AUTH_RATE_LIMIT_PER_MINUTE`,
+`MAULWURF_INTEGRATION_RATE_LIMIT_PER_MINUTE`) and unset means "no limit", the same rule as
+the A2.3 upload quota. When enabled they answer `429 rate_limited` with `Retry-After`; a
+Redis outage fails closed with `503 capacity_unavailable` and `Retry-After`.
 
 After `DELETE /me`, the session that started the operation enters **restricted mode**: only
-`GET /me/deletion/{id}` and `POST /auth/logout`; every other session is revoked. This way
+`GET /me/deletion/{id}`, `POST /me/deletion/{id}/resume` and `POST /auth/logout`; every other
+session is revoked. This way
 the client can show the deletion status without keeping access to the rest of the account.
 
 `GET /me` example:
@@ -1109,20 +1269,16 @@ the client can show the deletion status without keeping access to the rest of th
 {
   "id": "b2a1…",
   "email": "estudiante@uni.edu",
+  "display_name": "Estudiante",
   "timezone": "America/Bogota",
-  "csrf_token": "plain-token-only-in-non-cacheable-response",
-  "integrations": {
-    "google_login": "connected",
-    "calendar": {
-      "status": "connected",
-      "calendar_id": "abc@group.calendar.google.com",
-      "scopes": ["calendar.app.created", "calendar.events.readonly",
-                 "calendar.calendarlist.readonly"]
-    },
-    "gmail": { "status": "disconnected" }
-  }
+  "csrf_token": "plain-token-only-in-non-cacheable-response"
 }
 ```
+
+`display_name` is read-only here (it comes from the Google profile). Integration state is
+**not** embedded in `/me`: `GET /integrations/status` is the single integrations surface
+(`google.status`, granted `scopes`, `calendar_id`, token freshness). A2.19 narrowed this
+section to the frozen S1 A1.8 contract.
 
 Declining Calendar/Gmail permissions does **not** prevent transcribing or chatting.
 
@@ -1140,8 +1296,9 @@ spaces; deleting a subject frees its name.
 
 ### 3.5 M2b — Ingestion and audios (S1 skeleton; S2 full)
 
-`GET /ingestion/capabilities` publishes only values observed by the spike. Before F0 the
-shape does not claim to prove limits or languages:
+`GET /ingestion/capabilities` publishes only measured values. The size/duration limits stay
+hidden while D4 is blocked, but S4.4 publishes the effective TTLs with their own benchmark
+source:
 
 ```json
 {
@@ -1150,7 +1307,9 @@ shape does not claim to prove limits or languages:
   "accepted_input_formats": [],
   "languages": [],
   "language_policy": "explicit_select_required_no_multi",
-  "ttl": {"upload_start_minutes": null, "receive_minutes": null, "asr_minutes": null},
+  "ttl": {"upload_start_minutes": 10, "receive_minutes": 30, "asr_minutes": 60},
+  "ttl_source_report": "docs/eval/ttl-benchmark.md",
+  "ttl_source_version": "2026-11-01",
   "asr": {"provider": "nvidia-riva", "model": "whisper-large-v3",
            "timestamp_precision": null},
   "active_slots": null,
@@ -1159,7 +1318,20 @@ shape does not claim to prove limits or languages:
 }
 ```
 
-After F0, non-null fields must link to the versioned report that measured them.
+After F0, non-null size/duration fields must link to the versioned report that measured
+them. A TTL publication with only one or two phases is rejected; an explicit all-null TTL
+publication is the only way to fall back to the provisional window.
+
+The reservation deadlines are derived from the published TTL, never from an invented
+number: `upload_expires_at = now + ttl.upload_start_minutes`, `receive_deadline =
+upload_expires_at + ttl.receive_minutes` and `asr_deadline = receive_deadline +
+ttl.asr_minutes` (chained, so each ephemeral phase has its own budget and the three values
+are monotonic). The TTL publication is independent of `limits_validated`: the effective
+10/30/60 min apply while D4 is blocked. The API keeps `MAULWURF_UPLOAD_TTL_MINUTES` only for
+an explicit all-null TTL publication and then leaves `receive_deadline`/`asr_deadline` null.
+The size limit has ONE value: the API reads `INGEST_MAX_UPLOAD_BYTES` from the shared
+configuration and refuses to start when it disagrees with `MAULWURF_UPLOAD_MAX_BYTES`;
+`GET /ingestion/capabilities` publishes the effective limit once F0 validates it.
 
 `POST /audios` reserves a session; it cannot deduplicate before knowing the hash.
 
@@ -1180,7 +1352,10 @@ After F0, non-null fields must link to the versioned report that measured them.
 
 `privacy_notice_version` and the two acknowledgements are validated before reserving. The
 optional token can only come from a previous `409 duplicate_variant`, belongs to the same
-tenant, expires soon, and is consumed once.
+tenant, expires soon, and is consumed once. An unknown, expired, consumed or mismatched
+token — including one consumed by a racing request — answers the same opaque
+`422 validation_failed` keyed on `variant_confirmation_token`; the state is never disclosed,
+so this `POST` has no `409`.
 
 - `201 Created`: `{"audio_id","attempt_id","upload_url","upload_expires_at","outcome":"new"}`.
 - `422 consent_required|language_not_allowed|validation_failed`; `429` quota; `503` no slot.
@@ -1236,14 +1411,44 @@ across tenants).
   "stages": { "index": "pending", "analyze": "not_requested" },
   "aggregate_status": "processing",
   "audio_retained": false,
-  "transcript": { "version": 2, "timestamp_precision": "segment", "char_count": 18422 },
+  "analysis_backfill_available": true,
+  "transcript": {
+    "version": 2,
+    "timestamp_precision": "segment",
+    "char_count": 18422,
+    "quality_warnings": [
+      { "code": "repetition", "count": 3 },
+      { "code": "low_confidence", "count": 4, "total": 10 }
+    ]
+  },
   "exports": { "txt": true, "srt": true }
 }
 ```
 
 `transcript` is `null` without a usable transcript; `exports.srt` is `true` only when a
 truthful SRT exists (real precision and ordered times inside `duration_seconds`), so the
-client can enable the download without probing the `409`.
+client can enable the download without probing the `409`. `transcript.quality_warnings`
+carries the non-sensitive ASR signals (`code` plus counts) persisted by ingestion — for
+example `repetition`, `empty_segments` and `low_confidence` — so the inbox/class page can
+warn before proposing dates or tasks. Unknown fields are dropped and the list is bounded;
+no spoken text or provider payload is part of the signal (S3.6).
+
+`analysis_backfill_available` is the explicit S3.1/D3.5 action and mirrors the decision of
+`classify_existing_run`, so the class page never offers an action the service resolves as a
+no-op. It is `true` only for a live class with a persisted transcript and a latest attempt
+with `cleanup_status='verified'` when the `analyze` stage of the current transcript/config
+is `not_requested` (F1), `failed` or `cancelled`; without a run for those versions it is
+`true` only for an F1 class or when a previous analysis run exists under another version
+(reanalysis after a version change, S3.4). While the analysis run is `pending`/`running`
+the stage itself is the visible queue and the flag is `false`, so a second click cannot
+duplicate work. Queueing never uploads audio or retranscribes: the operator script
+(`scripts/backfill_analysis.py`, dry-run by default) upgrades `required_stages` to
+`['index','analyze']` and creates the `analyze` run plus its cleanup-gated event. The
+upgrade is persisted only on the branch that actually queues a run: `already_analyzed`,
+`already_queued` and `unknown_run_state` leave the stage list untouched, and a class that
+is already F2 without an `analyze` run is reported as `already_f2_no_run` and keeps
+`analysis_backfill_available: false` (its entry point is `POST /audios/{id}/retry`, not the
+backfill).
 
 `aggregate_status`: `processing` while required stages are pending/running; `ready` if all
 succeeded; `partial` if there is a usable transcript but some required stage failed/was
@@ -1364,8 +1569,17 @@ visible/editable before confirming and the LLM never invents a duration.
 | Method | Route | Description | Responses |
 |---|---|---|---|
 | `GET` | `/calendar/events?from=&to=` | Reads the local mirror (`calendar_events`), proposed window -7/+60 days; reports freshness/coverage | `200` with `last_synced_at` and a coverage notice |
-| `POST` | `/calendar/sync` | Forces a full refresh of the window with atomic publication (without mixing `syncToken` with filters) | `202` · `409` |
+| `POST` | `/calendar/sync` | Forces a full refresh of the window with atomic publication (without mixing `syncToken` with filters); bounded by a per-user cooldown | `202` · `409` · `429` (`Retry-After`) · `503` |
 | `GET` | `/calendar/conflicts` | Conflicts: time overlap (events with time) vs concentration of deadlines/exams on the same day | `200` shape below |
+
+J3.7 response shape: `from`/`to` are inclusive local dates; `events` carries each mirror row
+with its instant pair or the exclusive all-day pair, plus `from`, `to`, `last_synced_at`,
+`coverage_ok`, `stale` and a closed-set `coverage_notice` (`never_synced`,
+`no_read_calendars`, `calendar_set_changed`, `outside_coverage`, `stale`). A notice never
+hides the rows already mirrored; an inverted or oversized range answers `422
+validation_failed`. When only one bound is sent, the other is derived from it (`from` →
+`from+60`, `to` → `to-7`) instead of from today's default window, so a future `from` cannot
+answer a misleading inverted-range error.
 
 ```json
 {
@@ -1380,6 +1594,25 @@ visible/editable before confirming and the LLM never invents a duration.
   "coverage_ok": true
 }
 ```
+
+`time_conflicts` pairs only timed events whose half-open intervals overlap; touching
+edges (`a.end == b.start`) do not overlap, and all-day, `cancelled` and `missing` rows are
+never time conflicts. `deadline_clashes` groups two or more active deadlines/exams
+(`pending`, `needs_review`, `confirmed`) by the user-local day: `due_date` is already a
+day, `due_at` is converted to the user's IANA zone first, and a lone deadline is not a
+clash. A3.1 owns `tasks`; while that migration is absent the endpoint returns an empty
+`deadline_clashes` instead of failing. Both lists use the same `from`/`to` window,
+selection and freshness envelope as `GET /calendar/events`. `POST /calendar/sync` answers
+`202` with the covered window and publication counts; `409 calendar_sync_unavailable`
+carries a closed `details.reason` (`no_read_calendars`, `google_not_connected`,
+`missing_calendar_scopes`, `google_invalid_grant`, `calendar_read_failed`), and a
+transient provider failure answers `503 calendar_sync_temporarily_unavailable` without
+touching the mirror. Since `0008_s3_calendar_manual_sync`, `settings` records
+`calendar_last_manual_sync_at`: a manual attempt inside the 60-second per-user cooldown
+answers `429 rate_limited` with `Retry-After` and
+`details.reason=calendar_sync_cooldown` before any Google call. Row locks cover only the
+cooldown decision and the token renewal; the Google reads run after those transactions
+commit, and a bounded lock wait answers the same transient `503`.
 
 The same contract feeds the dashboard and `get_calendar_events(range)`. When
 `/integrations/google/reconnect` completes, the backend looks only for `blocked` tasks of
@@ -1430,8 +1663,8 @@ It does not reactivate revisions, tombstoned tasks, or obsolete versions.
 | Method | Route | Sprint | Description | Responses |
 |---|---|---|---|---|
 | `POST` | `/chat/conversations` | S2 | Creates a conversation (`mode: all\|subject\|class` + `subject_id`/`audio_id` per mode) | `201` · `422 chat_mode_invalid` |
-| `GET` | `/chat/conversations` | S2 | Tenant list | `200` |
-| `GET` | `/chat/conversations/{id}/messages` | S2 | Paginated history | `200` |
+| `GET` | `/chat/conversations` | S2 | Tenant list, keyset paginated (`limit` 1–100, default 50) | `200` |
+| `GET` | `/chat/conversations/{id}/messages` | S2 | Paginated history, deterministic user-before-assistant order | `200` |
 | `POST` | `/chat/conversations/{id}/messages` | S2 | Sends a question; **SSE consumed with `fetch`**; an idempotent `client_message_id` returns the existing message without re-executing; at most two concurrent streams per user | `200 text/event-stream` · `429 rate_limited` |
 | `DELETE` | `/chat/conversations/{id}` | S2 | Tombstone and purge of content/sources | `204` |
 | `POST` | `/chat/conversations/{id}/messages/{message_id}/cancel` | S2 | Cancels the in-flight stream; the partial is left `cancelled` | `202` |
@@ -1482,14 +1715,31 @@ Contract rules:
   ranges and schemas validated by the backend.
 - Modes validated by the `conversations` CHECK; everything within the tenant.
 - L2.5 implements `POST .../messages` and `.../cancel` with the minimal turn persistence;
-  conversation create/list/history/delete remain A2.12. `Last-Event-ID` is the last received
+  A2.12 adds conversation create/list/paginated history/delete over the same tables; `DELETE`
+  cancels assistant rows still `streaming` in the same transaction and signals their
+  producers after the commit, so an in-flight answer stops consuming model tokens.
+  `Last-Event-ID` is the last received
   character offset: every connect/reconnect re-sends `snapshot` and skips that prefix from the
   persisted message.
+- A turn's two rows are inserted in one transaction, so ordering by `created_at` alone can
+  interleave a question and its answer. `RAGService.prepare` reads the turn clock from
+  PostgreSQL (`clock_timestamp()`) after taking the conversation lock and writes the user row
+  at that mark and the assistant one microsecond later; the database clock keeps turns
+  ordered across API hosts whose clocks disagree. The history query, its keyset cursor and
+  the RAG history also break a legacy equal-timestamp tie with a `user < system < assistant`
+  role rank. The v2 history cursor carries that role, so v1 cursors are rejected instead of
+  silently skipping or duplicating a message.
+- Both conversation reads are bounded: history pages use `limit` 1–100 (default 50) and the
+  listing uses the same keyset pattern. Revision `0010` replaces the FK-only
+  `messages_by_conversation` index with
+  `messages_by_conversation_order (user_id, conversation_id, created_at, id)`, which supports
+  the history order and the per-conversation `max(created_at)` used by the listing.
 
 ### 3.11 M8/M9 — Notifications and dashboard (S4)
 
 | Method | Route | Sprint | Description |
 |---|---|---|---|
+| `GET` | `/me/notifications` | S4 | Current M8 preferences: Gmail opt-in, digest switches/time/weekday, visible thresholds |
 | `PATCH` | `/me/notifications` | S4 | M8 preferences: Gmail opt-in, daily digest time/weekday, visible thresholds |
 | `POST` | `/notifications/test` | S4 | Test send to the verified email (Gmail `gmail.send`); `202` with an uncertain-delivery warning |
 | `GET` | `/notifications?status=&from=&to=&limit=&cursor=` | S4 | Paginated delivery panel; does not mix sensitive payloads |
@@ -1536,8 +1786,8 @@ no new endpoints in the MVP.
 | `/tasks*` (M4) | — | — | ✓ | — |
 | `/calendar/*` (M5) | — | — | ✓ | — |
 | `/integrations/google/connect\|reconnect` | — | — | ✓ | — |
-| `PATCH /me/notifications`, `POST /notifications/test`, `GET /notifications`, `POST /notifications/{id}/resend` | — | — | — | ✓ |
-| `DELETE /me`, `GET /me/deletion/{id}` | — | — | — | ✓ |
+| `GET/PATCH /me/notifications`, `POST /notifications/test`, `GET /notifications`, `POST /notifications/{id}/resend` | — | — | — | ✓ |
+| `DELETE /me`, `GET /me/deletion/{id}`, `POST /me/deletion/{id}/resume` | — | — | — | ✓ |
 
 ---
 
@@ -1643,7 +1893,7 @@ CSRF with a development login behind a temporary feature flag, never merged to d
 
 | Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
-| 1 | D1.1 | `apps/web` scaffold: Next.js App Router + TS + Tailwind + shadcn/ui with lockfile | App runs against the local API |
+| 1 | D1.1 | `apps/web` scaffold: Vite + React + TS + Tailwind with lockfile (ADR-0007) | App runs against the local API |
 | 1–2 | D1.2 | Base routes `/`, `/biblioteca`, `/chat`, `/materias`, `/settings` with layout | Visible navigation |
 | 2–3 | D1.3 | Google login: redirect to `/auth/google/start`, callback, loading/error states; logout | Demonstrable login |
 | 3 | D1.4 | HTTP client: same-origin cookies, CSRF on mutations, 401/403/429 interceptors | Tested client |
@@ -1766,7 +2016,7 @@ by the lead. The full text, evidence and priorities are in [plan/S2.md](plan/S2.
 | A2.19 | API | Contract conformance (§3.2, §3.3, §3.5) | P1 |
 | S2.12 · S2.13 | Ingestion | Admission latch, heartbeat, ffprobe limits; error-code catalog (§3.2) | P1 |
 | L2.9 | RAG | Align the §M6 `Chunk` contract with §2.5 | P1 |
-| J2.10 | Infra | Ingress upload limit and Caddy limits (Cloudflare Tunnel is no longer planned) | P1 |
+| J2.10 | Infra | Ingress decision (Caddy only; Cloudflare Tunnel dropped) and Caddy body/timeout limits | P1 |
 | A2.15 · J2.9 · L2.11 | API · Infra · lead | Error envelope; CI hygiene; documentation reconciliation | P2 |
 
 ### 4.3 S3 — Action: extraction and Calendar (F2)
@@ -1876,7 +2126,7 @@ delivery tested; runbooks and security/cost review; final demo.
 | Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
 | 1 | A4.1 | `notifications` table per M8: `scheduled_at`, `due_version`, `dedupe_key`, statuses (`pending\|sending\|sent\|failed\|delivery_unknown\|cancelled`), `provider_message_id`, redacted errors | Tested schema |
-| 1–2 | A4.2 | `PATCH /me/notifications` and `POST /notifications/test` | Endpoints |
+| 1–2 | A4.2 | Preferences (`GET/PATCH /me/notifications`), test send, cursor listing and warned resend | Endpoints |
 | 2 | A4.3 | Changing the due date/preferences cancels obsolete future occurrences; never a retrospective burst when confirming late | Cancellation tests |
 | 2–3 | A4.4 | Observable account deletion: `DELETE /me` → 202 + `deletion_operation_id`; tombstone, session/job blocking, remote deletion **before** revoking, idempotent purge, and `GET /me/deletion/{id}` | Deletion E2E |
 | 3 | A4.5 | D8 already approved: validate encrypted text/metadata backups, agreed retention, and tombstones reapplied on restore | Restore verified |
@@ -1905,7 +2155,7 @@ delivery tested; runbooks and security/cost review; final demo.
 | 2–3 | J4.4 | Persistent dedupe `(user_id, type, task_id, due_version, occurrence)`; changing the due date/preferences cancels obsolete occurrences; DST: nonexistent hour → next valid; repeated hour → once | DST cases tested |
 | 3–4 | J4.5 | `delivery_unknown` when the response is lost after sending or the `sending` lease expires: **no automatic retry**; visible in the panel; manual resending warns | Uncertain delivery handled |
 | 4 | J4.6 | Daily (07:00 configurable) and weekly (Sunday) digests by local date, with the week's conflicts | Digests sent |
-| 3–5 | J4.7 | Reference deployment (ARM + domain + tunnel per the §5 proposal), versioned images, Alembic as a single job, tested rollback | Deploy with rollback |
+| 3–5 | J4.7 | Reference deployment (ARM + domain + Caddy as the only ingress per ADR-0010), versioned images, Alembic as a single job, tested rollback | Deploy with rollback |
 | 4–5 | J4.8 | Active budget/alerts (tokens, ASR, quotas) and runbooks: cleanup, provider outage, revoked tokens, restore, account deletion | Active alerts |
 | Friday | J4.9 | G8: builds/tests for the 3 apps, verified restore, reminders within target with healthy dependencies | G8 closed |
 | Friday | J4.10 | Real test send observed with an authorized account and subsequent cleanup | Send evidence |

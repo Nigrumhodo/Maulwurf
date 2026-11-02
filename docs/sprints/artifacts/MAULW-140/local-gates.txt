@@ -1,0 +1,120 @@
+# J4.2 / MAULW-140 local gates
+
+Date (UTC): 2026-11-01
+Environment: Linux (Ubuntu 24.04), Python 3.12.3, uv 0.13.1, PostgreSQL 16.15,
+Redis 7.0.15. Synthetic/deterministic tests only: no Riva, LLM, Google, Gmail, real class
+audio, credential or secret. `apps/web` is untouched.
+
+Base: `develop@c8e40d0` (PR #149, A4.3, merged before these gates).
+
+## apps/api static
+
+```text
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 278 source files
+```
+
+## apps/api unit
+
+`NO_PROXY`/`no_proxy` without the bracketed IPv6 entries:
+
+```text
+$ uv run pytest tests/unit -q
+1572 passed, 35 warnings
+```
+
+The raw sandbox environment still produces the two pre-existing bracketed-IPv6 `httpx`
+failures in `test_ingest_sink`/`test_llm`, unrelated to this diff.
+
+## I-S4-JF-04 (J4.2)
+
+```text
+$ uv run pytest tests/integration/test_notification_scheduler.py -q
+8 passed
+```
+
+Cases: live lease blocks a second scheduler and renews in place; a live lease stops the tick
+before any claim; exactly one of two candidates takes over an expired lease and the fence
+grows; one due row is claimed once; two workers claim disjoint rows while one holds its
+locks (`SKIP LOCKED`); the claim is ordered/bounded; an expired `sending` lease becomes
+terminal `delivery_unknown`; the cross-tenant `maulwurf_jobs` role can elect and claim under
+RLS.
+
+## Integration regressions
+
+```text
+$ uv run pytest tests/integration/test_migrations.py -q
+29 passed
+
+$ uv run pytest tests/integration/test_s4_notifications_schema.py \
+    tests/integration/test_notifications_endpoints.py tests/integration/test_rls.py -q
+73 passed
+
+$ uv run pytest -m integration -q
+734 passed, 1573 deselected
+```
+
+Full API integration against an isolated PostgreSQL 16.15 + Redis 7.0.15 pair.
+
+## apps/ingest (unchanged area, regression check)
+
+```text
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 83 source files
+
+$ uv run pytest -m "not integration and not provider and not load" -q
+306 passed, 93 deselected
+```
+
+## Documentation
+
+```text
+$ python3 scripts/docs/check_refs.py
+OK: 946 documented repository paths exist or are expected.
+```
+
+## Fix1 after the hoplite review (2026-11-01)
+
+Changes: the scheduler cron is disabled by default
+(`MAULWURF_NOTIFICATION_SCHEDULER_ENABLED=false`) until J4.1 consumes `sending`; the
+election, expiry sweep and due comparison use PostgreSQL's transaction clock (`now()`)
+instead of each host's wall clock; migration `0018` adds `notifications.claimed_by_fence`
+and the atomic claim writes the elected fence so J4.1 can validate it before sending.
+
+```text
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 279 source files
+
+$ uv run pytest tests/unit -q          # sanitized NO_PROXY
+1576 passed, 35 warnings
+
+$ uv run pytest tests/integration/test_notification_scheduler.py -q
+12 passed
+
+$ uv run pytest tests/integration/test_migrations.py -q
+30 passed
+
+$ uv run pytest tests/integration -q   # sanitized NO_PROXY
+740 passed, 776 warnings
+
+$ python3 scripts/docs/check_refs.py
+OK: 947 documented repository paths exist or are expected.
+```
+
+The raw sandbox environment still produces the same two pre-existing bracketed-IPv6
+`httpx` failures in unit tests (`test_ingest_sink`/`test_llm`) and 19 instances in the ingest
+reception integration file; both disappear with a `NO_PROXY` without bracketed IPv6 entries
+and are unrelated to this diff. The new scheduler cases cover a host clock far ahead of the
+database for election, expiry and due comparison, the persisted fence across a takeover,
+the disabled cron and the disabled service, and the `has_table_privilege` guard for
+app/jobs/ingest on both `scheduler_leases` and `notifications`.
+

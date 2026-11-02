@@ -15,6 +15,7 @@ import hashlib
 import secrets
 import time
 import urllib.parse
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -28,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.crypto import encrypt
+from app.core.db import bind_google_sub, set_current_user
 from app.models import GoogleCredential, User
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/auth"
@@ -41,6 +43,16 @@ JWKS_REFRESH_COOLDOWN_SECONDS = 60
 
 # OIDC: identidad + perfil para login; Calendar/Gmail se conectan en S3 (J3.3).
 SCOPES = ("openid", "email", "profile")
+
+# Incremental Calendar consent (J3.3, D7). Google grants and returns the full authorization
+# URLs, so that is what is requested and persisted; `scope_granted` also accepts the short
+# `calendar.*` form used in the documentation.
+CALENDAR_SCOPES = (
+    "https://www.googleapis.com/auth/calendar.app.created",
+    "https://www.googleapis.com/auth/calendar.events.readonly",
+    "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+)
+_CALENDAR_SCOPE_PREFIX = "https://www.googleapis.com/auth/"
 
 # Cookie HttpOnly firmada que custodia state/nonce/code_verifier entre start y callback.
 OAUTH_STATE_TTL_SECONDS = 600
@@ -94,6 +106,9 @@ def build_authorization_request() -> AuthorizationRequest:
             "nonce": nonce,
             "code_challenge": _code_challenge(code_verifier),
             "code_challenge_method": "S256",
+            # Login never drops a grant the user already gave: without this Google would
+            # return an access token limited to the login scopes after a Calendar connect.
+            "include_granted_scopes": "true",
         }
     )
     return AuthorizationRequest(
@@ -102,6 +117,60 @@ def build_authorization_request() -> AuthorizationRequest:
         nonce=nonce,
         code_verifier=code_verifier,
     )
+
+
+def build_incremental_authorization_request(
+    *, scopes: Sequence[str], login_hint: str
+) -> AuthorizationRequest:
+    """Authorization URL that asks ONLY for the new capability scopes (J3.3).
+
+    `include_granted_scopes=true` keeps the login scopes without re-asking for them, and
+    `openid` is included solely to receive an ID token: the callback verifies its `sub` so a
+    grant for another Google account can never be attached to the logged-in user.
+    `access_type=offline` + `prompt=consent` are required to receive a refresh token for
+    background Calendar work.
+    """
+    if not scopes:
+        raise ValueError("scopes must not be empty")
+    client_id, _ = _client_credentials()
+    state = secrets.token_urlsafe(32)
+    nonce = secrets.token_urlsafe(32)
+    code_verifier = secrets.token_urlsafe(64)
+    query = urllib.parse.urlencode(
+        {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri(),
+            "response_type": "code",
+            "scope": " ".join(("openid", *scopes)),
+            "state": state,
+            "nonce": nonce,
+            "code_challenge": _code_challenge(code_verifier),
+            "code_challenge_method": "S256",
+            "access_type": "offline",
+            "prompt": "consent",
+            "include_granted_scopes": "true",
+            "login_hint": login_hint,
+        }
+    )
+    return AuthorizationRequest(
+        url=f"{GOOGLE_AUTH_URL}?{query}",
+        state=state,
+        nonce=nonce,
+        code_verifier=code_verifier,
+    )
+
+
+def scope_granted(granted: Sequence[str], scope: str) -> bool:
+    """Whether `granted` contains `scope`, accepting the short documented form too."""
+    short = scope.removeprefix(_CALENDAR_SCOPE_PREFIX)
+    return any(
+        item == scope or item.removeprefix(_CALENDAR_SCOPE_PREFIX) == short
+        for item in granted
+    )
+
+
+def missing_calendar_scopes(granted: Sequence[str]) -> list[str]:
+    return [scope for scope in CALENDAR_SCOPES if not scope_granted(granted, scope)]
 
 
 async def exchange_code(code: str, code_verifier: str) -> dict[str, Any]:
@@ -199,6 +268,85 @@ def _access_expiry(tokens: dict[str, Any]) -> datetime | None:
     return datetime.now(UTC) + timedelta(seconds=expires_in)
 
 
+def granted_scopes(tokens: dict[str, Any]) -> list[str]:
+    """Scopes Google reports for the newly issued token, in its order, deduplicated."""
+    raw = tokens.get("scope")
+    if not isinstance(raw, str):
+        return []
+    seen: dict[str, None] = {}
+    for item in raw.split():
+        seen.setdefault(item, None)
+    return list(seen)
+
+
+def merge_scopes(*groups: Sequence[str]) -> list[str]:
+    seen: dict[str, None] = {}
+    for group in groups:
+        for item in group:
+            if item:
+                seen.setdefault(item, None)
+    return list(seen)
+
+
+def _store_tokens(
+    db: AsyncSession,
+    user: User,
+    tokens: dict[str, Any],
+    scopes: Sequence[str],
+    credential: GoogleCredential | None = None,
+) -> GoogleCredential:
+    """Encrypt and persist the access token, the optional refresh token and the scopes.
+
+    A token response without `refresh_token` keeps the previous one: Google only returns it
+    on the first consent (or when `prompt=consent` forces a new one).
+    """
+    access_token = tokens.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise OAuthError("token_exchange_incomplete")
+    access_blob, key_version = encrypt(
+        access_token, user_id=user.id, field="google_credentials.access_token"
+    )
+    if credential is None:
+        credential = GoogleCredential(user_id=user.id)
+        db.add(credential)
+    credential.access_token_enc = access_blob
+    refresh_token = tokens.get("refresh_token")
+    if isinstance(refresh_token, str) and refresh_token:
+        credential.refresh_token_enc, _ = encrypt(
+            refresh_token, user_id=user.id, field="google_credentials.refresh_token"
+        )
+    credential.key_version = key_version
+    credential.scopes = list(scopes)
+    credential.status = "connected"
+    credential.token_expires_at = _access_expiry(tokens)
+    return credential
+
+
+async def apply_incremental_grant(
+    db: AsyncSession,
+    user: User,
+    tokens: dict[str, Any],
+    *,
+    requested_scopes: Sequence[str],
+) -> GoogleCredential:
+    """Persist an incremental Calendar grant without re-requesting the login scopes.
+
+    The recorded grant is exactly what the token response says it covers (which, with
+    `include_granted_scopes`, includes the previously granted login scopes). OAuth 2.0 §5.1
+    makes `scope` optional only while it equals the requested set, so an omitted value keeps
+    the previous grant and adds the requested scopes: a login can never silently lose a
+    capability the account still holds, and the code never invents a scope it did not ask
+    for.
+    """
+    credential = await db.get(GoogleCredential, user.id)
+    current = list(credential.scopes) if credential is not None and credential.scopes else []
+    granted = granted_scopes(tokens)
+    scopes = granted if granted else merge_scopes(current, requested_scopes)
+    updated = _store_tokens(db, user, tokens, scopes, credential)
+    await db.flush()
+    return updated
+
+
 async def upsert_google_identity(
     db: AsyncSession, claims: dict[str, Any], tokens: dict[str, Any]
 ) -> User:
@@ -213,6 +361,9 @@ async def upsert_google_identity(
     if claims.get("email_verified") is not True:
         raise OAuthError("email_unverified")
 
+    # The bootstrap policy on `users` exposes exactly the row whose Google `sub` was
+    # verified for this transaction (A2.17); the value is not trusted for anything else.
+    await bind_google_sub(db, sub)
     user = await db.scalar(select(User).where(User.google_sub == sub))
     if user is None:
         user = User(google_sub=sub, email=email)
@@ -225,6 +376,9 @@ async def upsert_google_identity(
     elif user.status != "active":
         # Account being deleted: no new session. The reason never reaches the browser.
         raise OAuthError("account_unavailable")
+    # From here the row is the tenant of the request: the update, the credential and the
+    # session below are bound by RLS to this user_id.
+    await set_current_user(db, user.id)
     user.email = email
     user.email_verified = True
     name = claims.get("name")
@@ -246,7 +400,14 @@ async def upsert_google_identity(
         )
     # Without a new refresh token the previous one is kept (ESPECIFICACION, Google tokens).
     credential.key_version = key_version
-    credential.scopes = list(SCOPES)
+    # A login must not erase an incremental Calendar/Gmail grant (J3.3): the login request
+    # uses `include_granted_scopes`, so the response reports every scope the account still
+    # holds. If Google omits `scope`, the union of the previous grant and the login scopes
+    # is kept instead of claiming a capability nobody confirmed.
+    granted = granted_scopes(tokens)
+    credential.scopes = (
+        granted if granted else merge_scopes(credential.scopes or (), SCOPES)
+    )
     credential.status = "connected"
     credential.token_expires_at = _access_expiry(tokens)
     await db.flush()

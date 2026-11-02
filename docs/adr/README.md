@@ -15,6 +15,8 @@ already resolved by J1.x and are kept as decision context.
 | [ADR-0006](ADR-0006-aislamiento-tenant.md) | Tenant isolation in S1 (filtering; RLS in S2) | Accepted |
 | [ADR-0007](ADR-0007-web-stack.md) | Web stack: Vite + React SPA instead of Next.js | Accepted |
 | [ADR-0008](ADR-0008-api-ingest-reception.md) | API↔ingest reception contract: `api` terminates the `PUT` and streams to `ingest` | Accepted |
+| [ADR-0009](ADR-0009-run-fencing.md) | Fencing token for the API `processing_runs` ledger | Accepted |
+| [ADR-0010](ADR-0010-ingress.md) | Ingress: Caddy terminates TLS directly; Cloudflare Tunnel dropped | Accepted |
 
 ## L1.2 verification
 

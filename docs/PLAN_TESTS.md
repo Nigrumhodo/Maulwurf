@@ -1,12 +1,13 @@
 # Maulwurf — Sprint Test Catalog
 
-> Status: operational plan pending execution, revision 2026-09-19. Subordinate to
+> Status: operational catalog, revision 2026-09-19; execution status is tracked per ticket
+> in [sprints/CLAIMS.md](sprints/CLAIMS.md) and in the logbooks. Subordinate to
 > [ESPECIFICACION.md](ESPECIFICACION.md) (contracts M1–M9, §6 data model) and
 > [PLAN_IMPLEMENTACION.md](PLAN_IMPLEMENTACION.md) (§7 test layers and G1–G8 gate variants).
 > Each ticket in the [PLAN_SPRINTS.md](PLAN_SPRINTS.md) backlog references here the tests that
 > evidence it; whoever claims a ticket records its execution in their logbook at
-> [sprints/](sprints/README.md). **No test exists yet:** this document defines what must exist
-> and when.
+> [sprints/](sprints/README.md). The S1 and S2 suites exist for the tickets recorded as
+> `done`; tests for S3–S4 remain planned.
 
 ---
 
@@ -34,9 +35,12 @@ renamed**. Responsibility comes only from the ticket claim, recorded in
 
 ### 0.3 Location (per §3.3 of the specification)
 
-- Python: `apps/api/tests/unit/`, `apps/api/tests/integration/`, `apps/ingest/tests/…`,
-  `workers/tests/…` — pytest, markers `@pytest.mark.integration` / `provider` / `load`.
+- Python: `apps/api/tests/unit/`, `apps/api/tests/integration/`, `apps/ingest/tests/` —
+  pytest, markers `@pytest.mark.integration` / `provider` / `load`.
 - Web: `apps/web/tests/unit/`, `apps/web/tests/e2e/` — Vitest (+ Playwright once E2E exists).
+- Compose E2E smoke (`E-S2-JF-06`): `scripts/e2e/smoke_pipeline.py`, run inside the `api`
+  container by the `e2e-smoke` CI job. It is API-level (no browser) until D2.2/D2.6 provide
+  the `apps/web/tests/e2e/` browser leg; it does not replace a `P-*` provider test.
 - Load and provider scripts: `scripts/load/`, `scripts/provider/` (no embedded secrets).
 
 ### 0.4 Fixture rules (non-negotiable, from AGENTS.md and the spec)
@@ -179,13 +183,13 @@ These associations complete the backlog references without changing the stable I
 | I-S2-AN-08 | I | `retry` vs `reupload` matrix: retry only for analysis/index; reupload only without usable transcript; correct error messages in each case | M2 |
 | I-S2-AN-09 | I | Export `transcript.txt` always; `transcript.srt` **only** with valid times; `?segment=` filters by owner | M2/M9 |
 | I-S2-AN-10 | I | `index_requested`/`analyze_requested` outbox stays disabled until `cleanup_status=verified`; the gate is not blocked by an error in the Calendar, notification or deletion outbox created by their transactions | M3/G5-F1/G5-F2 |
-| I-S2-AN-11 | I | M7 chat: conversation CRUD with all/subject/class modes isolated by tenant; idempotent `client_message_id`; stream cancellation leaves a `cancelled` partial; deleting a conversation purges sources | M7/G3 |
+| I-S2-AN-11 | I | M7 chat: conversation CRUD with all/subject/class modes isolated by tenant; idempotent `client_message_id`; stream cancellation leaves a `cancelled` partial; deleting a conversation purges sources; a same-timestamp turn returns user-before-assistant and `limit=1` pages neither duplicate nor lose a pair; the tenant listing is keyset paginated; deleting during an in-flight stream signals the live producer, closes with `done: cancelled`, consumes no further model text and tolerates zero-row checkpoints without resurrecting content; the turn clock comes from the database, not the API process | M7/G3 |
 | I-S2-AN-12 | I | API→ingest reception contract: 200 MiB stream with no spool, equal SHA-256 on both sides, sink errors mapped through the catalog, client disconnect cancels and leaves no temporaries | M2/G1 |
 | I-S2-AN-13 | I | 20 concurrent `POST /audios` never exceed `active_slots`/`per_user_active_limit`; two `PUT`s on one attempt reach the sink exactly once (`409 attempt_not_active`); abandoned and failed reservations free their slot | M2/G5-F1 |
 | U-S2-AN-14 | U | 404, 405 and an injected unhandled exception use `{"error": {code, message, details}}` and the 500 body carries no exception text | §3.2 |
 | U-S2-AN-15 | U | Startup without `MAULWURF_ENV` fails; weak or mutually equal secrets are rejected outside `local` | M1/security |
-| I-S2-AN-16 | I | RLS enabled: the A1.9 suite passes, a query without `app.user_id` fails (fail-closed), the table owner is also subject to the policies (`FORCE`), pooled connections do not leak the setting, one test shows the barrier works without the application filter | G3/ADR-0006 |
-| I-S2-AN-17 | I | Every composite FK has a non-partial covering index; `index_version` and dimension invariants rejected by the database; blank transcript text rejected (if confirmed by the lead); `alembic check` drift test; `0003` upgrades and downgrades | G3/§2.1.8 |
+| I-S2-AN-16 | I | RLS enabled: the A1.9 suite passes, a query without `app.user_id` fails (fail-closed), the table owner is also subject to the policies (`FORCE`), pooled connections do not leak the setting, one test shows the barrier works without the application filter, runtime roles cannot write `alembic_version`, the committing transaction runs with the tenant bound, and the cross-tenant ingest queue policy is scoped to `maulwurf_ingest` | G3/ADR-0006 |
+| I-S2-AN-17 | I | Every FK has a non-partial covering index (from `pg_index`); `index_version`, transcript-version and dimension invariants rejected by the database; blank transcript text rejected (confirmed safe by S2.10); `alembic check` drift test fails on a model change without a migration; revision `0009` upgrades and downgrades; a stale build batch after the run was closed is fenced | G3/§2.1.8 |
 | U-S2-AN-18 | U | One contract test per conformance item: capabilities TTL, language normalization, variant-token codes, `GET`/`PATCH /me`, single upload-limit source, consistent `503` headers | M1/M2 |
 
 ### 2.3 Retrieval/RAG — chunking, index and chat
@@ -204,7 +208,7 @@ These associations complete the backlog references without changing the stable I
 | P-S2-JL-10 | P | Embedding/LLM provider: real contract, dimensions and quotas (protected) — feeds D5 | D5 |
 | U-S2-JL-11 | U | A `Chunk` (§M6) persists into `chunks`/`chunk_segments` with no extra mapping; every `NOT NULL` column is derivable; `overlap_span` shape validated | M6 |
 | C-S2-JL-12 | C | Checklist: web stack ADR published, `ARCH.md` §7 row closed, PR #42 merged, rebased or closed | ARCH |
-| C-S2-JL-13 | C | Checklist: `scripts/docs/check_refs.py` passes in CI; `AGENTS.md`/`README.md` status matches `CLAIMS.md`; corrected `CLAIMS.md` rows | docs |
+| C-S2-JL-13 | C | Checklist: `scripts/docs/check_refs.py` passes in CI; `AGENTS.md`/`README.md` status matches `CLAIMS.md`; `CLAIMS.md` discrepancies reported to the lead (ownership and history are not rewritten without review) | docs |
 
 **G4 criterion (weekly, reproducible script):** Recall@8 ≥ 0.85 (answerables, with tenant/version
 filters active), citation precision
@@ -218,7 +222,7 @@ published per the PLAN_IMPLEMENTACION §7.1 protocol.
 |---|---|---|---|
 | U-S2-JF-01 | U | Backoff with bounded jitter (max 3 transients); non-transient cases do not retry | M3 |
 | I-S2-JF-02 | I | Idempotent `index(audio_id)` job: double delivery → a single index; no partially active versions | G5-F1 |
-| I-S2-JF-03 | I | Redis `FLUSHALL` in the test environment → jobs regenerated from DB/outbox end to end | G5-F1 |
+| I-S2-JF-03 | I | Redis queue loss (`FLUSHDB` on a dedicated test DB) → jobs regenerated from DB/outbox end to end; DB 0 untouched | G5-F1 |
 | I-S2-JF-04 | I | Reconciler: dead attempts marked, stuck outbox re-published, duplicates resolved by uniqueness/lease | G5-F1 |
 | I-S2-JF-05 | I | Injected crash before and after the commit between ingestion and API: outcome per contract | G5-F1 |
 | E-S2-JF-06 | E | Pipeline E2E smoke: upload → transcript → cleanup → index → question with citation | G4/G5-F1 |
@@ -226,6 +230,8 @@ published per the PLAN_IMPLEMENTACION §7.1 protocol.
 | I-S2-JF-11 | I | `docker compose config`: `ingest` has the Riva and `INGEST_*` variable names and none of the API secrets; no default for `NVIDIA_API_KEY`; `ingest` still runs as UID 10001; `.env` can override `MAULWURF_PUBLIC_ORIGIN` | M2/G1 |
 | C-S2-JF-12 | C | Checklist: CI fails on a seeded fake secret and on an emptied suite; CI Redis has `maxmemory` and `noeviction`; license report published | G8/ADR-0005 |
 | C-S2-JF-13 | C | Checklist: ingress decided; its effective upload limit, timeouts and buffering measured or documented (date, environment, status codes); Caddy body and timeout limits set | D4/M2 |
+| I-S2-JF-14 | I | Reconciler lock scope: a blocked/slow Redis leaves no `FOR UPDATE` transaction open; two concurrent cycles do not duplicate a job | G5-F1 |
+| I-S2-JF-15 | I | Run fencing: a stale worker cannot finish a reclaimed run or activate the generation it was building | G5-F1 |
 
 ### 2.5 Web/UX — upload, library and chat
 
@@ -289,9 +295,9 @@ approval per language, not by global average.
 | P-S3-JF-02 | P | Insert with timeout → look up the deterministic ID; 409 → verify identity and reconcile; `Retry-After` respected; `invalid_grant` disconnects (do not retry) | G7-CAL |
 | I-S3-JF-03 | I | Sync idempotency: double click / lost response / concurrent retry → **exactly one event** | G5-F2/G7-CAL |
 | I-S3-JF-04 | I | Patch with ETag: an external conflict is not overwritten; completing/discarding cancels reminders but keeps the event | G7-CAL |
-| I-S3-JF-05 | I | -7/+60 day read: full pagination, expanded recurrences, deletions; **atomic** publication into `calendar_events`; never mixing `syncToken` with filters | G7-CAL |
+| I-S3-JF-05 | I | -7/+60 day read: full pagination, expanded recurrences, deletions; **atomic** publication into `calendar_events` (upsert on the natural key, pre-window and deselection pruning, window delete and pruning both spare task-linked rows, absent linked rows marked `missing` and cancelled ones `cancelled` without losing the link, one savepoint); never mixing `syncToken` with filters; a lone `from`/`to` anchors the other bound | G7-CAL |
 | I-S3-JF-06 | I | Missing scopes or `invalid_grant` leave sync `blocked` without breaking library/chat; on reconnect, only current blocked versions move atomically to `pending` and create/reuse outbox, never stale revisions/jobs | G5-F2/G7-CAL |
-| I-S3-JF-07 | I | Conflicts: time overlap ≠ delivery pile-up; correct `GET /calendar/conflicts` | M5 |
+| I-S3-JF-07 | I | Conflicts: time overlap ≠ delivery pile-up (half-open, all-day excluded, two or more deadlines per user-local day); correct `GET /calendar/conflicts` and `POST /calendar/sync` 202/409, with the 429 per-user cooldown (`Retry-After`), the credential row lock released before Google reads and a busy lock answering 503 | M5 |
 
 ### 3.5 Web/UX — review inbox and dashboard
 
@@ -318,7 +324,7 @@ approval per language, not by global average.
 | U-S4-AN-01 | U | `notifications` statuses (`pending\|sending\|sent\|failed\|delivery_unknown\|cancelled`) and valid transitions | M8 |
 | U-S4-AN-02 | U | `dedupe_key` (user, type, task, due_version, occurrence) prevents duplicates by construction | M8 |
 | U-S4-AN-03 | U | Changing due date/preferences cancels **only** stale future occurrences; never a retrospective burst | M8 |
-| I-S4-AN-04 | I | `DELETE /me` returns 202 + `deletion_operation_id`; tombstone, blocked sessions/jobs and idempotent purge; the initiating session is restricted to `GET /me/deletion/{id}` and logout, the rest are revoked; remote deletion before revoking tokens; `GET /me/deletion/{id}` exposes `pending\|completed\|completed_with_remote_failures` and only the expired minimal residue | security/G3 |
+| I-S4-AN-04 | I | `DELETE /me` returns 202 + `deletion_operation_id`; tombstone, blocked sessions/jobs and idempotent purge; the initiating session is restricted to `GET /me/deletion/{id}`, the authorized `POST /me/deletion/{id}/resume` and logout, the rest are revoked; a post-tombstone purge failure keeps the 202 and leaves a resumable operation that completes without repeating remote deletes; concurrent executions are serialized by the atomic claim; the scheduled retention job purges expired `account_deletions` and `google_remote_operations` as the cross-tenant jobs role; remote deletion runs before revoking tokens; `GET /me/deletion/{id}` exposes `pending\|running\|completed\|completed_with_remote_failures` and only the expired minimal residue | security/G3 |
 | I-S4-AN-05 | I | Backup restore (D8): only encrypted text/metadata; tombstones reapplied; nothing deleted reappears | D8/G8 |
 | I-S4-AN-06 | I | Basic rate limits: `429/503` with correct headers on sensitive endpoints; ownership in API/SSE/tools/jobs | G3/NFR |
 | I-S4-AN-07 | I | Orphan sweep: zero chunks/embeddings/derived rows without a class after deletions | G3 |
@@ -330,8 +336,8 @@ approval per language, not by global average.
 | U-S4-JF-01 | U | T-48/T-24/T-2 h escalation (instants) and T-3d/T-1d at local time (all-day); undated tasks without reminders | M8 |
 | U-S4-JF-02 | U | DST: nonexistent time → next valid instant; repeated time → a single notification | M8 |
 | U-S4-JF-03 | U | HTML + escaped plain-text templates; fixed recipient to the verified email; no mail GET mutates state | M8/security |
-| I-S4-JF-04 | I | Scheduler: single active role; atomic row claiming with multiple workers; target SLA 15 min | M8 |
-| I-S4-JF-05 | I | `delivery_unknown`: lost response or expired lease → **no automatic retry**; `POST /notifications/{id}/resend` requires `acknowledge_duplicate_risk=true`, creates a new audited occurrence and does not set the original back to `pending` | M8/G7-MAIL |
+| I-S4-JF-04 | I | Scheduler: single active role; database clock for election/expiry; atomic row claiming with multiple workers; persisted claim fence; target SLA 15 min | M8 |
+| I-S4-JF-05 | I | `delivery_unknown`: lost response or expired lease → **no automatic retry**; the J4.5 suite (`test_notification_delivery_unknown.py`) settles a claimed row with a deterministic sender: a lost response, an unexpected sender failure, an expired lease, a sender that exceeds its timeout or the remaining lease, or a cancelled send ends terminal `delivery_unknown` without calling the provider again, a retried settlement is a no-op, and a success must prove its provider message id. The A4.2 suite also covers preferences, the Gmail-gated test send and the cursor listing; `POST /notifications/{id}/resend` requires `acknowledge_duplicate_risk=true`, creates a new audited occurrence and does not set the original back to `pending` | M8/G7-MAIL |
 | I-S4-JF-06 | I | Daily 07:00 configurable digest and weekly (Sunday) by local date, with the week's conflicts | M8 |
 | P-S4-JF-07 | P | Real Gmail delivery observed end to end with an authorized account + subsequent cleanup (once, controlled) | G7-MAIL/G8 |
 | L-S4-JF-08 | L | Restore verified in a clean environment; image rollback tested; Alembic migration as a single job | G8 |

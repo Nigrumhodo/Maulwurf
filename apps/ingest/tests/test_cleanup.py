@@ -9,6 +9,7 @@ import dataclasses
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from maulwurf_ingest import cleanup
 
@@ -33,6 +34,36 @@ def test_unreadable_processes_fails_closed() -> None:
     # Si hubo /proc/<pid>/fd ilegibles (otro UID), la ausencia de descriptores no está
     # probada: un entorno mal endurecido no puede auto-acreditarse la limpieza.
     assert _evidence(unreadable_processes=1).verified is False
+
+
+def test_absence_requires_every_proc_check() -> None:
+    """S4.2: `audio_deleted_at` needs descriptors, processes and mounts, not a name."""
+    evidence = _evidence().as_json()
+    assert cleanup.absence_verified(evidence) is True
+    for field in ("workdir_absent", "tmp_is_tmpfs"):
+        assert cleanup.absence_verified({**evidence, field: False}) is False
+    for field in (
+        "live_processes", "open_descriptors", "mounts_under_workdir", "unreadable_processes",
+    ):
+        assert cleanup.absence_verified({**evidence, field: 1}) is False
+
+
+def test_absence_is_not_proven_by_a_partial_report() -> None:
+    # A caller that only says "verified" has not inspected /proc; a missing counter is
+    # unknown, not zero.
+    assert cleanup.absence_verified({}) is False
+    assert cleanup.absence_verified({"verified": True}) is False
+    assert cleanup.absence_verified({"workdir_absent": True, "tmp_is_tmpfs": True}) is False
+
+
+def test_absence_rejects_booleans_and_strings_in_counters() -> None:
+    evidence = _evidence().as_json()
+    for field in (
+        "live_processes", "open_descriptors", "mounts_under_workdir", "unreadable_processes",
+    ):
+        assert cleanup.absence_verified({**evidence, field: False}) is False
+        assert cleanup.absence_verified({**evidence, field: "0"}) is False
+        assert cleanup.absence_verified({**evidence, field: 0.0}) is False
 
 
 def _spawn_sleeper() -> tuple[subprocess.Popen[bytes], int]:
@@ -78,3 +109,29 @@ def test_kill_group_on_a_gone_group_is_a_noop() -> None:
     cleanup.kill_group(proc.pid, starttime)
     proc.wait(timeout=10)
     cleanup.kill_group(proc.pid, starttime)  # ya no existe: no debe lanzar
+
+
+def test_a_zombie_is_not_an_unreadable_process(tmp_path: Path) -> None:
+    """A zombie released every descriptor: `/proc/<pid>/fd` is denied, but it leaks nothing.
+
+    Counting it as unreadable used to make cleanup verification fail closed on a harmless
+    race (the killed ffmpeg is still a zombie when the evidence is collected).
+    """
+    proc, _starttime = _spawn_sleeper()
+    try:
+        cleanup.kill_group(proc.pid, None)
+        deadline = time.monotonic() + 10
+        state = None
+        while time.monotonic() < deadline:
+            state = cleanup._state(proc.pid)
+            if state == "Z":
+                break
+            time.sleep(0.01)
+        assert state == "Z", "the child did not become a zombie"
+
+        assert proc.pid not in cleanup._inspectable_pids()
+        found, _unreadable = cleanup.open_descriptors_under(tmp_path)
+
+        assert found == 0
+    finally:
+        proc.wait(timeout=10)

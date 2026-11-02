@@ -5,11 +5,17 @@
 name: maulwurf
 
 x-api-env: &api-env
+  # A2.16: required with no default in Settings; Compose is the local environment.
   MAULWURF_ENV: local
+  # A2.17: runtime role the API downgrades to with SET LOCAL ROLE on every transaction.
+  # It is NOLOGIN and has no BYPASSRLS; the DSN still authenticates as the migration owner.
+  MAULWURF_DATABASE_ROLE: maulwurf_app
   MAULWURF_DATABASE_URL: postgresql+asyncpg://maulwurf:${POSTGRES_PASSWORD:-maulwurf}@postgres:5432/maulwurf
   MAULWURF_REDIS_URL: redis://redis:6379/0
-  # Origin exacto que ve el navegador (CSRF, A1.4); el 443 por defecto se normaliza.
-  MAULWURF_PUBLIC_ORIGIN: https://localhost:${CADDY_HTTPS_PORT:-443}
+  # Exact origin the browser sees (CSRF, A1.4); the default port 443 is normalized.
+  # The shared block wins over env_file, so a .env override needs interpolation
+  # (`--env-file ../.env`); the default therefore follows CADDY_HTTPS_PORT here.
+  MAULWURF_PUBLIC_ORIGIN: ${MAULWURF_PUBLIC_ORIGIN:-https://localhost:${CADDY_HTTPS_PORT:-443}}
 
 services:
   postgres:
@@ -62,7 +68,13 @@ services:
     env_file:
       - path: ../.env
         required: false
-    environment: *api-env
+    # ADR-0008 §2: the ingest pair is set together or not at all. Pass-through names come
+    # from the .env (`--env-file`) and stay unset when absent; an empty secret next to a URL
+    # would stop the API at startup.
+    environment:
+      <<: *api-env
+      MAULWURF_INGEST_URL:
+      MAULWURF_INGEST_CREDENTIAL_SECRET:
     depends_on:
       postgres:
         condition: service_healthy
@@ -90,7 +102,11 @@ services:
     env_file:
       - path: ../.env
         required: false
-    environment: *api-env
+    environment:
+      <<: *api-env
+      # A2.17: cross-tenant dispatcher/reconciler/index; the explicit jobs policy only
+      # applies to this role and still requires app.cross_tenant='on' in code.
+      MAULWURF_DATABASE_ROLE: maulwurf_jobs
     # Solo Redis (y Postgres para el dispatcher): un fallo de la API no debe dejar la
     # cola sin drenar.
     depends_on:
@@ -119,7 +135,10 @@ services:
     env_file:
       - path: ../.env
         required: false
-    environment: *api-env
+    environment:
+      <<: *api-env
+      # A2.17: see the worker service.
+      MAULWURF_DATABASE_ROLE: maulwurf_jobs
     # Solo Redis (y Postgres para el dispatcher): un fallo de la API no debe dejar la
     # cola sin drenar.
     depends_on:
@@ -169,9 +188,28 @@ services:
         soft: 1024
         hard: 1024
     stop_grace_period: 30s
+    # Explicit list, never env_file: ingest must not receive the API secrets. Pass-through
+    # names have no default, so an absent NVIDIA_API_KEY leaves ASR unavailable instead of
+    # using a placeholder.
     environment:
       MAULWURF_ENV: local
       MAULWURF_DATABASE_URL: postgresql+asyncpg://maulwurf:${POSTGRES_PASSWORD:-maulwurf}@postgres:5432/maulwurf
+      INGEST_CREDENTIAL_SECRET: ${MAULWURF_INGEST_CREDENTIAL_SECRET:-}
+      INGEST_CREDENTIAL_KID: ${MAULWURF_INGEST_CREDENTIAL_KID:-k1}
+      # Rotation only: ingest accepts the previous pair while api mints with the new
+      # one. Ingest treats an empty value as absent (`env_ignore_empty`).
+      INGEST_CREDENTIAL_PREVIOUS_SECRET: ${INGEST_CREDENTIAL_PREVIOUS_SECRET:-}
+      INGEST_CREDENTIAL_PREVIOUS_KID: ${INGEST_CREDENTIAL_PREVIOUS_KID:-}
+      INGEST_MAX_UPLOAD_BYTES: ${INGEST_MAX_UPLOAD_BYTES:-209715200}
+      INGEST_FRAGMENT_OVERLAP_S: ${INGEST_FRAGMENT_OVERLAP_S:-0.25}
+      INGEST_FRAGMENT_SECONDS: ${INGEST_FRAGMENT_SECONDS:-30}
+      NVIDIA_API_KEY:
+      RIVA_SERVER:
+      RIVA_FUNCTION_ID:
+      RIVA_USE_SSL:
+    deploy:
+      # ADR-0008 §11: one replica until J4.x; scaling out is not safe yet.
+      replicas: 1
     depends_on:
       postgres:
         condition: service_healthy
@@ -186,7 +224,7 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
-    networks: [edge, data]
+    networks: [data]
     restart: unless-stopped
 
   web:
@@ -226,8 +264,6 @@ services:
       web:
         condition: service_healthy
       api:
-        condition: service_healthy
-      ingest:
         condition: service_healthy
     networks: [edge]
     restart: unless-stopped

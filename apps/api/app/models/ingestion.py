@@ -20,6 +20,7 @@ from sqlalchemy import (
     Integer,
     Text,
     UniqueConstraint,
+    desc,
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
@@ -81,9 +82,15 @@ class Audio(TenantOwned, Base):
             "audios_library",
             "user_id",
             "subject_id",
-            text("class_date DESC"),
+            # The physical index sorts by `class_date DESC` (migration 0001). `desc()` keeps
+            # the sort order in the metadata and still compares cleanly with reflection in
+            # the `alembic check` drift test (A2.18).
+            desc("class_date"),
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # Non-partial supporting index for the FK: the library index is partial, so a class
+        # purge would seq-scan every tombstoned row.
+        Index("audios_by_subject", "user_id", "subject_id"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -173,6 +180,8 @@ class VariantConfirmationToken(TenantOwned, Base):
         ),
         Index("variant_tokens_expiry", "expires_at", postgresql_where=text("consumed_at IS NULL")),
         Index("variant_tokens_by_canonical", "user_id", "canonical_audio_id"),
+        Index("variant_tokens_by_subject", "user_id", "subject_id"),
+        Index("variant_tokens_by_reserved_audio", "user_id", "reserved_audio_id"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -220,6 +229,10 @@ class OutboxEvent(TenantOwned, Base):
             postgresql_where=text("enabled AND status = 'pending'"),
         ),
         Index("outbox_by_user", "user_id", postgresql_where=text("status <> 'completed'")),
+        # The partial index above cannot serve the FK for completed rows.
+        Index("outbox_events_by_user", "user_id"),
+        # J4.8: the internal Google budget counts one event type in a UTC month.
+        Index("outbox_events_by_type_created_at", "type", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()

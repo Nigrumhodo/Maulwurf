@@ -1,0 +1,51 @@
+J4.8 / C-S4-JF-10 — tokens/credentials runbook drill
+Date (UTC): 2026-11-01
+Environment: local sandbox, Python 3.12, ingest/api packages from this worktree.
+  No real Google/NVIDIA/LLM credential was created, revoked or printed.
+
+Rotation configuration check (runbook §3; booleans only, fake hex values):
+  $ cd apps/ingest
+  $ INGEST_CREDENTIAL_SECRET=<64 hex> INGEST_CREDENTIAL_KID=k2 \
+      INGEST_CREDENTIAL_PREVIOUS_SECRET=<64 hex> INGEST_CREDENTIAL_PREVIOUS_KID=k1 \
+      uv run python -c "from maulwurf_ingest.config import settings; ..."
+  current_kid k2
+  previous_kid k1
+  current_present True
+  previous_present True
+
+  $ INGEST_CREDENTIAL_SECRET=<64 hex> INGEST_CREDENTIAL_KID=k2 uv run python -c ...
+  previous_kid None
+  previous_present False
+
+Empty previous pair (Compose interpolates an unset pair as an empty string):
+  $ INGEST_CREDENTIAL_PREVIOUS_SECRET='' INGEST_CREDENTIAL_PREVIOUS_KID='' \
+      uv run pytest tests/test_main.py -q
+  14 passed in 0.99s
+  The settings model treats empty as absent; startup does not mistake it for an invalid
+  previous key.
+
+Interpretation: `ingest` accepts a current plus optional previous key during a dual-key
+rotation; with no previous pair the old key is rejected. Compose now passes
+`INGEST_CREDENTIAL_PREVIOUS_SECRET`/`_KID` to `ingest` only (never to `api`), and the CI
+allowlist includes them.
+
+Deterministic revocation/rotation coverage:
+  $ cd apps/api && pytest tests/unit/test_google_tokens.py \
+      tests/unit/test_google_calendar.py tests/unit/test_ingest_credential.py -q
+  59 passed in 1.90s
+  $ cd apps/ingest && pytest tests/test_credential_catalog.py tests/test_riva_client.py -q
+  27 passed in 0.80s
+
+- `invalid_grant` disconnects the integration and is never retried.
+- An old/wrong ingest `kid` is rejected; the previous pair is accepted only while it is
+  configured.
+- A missing NVIDIA key makes ASR unavailable instead of using a placeholder.
+- Google access/refresh tokens remain encrypted; the schema has no plaintext token column.
+
+Known limitation recorded by the runbook: `MAULWURF_ENCRYPTION_KEY_VERSION` has no
+multi-version keyring or re-encryption job. Changing it in production would make stored
+Google tokens unreadable; it is a stop condition, not a supported rotation.
+
+Not run here: a real Google grant revocation, a real NVIDIA key rotation and a real
+secret-store rotation. Those are reference-environment/provider-contract steps and remain
+NOT RUN until J4.7 exists. No secret value was written to this file.

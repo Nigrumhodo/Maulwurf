@@ -1,0 +1,131 @@
+S4.5 — local gates (apps/ingest + apps/api), 2026-11-01T02:28:01Z
+Host: Linux 7.0.0-39-generic x86_64 · Python 3.12.3
+
+$ cd apps/ingest && uv run ruff check .
+All checks passed!
+
+$ cd apps/ingest && uv run mypy .
+Success: no issues found in 83 source files
+
+$ cd apps/ingest && uv run pytest tests -q -m 'not integration and not provider and not load'
+300 passed, 93 deselected, 2 warnings
+
+$ cd apps/ingest && uv run pytest tests/test_cost_table.py -q -m 'not load'
+15 passed, 1 deselected
+
+$ cd apps/ingest && uv run pytest tests/test_cost_table.py -q -m load
+1 passed, 15 deselected
+
+$ cd apps/ingest && uv run pytest tests/test_asr_cost.py -q -m 'not load'
+17 passed, 1 deselected
+
+$ cd apps/ingest && uv run pytest tests/test_asr_cost.py -q -m load
+1 passed, 17 deselected
+
+$ cd apps/ingest && uv run ruff check ../../scripts/load/asr_cost.py ../../scripts/load/cost_table.py
+All checks passed!
+
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ cd apps/api && uv run mypy .
+Success: no issues found in 239 source files
+
+$ cd apps/api && uv run pytest tests/unit -q
+# Unsanitized sandbox proxy: 2 pre-existing failures from bracketed IPv6 NO_PROXY entries
+# parsed by httpx 0.28 (documented in S3.6/J3.6, outside this diff):
+#   tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured
+#   tests/unit/test_llm.py::test_shared_http_client_is_bounded_reused_and_closed
+2 failed, 1323 passed
+
+$ cd apps/api && env -u all_proxy -u ALL_PROXY -u http_proxy -u HTTP_PROXY \
+    -u https_proxy -u HTTPS_PROXY NO_PROXY='localhost,127.0.0.1,::1' \
+    no_proxy='localhost,127.0.0.1,::1' uv run pytest tests/unit -q
+1325 passed, 35 warnings
+
+$ python3 scripts/docs/check_refs.py
+OK: 868 documented repository paths exist or are expected.
+
+Note: no Riva/LLM/Google call, no PostgreSQL/Redis requirement for the S4.5 harness, no
+real class audio, and no `apps/web` change.
+
+---
+
+S4.5 — review fix1 local gates (peak-RSS portability + claim status), 2026-11-01T02:52Z
+Host: Linux 7.0.0-39-generic x86_64 · Python 3.12.3 · ffmpeg 8.1.2 · espeak-ng 1.51
+
+Scope of this pass: `scripts/load/asr_cost.py` (peak-RSS source), its tests,
+`apps/ingest/tests/test_cost_table.py` (explicit skip), and docs. `apps/api` is untouched,
+so the API capture above remains the latest for that app.
+
+$ cd apps/ingest && uv run ruff check .
+All checks passed!
+
+$ cd apps/ingest && uv run mypy .
+Success: no issues found in 83 source files
+
+# apps/ingest has no tests/unit directory; this is the equivalent unit/non-integration run.
+$ cd apps/ingest && uv run pytest tests -q -m 'not integration and not provider and not load'
+303 passed, 93 deselected, 2 warnings
+
+$ cd apps/ingest && uv run pytest tests/test_asr_cost.py -q -k peak_rss
+3 passed, 18 deselected
+
+$ cd apps/ingest && uv run pytest tests/test_asr_cost.py tests/test_cost_table.py -q -m 'not load'
+35 passed, 2 deselected
+
+$ cd apps/ingest && uv run pytest tests/test_asr_cost.py tests/test_cost_table.py -q -m load
+2 passed, 35 deselected
+
+# Fallback validation in a process where /proc/self/status is unreadable (gVisor shape);
+# test-only LD_PRELOAD shim, never committed, source in peak-rss-fallback.txt.
+$ cd apps/ingest && LD_PRELOAD=/tmp/peak_rss_shim.so uv run pytest tests/test_cost_table.py -q -m load
+1 passed, 15 deselected
+
+# Neither source: /proc/self/status hidden and ru_maxrss zeroed.
+$ cd apps/ingest && LD_PRELOAD=/tmp/peak_rss_shim.so MAULWURF_TEST_HIDE_MAXRSS=1 \
+    uv run pytest tests/test_cost_table.py -q -m load -rs
+SKIPPED [1] tests/test_cost_table.py:308: peak RSS unavailable: neither
+/proc/self/status VmHWM nor getrusage(RUSAGE_SELF).ru_maxrss reports a peak
+1 skipped, 15 deselected
+
+$ python3 scripts/docs/check_refs.py
+OK: 870 documented repository paths exist or are expected.
+
+# After the fix2 CLAIMS edit (documentation only, same code tree):
+$ python3 scripts/docs/check_refs.py
+OK: 872 documented repository paths exist or are expected.
+
+# Review fix5: a zero VmHWM is treated as missing, so the fallback covers it too.
+$ cd apps/ingest && uv run pytest tests/test_asr_cost.py -q -k peak_rss
+4 passed, 18 deselected
+
+$ cd apps/ingest && uv run pytest tests -q -m 'not integration and not provider and not load'
+304 passed, 93 deselected, 2 warnings
+
+$ cd apps/ingest && uv run pytest tests/test_asr_cost.py tests/test_cost_table.py -q -m 'not load'
+36 passed, 2 deselected
+
+$ cd apps/ingest && uv run pytest tests/test_asr_cost.py tests/test_cost_table.py -q -m load
+2 passed, 36 deselected
+
+$ cd apps/ingest && LD_PRELOAD=/tmp/peak_rss_shim.so uv run pytest tests/test_cost_table.py -q -m load
+1 passed, 15 deselected
+
+$ cd apps/ingest && LD_PRELOAD=/tmp/peak_rss_shim.so MAULWURF_TEST_HIDE_MAXRSS=1 \
+    uv run pytest tests/test_cost_table.py -q -m load -rs
+1 skipped, 15 deselected
+
+$ cd apps/ingest && uv run ruff check . && uv run mypy .
+All checks passed!
+Success: no issues found in 83 source files
+
+$ python3 scripts/docs/check_refs.py
+OK: 872 documented repository paths exist or are expected.
+
+# After merging develop@158702b into the branch (conflict resolved in CLAIMS.md):
+$ python3 scripts/docs/check_refs.py
+OK: 873 documented repository paths exist or are expected.
+
+Note: no Riva/LLM/Google call, no real class audio, no PostgreSQL/Redis requirement for
+this harness and no `apps/web` change.

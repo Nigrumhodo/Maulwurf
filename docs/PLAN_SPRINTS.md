@@ -1,6 +1,7 @@
 # Maulwurf — Proposed sprint sequence (S1–S4)
 
-> Status: revision 2026-09-19. **Model: open backlog per sprint, no pre-assignment.** The
+> Status: revision 2026-09-19; status text reconciled 2026-10-30. **Model: open backlog per
+> sprint, no pre-assignment.** The
 > only accepted ownership registry is [sprints/CLAIMS.md](sprints/CLAIMS.md); personal
 > logbooks document work and evidence but do not assign tickets. Only an active sprint can
 > open for claiming and future weeks remain blocked. Subordinate to
@@ -9,8 +10,8 @@
 > specification of how each sprint must work** lives in [plan/S1.md](plan/S1.md) ·
 > [plan/S2.md](plan/S2.md) · [plan/S3.md](plan/S3.md) · [plan/S4.md](plan/S4.md) (frozen
 > contracts, per-ticket behavior, acceptance criteria, and tests). If this document
-> contradicts the specification, the specification wins. Nothing described here is
-> implemented except what is explicitly marked as existing skeleton.
+> contradicts the specification, the specification wins. Implementation status is tracked in
+> [sprints/CLAIMS.md](sprints/CLAIMS.md); the backlog defines scope, not evidence.
 
 ## 0. Planning model
 
@@ -48,8 +49,8 @@ person**:
 | `L-` | RAG · prompts · quality · leadership | `apps/api/prompts/`, datasets, ADRs | LLM/embeddings, coordination |
 | `A-` | API · database | `apps/api` (routers, services, models, core) | Python/FastAPI/SQLAlchemy |
 | `S-` | Ingestion · audio · ASR | `apps/ingest`, Riva client, ffmpeg, tmpfs | Systems, audio, resilience |
-| `J-` | Infra · workers · integrations | `infra/`, CI, `apps/api/workers/`, Google | Docker/CI, ARQ/Redis, Google APIs |
-| `D-` | Web · UX | `apps/web` | Next.js/TypeScript, UX |
+| `J-` | Infra · workers · integrations | `infra/`, CI, `apps/api/app/workers/`, Google | Docker/CI, ARQ/Redis, Google APIs |
+| `D-` | Web · UX | `apps/web` | React/Vite/TypeScript, UX |
 
 Any member may claim from any area. A ticket whose Tests field includes `P-*`, or whose
 execution makes a real call to Riva, LLM/embeddings, or Google, requires the owner to have
@@ -99,12 +100,11 @@ availability. S1 opens first; S2–S4 remain blocked until the previous gate clo
 Hard rule: **no real ingestion before S1 closes the F0 gate** (D3 retention, D2/D4
 limits, D6 timestamps, G1, and an approved G2 variant).
 
-**Skeleton status (revision 2026-09-19):** `apps/api` already exists (minimal FastAPI with
-`/healthz`+`/readyz` and Pydantic Settings config), `apps/ingest` (empty package),
-`apps/web` (Next.js scaffold; placeholder landing to be replaced by D1.8), and
-`scripts/scaffold_monorepo.sh`. There is no compose, quality CI, tests, or migrations yet.
-Tickets `L1.1`, `A1.1`, `A1.2`, `D1.1` are marked as *verify/complete*, not as from-scratch
-creation.
+**Status (reconciled 2026-10-30):** S1 is complete except L1.7 (the formal close), and S2
+is open. The repository has a running 8-service compose stack, five Alembic migrations,
+sessions/CSRF, Google login, subject CRUD, a hardened ingestion package, search and chat
+APIs, tests and quality CI. The web is a Vite + React SPA (ADR-0007), not the original
+Next.js scaffold. Exact ownership and state remain in [sprints/CLAIMS.md](sprints/CLAIMS.md).
 
 ## 2. Week 1 (S1) — Foundation + feasibility spike (F0)
 
@@ -179,7 +179,7 @@ progress SSE response shape.
 
 | Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
-| D1.1 | Verify the `apps/web` scaffold (Next.js + TS + Tailwind) *(base already created; placeholder landing replaced in D1.8)* | L1.1 | — |
+| D1.1 | Verify the `apps/web` scaffold (Vite + React + TS + Tailwind, ADR-0007) *(base already created; placeholder landing replaced in D1.8)* | L1.1 | — |
 | D1.2 | Base routes (`/biblioteca`, `/chat`, `/materias`, `/settings`) and navigation layout | D1.1 | — |
 | D1.3 | Google login with redirect/callback; logout; loading/error states | A1.3/A1.4, L1.6 | — |
 | D1.4 | HTTP client: CSRF on mutations; 401/403/429 interceptors | L1.6 | U-S1-DA-01 |
@@ -221,7 +221,8 @@ terminal event; citation format `[Subject · Class · mm:ss]`; paginated `/searc
 2026-10-11 to cover gaps between the code and the specification that no ticket owned (detail,
 evidence and priorities in [plan/S2.md](plan/S2.md) §10). They are claimed like any other ticket;
 the lead decides which `P1`/`P2` ones move to S3. `A1.3` (Google login) and `A1.6` (subject CRUD)
-remain open S1 tickets and the slice cannot run without them.
+were open S1 tickets when this backlog was written; both are now `done` (see
+[sprints/CLAIMS.md](sprints/CLAIMS.md)).
 
 ### S2 backlog — RAG (`L2.x`)
 
@@ -254,14 +255,15 @@ remain open S1 tickets and the slice cannot run without them.
 | A2.9 | Listing, `GET /audios/{id}`, SSE progress from the DB, conditional `txt`/`srt` exports | A2.6 | I-S2-AN-07/09 |
 | A2.10 | Atomic commit + `cleanup_pending` state; outbox gate only for index/analyze | S2.5 | I-S2-AN-10 |
 | A2.11 | `GET /search` (paired with L2.4) | L2.3 | I-S2-JL-06 |
-| A2.12 | M7 conversation CRUD (all/subject/class modes), paginated history, and delete/purge; L2.5 already provides the streaming `POST .../messages` and `.../cancel` | A2.1, L2.5 (contract) | I-S2-AN-11 |
+| A2.12 | M7 conversation CRUD (all/subject/class modes), bounded keyset-paginated listing and history, and delete/purge; L2.5 already provides the streaming `POST .../messages` and `.../cancel` | A2.1, L2.5 (contract) | I-S2-AN-11 |
 | A2.13 | *(gap, P0)* API↔ingest reception contract: ADR on where the `PUT` terminates, `ReceptionSink` client, internal credential (pairs with S2.11) | A2.4; S2.1 | I-S2-AN-12 |
 | A2.14 | *(gap, P1)* Reservation lifecycle and `PUT` concurrency: row lock and `receiving` transition, atomic quota/slot, stale-reservation expiry | A2.3, A2.4 | I-S2-AN-13 |
 | A2.15 | *(gap, P2)* Error envelope on 404, 405 and unhandled exceptions | A2.4 | U-S2-AN-14 |
 | A2.16 | *(gap, P1)* Fail-closed settings: `MAULWURF_ENV` required, secret strength and distinctness | A1.2 | U-S2-AN-15 |
 | A2.17 | *(gap, P1)* PostgreSQL RLS with `SET LOCAL app.user_id` (ADR-0006 second barrier) | A2.1; A1.9 | I-S2-AN-16 |
-| A2.18 | *(gap, P1)* Schema integrity follow-up (migration `0003`): FK indexes, version invariants, drift test | A2.1 | I-S2-AN-17 |
+| A2.18 | *(gap, P1)* Schema integrity follow-up (new migration after A2.20): FK indexes, version invariants, drift test, and the build-phase fence left by ADR-0009 | A2.1, A2.20 | I-S2-AN-17 |
 | A2.19 | *(gap, P1)* Contract conformance of A1.8/A2.3/A2.4: TTL, language, token codes, `/me`, single limit source | A2.4 | U-S2-AN-18 |
+| A2.20 | *(gap, P1)* `processing_runs` fencing: a stale worker cannot finish a run or activate a generation after the reconciler reclaimed it | A2.1, J2.2, J2.4 | I-S2-JF-15 |
 
 ### S2 backlog — Ingestion/ASR (`S2.x`)
 
@@ -295,6 +297,7 @@ remain open S1 tickets and the slice cannot run without them.
 | J2.8 | *(gap, P0)* Compose/env wiring for `ingest` (Riva credentials, `INGEST_*`, origin override, `INGEST_SLOTS`) | A2.13 | I-S2-JF-11 |
 | J2.9 | *(gap, P2)* CI hygiene: no empty-suite tolerance, Redis `maxmemory`, secret and license scan | J1.4 | C-S2-JF-12 |
 | J2.10 | *(gap, P1)* Ingress decision (Cloudflare Tunnel dropped), its upload limit and timeouts, and Caddy body/timeout limits | Ingress decision | C-S2-JF-13 |
+| J2.11 | *(gap, P1)* Reconciler: keep Redis I/O outside database row locks so a degraded Redis cannot hold up to 200 rows or trigger idle-in-transaction | J2.4 | I-S2-JF-14 |
 
 ### S2 backlog — Web/UX (`D2.x`)
 
@@ -430,7 +433,7 @@ routes.
 | Ticket | Task (summary) | Depends on | Tests |
 |---|---|---|---|
 | A4.1 | `notifications` + Gmail/digests extension of `settings` (the Calendar base already exists from S3) | A3.8 | U-S4-AN-01/02 |
-| A4.2 | `PATCH /me/notifications` + `POST /notifications/test` | A4.1 | I-S4-JF-05 |
+| A4.2 | Preferences (`GET/PATCH /me/notifications`), `POST /notifications/test`, cursor listing and warned resend | A4.1 | I-S4-JF-05 |
 | A4.3 | Changing due date/preferences cancels only obsolete future occurrences | A4.1 | U-S4-AN-03 |
 | A4.4 | Account deletion with an observable operation: `DELETE /me` + `GET /me/deletion/{id}` | A3.8, J3.3 | I-S4-AN-04 |
 | A4.5 | D8 already approved: backup and restore validation with reapplied tombstones | A4.4, D8 approved | I-S4-AN-05 |

@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.deps import COOKIE_NAME, CSRF_HEADER
 from app.models import (
     Audio,
+    CalendarEvent,
     Chunk,
     Conversation,
     Embedding,
@@ -25,17 +26,21 @@ from app.models import (
     IngestionAttempt,
     Message,
     MessageSource,
+    Notification,
     OutboxEvent,
     ProcessingRun,
     Segment,
     Session,
     Subject,
+    Task,
+    TaskRevision,
     Transcript,
     User,
     VariantConfirmationToken,
 )
 from app.models.base import TenantOwned
 from app.services import sessions
+from app.services.notifications import dedupe_key
 
 # Scopes de ejemplo: el test comprueba que nunca aparecen en respuestas de otro usuario.
 GOOGLE_SCOPES = ["openid", "https://www.googleapis.com/auth/calendar.events"]
@@ -49,6 +54,7 @@ class Actor:
         # Copias planas: los handlers hacen commit() y expiran los atributos del ORM, y
         # leerlos después fuera de un await rompe (MissingGreenlet).
         self.user_id = user.id
+        self.google_sub = user.google_sub
         self.email = user.email
         self.session = issued.session
         self.csrf_token = issued.csrf_token
@@ -140,12 +146,12 @@ async def make_variant_confirmation_token(
 
 
 async def make_outbox_event(db: AsyncSession, actor: Actor) -> OutboxEvent:
-    # Tipo fuera de CLEANUP_GATED_EVENT_TYPES: el CHECK `cleanup_gate` exige enabled sin
-    # motivo de bloqueo.
+    # Outside CLEANUP_GATED_EVENT_TYPES, so the `cleanup_gate` CHECK requires enabled
+    # without a blocked reason. `task_cancelled` has no consumer yet.
     event = OutboxEvent(
         user_id=actor.user.id,
-        type="sync_task_event",
-        resource_type="audio",
+        type="task_cancelled",
+        resource_type="task",
         resource_id=uuid.uuid4(),
         resource_version=1,
         enabled=True,
@@ -388,12 +394,24 @@ async def make_class_with_timed_segments(
 
 async def make_chunk(db: AsyncSession, actor: Actor) -> Chunk:
     transcript = await make_transcript(db, actor)
+    # A2.18: a chunk references its generation, so the fixture must materialize one first.
+    # The version is unique per call: two chunks for the same actor must not collide on
+    # `uq_index_generations_user_id_version`.
+    generation = IndexGeneration(
+        user_id=actor.user_id,
+        version=f"test-{uuid.uuid4().hex}",
+        model="test-model",
+        dimension=1536,
+        status="building",
+    )
+    db.add(generation)
+    await db.flush()
     chunk = Chunk(
         user_id=actor.user_id,
         audio_id=transcript.audio_id,
         transcript_id=transcript.id,
         transcript_version=transcript.version,
-        index_version="test-v1",
+        index_version=generation.version,
         ordinal=1,
         content=transcript.text,
         char_start=0,
@@ -413,7 +431,9 @@ async def make_embedding(
     embedding = Embedding(
         user_id=actor.user.id,
         chunk_id=chunk.id,
-        index_version="test-v1",
+        # A2.18: `embeddings.index_version` is part of the FK to the chunk; a vector can only
+        # live under the exact generation of the chunk it belongs to.
+        index_version=chunk.index_version,
         model="test-model",
         dimension=1536,
         vector=[0.0] * 1536,
@@ -491,6 +511,78 @@ async def make_google_credential(db: AsyncSession, actor: Actor) -> GoogleCreden
     return credential
 
 
+async def make_calendar_event(db: AsyncSession, actor: Actor) -> CalendarEvent:
+    """Timed mirror event of the actor (J3.7)."""
+    start = datetime.now(UTC) + timedelta(days=1)
+    event = CalendarEvent(
+        user_id=actor.user_id,
+        calendar_id="primary",
+        event_id=f"event-{uuid.uuid4().hex}",
+        title="Evento de prueba",
+        start_at=start,
+        end_at=start + timedelta(hours=1),
+        last_synced_at=datetime.now(UTC),
+    )
+    db.add(event)
+    await db.flush()
+    return event
+
+
+async def make_task(db: AsyncSession, actor: Actor) -> Task:
+    """Manual task without a date: the unresolved state invents nothing (A3.1)."""
+    task = Task(
+        user_id=actor.user_id,
+        source="manual",
+        tipo="recordatorio",
+        titulo=f"Recordatorio {uuid.uuid4().hex[:6]}",
+        timezone="America/Bogota",
+        all_day=True,
+        date_status="missing",
+    )
+    db.add(task)
+    await db.flush()
+    return task
+
+
+async def make_notification(db: AsyncSession, actor: Actor) -> Notification:
+    """One audited T-24 reminder for the actor's task; the dedupe key is canonical (A4.1)."""
+    task = await make_task(db, actor)
+    occurrence = date(2026, 11, 9)
+    notification = Notification(
+        user_id=actor.user_id,
+        task_id=task.id,
+        type="reminder_t24",
+        occurrence=occurrence,
+        due_version=task.due_version,
+        scheduled_at=datetime(2026, 11, 8, 10, 0, tzinfo=UTC),
+        dedupe_key=dedupe_key(
+            user_id=actor.user_id,
+            type="reminder_t24",
+            task_id=task.id,
+            due_version=task.due_version,
+            occurrence=occurrence,
+        ),
+    )
+    db.add(notification)
+    await db.flush()
+    return notification
+
+
+async def make_task_revision(db: AsyncSession, actor: Actor) -> TaskRevision:
+    """Pending edit of the actor's manual task; the active row is not touched."""
+    task = await make_task(db, actor)
+    revision = TaskRevision(
+        user_id=actor.user_id,
+        task_id=task.id,
+        base_task_version=task.version,
+        revision_type="edit_of_confirmed",
+        proposed_fields={"titulo": "Recordatorio revisado"},
+    )
+    db.add(revision)
+    await db.flush()
+    return revision
+
+
 Factory = Callable[[AsyncSession, Actor], Awaitable[Any]]
 
 FACTORIES: dict[type[TenantOwned], Factory] = {
@@ -508,4 +600,8 @@ FACTORIES: dict[type[TenantOwned], Factory] = {
     IngestionAttempt: make_attempt,
     VariantConfirmationToken: make_variant_confirmation_token,
     OutboxEvent: make_outbox_event,
+    CalendarEvent: make_calendar_event,
+    Task: make_task,
+    TaskRevision: make_task_revision,
+    Notification: make_notification,
 }

@@ -32,7 +32,7 @@ import hashlib
 import uuid
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,8 +40,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.errors import ApiError, duplicate_variant, variant_hash_mismatch
 from app.models import Audio, IngestionAttempt
-from app.services import dedupe, state_machine
-from app.services.audios import RETRY_AFTER_SECONDS, cas_transition
+from app.services import dedupe
+from app.services.audios import RETRY_AFTER_SECONDS
 from app.services.tenant import get_owned
 
 
@@ -60,12 +60,31 @@ class Admission:
     status: str
 
 
+@dataclass(frozen=True)
+class Received:
+    """Hash and byte count that `ingest` computed over the bytes it actually stored."""
+
+    sha256: str
+    received_bytes: int
+
+
+# ADR-0008 §3: the reasons `api` sends with `discard`. `ingest` maps each to a status.
+DiscardReason = Literal[
+    "duplicate_exact",
+    "duplicate_variant",
+    "variant_hash_mismatch",
+    "client_disconnected",
+    "reception_integrity_failed",
+    "api_error",
+]
+
+
 class ReceptionSink(Protocol):
     """Destino efímero del pipe-through: la API escribe, nunca retiene.
 
-    Contrato mínimo de A2.4 (`begin/write/finish/discard/admit`); S2.1 lo ampliará cuando
-    congele la ruta interna (C2). `discard()` debe poder VERIFICARSE antes de cualquier
-    respuesta `200/409` (M2: «limpiar primero»).
+    `finish()` returns the remote hash and count, which `receive_content` compares with its
+    own. `discard()` must VERIFY the cleanup before any `200/409` answer (M2: «clean up
+    first»); `abort()` only cancels the in-flight stream and expects no answer.
     """
 
     async def begin(
@@ -74,20 +93,23 @@ class ReceptionSink(Protocol):
         user_id: uuid.UUID,
         audio_id: uuid.UUID,
         attempt_id: uuid.UUID,
-        expected_bytes: int | None,
+        fencing_token: int,
+        declared_bytes: int | None,
     ) -> None: ...
 
     async def write(self, chunk: bytes) -> None: ...
 
-    async def finish(self) -> None: ...
+    async def finish(self) -> Received: ...
 
-    async def discard(self) -> None: ...
+    async def abort(self) -> None: ...
+
+    async def discard(self, reason: DiscardReason) -> None: ...
 
     async def admit(self) -> Admission: ...
 
 
 class UnavailableReceptionSink:
-    """Sink por defecto: recepción no disponible hasta que S2.1 congele el contrato (C2)."""
+    """Sink used when `ingest` is not configured: every call answers `503` before a byte."""
 
     async def begin(
         self,
@@ -95,26 +117,25 @@ class UnavailableReceptionSink:
         user_id: uuid.UUID,
         audio_id: uuid.UUID,
         attempt_id: uuid.UUID,
-        expected_bytes: int | None,
+        fencing_token: int,
+        declared_bytes: int | None,
     ) -> None:
         raise SinkError("capacity_unavailable")
 
     async def write(self, chunk: bytes) -> None:
         raise SinkError("capacity_unavailable")
 
-    async def finish(self) -> None:
+    async def finish(self) -> Received:
         raise SinkError("capacity_unavailable")
 
-    async def discard(self) -> None:
+    async def abort(self) -> None:
+        return None
+
+    async def discard(self, reason: DiscardReason) -> None:
         raise SinkError("capacity_unavailable")
 
     async def admit(self) -> Admission:
         raise SinkError("capacity_unavailable")
-
-
-def get_reception_sink() -> ReceptionSink:
-    """Dependencia FastAPI: en producción, el «aún no disponible» hasta S2.1; tests la pisan."""
-    return UnavailableReceptionSink()
 
 
 @dataclass(frozen=True)
@@ -165,15 +186,21 @@ def map_ingest_code(code: str) -> ApiError:
     }:
         return ApiError(415, "unsupported_format", "La ingesta rechazó el formato del audio.")
     if code == "payload_too_large":
-        return ApiError(413, "payload_too_large", "El audio supera el límite de recepción.")
+        return ApiError(
+            413,
+            "payload_too_large",
+            "El audio supera el límite de recepción.",
+            {"max_bytes": effective_upload_limit()},
+        )
     if code in {
         "capacity_unavailable", "probe_unavailable", "wrong_instance", "reception_not_held",
     }:
+        # §3.1: a capacity 503 carries `Retry-After`; that IS the retry signal, so the body
+        # must not contradict it with `retryable=false` (A2.19).
         return ApiError(
             503,
             "capacity_unavailable",
             "La recepción de audio no está disponible; inténtalo más tarde.",
-            {"retryable": False},
             headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
         )
     if code == "attempt_not_active":
@@ -188,43 +215,36 @@ def _sink_api_error(exc: SinkError) -> ApiError:
     return map_ingest_code(exc.code)
 
 
-async def _discard_lenient(sink: ReceptionSink) -> None:
+async def _discard_lenient(sink: ReceptionSink, reason: DiscardReason) -> None:
     """Limpieza best-effort: la reserva sigue viva, así que los temporales quedan justificados."""
     try:
-        await sink.discard()
+        await sink.discard(reason)
     except SinkError:
         return  # S2.7 reconcilia lo que no se pudo descartar; no hay respuesta dependiente.
 
 
-async def _discard_verified(sink: ReceptionSink) -> None:
+async def _discard_verified(sink: ReceptionSink, reason: DiscardReason) -> None:
     """Sin respuesta `200/409` hasta que la limpieza termine (invariante de M2 y C10)."""
     try:
-        await sink.discard()
+        await sink.discard(reason)
     except SinkError as exc:
         raise ApiError(
             500, "internal_error", "No se pudo limpiar el contenido temporal recibido."
         ) from exc
 
 
-async def _abort_disconnected(
-    db: AsyncSession, *, attempt: IngestionAttempt, sink: ReceptionSink
-) -> None:
-    """Desconexión del cliente (C6): limpieza verificada + intento `cancelled`, sin respuesta."""
-    # Un temporal huérfano por fallo de red lo reconcilia S2.7: la reserva se cancela igual,
-    # que es lo que exige el contrato («desconectar cancela y limpia el intento»).
-    with suppress(SinkError):
-        await sink.discard()
-    # A2.6/A2.7: typed destination written through the CAS. A concurrent commit wins the
-    # race and this late cancel becomes a no-op (H2), and its `invalid_transition` is
-    # swallowed here (H3): this is a cleanup path with no HTTP response to send, and a
-    # final or committed attempt must never be overwritten or crash the disconnect.
-    try:
-        await cas_transition(db, attempt=attempt, target="cancelled")
-    except ApiError as exc:
-        if exc.code != "invalid_transition":
-            raise
-        return  # no commit: the winner's state stands.
-    await db.commit()
+async def _abort_disconnected(sink: ReceptionSink, *, finished: bool) -> None:
+    """Client disconnect (ADR-0008 §7): cancels the internal hop, with no response.
+
+    Before `finish()`, cancelling is enough: `ingest` sees the body cut off and records
+    `cancelled` on its own. If `receive` has already answered, `ingest` holds a retained
+    temp file and must be asked for a verified `discard`.
+    """
+    await sink.abort()
+    if finished:
+        with suppress(SinkError):
+            await sink.discard("client_disconnected")
+
 
 
 async def _restore_identity(
@@ -279,7 +299,7 @@ async def _resolve_duplicate(
     )
     if canonical is not None:
         canonical_id = canonical.id
-        await _discard_verified(sink)
+        await _discard_verified(sink, "duplicate_exact")
         payload = {"audio_id": str(canonical_id), "outcome": "duplicate_exact"}
         await dedupe.absorb_reservation(db, audio=audio, attempt=attempt)
         await db.commit()
@@ -295,7 +315,7 @@ async def _resolve_duplicate(
     if variant is None:
         return None
     canonical_id = variant.id
-    await _discard_verified(sink)
+    await _discard_verified(sink, "duplicate_variant")
     await dedupe.absorb_reservation(db, audio=audio, attempt=attempt)
     issued = await dedupe.issue_variant_token(
         db, canonical=variant, identity=identity, content_sha256=sha256_hex
@@ -341,7 +361,7 @@ async def _reject_if_concurrent_variant(
         # This class holds precedence: the rival's own re-check yields toward us.
         return
     rival_id = rival.id
-    await _discard_verified(sink)
+    await _discard_verified(sink, "duplicate_variant")
     await dedupe.absorb_reservation(db, audio=own, attempt=attempt)
     issued = await dedupe.issue_variant_token(
         db, canonical=rival, identity=identity, content_sha256=sha256_hex
@@ -378,7 +398,8 @@ async def receive_content(
             user_id=user_id,
             audio_id=audio_id,
             attempt_id=attempt_id,
-            expected_bytes=content_length,
+            fencing_token=attempt.fencing_token,
+            declared_bytes=content_length,
         )
     except SinkError as exc:
         raise _sink_api_error(exc) from exc  # 503 ANTES de leer un solo byte.
@@ -391,9 +412,9 @@ async def receive_content(
                 continue
             received += len(chunk)
             if received > limit:
-                # Corte en caliente (C5/C6): no se lee el resto ni se escribe nada en BD;
-                # la reserva queda `awaiting_upload` y los temporales justificados.
-                await _discard_lenient(sink)
+                # Mid-stream cut (ADR-0008 §7): the internal hop is cancelled; `ingest` sees the
+                # body cut off and records `cancelled` itself, so there is no discard here.
+                await sink.abort()
                 raise ApiError(
                     413,
                     "payload_too_large",
@@ -405,33 +426,35 @@ async def receive_content(
     except ApiError:
         raise
     except SinkError as exc:
-        await _discard_lenient(sink)
+        await sink.abort()
         raise _sink_api_error(exc) from exc
     except Exception:
-        # Desconexión/lectura rota a mitad de subida (C6): no hay respuesta que enviar.
-        await _abort_disconnected(db, attempt=attempt, sink=sink)
+        # Disconnect or broken read mid-upload (ADR-0008 §7): no response to send.
+        await _abort_disconnected(sink, finished=False)
         raise
 
     if received == 0:
         # C10: un cuerpo vacío nunca se admite (jamás `202`); `415` del catálogo §3.2.
-        await _discard_lenient(sink)
+        await sink.abort()
         raise ApiError(415, "unsupported_format", "El contenido de audio está vacío.")
 
     try:
-        await sink.finish()
+        remote = await sink.finish()
     except SinkError as exc:
-        await _discard_lenient(sink)
+        await sink.abort()
         raise _sink_api_error(exc) from exc
 
     sha256_hex = hasher.hexdigest()
+    # ADR-0008 §6: `ingest` hashed the bytes it stored. A mismatch means the hop lost or
+    # changed data, so the reception is discarded and the public answer is a 500.
+    if remote.sha256 != sha256_hex or remote.received_bytes != received:
+        await _discard_lenient(sink, "reception_integrity_failed")
+        raise ApiError(500, "internal_error", "No se pudo procesar la recepción.")
 
     # Segundo `PUT` de una variante confirmada: el hash se verifica ANTES de admisión/ASR.
     confirmed = await dedupe.find_confirmed_variant(db, user_id=user_id, audio_id=audio_id)
     if confirmed is not None and not dedupe.verify_variant_hash(confirmed, sha256_hex):
-        await _discard_verified(sink)
-        # A2.6: typed final destination, validated by the state machine (still awaiting_upload).
-        state_machine.transition(attempt, "rejected", error_code="variant_hash_mismatch")
-        await db.commit()
+        await _discard_verified(sink, "variant_hash_mismatch")
         raise variant_hash_mismatch()
 
     if confirmed is None:
@@ -464,7 +487,7 @@ async def receive_content(
         # BD falló DESPUÉS de recibir (plan §16): revertir + temporales; reserva intacta.
         with suppress(Exception):
             await db.rollback()
-        await _discard_lenient(sink)
+        await _discard_lenient(sink, "api_error")
         raise ApiError(
             500, "internal_error", "No se pudo registrar el contenido recibido."
         ) from exc
@@ -472,7 +495,7 @@ async def receive_content(
     if raced is not None:
         # Carrera ganada por otra subida exacta: convergencia hacia la canónica (M2).
         raced_id = raced.id
-        await _discard_verified(sink)
+        await _discard_verified(sink, "duplicate_exact")
         payload = {"audio_id": str(raced_id), "outcome": "duplicate_exact"}
         fresh_audio = await get_owned(db, Audio, user_id, audio_id)
         fresh_attempt = await get_owned(db, IngestionAttempt, user_id, attempt_id)
@@ -503,7 +526,7 @@ async def receive_content(
         await _restore_identity(
             db, user_id=user_id, audio_id=audio_id, attempt_id=attempt_id, previous=previous
         )
-        await _discard_lenient(sink)
+        await _discard_lenient(sink, "api_error")
         raise _sink_api_error(exc) from exc
 
     return UploadResult(

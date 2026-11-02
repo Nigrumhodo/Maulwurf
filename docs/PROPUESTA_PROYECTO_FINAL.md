@@ -112,7 +112,7 @@ The names can be replaced with the team's real names.
 | **Member 1 — José Leonardo Pinilla Zamora** | **Technical lead and RAG specialist** | Design the overall system architecture; implement the RAG pipeline; define chunking, embeddings, hybrid retrieval, RRF, prompts, and citations; coordinate integration between backend, models, and frontend; review technical decisions and validate answer quality. |
 | **Member 2 — Andres Felipe** | Backend and database | Implement the API with FastAPI; design PostgreSQL models and migrations; develop authentication, users, subjects, classes, and endpoints; ensure data isolation between users. |
 | **Member 3 — Santiago Montealegre** | Audio processing and transcription | Integrate NVIDIA Riva through `nvidia-riva-client`; implement validation with FFmpeg/FFprobe, normalization, audio fragmentation, and limit control; manage temporary files, cleanup, ingestion states, and ASR contract tests. |
-| **Member 4 — Daniel Samaca** | Frontend and user experience | Develop the interface with Next.js; build the upload form, transcript library, segment reader, chat, review tray, and dashboard; present statuses, citations, and errors clearly and accessibly. |
+| **Member 4 — Daniel Samaca** | Frontend and user experience | Develop the interface with the Vite + React stack (ADR-0007); build the upload form, transcript library, segment reader, chat, review tray, and dashboard; present statuses, citations, and errors clearly and accessibly. |
 | **Member 5 — Jefferson Figueroa** | Integrations, infrastructure, and quality | Implement Google Calendar and Gmail; configure Redis, ARQ, Docker Compose, and the runtime environment; prepare CI/CD, integration and E2E tests; document deployment, security, monitoring, and cost control. |
 
 Although each member will have a main area, the team will work through code reviews,
@@ -124,7 +124,7 @@ API, the transcription, or the user interface.
 
 | Area | Proposed technology | Use within the project |
 | --- | --- | --- |
-| Frontend | Next.js, TypeScript, Tailwind CSS, and shadcn/ui | Web application, dashboard, chat, and library |
+| Frontend | Vite, React, React Router, TypeScript, and Tailwind CSS | Web application, dashboard, chat, and library |
 | Backend | Python, FastAPI, Pydantic, and SQLAlchemy | REST API, validation, and system logic |
 | Database | PostgreSQL | Users, subjects, transcripts, tasks, and metadata |
 | Vector search | pgvector with HNSW indexes | Embeddings and semantic retrieval |
@@ -135,7 +135,7 @@ API, the transcription, or the user interface.
 | Language models | Pool of LLMs from free inference providers | RAG chat and structured extraction |
 | Embeddings | Configurable model, subject to future changes | Vector representation of chunks |
 | Integrations | Google OAuth, Google Calendar API, and Gmail API | Authentication, scheduling, and notifications |
-| Infrastructure | ARM server, own domain, Cloudflare Tunnel (`cloudflared`), and Cloudflare bot protection | Deployment, secure access, and service protection |
+| Infrastructure | ARM server, own domain, and Caddy as the only public ingress (TLS termination; ADR-0010). No Cloudflare Tunnel or CDN in front | Deployment and secure access; the edge enforces the upload ceiling and timeouts |
 
 The architecture will be designed so that providers can be swapped through adapters, but
 any model or provider change must be validated with quality, capacity, privacy, and

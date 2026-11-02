@@ -8,7 +8,6 @@ Markers can be split across provider deltas, so the buffer keeps an incomplete s
 next delta (or until the stream ends, where it becomes literal text).
 """
 
-import math
 import re
 import uuid
 from collections.abc import Awaitable, Callable
@@ -16,47 +15,28 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.evidence import evidence_label
+from app.services.evidence import format_timestamp as format_timestamp
+from app.services.reader_links import class_reader_path
 from app.services.search import RetrievedChunk, SearchService
 
 _MARKER = re.compile(r"\[S([1-9][0-9]*)\]")
 _MARKER_PREFIX = re.compile(r"^\[S?[0-9]*$")
 
 
-def format_timestamp(seconds: float) -> str:
-    """Deterministic `mm:ss` / `h:mm:ss`; timestamps are evidence, never interpolated."""
-    total = max(0, int(seconds))
-    hours, remainder = divmod(total, 3600)
-    minutes, secs = divmod(remainder, 60)
-    if hours:
-        return f"{hours}:{minutes:02d}:{secs:02d}"
-    return f"{minutes:02d}:{secs:02d}"
-
-
-def _has_reliable_offsets(t_start: float | None, t_end: float | None) -> bool:
-    if t_start is None or t_end is None:
-        return False
-    return math.isfinite(t_start) and math.isfinite(t_end) and 0 <= t_start < t_end
-
-
 def citation_label(chunk: RetrievedChunk) -> str:
     """Human label built only from hydrated columns; no model-provided title is trusted."""
-    parts = [chunk.subject_name, chunk.class_date.isoformat()]
-    if (
-        chunk.t_start is not None
-        and chunk.t_end is not None
-        and _has_reliable_offsets(chunk.t_start, chunk.t_end)
-    ):
-        parts.append(format_timestamp(chunk.t_start))
-    elif chunk.segment_ordinal is not None:
-        parts.append(f"segment {chunk.segment_ordinal}")
-    return f"[{' · '.join(parts)}]"
+    return evidence_label(
+        subject_name=chunk.subject_name,
+        class_date=chunk.class_date,
+        segment_ordinal=chunk.segment_ordinal,
+        t_start=chunk.t_start,
+        t_end=chunk.t_end,
+    )
 
 
 def citation_url(chunk: RetrievedChunk) -> str:
-    base = f"/biblioteca/{chunk.audio_id}"
-    if chunk.segment_id is None:
-        return base
-    return f"{base}?segment={chunk.segment_id}"
+    return class_reader_path(chunk.audio_id, chunk.segment_id)
 
 
 @dataclass(frozen=True)

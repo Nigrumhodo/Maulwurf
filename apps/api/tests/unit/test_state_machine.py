@@ -21,7 +21,7 @@ from sqlalchemy.schema import CheckConstraint
 
 from app.core.errors import ApiError
 from app.models.ingestion import ACTIVE_INGESTION_STATES, INGESTION_STATES
-from app.models.transcript import ProcessingRun
+from app.models.processing_run import ProcessingRun
 from app.services import state_machine
 from app.services.state_machine import (
     ATTEMPT_TRANSITIONS,

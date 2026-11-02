@@ -1,0 +1,40 @@
+J4.8 / C-S4-JF-10 — provider outage runbook drill
+Date (UTC): 2026-11-01
+Environment: Linux sandbox, Python 3.12, no real provider key and no provider call.
+  The local `NO_PROXY` contains a bracketed IPv6 that httpx mis-parses; the probe was run
+  with `NO_PROXY=localhost,127.0.0.1` (the same pre-existing sandbox issue recorded by
+  earlier tickets). This is an environment workaround, not a production requirement.
+
+Adapter probe (runbook §2.4; closed local port, no key):
+  $ cd apps/api
+  $ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 \
+      MAULWURF_ENV=local uv run python - <<'PY'
+      ... HttpChatProvider(base_url='http://127.0.0.1:9/v1', max_retries=0) ...
+      ... HttpEmbeddingProvider(base_url='http://127.0.0.1:9/v1', max_retries=0) ...
+      PY
+  llm LLMProviderError llm_provider_error
+  embeddings EmbeddingProviderError embedding_provider_error
+
+Interpretation: an unreachable LLM/embeddings endpoint becomes a typed, bounded error;
+there is no fake answer, fake vector or infinite retry. The provider key is never printed.
+
+Deterministic provider adapters:
+  $ cd apps/ingest && uv run pytest tests/test_riva_client.py tests/test_credential_catalog.py -q
+  27 passed in 0.80s
+
+  $ cd apps/api && pytest tests/unit/test_google_calendar.py \
+      tests/unit/test_google_tokens.py tests/unit/test_ingest_credential.py -q
+  59 passed in 1.90s
+
+Coverage:
+- Riva transient codes retry at most three times; auth/language/format do not retry;
+  cancellation and deadline exhaustion ask for reupload.
+- Google 408/429/5xx are bounded retries; `invalid_grant` disconnects without retry;
+  the token endpoint handles revoked refresh tokens the same way.
+- The ingest credential rejects a wrong/old kid and accepts the configured previous pair
+  only during rotation.
+
+Not run here: a real Riva/LLM/embeddings/Google outage, quota or retention observation.
+Those require the protected `P-*` setup and the reference deployment; it remains
+NOT RUN until J4.7 exists. No transcript, prompt, email, Calendar title or provider payload
+was emitted.

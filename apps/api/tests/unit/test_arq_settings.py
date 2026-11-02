@@ -3,16 +3,33 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import pytest
+from arq.worker import Function
 
+from app.core.config import settings as app_settings
+from app.services.digests import DigestMaterialization
+from app.services.scheduler_lease import SchedulerReport
 from app.workers import arq_app
 from app.workers.arq_app import (
+    DIGEST_SECOND,
     HEALTH_CHECK_INTERVAL_S,
+    RECONCILE_EVERY_MINUTES,
+    RECONCILE_SECOND,
+    RETENTION_MINUTE,
+    RETENTION_SECOND,
     SchedulerSettings,
     WorkerSettings,
     analyze,
     dispatch_outbox,
-    index,
+    materialize_digests,
+    purge_residuals,
+    reconcile,
+    schedule_notifications,
 )
+from app.workers.index_job import MAX_TRIES, index
+from app.workers.jobs.calendar_sync import JOB_TIMEOUT_S as CALENDAR_SYNC_TIMEOUT_S
+from app.workers.jobs.calendar_sync import MAX_TRIES as CALENDAR_SYNC_MAX_TRIES
+from app.workers.jobs.calendar_sync import sync_task_event
+from app.workers.retry import MAX_TRIES as ANALYSIS_MAX_TRIES
 
 
 def test_worker_and_scheduler_use_separate_queues() -> None:
@@ -28,16 +45,33 @@ def test_health_key_expires_fast_enough_to_detect_a_dead_process() -> None:
     assert HEALTH_CHECK_INTERVAL_S <= 60
 
 
-def test_worker_registers_only_s1_stubs() -> None:
-    assert WorkerSettings.functions == [index, analyze]
+def test_worker_registers_index_analyze_and_calendar_sync_with_their_budgets() -> None:
+    index_function, analyze_function, calendar_function = WorkerSettings.functions
+    assert isinstance(index_function, Function)
+    assert index_function.coroutine is index
+    assert index_function.max_tries == MAX_TRIES
+    assert isinstance(analyze_function, Function)
+    assert analyze_function.coroutine is analyze
+    assert analyze_function.max_tries == ANALYSIS_MAX_TRIES
+    assert isinstance(calendar_function, Function)
+    assert calendar_function.coroutine is sync_task_event
+    assert calendar_function.max_tries == CALENDAR_SYNC_MAX_TRIES
+    assert calendar_function.timeout_s == CALENDAR_SYNC_TIMEOUT_S
 
 
-def test_scheduler_runs_only_the_outbox_cron() -> None:
+def test_scheduler_runs_the_outbox_notification_digest_reconciler_and_retention_crons() -> None:
     assert not hasattr(SchedulerSettings, "functions")
-    assert [job.coroutine for job in SchedulerSettings.cron_jobs] == [dispatch_outbox]
+    assert [job.coroutine for job in SchedulerSettings.cron_jobs] == [
+        dispatch_outbox,
+        schedule_notifications,
+        materialize_digests,
+        reconcile,
+        purge_residuals,
+    ]
 
 
-def test_no_retries_until_backoff_policy_exists() -> None:
+def test_functions_without_their_own_budget_do_not_retry() -> None:
+    # Only `index` (J2.2) and `analyze` (S3.6) have a retry budget; the default stays one try.
     assert WorkerSettings.max_tries == 1
     assert SchedulerSettings.max_tries == 1
 
@@ -61,7 +95,239 @@ async def test_dispatch_cron_survives_a_database_failure(
     assert "CANARIO-7f3a9c" not in caplog.text
 
 
+async def test_notification_scheduler_cron_survives_a_database_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    @asynccontextmanager
+    async def broken_scope() -> AsyncIterator[None]:
+        raise ConnectionRefusedError("connect to db failed: CANARIO-4c1e8d user=maulwurf")
+        yield
+
+    monkeypatch.setattr(arq_app, "session_scope", broken_scope)
+    monkeypatch.setattr(app_settings, "notification_scheduler_enabled", True)
+
+    await schedule_notifications({})
+
+    assert "schedule_notifications.failed error=ConnectionRefusedError" in caplog.text
+    assert "CANARIO-4c1e8d" not in caplog.text
+
+
+async def test_notification_scheduler_cron_uses_the_cross_tenant_jobs_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[object] = []
+    token = object()
+
+    def _bind() -> object:
+        events.append("bind")
+        return token
+
+    def _reset(value: object) -> None:
+        events.append(value is token)
+
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[object]:
+        yield object()
+
+    async def fake_run(db: object, *, enabled: bool) -> SchedulerReport:
+        del db
+        events.append(("run", enabled))
+        return SchedulerReport(active=True, claimed=1)
+
+    monkeypatch.setattr(app_settings, "notification_scheduler_enabled", True)
+    monkeypatch.setattr(arq_app, "bind_cross_tenant", _bind)
+    monkeypatch.setattr(arq_app, "reset_cross_tenant", _reset)
+    monkeypatch.setattr(arq_app, "session_scope", scope)
+    monkeypatch.setattr(arq_app, "run_notification_scheduler", fake_run)
+
+    await schedule_notifications({})
+
+    assert events == ["bind", ("run", True), True]
+
+
+async def test_notification_scheduler_cron_is_a_no_op_while_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """J4.1 owns the consumer of `sending`; a disabled tick must not claim any row."""
+    events: list[str] = []
+
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[object]:
+        events.append("session")
+        yield object()
+
+    async def fake_run(db: object, *, enabled: bool) -> SchedulerReport:
+        del db, enabled
+        events.append("run")
+        return SchedulerReport(active=True, claimed=1)
+
+    monkeypatch.setattr(app_settings, "notification_scheduler_enabled", False)
+    monkeypatch.setattr(arq_app, "bind_cross_tenant", lambda: events.append("bind"))
+    monkeypatch.setattr(arq_app, "session_scope", scope)
+    monkeypatch.setattr(arq_app, "run_notification_scheduler", fake_run)
+
+    await schedule_notifications({})
+
+    assert events == []
+
+
+def test_digest_materializer_cron_runs_off_the_claim_second() -> None:
+    _dispatch, _schedule, digest, _reconcile, _retention = SchedulerSettings.cron_jobs
+    assert digest.coroutine is materialize_digests
+    assert digest.second == DIGEST_SECOND
+    assert digest.second not in {0, RECONCILE_SECOND}
+    assert digest.minute is None and digest.run_at_startup
+
+
+async def test_digest_cron_survives_a_database_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    @asynccontextmanager
+    async def broken_scope() -> AsyncIterator[None]:
+        raise ConnectionRefusedError("connect to db failed: CANARIO-9d2b4a user=maulwurf")
+        yield
+
+    monkeypatch.setattr(app_settings, "notification_scheduler_enabled", True)
+    monkeypatch.setattr(arq_app, "session_scope", broken_scope)
+
+    await materialize_digests({})
+
+    assert "materialize_digests.failed error=ConnectionRefusedError" in caplog.text
+    assert "CANARIO-9d2b4a" not in caplog.text
+
+
+async def test_digest_cron_uses_the_cross_tenant_jobs_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[object] = []
+    token = object()
+
+    def _bind() -> object:
+        events.append("bind")
+        return token
+
+    def _reset(value: object) -> None:
+        events.append(value is token)
+
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[object]:
+        yield object()
+
+    async def fake_materialize(db: object) -> DigestMaterialization:
+        del db
+        events.append("run")
+        return DigestMaterialization(
+            users=1, planned=2, written=2, cancelled=0, skipped=0
+        )
+
+    monkeypatch.setattr(app_settings, "notification_scheduler_enabled", True)
+    monkeypatch.setattr(arq_app, "bind_cross_tenant", _bind)
+    monkeypatch.setattr(arq_app, "reset_cross_tenant", _reset)
+    monkeypatch.setattr(arq_app, "session_scope", scope)
+    monkeypatch.setattr(arq_app, "materialize_due_digests", fake_materialize)
+
+    await materialize_digests({})
+
+    assert events == ["bind", "run", True]
+
+
+async def test_digest_cron_is_a_no_op_while_the_scheduler_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """J4.1 owns the consumer of `sending`; digest rows must not pile up before it exists."""
+    events: list[str] = []
+
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[object]:
+        events.append("session")
+        yield object()
+
+    async def fake_materialize(db: object) -> DigestMaterialization:
+        del db
+        events.append("run")
+        return DigestMaterialization(
+            users=0, planned=0, written=0, cancelled=0, skipped=0
+        )
+
+    monkeypatch.setattr(app_settings, "notification_scheduler_enabled", False)
+    monkeypatch.setattr(arq_app, "bind_cross_tenant", lambda: events.append("bind"))
+    monkeypatch.setattr(arq_app, "session_scope", scope)
+    monkeypatch.setattr(arq_app, "materialize_due_digests", fake_materialize)
+
+    await materialize_digests({})
+
+    assert events == []
+
+
 def test_dispatch_cron_runs_every_minute_at_second_zero() -> None:
-    (job,) = SchedulerSettings.cron_jobs
-    assert job.second == 0
-    assert job.minute is None and job.run_at_startup
+    dispatch, _schedule, _digest, _reconcile, _retention = SchedulerSettings.cron_jobs
+    assert dispatch.second == 0
+    assert dispatch.minute is None and dispatch.run_at_startup
+
+
+def test_notification_scheduler_cron_runs_every_minute_and_at_startup() -> None:
+    _dispatch, schedule, _digest, _reconcile, _retention = SchedulerSettings.cron_jobs
+    assert schedule.coroutine is schedule_notifications
+    assert schedule.second == 0
+    assert schedule.minute is None and schedule.run_at_startup
+
+
+def test_reconciler_cron_runs_on_a_fixed_minute_grid_off_the_dispatcher_second() -> None:
+    _dispatch, _schedule, _digest, reconciler, _retention = SchedulerSettings.cron_jobs
+    assert reconciler.second != 0
+    assert reconciler.minute == set(range(0, 60, RECONCILE_EVERY_MINUTES))
+
+
+def test_retention_cron_runs_hourly_off_the_other_crons() -> None:
+    _dispatch, _schedule, _digest, _reconcile, retention = SchedulerSettings.cron_jobs
+    assert retention.second == RETENTION_SECOND
+    assert retention.minute == RETENTION_MINUTE
+    assert retention.second not in {0, 30}
+    assert retention.run_at_startup
+
+
+async def test_retention_cron_survives_a_database_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    @asynccontextmanager
+    async def broken_scope() -> AsyncIterator[None]:
+        raise ConnectionRefusedError("CANARIO-7f3a9c user=maulwurf")
+        yield
+
+    monkeypatch.setattr(arq_app, "session_scope", broken_scope)
+
+    await purge_residuals({})
+
+    assert "purge_residuals.failed error=ConnectionRefusedError" in caplog.text
+    assert "CANARIO-7f3a9c" not in caplog.text
+
+
+async def test_retention_cron_uses_the_cross_tenant_jobs_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[object] = []
+    token = object()
+
+    def _bind() -> object:
+        events.append("bind")
+        return token
+
+    def _reset(value: object) -> None:
+        events.append(value is token)
+
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[object]:
+        yield object()
+
+    async def fake_purge(db: object) -> dict[str, int]:
+        del db
+        return {"account_deletions": 0, "google_remote_operations": 0}
+
+    monkeypatch.setattr(arq_app, "bind_cross_tenant", _bind)
+    monkeypatch.setattr(arq_app, "reset_cross_tenant", _reset)
+    monkeypatch.setattr(arq_app, "session_scope", scope)
+    monkeypatch.setattr(arq_app, "purge_expired_residuals", fake_purge)
+
+    await purge_residuals({})
+
+    assert events == ["bind", True]

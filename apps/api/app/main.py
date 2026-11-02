@@ -5,19 +5,26 @@ from importlib.metadata import PackageNotFoundError, version
 
 from fastapi import FastAPI
 
+from app.core.cache_control import NoStoreMiddleware
 from app.core.db import engine
 from app.core.errors import install_error_handlers
+from app.core.logging import configure_logging
+from app.core.request_context import RequestIdMiddleware
 from app.routers import (
     audios,
     auth,
+    calendar,
     chat,
     health,
     ingestion,
     integrations,
+    internal_metrics,
     me,
+    notifications,
     search,
     subjects,
 )
+from app.services.ingest_sink import close_ingest_client
 from app.services.llm import close_llm_http_client
 
 try:
@@ -29,20 +36,29 @@ except PackageNotFoundError:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    configure_logging()
     yield
     # Cierra el pool al parar (compose stop / SIGTERM) en vez de abandonar conexiones.
     await close_llm_http_client()
+    await close_ingest_client()
     await engine.dispose()
 
 
 app = FastAPI(title="Maulwurf API", version=__version__, lifespan=lifespan)
 install_error_handlers(app)
+app.add_middleware(RequestIdMiddleware)
+# Added last so it is the outermost user middleware: it sees redirects, SSE starts and the
+# framework's own 404/405, not only the routes that remembered the header.
+app.add_middleware(NoStoreMiddleware)
 app.include_router(health.router)
 app.include_router(ingestion.router)
 app.include_router(me.router)
+app.include_router(notifications.router)
 app.include_router(auth.router)
 app.include_router(audios.router)
 app.include_router(integrations.router)
 app.include_router(subjects.router)
 app.include_router(search.router)
 app.include_router(chat.router)
+app.include_router(calendar.router)
+app.include_router(internal_metrics.router)

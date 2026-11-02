@@ -11,9 +11,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore")
+    # J4.8: Compose passes the optional previous rotation pair through an interpolation
+    # whose unset value is an empty string. Treat empty as absent so the pair stays
+    # `None`/`None` and startup does not fail on a harmless blank variable.
+    model_config = SettingsConfigDict(extra="ignore", env_ignore_empty=True)
 
     database_url: str | None = Field(default=None, validation_alias="MAULWURF_DATABASE_URL")
+    # Stable identifier of the host that owns this ingest tmpfs. `resolve` refuses an
+    # attestation whose `host` differs, and refuses to run without an expected host.
+    ingest_host_id: str | None = Field(default=None, validation_alias="INGEST_HOST_ID")
     # `enforce` (defecto, fail closed): sin endurecimiento el proceso no arranca.
     # `report` solo para desarrollo fuera del contenedor: arranca, pero /readyz responde 503.
     ingest_hardening: Literal["enforce", "report"] = Field(
@@ -27,9 +33,23 @@ class Settings(BaseSettings):
     fragment_overlap_s: float = Field(
         default=0.25, gt=0, le=2, validation_alias="INGEST_FRAGMENT_OVERLAP_S"
     )
+    # Recovery sweeper target (S4.2). Not an instant-deletion promise: normal
+    # cleanup stays immediate.
+    sweep_interval_s: float = Field(
+        default=60.0, ge=1, validation_alias="INGEST_SWEEP_INTERVAL_S"
+    )
     # Piso que Riva aceptó en el spike. No es un máximo aprobado; el uso lo recorta a 30 s.
     fragment_seconds: int = Field(
         default=30, ge=1, validation_alias="INGEST_FRAGMENT_SECONDS"
+    )
+    # S4.4: the published ASR TTL is 60 min. The old 600 s child cap was below the
+    # benchmark's 3 h projection (788 s local + provider), so the effective cap follows
+    # the publication; the floor refuses a deployment that would silently shorten it.
+    asr_timeout_s: float = Field(
+        default=3_600.0,
+        ge=3_600.0,
+        le=7_200.0,
+        validation_alias="INGEST_ASR_TIMEOUT_S",
     )
     # Unset: internal routes answer 503 and /readyz reports credential.
     # Set but short, non-hex, or containing change-me: the process refuses to start.

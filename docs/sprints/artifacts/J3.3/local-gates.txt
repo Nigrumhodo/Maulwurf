@@ -1,0 +1,130 @@
+# J3.3 local gates (MAULW-116)
+
+Date: 2026-10-31 (UTC). Environment: Ubuntu 24.04 container, Python 3.12.3, PostgreSQL 16 with
+pgvector 0.6.0, Redis 7, `uv run` from `apps/api`. No secret, no real Google call and no audio were
+involved: the Calendar API is an `httpx.MockTransport` double and the OAuth token/id-token
+exchange is replaced by deterministic local functions.
+
+## Static gates
+
+```text
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ cd apps/api && uv run mypy .
+Success: no issues found in 212 source files
+```
+
+## Unit suite
+
+```text
+$ cd apps/api && uv run pytest tests/unit -q
+1125 passed, 35 warnings in 10.30s
+```
+
+The two `httpx` failures that the sandbox produces when `NO_PROXY` contains bracketed IPv6
+entries (`Invalid port: ':1]'` in `httpx._utils.URLPattern`, from
+`tests/unit/test_ingest_sink.py::test_sink_is_the_ingest_client_when_configured` and
+`tests/unit/test_llm.py::test_shared_http_client_is_bounded_reused_and_closed`) are
+environmental: both pass with the proxy variables cleared, and J3.2 recorded the same pair.
+
+## Integration suite
+
+```text
+$ cd apps/api && uv run pytest tests/integration -q   # after merging origin/develop
+32 failed, 418 passed, 1126 deselected, 461 warnings in 74.61s
+```
+
+The 32 failures are exactly the same set that a pristine `develop` checkout (`44b576a`)
+produces in this sandbox: `tests/integration/test_chat_sse.py` (17),
+`tests/integration/test_g4_eval.py` (4) and `tests/integration/test_search.py` (11). They are
+provider/environment failures unrelated to J3.3 (the `diff` of both failure lists is empty).
+The underlying cause is the sandbox's pgvector 0.6.0: `app/services/search.py` maps the
+unsupported `hnsw.iterative_scan` GUC (pgvector >= 0.8) to `500 search_hnsw_unsupported`, and
+search, chat and G4 depend on it. Quality CI runs against the `pgvector/pgvector:pg16` image,
+not this local package. Everything else passes, including `test_migrations.py`, `test_rls.py`, `test_isolation.py`,
+`test_oauth_google.py`, `test_a18_endpoints.py` and the 18 I-S3-JF-06 cases in
+`test_calendar_connect.py`.
+
+## Other area gates
+
+```text
+$ cd apps/ingest && uv run ruff check .        # All checks passed
+$ cd apps/ingest && uv run mypy .              # Success: no issues found in 77 source files
+$ cd apps/ingest && uv run pytest -m "not integration and not provider and not load" -q
+198 passed, 71 deselected
+
+$ python3 scripts/docs/check_refs.py
+OK: 764 documented repository paths exist or are expected.
+```
+
+## Review fix1 (2026-10-31, second hoplite review of head `7bf4d0a`)
+
+Scope: the three findings of the read-only review.
+
+1. **Duplicate-calendar race (blocking).** `connect_calendar` now takes a
+   transaction-scoped advisory lock keyed by the user
+   (`pg_advisory_xact_lock(hashtextextended('calendar_binding:<user_id>', 0))`) before
+   reading the stored ID and before list/create. Two concurrent callbacks for the same user
+   take turns; the second reuses the ID the first committed. The `ON CONFLICT` upsert stays
+   as the convergence point for the stored ID. Regression
+   `test_two_concurrent_connects_create_a_single_calendar` uses two real DB sessions and a
+   `threading.Barrier` inside the list call, so without the lock both callbacks list an
+   empty calendar list and both `POST /calendars`. Verified red without the lock (the single
+   `POST` assertion fails) and green with it.
+2. **Non-owned calendar adoption (blocking).** `is_maulwurf_calendar` and the stored-ID
+   reuse path now require `accessRole == 'owner'` and `primary` not true. The stored ID is
+   revalidated with `GET /users/me/calendarList/{id}` (`get_calendar_list_entry`), because
+   the plain Calendar resource does not expose `accessRole`. A shared/subscribed copy is
+   skipped and an owned calendar is created instead. Unit cases cover reader, writer,
+   freeBusyReader and a missing role; the integration case
+   `test_connect_never_adopts_a_read_only_maulwurf_lookalike` proves the HTTP flow.
+3. **`ON CONFLICT` without real-table coverage.** The `outbox_events` half is now validated
+   against the real schema.
+   `test_sync_task_event_conflict_target_matches_the_real_unique_index` checks the `0001`
+   unique index definition (four columns, `NULLS NOT DISTINCT`, no partial predicate) and
+   runs the exact `INSERT ... ON CONFLICT (...) DO NOTHING` twice: the first returns a row
+   and the identical second one is swallowed by the index. The `UPDATE tasks ... RETURNING`
+   statement still has no real table in `develop`; `calendar_resume.py` records it as
+   pending A3.1 and no test claims otherwise.
+
+### Gates after fix1 (2026-10-31)
+
+```text
+$ cd apps/api && uv run ruff check .
+All checks passed!
+
+$ cd apps/api && uv run mypy .
+Success: no issues found in 222 source files
+
+$ cd apps/api && uv run pytest tests/unit -q     # sandbox proxy variables cleared
+1177 passed, 35 warnings in 11.81s
+
+$ cd apps/api && uv run pytest tests/unit -q     # literal command, sandbox NO_PROXY set
+2 failed, 1175 passed, 35 warnings in 12.14s
+```
+
+The two failures are the same environmental `httpx` `NO_PROXY` bracketed-IPv6 pair recorded
+above; both pass with the proxy variables cleared (1177 passed).
+
+```text
+$ cd apps/api && uv run pytest tests/integration/test_calendar_connect.py -q
+21 passed, 41 warnings in 5.41s
+
+$ cd apps/api && uv run pytest tests/integration -q   # sandbox proxy variables cleared
+32 failed, 437 passed, 461 warnings in 97.72s (0:01:37)
+```
+
+The 32 failures are again exactly `test_chat_sse.py` (17), `test_g4_eval.py` (4) and
+`test_search.py` (11), the pre-existing pgvector 0.6 set. Without clearing the sandbox proxy
+variables `test_ingest_reception.py` adds 19 `httpx.InvalidURL: Invalid port ':1]'` failures
+(51 total); they are the same environment artifact, not new failures.
+
+I-S3-JF-06 grows from 18 to 21 integration cases and the deterministic unit file from 18 to
+22 cases; `test_google_calendar.py` gains one case for the `CalendarListEntry` path.
+
+## Not executed
+
+- Any real Google OAuth/Calendar call (J3.1's protected account and the cloud leg of
+  P-S3-JF-02 are still pending). Cloud eligibility stays `pending`.
+- The `apps/web` build: no web file was changed.

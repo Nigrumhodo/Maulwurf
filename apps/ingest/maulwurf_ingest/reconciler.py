@@ -20,7 +20,7 @@ from pathlib import Path
 
 import asyncpg
 
-from maulwurf_ingest import admission, cleanup, persistence
+from maulwurf_ingest import admission, cleanup, metrics, persistence, rls
 from maulwurf_ingest import lease as leases
 from maulwurf_ingest.cleanup import CleanupEvidence
 
@@ -76,7 +76,7 @@ async def _destroy(workdirs: list[Path]) -> CleanupEvidence:
 async def _active_version(
     pool: asyncpg.Pool, lease: leases.Lease,
 ) -> tuple[uuid.UUID, int] | None:
-    row = await pool.fetchrow(
+    row = await rls.fetchrow(pool, lease.user_id,
         """
         SELECT ia.audio_id, a.active_transcript_version
           FROM ingestion_attempts ia
@@ -109,13 +109,47 @@ async def _enable(pool: asyncpg.Pool, lease: leases.Lease) -> ReconcileAction:
     return ReconcileAction.ENABLED
 
 
+async def _record_cleanup(
+    pool: asyncpg.Pool, lease: leases.Lease, *, verified: bool, evidence: dict[str, object],
+) -> bool | None:
+    """Persist cleanup evidence; ``None`` when the write itself failed.
+
+    A driver error on this statement used to abort the whole pass, including
+    ``sweep_stranded``. One attempt that cannot record its evidence must not stop
+    the recovery of the rest: the caller treats the row as not recorded and
+    continues with the next one.
+    """
+    try:
+        return await leases.record_cleanup(
+            pool, lease, verified=verified, evidence=evidence,
+        )
+    except Exception as exc:  # noqa: BLE001 — one row must not abort the whole pass
+        # Only the type: driver errors can include the DSN with credentials.
+        logger.error(
+            "reconciler.cleanup_record_failed attempt_id=%s error=%s",
+            lease.attempt_id, type(exc).__name__,
+        )
+        return None
+
+
+def _note_unrecorded_cleanup(attempt_id: uuid.UUID) -> None:
+    """Make a cleanup this pass could not persist explicitly visible.
+
+    The row stays ``pending`` (no durable ``failed`` latch exists), so admission
+    stays open, but neither a driver error nor a moved fencing token may leave
+    only a log line: the alert and the failure metric are the observable record.
+    """
+    admission.flag_unrecorded_cleanup(attempt_id)
+    metrics.record_failure("cleanup", "cleanup_unrecorded")
+
+
 async def reconcile_committed(
     pool: asyncpg.Pool, *, instance: str, tmp_dir: str | None = None,
     lease_ttl: timedelta = DEFAULT_LEASE_TTL,
 ) -> tuple[ReconcileResult, ...]:
     """Enable the text outbox for expired post-commit attempts. Never retranscribes."""
     root = Path(tmp_dir) if tmp_dir is not None else Path(tempfile.gettempdir())
-    rows = await pool.fetch(
+    rows = await rls.fetch(pool, None,
         """
         SELECT id, user_id, cleanup_status
           FROM ingestion_attempts
@@ -146,18 +180,97 @@ async def reconcile_committed(
             results.append(ReconcileResult(attempt_id, ReconcileAction.LOST))
             continue
         if workdirs:
-            evidence = await _destroy(workdirs)
-            recorded = await leases.record_cleanup(
+            try:
+                evidence = await _destroy(workdirs)
+            except Exception as exc:  # noqa: BLE001 — an exception is not proof of absence
+                # The periodic sweeper must not turn an unverified cleanup into a silent
+                # retry: record it as failed (durable across restarts) and stop admission.
+                logger.error(
+                    "reconciler.cleanup_error attempt_id=%s error=%s",
+                    attempt_id, type(exc).__name__,
+                )
+                cleanup.log_cleanup_failed(
+                    str(attempt_id), None, error_type=type(exc).__name__,
+                )
+                recorded = await _record_cleanup(
+                    pool, lease, verified=False,
+                    evidence={"verified": False, "error": type(exc).__name__},
+                )
+                if recorded:
+                    admission.halt(attempt_id)
+                else:
+                    _note_unrecorded_cleanup(attempt_id)
+                results.append(ReconcileResult(attempt_id, ReconcileAction.CLEANUP_FAILED))
+                continue
+            recorded = await _record_cleanup(
                 pool, lease, verified=evidence.verified, evidence=evidence.as_json(),
             )
             if not evidence.verified:
                 if recorded:
                     admission.halt(attempt_id)
+                else:
+                    _note_unrecorded_cleanup(attempt_id)
                 logger.error("reconciler.cleanup_failed attempt_id=%s", attempt_id)
                 results.append(ReconcileResult(attempt_id, ReconcileAction.CLEANUP_FAILED))
                 continue
             if not recorded:
+                _note_unrecorded_cleanup(attempt_id)
                 results.append(ReconcileResult(attempt_id, ReconcileAction.LOST))
                 continue
         results.append(ReconcileResult(attempt_id, await _enable(pool, lease)))
     return tuple(results)
+
+
+# Same status and error code as ``LOSS_REASONS["technical_loss"]`` in
+# ``apps/api/app/services/state_machine.py``. Ingest cannot import the API package.
+STRANDED_STATES = ("receiving", "transcribing")
+STRANDED_STATUS = "requires_reupload"
+STRANDED_ERROR_CODE = "technical_loss"
+SWEEP_BATCH_SIZE = 100
+SWEEP_MAX_BATCHES = 10
+
+# Bumping ``fencing_token`` in the same statement fences the dead owner: its
+# ``transition``, ``heartbeat`` and ``record_cleanup`` now match no row.
+_SWEEP_SQL = """
+WITH due AS (
+    SELECT id, user_id
+      FROM ingestion_attempts
+     WHERE status = ANY($1::text[])
+       AND lease_expires_at <= now()
+     ORDER BY lease_expires_at
+     LIMIT $2
+       FOR UPDATE SKIP LOCKED
+)
+UPDATE ingestion_attempts AS ia
+   SET status = $3, error_code = $4,
+       fencing_token = ia.fencing_token + 1, updated_at = now()
+  FROM due
+ WHERE ia.id = due.id AND ia.user_id = due.user_id
+   AND ia.status = ANY($1::text[]) AND ia.lease_expires_at <= now()
+RETURNING ia.id, ia.user_id
+"""
+
+
+async def sweep_stranded(pool: rls.Executor) -> tuple[uuid.UUID, ...]:
+    """End receiving/transcribing attempts whose lease expired. Bounded, never retranscribes.
+
+    Committed attempts sit in ``transcript_committed_cleanup_pending`` and are not selected.
+    ``awaiting_upload`` is not selected either. ``cleanup_status`` is not touched.
+    """
+    ended: list[uuid.UUID] = []
+    for _ in range(SWEEP_MAX_BATCHES):
+        rows = await rls.fetch(pool, None,
+            _SWEEP_SQL, list(STRANDED_STATES), SWEEP_BATCH_SIZE,
+            STRANDED_STATUS, STRANDED_ERROR_CODE,
+        )
+        for row in rows:
+            attempt_id = row["id"]
+            ended.append(attempt_id)
+            logger.info(
+                "reconciler.stranded_ended attempt_id=%s user_id=%s", attempt_id, row["user_id"],
+            )
+        if len(rows) < SWEEP_BATCH_SIZE:
+            break
+    if ended:
+        logger.info("reconciler.stranded_swept count=%s", len(ended))
+    return tuple(ended)

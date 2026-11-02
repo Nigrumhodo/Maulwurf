@@ -1,0 +1,96 @@
+"""Google Calendar adapter for the idempotent task-event sync (J3.4, J3.6).
+
+Wraps `GoogleCalendarService` so the orchestrator sees "event or None" instead of the
+service's typed `NotFound` error, and never lists or deletes events. A 401 triggers one
+token refresh through the injected callback before the operation is retried. Every PATCH
+requires an `If-Match` ETag (J3.6), so an event edited in Google is never overwritten by a
+stale write; an unconditional call is rejected instead of sent.
+"""
+
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any
+from urllib.parse import quote
+
+from app.services.google_calendar import (
+    GoogleCalendarNotFound,
+    GoogleCalendarService,
+    GoogleCalendarUnauthorized,
+)
+
+
+def _calendar(calendar_id: str) -> str:
+    # Calendar IDs are usually e-mail addresses: encode the "@" as a path segment.
+    return quote(calendar_id, safe="")
+
+
+class GoogleCalendarGateway:
+    def __init__(
+        self,
+        service: GoogleCalendarService,
+        *,
+        refresh_access_token: Callable[[], Awaitable[str]] | None = None,
+    ) -> None:
+        self._service = service
+        self._refresh = refresh_access_token
+
+    async def insert_event(
+        self, calendar_id: str, event_id: str, body: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        payload = dict(body)
+        payload["id"] = event_id
+        return await self._request(
+            "POST",
+            f"/calendars/{_calendar(calendar_id)}/events",
+            params={"sendUpdates": "none"},  # never e-mail attendees
+            json=payload,
+        )
+
+    async def get_event(
+        self, calendar_id: str, event_id: str
+    ) -> Mapping[str, Any] | None:
+        try:
+            return await self._request(
+                "GET",
+                f"/calendars/{_calendar(calendar_id)}/events/{quote(event_id, safe='')}",
+            )
+        except GoogleCalendarNotFound:
+            return None
+
+    async def update_event(
+        self,
+        calendar_id: str,
+        event_id: str,
+        body: Mapping[str, Any],
+        *,
+        if_match: str,
+    ) -> Mapping[str, Any]:
+        """Patch an event under `If-Match`; a write without an ETag is never issued.
+
+        The precondition covers edits made after the ETag was read: Google answers 412 and
+        the caller decides, instead of the stale body silently replacing the remote edit.
+        Detecting an edit made *before* that read requires the caller's persisted baseline.
+        """
+        if not if_match.strip():
+            # Fail closed: the gateway never issues an unconditional PATCH.
+            raise ValueError("update_event requires a non-empty If-Match ETag")
+        payload = dict(body)
+        if "description" not in payload:
+            # PATCH keeps what is not sent; an empty string clears a removed detail.
+            payload["description"] = ""
+        return await self._request(
+            "PATCH",
+            f"/calendars/{_calendar(calendar_id)}/events/{quote(event_id, safe='')}",
+            params={"sendUpdates": "none"},
+            json=payload,
+            headers={"If-Match": if_match},
+        )
+
+    async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        try:
+            return await self._service.request(method, path, **kwargs)
+        except GoogleCalendarUnauthorized:
+            # The token may have expired between the freshness check and this call.
+            if self._refresh is None:
+                raise
+            self._service.update_access_token(await self._refresh())
+            return await self._service.request(method, path, **kwargs)

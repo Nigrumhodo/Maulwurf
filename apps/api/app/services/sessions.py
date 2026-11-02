@@ -17,10 +17,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.db import set_current_user
 from app.core.errors import ApiError
 from app.models import Session, User
 
@@ -56,6 +57,9 @@ def _now() -> datetime:
 async def create_session(db: AsyncSession, user_id: uuid.UUID) -> IssuedSession:
     cookie_token = secrets.token_urlsafe(TOKEN_BYTES)
     csrf_token = csrf_token_for(cookie_token)
+    # The RLS policy on `sessions` checks the row's user_id. Binding here keeps the
+    # service correct for any caller (login, rotation) instead of relying on the route.
+    await set_current_user(db, user_id)
     session = Session(
         user_id=user_id,
         token_hash=_sha256(cookie_token),
@@ -71,21 +75,40 @@ async def resolve_session(db: AsyncSession, cookie_token: str | None) -> Session
     """Sesión vigente para la cookie; `None` si falta, es desconocida, expiró o fue revocada.
 
     Solo lectura: validar una petición no escribe en BD.
+
+    Under RLS (A2.17) the request does not know its user yet. The bootstrap policy exposes
+    only the row whose `token_hash` matches the presented opaque token; that hash is set
+    transactionally before the lookup. Once the row is found, its user_id becomes the
+    tenant of the remaining transactions in the request.
     """
     if not cookie_token:
         return None
-    # El join con `users` impide que una cuenta en borrado siga operando con su sesión.
+    token_hash = _sha256(cookie_token)
+    await db.execute(
+        text("SELECT set_config('app.session_token_hash', :token_hash, true)"),
+        {"token_hash": token_hash},
+    )
     session: Session | None = await db.scalar(
-        select(Session)
-        .join(User, User.id == Session.user_id)
-        .where(
-            Session.token_hash == _sha256(cookie_token),
+        select(Session).where(
+            Session.token_hash == token_hash,
             Session.revoked_at.is_(None),
             Session.expires_at > _now(),
-            User.status == "active",
         )
     )
-    return session
+    if session is None:
+        return None
+    await set_current_user(db, session.user_id)
+    # The join with `users` used to reject an account in deletion in the same query. RLS
+    # needs the user_id first, so the status check is a second, equally fail-closed read.
+    status = await db.scalar(select(User.status).where(User.id == session.user_id))
+    if status == "active":
+        return session
+    # A4.4: the session that started the deletion stays alive in restricted mode so its
+    # owner can read GET /me/deletion/{id} and log out. Callers that serve the rest of the
+    # account reject it explicitly in `core.deps`.
+    if status in {"deleting", "deleted"} and session.deletion_operation_id is not None:
+        return session
+    return None
 
 
 async def revoke_session(db: AsyncSession, session: Session) -> bool:
@@ -93,6 +116,9 @@ async def revoke_session(db: AsyncSession, session: Session) -> bool:
 
     Idempotente para logout. La siguiente petición con esa cookie recibe 401.
     """
+    # Rotation and the login callback may revoke a session captured before the tenant of
+    # this request was bound; bind it explicitly so the RLS WITH CHECK also passes.
+    await set_current_user(db, session.user_id)
     result = await db.execute(
         update(Session)
         .where(Session.id == session.id, Session.revoked_at.is_(None))

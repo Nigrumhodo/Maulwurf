@@ -1,0 +1,31 @@
+J4.8 / C-S4-JF-10 — account-deletion runbook drill
+Date (UTC): 2026-11-01
+Environment: local PostgreSQL 16.15, Redis 7.0.15, API integration fixtures; no real
+  Google account, credential or Calendar id.
+
+Command (the runbook's executable contract, I-S4-AN-04):
+  $ cd apps/api
+  $ MAULWURF_ENV=local \
+    MAULWURF_DATABASE_URL='postgresql+asyncpg://maulwurf:<local-only>@127.0.0.1:5432/maulwurf' \
+    MAULWURF_REDIS_URL='redis://127.0.0.1:6379/0' \
+    pytest tests/integration/test_account_deletion.py -q
+  ...
+  13 passed, 25 warnings in 4.34s
+
+Cases exercised as written in the runbook:
+- `DELETE /me` applies the tombstone, revokes the other sessions and returns 202 with the
+  operation id; the purge removes tenant rows and keeps the opaque placeholders.
+- The initiating session is restricted to the status route, the authorized resume and
+  logout; CSRF/Origin are required.
+- An authorized Google deletion runs before the encrypted credential is removed; a remote
+  failure still purges and reports `completed_with_remote_failures`.
+- A purge failure after the durable tombstone keeps the 202 and leaves a resumable
+  operation; the resume reclaims a stranded `running` claim and does not repeat successful
+  Google deletes.
+- Concurrent executions claim once; retention purges expired residual rows in batches.
+- The operation is owner-scoped and expires after 30 days.
+
+Not run here: a real `DELETE /me` with a real Google account and Calendar events, and the
+reference-host status/resume drill. Those require the protected authorized setup and J4.7;
+they remain NOT RUN. The deterministic suite proves the state machine, not Google's
+retention or a real account.

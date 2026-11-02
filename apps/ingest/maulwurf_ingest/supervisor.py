@@ -10,11 +10,22 @@ pase con el hijo (éxito, error, timeout, SIGKILL, lease perdido). Mata el grupo
 borra el directorio y verifica en `/proc` descriptores, procesos y mounts; solo con esa
 evidencia registra `cleanup_status = verified`. Si la evidencia falla y este run
 persistió `failed`, cierra la admisión de la instancia y dispara la alerta (S1.B6).
-Un lease vencido que no llega a escribir esa fila deja `pending` y no cierra la admisión.
+Un lease vencido que no llega a escribir esa fila deja `pending` y no cierra la
+admisión, pero emite la alerta explícita `cleanup_unrecorded` y su métrica (S4.2): un
+cleanup no verificado en un proceso zombi no puede quedar solo en un log.
 
 Si el supervisor muere entero (SIGKILL al contenedor), el tmpfs desaparece con el
 contenedor (S1.B1) y el intento queda con lease vencido y `cleanup_status = pending`: la
 reconciliación de ese caso es S1.B4/S1.B6.
+
+Since S4.2, `run_sweeper` adds the periodic pass (60 s target): it reconciles
+post-commit attempts and ends stranded ones. Every pass re-reads the durable
+admission latch from the database (``admission.restore_from_database``), so a
+``cleanup_status=failed`` row persisted by any instance closes admission here even
+when this process started earlier. A failed pass closes admission (fail closed) but
+does not kill the loop: the next pass still tries to recover, and a clean pass
+reopens only the transient close (a durable ``failed`` latch stays closed). Passes
+never overlap.
 """
 from __future__ import annotations
 
@@ -34,15 +45,34 @@ from pathlib import Path
 
 import asyncpg
 
-from maulwurf_ingest import admission, cancel, cleanup, persistence
+from maulwurf_ingest import admission, cancel, cleanup, metrics, persistence, rls
 from maulwurf_ingest import lease as leases
 from maulwurf_ingest.asr_job import ORIGINAL, SCRIPTED_NAME, STUB_TRANSCRIPT_NAME
 from maulwurf_ingest.audio.validate import probe_file
 from maulwurf_ingest.config import settings
 from maulwurf_ingest.outcomes import CATALOG
 from maulwurf_ingest.receiver import PayloadTooLarge, receive
+from maulwurf_ingest.reconciler import (
+    DEFAULT_LEASE_TTL,
+    ReconcileResult,
+    reconcile_committed,
+    sweep_stranded,
+)
 
 logger = logging.getLogger(__name__)
+
+SWEEP_INTERVAL_S = 60.0
+# Defaults for the per-attempt lease (S4.2). The heartbeat interval must leave
+# several renewals inside one TTL: the asyncio loop can be busy (ffprobe thread
+# callbacks, GC, a slow event-loop task) and one late heartbeat must not expire a
+# live run. Three renewals per TTL means a single stall under two intervals
+# (20 s with the defaults) still finds the lease alive; a run whose loop is
+# blocked longer than the whole TTL is indistinguishable from a dead owner and
+# is ended as `technical_loss` by the sweeper.
+LEASE_TTL_S = 30
+HEARTBEAT_INTERVAL_S = 10.0
+MIN_HEARTBEATS_PER_LEASE = 3
+
 
 
 def _default_fragment_seconds() -> int:
@@ -64,9 +94,9 @@ class Outcome(StrEnum):
 @dataclass(frozen=True)
 class SupervisorConfig:
     instance: str
-    lease_ttl: timedelta = timedelta(seconds=30)
-    heartbeat_interval_s: float = 10.0
-    asr_timeout_s: float = 600.0
+    lease_ttl: timedelta = timedelta(seconds=LEASE_TTL_S)
+    heartbeat_interval_s: float = HEARTBEAT_INTERVAL_S
+    asr_timeout_s: float = 3_600.0
     tmp_dir: str | None = None  # None = TMPDIR (el tmpfs del contenedor)
     realtime: bool = False  # solo pruebas: ffmpeg a velocidad real
     # Defecto: INGEST_FRAGMENT_SECONDS (30). effective_fragment_seconds lo recorta al piso.
@@ -75,6 +105,17 @@ class SupervisorConfig:
     stub_transcript: str | None = None
     # JSON for the in-tree transport double. The HTTP route never sets it.
     scripted_transport: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.heartbeat_interval_s <= 0:
+            raise ValueError("heartbeat interval must be positive")
+        if self.lease_ttl <= timedelta(0):
+            raise ValueError("lease ttl must be positive")
+        if self.heartbeat_interval_s * MIN_HEARTBEATS_PER_LEASE > self.lease_ttl.total_seconds():
+            raise ValueError(
+                "heartbeat interval leaves no margin before lease expiry: require "
+                f"{MIN_HEARTBEATS_PER_LEASE} heartbeats per lease"
+            )
 
 
 @dataclass
@@ -87,6 +128,80 @@ class RunResult:
     evidence: dict[str, object] = field(default_factory=dict)
     # Code from the child's stderr. Not an ``error_code`` unless it is in the catalog.
     child_error: str | None = None
+
+
+@dataclass(frozen=True)
+class SweepResult:
+    committed: tuple[ReconcileResult, ...]
+    stranded: tuple[uuid.UUID, ...]
+
+
+async def sweep_once(
+    pool: asyncpg.Pool, *, instance: str, tmp_dir: str | None = None,
+    lease_ttl: timedelta = DEFAULT_LEASE_TTL,
+) -> SweepResult:
+    """One recovery pass: post-commit reconciliation, then stranded attempts."""
+    committed = await reconcile_committed(
+        pool, instance=instance, tmp_dir=tmp_dir, lease_ttl=lease_ttl,
+    )
+    stranded = await sweep_stranded(pool)
+    return SweepResult(committed=committed, stranded=stranded)
+
+
+async def sweep_pass(
+    pool: asyncpg.Pool, *, instance: str, tmp_dir: str | None = None,
+) -> SweepResult:
+    """One periodic pass: re-sync the admission latch, then recover.
+
+    The latch read is part of the pass, not only of process start: a ``failed`` row
+    written by another instance must stop this instance from admitting uploads. The
+    read itself fail-closes inside ``restore_from_database`` and never raises.
+    """
+    await admission.restore_from_database(pool)
+    return await sweep_once(pool, instance=instance, tmp_dir=tmp_dir)
+
+
+async def run_sweeper(
+    pool: asyncpg.Pool, *, instance: str, interval_s: float = SWEEP_INTERVAL_S,
+    tmp_dir: str | None = None,
+) -> None:
+    """Run one recovery pass per interval until cancelled (S4.2).
+
+    A failed pass closes admission (fail closed) but does not kill the loop: the
+    next pass still tries to recover and, when the latch is readable and no
+    durable ``failed`` row exists, it reopens admission. A durable ``failed``
+    cleanup keeps admission closed because ``sweep_pass`` re-reads it each time.
+    Passes run sequentially and never overlap, and a pass that overruns the
+    interval does not trigger a burst of catch-up passes.
+    """
+    if interval_s <= 0:
+        raise ValueError("sweep interval must be positive")
+    loop = asyncio.get_running_loop()
+    next_at = loop.time() + interval_s
+    while True:
+        await asyncio.sleep(max(0.0, next_at - loop.time()))
+        try:
+            result = await sweep_pass(pool, instance=instance, tmp_dir=tmp_dir)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — a failed pass must not kill the loop
+            # Only the type: driver errors can include the DSN with credentials.
+            logger.error("supervisor.sweep_failed error=%s", type(exc).__name__)
+            if admission.uploads_admitted():
+                admission.close()
+        else:
+            if result.committed or result.stranded:
+                logger.info(
+                    "supervisor.sweep committed=%s stranded=%s",
+                    len(result.committed), len(result.stranded),
+                )
+            else:
+                logger.debug("supervisor.sweep_idle")
+        next_at += interval_s
+        if next_at < loop.time():
+            # The pass overran a whole interval. Start the next one from now instead
+            # of firing back-to-back passes.
+            next_at = loop.time() + interval_s
 
 
 # Gancho de pruebas: recibe (pid del trabajo ASR, directorio) al arrancar el hijo.
@@ -199,7 +314,7 @@ def _signal_group(pid: int, sig: int) -> None:
 
 
 async def _attempt_language(pool: asyncpg.Pool, lease: leases.Lease) -> str | None:
-    value = await pool.fetchval(
+    value = await rls.fetchval(pool, lease.user_id,
         """
         SELECT a.language_code
           FROM ingestion_attempts ia
@@ -276,17 +391,33 @@ async def _run_asr(
     return None, _job_payload(stdout), None
 
 
+def _note_unrecorded_cleanup(attempt_id: uuid.UUID) -> None:
+    """Make an unverified cleanup that could not be persisted explicitly visible.
+
+    The fencing token moved before this run wrote ``failed`` (the stranded sweep or
+    a reclaim), so the row stays ``pending`` and admission stays open. The alert and
+    the metric are the observable record of that case; no row exists to reopen
+    admission from later.
+    """
+    admission.flag_unrecorded_cleanup(attempt_id)
+    metrics.record_failure("cleanup", "cleanup_unrecorded")
+
+
 async def _note_cleanup_failure(
     pool: asyncpg.Pool, lease: leases.Lease, attempt_id: uuid.UUID, *,
     owned_audio: bool, exc: Exception, result: RunResult,
 ) -> None:
     """A cleanup exception is not verified deletion.
 
-    Admission closes only when this run still owns the row.
+    Admission closes only when this run still owns the row. A run that lost the
+    token (and with it the ability to persist ``failed``) raises the explicit
+    ``cleanup_unrecorded`` alert instead of leaving only a log line.
     """
     logger.error(
         "supervisor.cleanup_error attempt_id=%s error=%s", attempt_id, type(exc).__name__,
     )
+    cleanup.log_cleanup_failed(str(attempt_id), None, error_type=type(exc).__name__)
+    metrics.record_failure("cleanup", "cleanup_error")
     result.evidence = {"verified": False, "error": type(exc).__name__}
     recorded = False
     if owned_audio:
@@ -295,6 +426,8 @@ async def _note_cleanup_failure(
         )
     if recorded:
         admission.halt(attempt_id)
+    elif owned_audio:
+        _note_unrecorded_cleanup(attempt_id)
     if result.outcome is Outcome.SUCCEEDED:
         result.outcome = Outcome.CLEANUP_FAILED
 
@@ -316,10 +449,15 @@ async def _note_cleanup_evidence(
     )
     if not evidence.verified:
         logger.error("supervisor.cleanup_failed attempt_id=%s", attempt_id)
+        cleanup.log_cleanup_failed(str(attempt_id), evidence)
+        metrics.record_failure("cleanup", "verification_failed")
         # Solo un `failed` persistido con el token de este run. Si el lease
-        # ya no es nuestro, la fila sigue `pending` y la admisión no se cierra.
+        # ya no es nuestro, la fila sigue `pending`, la admisión no se cierra y
+        # la alerta `cleanup_unrecorded` deja el caso observable.
         if recorded:
             admission.halt(attempt_id)
+        elif owned_audio:
+            _note_unrecorded_cleanup(attempt_id)
         if result.outcome is Outcome.SUCCEEDED:
             result.outcome = Outcome.CLEANUP_FAILED
         return
@@ -330,6 +468,10 @@ async def _note_cleanup_evidence(
     )
     if not enabled:
         result.outcome = Outcome.LEASE_LOST
+
+
+def _error_name(exc: Exception | None) -> str | None:
+    return None if exc is None else type(exc).__name__
 
 
 async def _note_cancelled_cleanup(
@@ -349,7 +491,12 @@ async def _note_cancelled_cleanup(
     recorded = await cancel.record_cancelled_cleanup(
         pool, lease, verified=verified, evidence=result.evidence,
     )
-    if recorded and not verified:
+    if not verified:
+        cleanup.log_cleanup_failed(str(attempt_id), evidence, error_type=_error_name(exc))
+        metrics.record_failure("cleanup", "verification_failed")
+    if not recorded:
+        _note_unrecorded_cleanup(attempt_id)
+    elif not verified:
         admission.halt(attempt_id)
     result.outcome = Outcome.CANCELLED
 

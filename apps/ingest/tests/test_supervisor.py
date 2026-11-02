@@ -36,6 +36,13 @@ SYNTHETIC_TEXT = (
     "Hoy repasamos derivadas. La tarea es para el viernes y el examen es el lunes siguiente."
 )
 
+# S4.2: only this evidence proves `audio_deleted_at` (descriptors, processes and mounts,
+# not file names). Tests that record a verified cleanup use it verbatim.
+PROVEN_CLEANUP: dict[str, object] = cleanup.CleanupEvidence(
+    workdir_absent=True, tmp_is_tmpfs=True, live_processes=0, open_descriptors=0,
+    mounts_under_workdir=0, unreadable_processes=0,
+).as_json()
+
 
 def _synthetic_audio() -> bytes:
     if shutil.which("espeak-ng") or shutil.which("espeak"):
@@ -282,7 +289,7 @@ async def test_expired_lease_blocks_publication_but_not_cleanup_evidence(
     assert (await _row(pool, attempt))["cleanup_status"] == "pending"
     # Nadie tomó el intento: la evidencia real de limpieza sí se puede registrar.
     assert await lease.record_cleanup(
-        pool, owned, verified=True, evidence={"verified": True},
+        pool, owned, verified=True, evidence=PROVEN_CLEANUP,
     )
 
 
@@ -332,6 +339,36 @@ async def test_only_one_supervisor_acquires_the_lease(pool: asyncpg.Pool) -> Non
     winners = [r for r in results if r is not None]
     assert len(winners) == 1
     assert winners[0].fencing_token == 2
+
+
+async def test_api_preclaim_receiving_is_adopted_by_the_receive_acquire(
+    pool: asyncpg.Pool,
+) -> None:
+    # A2.14: `api` claims awaiting_upload -> receiving before the first byte; ingest adopts
+    # the claim with the same fencing token and increments it, so a replay still loses.
+    attempt = await _seed(pool)
+    audio_id = await pool.fetchval(
+        "SELECT audio_id FROM ingestion_attempts WHERE id = $1", attempt.attempt_id,
+    )
+    await pool.execute(
+        "UPDATE ingestion_attempts SET status = 'receiving' WHERE id = $1",
+        attempt.attempt_id,
+    )
+
+    taken = await lease.acquire_bound(
+        pool, user_id=attempt.user_id, audio_id=audio_id, attempt_id=attempt.attempt_id,
+        expected_token=1, instance="ingest:a", ttl=timedelta(seconds=30),
+    )
+    replay = await lease.acquire_bound(
+        pool, user_id=attempt.user_id, audio_id=audio_id, attempt_id=attempt.attempt_id,
+        expected_token=1, instance="ingest:b", ttl=timedelta(seconds=30),
+    )
+
+    assert taken is not None and taken.fencing_token == 2
+    assert replay is None
+    row = await _row(pool, attempt)
+    assert row["status"] == "receiving"
+    assert row["owner_instance"] == "ingest:a"
 
 
 async def _audio_id(pool: asyncpg.Pool, attempt: Attempt) -> uuid.UUID:

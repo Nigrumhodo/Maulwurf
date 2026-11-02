@@ -1,0 +1,52 @@
+# S4.2 local gates — 2026-10-31T21:56:27Z
+
+environment: Linux 7.0.0-39-generic, Python 3.12.3; no Docker, PostgreSQL or Redis in this sandbox
+espeak-ng on PATH: no
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 78 source files
+
+$ uv run pytest tests -q -m "not integration and not provider and not load"
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_synthetic_audio.py::test_same_seed_is_byte_identical - Runt...
+FAILED tests/test_synthetic_audio.py::test_different_seed_changes_bytes - Run...
+FAILED tests/test_synthetic_audio.py::test_wav_is_pcm_s16_mono - RuntimeError...
+FAILED tests/test_synthetic_audio.py::test_expected_text_is_the_requested_phrase
+FAILED tests/test_synthetic_audio.py::test_spectrum_is_not_a_pure_tone - Runt...
+FAILED tests/test_synthetic_audio.py::test_does_not_write_wav_to_disk - Runti...
+FAILED tests/test_synthetic_audio.py::test_leading_dash_is_spoken_not_espeak_flags
+FAILED tests/test_synthetic_audio.py::test_rejects_overlong_utterance - Asser...
+8 failed, 203 passed, 76 deselected, 2 warnings in 4.83s
+
+Known environment-only failures (not introduced by this change): the 8
+`test_synthetic_audio.py` cases need espeak-ng. The baseline run before the
+change reported the same 8 failures and 190 passed. Error cause:
+E       RuntimeError: espeak-ng is required for synthetic audio (S1.A1). Install the system package (espeak-ng on Linux/macOS; espeak-ng on Windows) and ensure it is on PATH.
+FAILED tests/test_synthetic_audio.py::test_same_seed_is_byte_identical - Runt...
+1 failed in 0.09s
+
+# S4.2 fix3 local gates — 2026-11-01T01:05Z
+
+environment: Linux, Python 3.12.3; no Docker/PostgreSQL/Redis; espeak-ng on PATH: no
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 81 source files
+
+$ uv run pytest tests -q -m "not integration" \
+    --ignore=tests/test_synthetic_audio.py --ignore=tests/test_asr_cost.py
+249 passed, 89 deselected, 2 warnings in 16.42s
+
+The ignored modules fail only because espeak-ng is absent in this sandbox
+(`tests/test_asr_cost.py` also generates synthetic speech). CI installs it.
+
+Quality CI run 41259864534 (head 6b7969b) green in all 17 checks:
+python-unit (ingest) 268 passed / 6 skipped; integration (ingest) 77 passed /
+11 skipped / 1 xfailed.

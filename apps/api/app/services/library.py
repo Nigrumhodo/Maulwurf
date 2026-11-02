@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.db import bind_user
 from app.models import (
     Audio,
     IngestionAttempt,
@@ -27,11 +28,12 @@ from app.models import (
     Subject,
     Transcript,
 )
+from app.services import analysis_backfill, state_machine
 from app.services import progress as progress_service
 from app.services import runs as runs_service
-from app.services import state_machine
 from app.services.exports import srt_exportable
 from app.services.progress import ProgressSnapshot
+from app.services.quality import normalize_quality_warnings
 from app.services.tenant import get_owned
 
 
@@ -72,6 +74,7 @@ class TranscriptInfo:
     version: int
     timestamp_precision: str
     char_count: int
+    quality_warnings: tuple[dict[str, Any], ...]
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,9 @@ class AudioDetail:
     summary: AudioSummary
     transcript: TranscriptInfo | None
     srt_exportable: bool
+    # D3.5 can show the explicit «backfill/re-analysis» action without re-deriving the
+    # cleanup gate or the current stage state in the browser.
+    analysis_backfill_available: bool
 
 
 def _attempt_summary(attempt: IngestionAttempt | None) -> AttemptSummary | None:
@@ -94,13 +100,35 @@ def _attempt_summary(attempt: IngestionAttempt | None) -> AttemptSummary | None:
     )
 
 
+def _current_run(runs: list[ProcessingRun], *, stage: str, usable_version: int | None) -> bool:
+    """Whether the class has a run for the active transcript and the current versions."""
+    spec = runs_service.run_spec(stage)
+    return any(
+        run.stage == stage
+        and run.transcript_version == usable_version
+        and run.config_version == spec.config_version
+        and run.prompt_version == spec.prompt_version
+        for run in runs
+    )
+
+
 def _derive_stages(
     audio: Audio, runs: list[ProcessingRun], *, usable_version: int | None
 ) -> dict[str, str]:
-    """Per-stage state from the persisted runs; `usable_version` scopes obsolete rows out."""
+    """Per-stage state from the runs of the active transcript and current versions.
+
+    A run produced by an older transcript/config version is durable history, not the state
+    of the class today: ignoring it makes a version change read as owed work (S3.4), so
+    reanalysis is visible instead of being masked by a stale `succeeded`.
+    """
     return {
         stage: state_machine.stage_status(
-            [run for run in runs if run.stage == stage],
+            [
+                run
+                for run in runs
+                if run.stage == stage
+                and run.config_version == runs_service.run_spec(stage).config_version
+            ],
             required=stage in audio.required_stages,
             active_transcript_version=usable_version,
         )
@@ -248,6 +276,16 @@ async def list_audios(
     return summaries
 
 
+def _quality_warnings(transcript: Transcript) -> tuple[dict[str, Any], ...]:
+    """ASR signals from the persisted commit, normalized before leaving the API (S3.6).
+
+    `quality_flags` is the ingestion-owned quality column; `warnings` is its historical
+    twin. If one is empty or malformed the other is tried, but nothing else is invented.
+    """
+    normalized = normalize_quality_warnings(transcript.quality_flags)
+    return normalized or normalize_quality_warnings(transcript.warnings)
+
+
 async def get_audio_detail(
     db: AsyncSession, *, user_id: uuid.UUID, audio: Audio
 ) -> AudioDetail:
@@ -270,6 +308,7 @@ async def get_audio_detail(
                 version=transcript.version,
                 timestamp_precision=transcript.timestamp_precision,
                 char_count=transcript.char_count,
+                quality_warnings=_quality_warnings(transcript),
             )
             segments = await segments_for(db, user_id=user_id, transcript_id=transcript.id)
             exportable = srt_exportable(
@@ -300,7 +339,29 @@ async def get_audio_detail(
         stages=stages,
         aggregate_status=_aggregate(audio, attempt, stages, usable_version=usable),
     )
-    return AudioDetail(summary=summary, transcript=transcript_info, srt_exportable=exportable)
+    return AudioDetail(
+        summary=summary,
+        transcript=transcript_info,
+        srt_exportable=exportable,
+        analysis_backfill_available=analysis_backfill.analysis_backfill_available(
+            has_usable_transcript=usable is not None,
+            attempt_status=attempt.status if attempt is not None else None,
+            cleanup_status=attempt.cleanup_status if attempt is not None else None,
+            analyze_state=stages[runs_service.ANALYSIS_STAGE],
+            has_current_run=_current_run(
+                runs.get(audio.id, []),
+                stage=runs_service.ANALYSIS_STAGE,
+                usable_version=usable,
+            ),
+            analysis_already_required=analysis_backfill.analysis_required(
+                audio.required_stages
+            ),
+            has_previous_run=any(
+                run.stage == runs_service.ANALYSIS_STAGE
+                for run in runs.get(audio.id, [])
+            ),
+        ),
+    )
 
 
 async def active_transcript(
@@ -399,6 +460,9 @@ async def stream_progress(
     STATE, so a reconnect re-sends `snapshot` regardless of `Last-Event-ID`; `done`/`error` is
     the single terminal frame, after which the connection closes.
     """
+    # Bind the tenant in the task that opens the short sessions (A2.17), independent of
+    # whether the request context was inherited by the streaming task.
+    bind_user(user_id)
     loop = asyncio.get_running_loop()
     started = loop.time()
     last_heartbeat = started

@@ -48,6 +48,9 @@ docs/PLANE_MCP.md
 *.webm
 *.aac
 
+# --- E2E smoke (J2.6): ephemeral TLS material, generated per run ---
+.e2e-tls/
+
 # --- Cobertura / dumps ---
 .coverage
 coverage/
@@ -63,3 +66,6 @@ Thumbs.db
 A2.3_CONTEXT.md
 A2.4_CONTEXT.md
 docs/context/
+
+# --- G4 evaluation (L2.7): raw artifacts contain question/answer text ---
+var/eval/

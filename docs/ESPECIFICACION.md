@@ -224,6 +224,9 @@ Gmail).
   without necessarily ending the application session.
 - Profile: IANA timezone, local digest time, and opt-in preferences. Each class's timezone is
   captured as a snapshot so profile changes do not alter already-extracted dates.
+  `GET /me` returns that profile plus the non-cacheable CSRF bootstrap and `PATCH /me`
+  updates only the IANA timezone; `display_name` comes from the Google profile and
+  integration state is served by `GET /integrations/status`.
 - All access, SSE, tools, and jobs are isolated by `user_id`; the backend takes it from the
   session, never from the user payload or the LLM.
 
@@ -259,7 +262,15 @@ retained file.
   `privacy_notice_version`, `cloud_processing_accepted=true`, and
   `third_party_voice_acknowledged=true`; the server records user, version, instant, and
   declared providers. A missing or outdated version is rejected before reserving capacity or
-  accepting bytes.
+  accepting bytes. Language codes are compared case-insensitively and stored lowercase.
+- The ephemeral attempt deadlines come from the published capabilities TTL
+  (`upload_start_minutes`, `receive_minutes`, `asr_minutes`). S4.4 publishes the effective
+  **10 / 30 / 60 min** with `docs/eval/ttl-benchmark.md` as `ttl_source_report`; this TTL
+  publication is independent of D4's size/duration limits, so `limits_validated=false` can
+  coexist with effective TTLs. A publication with only one or two TTLs is rejected; only an
+  explicit all-null TTL publication keeps the provisional upload window and invents no
+  receive/ASR deadline. The API and the ingestion service share one byte limit and refuse to
+  start when their two configuration names disagree.
 - `POST /audios` only validates metadata/consent, reserves RAM capacity, and creates the
   attempt; it cannot yet decide deduplication because it has not received the content. The
   binary upload uses `PUT` with `fetch`, not a framework upload helper or `UploadFile` with default spooling to
@@ -274,9 +285,12 @@ retained file.
   with an opaque `variant_confirmation_token`, single use, short expiry, and bound to
   user/hash/metadata/previous class. A second `POST /audios` with that token creates a variant
   reservation and requires uploading again; when the second `PUT` finishes, the server checks
-  that the hash matches before transcribing. Audio is never retained while awaiting a
-  decision. A confirmed variant creates another class without mutating existing evidence or
-  tasks. Transactional uniqueness resolves concurrent uploads toward the canonical class.
+  that the hash matches before transcribing (`422 variant_hash_mismatch` otherwise). An
+  unknown, expired, consumed or mismatched token is rejected with the same opaque
+  `422 validation_failed` so its existence and state are never disclosed. Audio is never
+  retained while awaiting a decision. A confirmed variant creates another class without
+  mutating existing evidence or tasks. Transactional uniqueness resolves concurrent uploads
+  toward the canonical class.
 - Ephemeral ASR:
   `awaiting_upload → receiving → transcribing → transcript_committed_cleanup_pending → succeeded`;
   from the active states it can also end in `requires_reupload | rejected | cancelled`.
@@ -318,7 +332,18 @@ retained file.
 - Ingestion service with private per-attempt `tmpfs` temporaries, resource reservation, task
   supervisor, and independent cleanup. Do not queue ASR in ARQ or pass temporary paths to
   remote workers. F0/F1 deploys a single ingestion instance; scaling requires routing to the
-  reservation owner, without moving files. The upload URL is same-origin relative and
+  reservation owner, without moving files. The supervisor runs one recovery pass every 60 s
+  from the ingest lifespan and re-reads the durable admission latch before each pass; passes
+  never overlap. Defaults are a 30 s lease with a 10 s heartbeat (at least three renewals per
+  lease), and a configuration without that margin is rejected.
+- Cleanup admission and verification: `cleanup_status=verified` requires proof that no
+  descriptor, process, or mount survives the attempt directory; an expired lease never
+  verifies cleanup. A persisted `cleanup_status=failed` row closes admission on the instance
+  (sticky for the process) and raises `cleanup_failed`; an unreadable or malformed latch
+  fails closed until a clean read. A cleanup that cannot be persisted (driver error or a
+  moved fencing token) raises `cleanup_unrecorded` and a failure metric without closing
+  admission, because no durable `failed` row exists; `cleanup_status=pending` blocks only the
+  text outbox. The upload URL is same-origin relative and
   validated with session/CSRF/attempt_id; it is not a public bearer token and does not allow
   choosing internal hosts.
 - Class library with transcript reader, language, status, and the permanent "audio not
@@ -333,7 +358,13 @@ optional `variant_confirmation_token` → `audio_id`, `attempt_id`, URL, and exp
 `POST /audios/{id}/reupload` (only without a usable transcript);
 `POST /audios/{id}/attempts/{attempt_id}/cancel`; `DELETE /audios/{id}`;
 `GET /audios/{id}/transcript.txt`; `GET /audios/{id}/transcript.srt` (only with valid
-timestamps).
+timestamps); `GET /audios/{id}/runs` (durable run history with the transcript, configuration
+and prompt version each run applied, its status/timestamps and whether it is the run of the
+active transcript and current versions). The `GET /audios/{id}` detail reports the derived
+per-stage states, whether the explicit analysis backfill is available, and the non-sensitive
+ASR quality warnings (`code` from the closed ingestion set `repetition`, `empty_segments`,
+`low_confidence`, plus counts) for the inbox/class page; the backfill queue is the `analyze`
+stage over the persisted transcript, never a reupload or retranscription.
 
 ---
 
@@ -371,9 +402,9 @@ traceability, without retaining audio.
   model/configuration, transcript version, and precision `word | segment | none`. Do not
   publish an incomplete transcript as complete. An empty/silent response is a result without
   usable text, not a hallucination to fill in.
-- Detect repetitions/silences as quality signals; do not automatically delete legitimate
-  phrases from the teacher. Store warnings and traceable normalized text; low quality
-  requires review before proposing dates/tasks.
+- Detect repetitions, empty segments and low confidence as quality signals; do not
+  automatically delete legitimate phrases from the teacher. Store warnings and traceable
+  normalized text; low quality requires review before proposing dates/tasks.
 - Release buffers, close files/client, and delete original/converted/fragments in `finally`
   when ASR ends (success or error). No core dumps or persistent swap; read-only root
   filesystem and `TMPDIR` on `tmpfs`. This prevents recoverable persistence on disk; it does
@@ -395,7 +426,8 @@ traceability, without retaining audio.
   event loop, with tested cancellation/deadlines.
 - Heartbeat and lease per attempt in the DB. The local supervisor cleans expired folders even
   if the DB fails; a reconciler marks dead attempts and publishes work over text if the
-  transaction already committed.
+  transaction already committed. Defaults are a 30 s lease and a 10 s heartbeat, with at least
+  three renewals inside one lease; the periodic recovery pass runs every 60 s.
 - Text outbox created alongside the transcript, enabled after cleanup; the reconciler
   verifies the attempt's release before dispatching the required stages (index in F1, also
   analysis from F2). The attempt only moves to `succeeded` after commit and verified cleanup.
@@ -438,8 +470,16 @@ dates, recommendations) with traceability to the source.
       "all_day": true,
       "date_status": "resolved",
       "confidence_score": 0.92,
-      "fuente": { "spans": [{ "segment_id": "…", "inicio_char": 0, "fin_char": 48 }] },
-      "cita_textual": "the midterm exam will be on Monday, September 21"
+      "fuente": {
+        "spans": [
+          {
+            "segment_id": "…",
+            "inicio_char": 0,
+            "fin_char": 48,
+            "cita_textual": "the midterm exam will be on Monday, September 21"
+          }
+        ]
+      }
     }
   ],
   "resumen_clase": "…3 to 5 sentences…",
@@ -456,12 +496,14 @@ dates, recommendations) with traceability to the source.
 - `confidence_score` is an uncalibrated signal, **not a certainty probability** and not
   permission to auto-schedule. Pydantic validation plus deterministic rules: dates, enums,
   ranges, and segment membership in class/tenant/version.
-- The LLM returns allowed IDs and spans/literal quote; offsets
-  `[inicio_char, fin_char)` in Unicode code points of each segment's immutable text (not
-  bytes or JavaScript UTF-16 indices). The backend reconstructs the evidence from the ordered
-  spans, checks the quote against the text, and resolves `audio_id` and times from the DB. Do
-  not trust invented timestamps or IDs. The transcript and the teacher's instructions are
-  untrusted data, not instructions for executing tools.
+- The LLM returns allowed IDs and spans/literal quotes; offsets
+  `[inicio_char, fin_char)` are Unicode code points of each segment's immutable text (not
+  bytes or JavaScript UTF-16 indices). Every evidence span carries its own mandatory
+  `cita_textual`, which must be exactly `segment_text[inicio_char:fin_char]`; there is no
+  item-level quote. The backend reconstructs the evidence from the ordered spans, checks
+  each quote against the text, and resolves `audio_id` and times from the DB. Do not trust
+  invented timestamps or IDs. The transcript and the teacher's instructions are untrusted
+  data, not instructions for executing tools.
 - **Recommendations** never go straight to Calendar: they are manually converted into a
   task/study block with a date and explicit confirmation.
 - Generate a summary (3–5 sentences) and topics; keep evidence per item. Windowed analysis
@@ -488,7 +530,9 @@ dates, recommendations) with traceability to the source.
   altering the active fields. Confirming receives `revision_id` and `expected_version`; in
   one transaction it promotes the revision, increments `tasks.version`, and creates the
   outbox. A stale revision → `409 version_conflict`. Re-analysis uses the same mechanism and
-  never activates partial results.
+  never activates partial results. Completing or dismissing also increments `tasks.version`
+  (a Calendar job queued for the previous version is discarded) and keeps the linked event
+  with a notice.
 
 **Endpoints:** `GET /tasks?status=&subject_id=&due_from=&due_to=`; `GET /tasks/{id}`;
 `PATCH /tasks/{id}` with `version`; `POST /tasks/{id}/confirm` with
@@ -525,9 +569,12 @@ week?").
 - Date/time/title changes to an already-confirmed task stay in a pending revision until a new
   explicit confirmation; a local `PATCH` does not write to Google. When confirming the
   revision, trigger a `patch` of the linked event with version/ETag control; do not silently
-  overwrite changes made in Google. Completing/dismissing a task cancels future reminders but
-  keeps its event with a notice unless remote deletion is explicitly requested. Deleting a
-  class also does not delete events by default.
+  overwrite changes made in Google. Persist the ETag Google returned from the last successful
+  write (`tasks.calendar_etag`) and require it as the baseline: if the current ETag differs,
+  the event was edited outside Maulwurf and the write is refused (flagged for review); a row
+  without a baseline also fails closed instead of assuming "no change". Completing/dismissing
+  a task cancels future reminders but keeps its event with a notice unless remote deletion is
+  explicitly requested. Deleting a class also does not delete events by default.
 - Agenda contract: the due date and the Calendar block are not the same thing. Store
   `event_start_at/event_end_at` for timed events, or
   `event_start_date/event_end_date_exclusive` for all-day; mutually exclusive pairs with end
@@ -561,7 +608,9 @@ week?").
   not draw the task and its linked event twice.
 
 **Endpoints:** `GET /calendar/events?from&to`, `POST /calendar/sync` (force),
-`GET /calendar/conflicts`.
+`GET /calendar/conflicts`. A manual refresh has a per-user cooldown (`429 rate_limited`
+with `Retry-After`) and never holds a database row lock across the Google reads; a bounded
+lock wait answers a transient `503`.
 
 ---
 
@@ -575,6 +624,15 @@ week?").
   boundaries. If a sentence exceeds the maximum, split it with preserved character offsets.
   Store `segment_ids`, spans, transcript version, and nullable derived times; a chunk is not
   the minimum evidence unit.
+- **Persisted `Chunk` contract:** `audio_id`, `transcript_id`, `transcript_version`,
+  `index_version`, `ordinal`, `content`, `char_start`, `char_end`, `token_count`, nullable
+  `t_start`/`t_end`, and at least one `segment_id` link. Every field maps to a column of
+  `chunks`/`chunk_segments`; `user_id` comes from the authenticated tenant and `tsv` is
+  derived at write time, so neither is part of the contract. Each link stores its
+  `chunk_segments.overlap_span` payload: segment-local `segment_ordinal`, `inicio_char`,
+  `fin_char` and an optional `overlap` region `{inicio_char, fin_char, tokens}` shared with
+  the previous chunk. Offsets are Unicode code points (`[start, end)`), never UTF-16 units
+  or bytes; `content` is exactly the transcript slice of `[char_start, char_end)`.
 - Batch embeddings in the `index(audio_id)` job; unique key per chunk and embedding version.
   Create a new index generation and activate it atomically when complete; do not mix
   versions/dimensions or expose a partial index.
@@ -682,9 +740,15 @@ consults the persisted message; it does not re-run the LLM with the same
   or another provider is out of scope and requires a new decision, privacy/retention review,
   delivery contract, budget, and a joint update of the specification and plan.
 - **Anti-spam:** group reminders and deduplicate scheduling with a unique key
-  `(user_id, tipo, task_id, due_version, occurrence)`. Digest per user/local date. Changing
-  the due date/preferences cancels stale future occurrences; never send all expired
-  thresholds retrospectively for a newly confirmed task.
+  `(user_id, tipo, task_id, due_version, occurrence)`. Digest per user/local date. A manual
+  repetition (a test send or a warned resend) is an audited occurrence too and carries an
+  `occurrence_seq` inside the same identity: `0` is the scheduled occurrence and each manual
+  repetition takes the next number, so automatic dedupe stays exact and a resend never
+  mutates the original. Changing the due date/preferences cancels stale future occurrences;
+  never send all expired thresholds retrospectively for a newly confirmed task. A future
+  occurrence cancelled by a preference is re-armed only when the same task generation is
+  scheduled again with that threshold enabled; it was never delivered. A `sending`, `sent`,
+  `failed` or `delivery_unknown` occurrence is never revived.
 - Gmail does not offer exactly-once delivery with `gmail.send`: if the response is lost
   after sending, mark `delivery_unknown` and do not retry automatically to avoid duplicates.
   Show it in the panel; a manual resend warns about the risk. A stable `Message-ID` does not
@@ -697,7 +761,13 @@ consults the persisted message; it does not re-run the LLM with the same
 
 - Native ARQ cron scheduler with a single active role; it computes due dates/local times
   every minute and claims rows atomically. Target send SLA within 15 min, not second-level
-  exactness; multiple workers protected by uniqueness and leases.
+  exactness; multiple workers protected by uniqueness and leases. Lease expiry and due
+  comparisons use the database clock, not each host's wall clock.
+- Every atomic claim persists the election's fencing token on the occurrence
+  (`claimed_by_fence`). The sender validates it against the live election before delivering,
+  so a row claimed by a superseded scheduler cannot be sent under the current authority.
+  Until the Gmail sender consumes `sending`, the scheduler runs disabled so no occurrence is
+  labeled `delivery_unknown` for a send that never started.
 - HTML + plain-text templates, escaped content and minimal data; recipient limited to the
   user's verified email in MVP. Do not expose arbitrary sending to the LLM.
 - `notifications`: `scheduled_at`, `due_version`, `dedupe_key`,
@@ -705,7 +775,8 @@ consults the persisted message; it does not re-run the LLM with the same
   `provider_message_id`, attempts, and a redacted error. An expired `sending` lease counts
   as uncertain delivery, not automatically pending.
 
-**Endpoints:** `PATCH /me/notifications` (preferences); `POST /notifications/test`;
+**Endpoints:** `GET /me/notifications` (current preferences) and `PATCH /me/notifications`
+(preferences); `POST /notifications/test`;
 `GET /notifications?status=&from=&to=&limit=&cursor=`; `POST /notifications/{id}/resend`
 with `{acknowledge_duplicate_risk:true}`. Resending creates a new audited occurrence and
 never changes a `delivery_unknown` delivery to `pending`.
@@ -792,8 +863,9 @@ sequenceDiagram
 audio before the commit requires a re-upload. If the commit exists and the process dies
 before publishing, the reconciler cleans/verifies the attempt and enables the outbox without
 retranscribing. Analysis and index are retried independently from text (initial maximum 3
-for transient errors, backoff with jitter). An analysis failure does not block chat with a
-valid index. Calendar keeps `confirmed` with pending/failed/blocked syncing; the worker
+for transient errors, backoff with jitter); provider 4xx responses other than 408/429,
+protocol/configuration errors and non-retryable database errors are permanent and are not
+retried. An analysis failure does not block chat with a valid index. Calendar keeps `confirmed` with pending/failed/blocked syncing; the worker
 reconciles the remote ID before inserting. Redis can be lost: the DB/outbox allow rebuilding
 durable work, **not** rebuilding audio. The UI does not declare a stage done or a temporary
 deleted without the corresponding confirmation.
@@ -883,6 +955,7 @@ erDiagram
         date event_end_date_exclusive
         text calendar_id
         text calendar_event_id
+        text calendar_etag
     }
     CHUNKS {
         uuid id PK
@@ -917,20 +990,30 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   reception/ASR/cleanup timestamps, and a typed error. It also records
   `privacy_notice_version`, `cloud_processing_accepted_at`,
   `third_party_voice_acknowledged_at`, and the declared providers' set/versions.
-  `audio_deleted_at` only after verifying the absence of temporaries. Proposed initial
-  expirations: 10 min to start the upload, 30 min of reception, 60 min from complete
-  reception for ASR; adjust with the F0 benchmark and publish effective limits. Sweeper
-  target every 60 s; normal cleanup is immediate, it does not wait for the TTL.
+  `audio_deleted_at` only after verifying the absence of temporaries. A persisted
+  `cleanup_status=failed` blocks new admissions and becomes the durable latch; `pending`
+  blocks only the text outbox. Effective expirations: 10 min to start the upload, 30 min of
+  reception, 60 min from complete reception for ASR, published with the S4.4 benchmark and
+  its `ttl_source_*` fields; changing them requires a new benchmark and the lead's approval.
+  Sweeper target every 60 s; normal cleanup is immediate, it does not wait for the TTL.
 - `transcripts`: unique `(audio_id, version)`, text, requested language,
   provider/model/configuration, `timestamp_precision`, quality, and summary/topics with the
   analysis version. `segments`: stable ID within a version, ordinal, text, and character
   offsets; `t_inicio/t_fin` nullable, with `0 ≤ start < end ≤ duration` when present. Do not
   duplicate a mutable segments JSON and rows as two sources of truth.
 - `chunk_segments` links chunks to segments/spans and keeps evidence even with overlap.
+  `overlap_span` is a validated JSON object with the segment-local `segment_ordinal`,
+  `inicio_char`, `fin_char` and an optional `overlap` `{inicio_char, fin_char, tokens}`
+  sub-range shared with the previous chunk; it is omitted when there is no overlap. A
+  chunk's coverage of a segment is therefore self-describing, and the derived chunk times
+  never publish a zero-length range (`t_start < t_end` when both are present).
   `embeddings`: chunk, model, dimension, version, and fixed-dimension vector; HNSW per
   compatible generation. `processing_runs` unique per
-  `(audio_id, stage, transcript_version, config_version)` with status and error. Active
-  versions are published atomically.
+  `(audio_id, stage, transcript_version, config_version)` with status and error; an
+  `analyze` run also stores its `prompt_version`, and the configuration version is derived
+  from it so a prompt change creates a new run. A version bump never overwrites the previous
+  row: old runs remain queryable and only the run of the active transcript and current
+  versions feeds the derived stage state. Active versions are published atomically.
 - `tasks.status`: `pending|needs_review → confirmed|dismissed`;
   `confirmed → completed|dismissed`. Resolve date/quality before confirming; confirming
   requires a valid date and checked evidence for extracted tasks. `calendar_sync_status`
@@ -938,10 +1021,21 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   source, but normative provenance lives in `task_sources` to support chat proposals with
   zero, one, or several classes.
 - `task_sources` links task, audio, transcript version, segment, and validated span;
-  deleting a source invalidates/purges pending proposals that depend on it.
+  deleting a source invalidates/purges pending proposals that depend on it. The reference is
+  self-consistent, not merely same-tenant: `(user_id, audio_id, transcript_id)` pins the
+  class of the cited transcript, `(user_id, transcript_id, transcript_version)` pins that
+  transcript's version, and `(user_id, transcript_id, segment_id)` pins a segment that
+  belongs to it, so a citation can never mix another class, version or transcript of the
+  same user.
   `task_revisions` stores `base_task_version`, proposed fields, state
   `pending_confirmation|activated|discarded`, and a tenant-aware relation to the run that
-  produced it.
+  produced it. Its unique key `(task_id, base_task_version, revision_type, run_id)` is
+  intentionally NULL-distinct: `run_id` is NULL for `edit_of_confirmed`, so several pending
+  edits of the same base version are legitimate proposals until one is confirmed; a repeated
+  reanalysis of the same run is still rejected. Only the explicit confirm promotes one
+  revision and bumps `tasks.version`, so the rest answer `409 version_conflict`. Enforcing
+  one edit per base version would require `NULLS NOT DISTINCT` (PostgreSQL 15+) and a new
+  revision of this contract.
 - Date CHECK: resolved all-day → only `due_date`; resolved with time → only `due_at`;
   ambiguous/no date → both null. Store the original date text, review reason, due version,
   and timezone snapshot. Persist `event_start_at/event_end_at` or
@@ -950,9 +1044,13 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   revision. `confidence_score` nullable on manual tasks, bounded [0,1], no probabilistic
   semantics.
 - `calendar_events`: key `(user_id, calendar_id, event_id)`; nullable link to task and
-  source `google|maulwurf`. A task has at most one linked event; other Google events have no
-  task. Persist the write calendar in settings, the selected read calendars, and sync
-  status/ETag/coverage.
+  source `google|maulwurf`. The link is tenant-pinned (`(user_id, task_id) -> tasks`) and
+  `ON DELETE SET NULL (task_id)`: deleting the task unlinks the mirror row and keeps the
+  event. A task has at most one linked event; other Google events have no task. Persist the
+  write calendar in settings, the selected read calendars, and sync status/ETag/coverage;
+  a blank (empty or whitespace-only) ETag is unknown, never a conditional-write baseline.
+  Blank calendar ids, event ids, remote statuses and array elements are rejected under the
+  same whitespace-aware criterion.
 - `messages.citas` references
   `{audio_id, transcript_version, chunk_id, segment_id, t_inicio, t_fin}` and validated
   text; normalize links in `message_sources` to locate/purge derived responses when deleting
@@ -998,7 +1096,11 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   is not used as an implicit JWT/JWKS issuer.
 - Distributed rate limit and per-user quotas: audio bytes/minutes, ingestion slots, LLM
   tokens, chat, and Google. Admission rejects before receiving audio when there is no
-  capacity (`429`/`503` with retry), without a queue of files waiting on disk.
+  capacity (`429`/`503` with retry), without a queue of files waiting on disk. Every
+  active limit answers `429` with `Retry-After`; a limiter or capacity outage answers
+  `503` with `Retry-After` (fail closed). Numbers come only from recorded decisions
+  (M5/M6/M7 and D4/D5); authentication and incremental consent have no published number
+  yet, so their fixed-window mechanism stays configuration-driven and unset means no limit.
 - Ingestion defense per M2/M3: streaming parser, byte/duration/time limits, ffmpeg sandbox,
   random internal names. Proxy without disk buffering, caching, or body capture; do not use a
   CDN that stores upload requests.
@@ -1006,19 +1108,29 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   duration, sizes, status, and redacted errors. Disable core dumps, persistent swap, and
   memory snapshots/hibernation on ingestion hosts; tmpfs alone is **not** enough if it can
   swap.
-- Browser: `Cache-Control: no-store` for private content; the service worker excludes
-  upload, API, transcripts/chat, and SSE responses; do not store audio in IndexedDB/Cache
-  Storage. Release `File`/object URLs on finish/cancel; the user's local original is not
-  deleted by the application.
+- Browser: `Cache-Control: no-store` for private content, guaranteed structurally on every
+  API response (routes, errors, redirects and SSE) rather than per route; the service worker
+  excludes upload, API, transcripts/chat, and SSE responses; do not store audio in
+  IndexedDB/Cache Storage. Release `File`/object URLs on finish/cancel; the user's local
+  original is not deleted by the application.
 - Account deletion: `DELETE /me` returns `202 {deletion_operation_id}`. The flow applies
   tombstones, blocks sessions/jobs, leaves the initiating session in a restricted mode (check
-  the deletion status and sign out; other sessions are revoked), requests authorized remote
-  deletions while credentials exist, purges data, and then removes tokens.
-  `GET /me/deletion/{id}` exposes `pending|completed|completed_with_remote_failures`; the
-  residual record keeps only remote IDs, authorization, status, redacted error, and
-  expiration. Do not delete other people's events; without permissions, deletion in Google
-  is not guaranteed.
-- Backups only of encrypted text/metadata, proposed maximum retention 30 days, and a
+  the status, resume an authorized operation, and sign out; other sessions are revoked),
+  claims the operation atomically, requests authorized remote deletions while credentials
+  exist, purges data, and then removes tokens. `GET /me/deletion/{id}` exposes
+  `pending|running|completed|completed_with_remote_failures`; a purge failure after the
+  tombstone still answers `202` and stays resumable through
+  `POST /me/deletion/{id}/resume` (CSRF/Origin checked, owner-scoped). An already-succeeded
+  remote delete is never repeated. The residual record keeps only remote IDs, authorization,
+  status, redacted error, and expiration; an hourly batched job deletes both residual tables
+  (`account_deletions`, `google_remote_operations`) once `expires_at` passes (30-day window,
+  D8 approved in A4.5). Once that job removes the operation row, the session link is
+  cleared and the restricted cookie gets `401` instead of `404`. `delete_maulwurf_events`
+  defaults to `false`: local tasks and
+  links are purged, but Maulwurf-created events remain in the user's Google calendar unless
+  the user explicitly opts in. Do not delete other people's events; without permissions,
+  deletion in Google is not guaranteed.
+- Backups only of encrypted text/metadata, maximum retention 30 days (D8 approved), and a
   deletion log reapplied on restore. The UI distinguishes deletion of active data, backup
   expiration, and data already sent to third parties. Consent for third-party voices and
   cloud processing before the upload.
@@ -1041,7 +1153,8 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   payloads.
 - Metrics: RAM/tmpfs/slots, ASR latency, temporary age, failed cleanup, expired leases,
   outbox lag, retries, tokens/cost, recall/invalid citations, sync/uncertain delivery.
-  Immediate alert when cleanup is not met; per-stage failure panel.
+  Immediate alert when cleanup is not met, including a cleanup that could not be persisted
+  (`cleanup_unrecorded`) and its failure metric; per-stage failure panel.
 - `GET /healthz` per process; the API's `GET /readyz` checks Postgres/Redis, and the
   ingestion one checks the DB, safe temporaries, cleanup, and operational capacity. Do not
   invoke paid providers on every healthcheck.
@@ -1143,11 +1256,11 @@ are not offered again as retention/autodetection options. Real pending items:
 | D1 | Personal deployment initially; confirm whether there will be a SaaS | Multi-tenant from F0. Google audience/consent and privacy review before opening to third parties |
 | D2 | Riva contract: exact languages, timestamps, formats/rate, limits, concurrency, quotas, and pricing | Blocking F0 spike; allowlist only with tested codes. `en`/`fr` appear in the provided example; they do not prove support for every needed language |
 | D3 | Provider retention/processing and permission for third-party voices | **D3-Audio** closes in F0 before real audio. **D3-Text** closes per provider/model before the first real transcript is sent to embeddings/LLM; changing provider reopens the decision |
-| D4 | Size/duration/deadlines and RAM per slot | 200 MiB/3 h target, initial lease values in §6; the F0 benchmark determines published limits and instance capacity |
+| D4 | Size/duration and RAM per slot | 200 MiB/3 h target and the lease values in §6; the F0 benchmark determines the published size/duration limits and instance capacity. The attempt TTLs are published separately by S4.4 (`docs/eval/ttl-benchmark.md`) and do not unblock D4 |
 | D5 | Quality/cost of the proposed LLM and embeddings | F1/F2 evaluation per language; do not assume valid JSON or high confidence implies accuracy |
 | D6 | Timestamps unavailable or insufficient at the endpoint | Blocks F1's temporal promise; decide validated ephemeral alignment or accept a text-only product. Do not implement a hidden fallback |
 | D7 | Minimum scopes and real Google behavior | **D7-CAL** before F2; **D7-MAIL** and uncertain delivery before F3. Each half requires a real contract and a protected account |
-| D8 | Text/chat retention and backups | Approve the policy before persisting the first non-synthetic transcript/chat; F3 validates restore, expiration, and reapplication of deletions |
+| D8 | Text/chat retention and backups | Approved (A4.5): encrypted text/metadata backups, a 30-day maximum that matches the residual deletion window, and a deletion log reapplied on every clean restore; never audio. F3 validates restore, expiration, and reapplication of deletions |
 
 Out of MVP/v1: diarization, URL/bot sources, collaboration, local mode, per-subject
 calendars, and other task managers. Future diarization would have to run during ingestion or

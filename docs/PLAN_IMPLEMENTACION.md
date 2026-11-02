@@ -111,10 +111,19 @@ alignment for G2-T; update spec, API, and UI in the same revision. No silent fal
   Redis, logs, traces, caches, or artifacts. Persist inspection evidence without audio.
 - [ ] Check that lease expiration does not mark cleanup as verified. Without evidence, block
   the outbox; on cleanup failure, stop local admission and alert.
+- [ ] Run one recovery pass every 60 s from the ingest lifespan, sequentially and without
+  overlap, re-reading the durable admission latch before each pass. Default lease is 30 s
+  with a 10 s heartbeat (at least three renewals per lease); reject an unsafe interval.
+- [ ] Require descriptor/process/mount absence before `cleanup_status=verified`. A persisted
+  `failed` cleanup is the durable latch: it closes admission, alerts and is not retried; an
+  unreadable or malformed latch fails closed until a clean read. A cleanup that cannot be
+  persisted (driver error or moved fencing token) stays `pending`, raises
+  `cleanup_unrecorded` plus its failure metric and does not close admission.
 
-**Exit:** immediate normal cleanup and supervisor recovery demonstrated; limits/TTL
-published. Sweeper target every 60 s, not an instant-deletion promise when the host is
-unreachable. Any detected persistence blocks the delivery.
+**Exit:** immediate normal cleanup and supervisor recovery demonstrated; effective TTLs
+published (S4.4) while size/duration limits stay with D4. Sweeper target every 60 s, not an
+instant-deletion promise when the host is unreachable. Any detected persistence blocks the
+delivery.
 
 ### F0.3 Application foundation
 
@@ -124,7 +133,8 @@ unreachable. Any detected persistence blocks the delivery.
   no audio storage. Initial single-instance ingestion; scaling with reservation affinity
   remains pending design/testing.
 - [ ] Google OAuth in the backend, opaque session, incremental scopes, encryption/rotation,
-  `GET /me` as a non-cacheable CSRF bootstrap, CSRF/Origin on every mutation, and
+  `GET /me` as a non-cacheable CSRF bootstrap (profile only; integration state is
+  `GET /integrations/status`), CSRF/Origin on every mutation, and
   logout/revocation. Do not condition chat on Calendar/Gmail scopes.
 - [ ] Tenant-aware migrations and subject CRUD. RLS, composite FKs, and pool/worker tests.
   Full model for attempts, transcript/segments, index/analysis versions, and outbox; later
@@ -141,14 +151,20 @@ because this plan exists.
 ### F1.1 Ingestion, text, and library
 
 - [ ] Implement `/ingestion/capabilities` with effective language/formats/limits/TTL. Form
-  without a preselected language, required metadata, and consent.
+  without a preselected language, required metadata, and consent. The attempt's ephemeral
+  deadlines (upload, receive, ASR) come from the published TTL; S4.4 publishes 10/30/60 min
+  with `docs/eval/ttl-benchmark.md` behind them, independently of D4. Only an explicit
+  all-null TTL publication keeps the provisional upload window. API and ingestion share one
+  byte limit and startup fails when the two configured names disagree.
 - [ ] `POST /audios` records versioned consent and reserves slot + attempt; it does not
   promise deduplication before knowing the hash. Authenticated `PUT` (terminated in the API
   and streamed to ingestion, ADR-0008) computes SHA-256 and
   answers 202 only after reception/admission, or 200/409 from dedup, always after cleanup.
   Compensate reservations if the DB fails.
 - [ ] Exact-identity deduplication in the `PUT`; a variant returns an opaque single-use
-  token, requires a second `POST` and re-upload, and verifies the hash again. Do not retain
+  token, requires a second `POST` and re-upload, and verifies the hash again. An unusable
+  token (unknown, expired, consumed or mismatched) answers the same opaque
+  `422 validation_failed` without disclosing its state. Do not retain
   audio while waiting for confirmation. Test concurrency, token expiration/reuse, and
   separation between users.
 - [ ] Transcribe sequential fragments with backpressure; reconcile boundaries and offsets
@@ -164,8 +180,12 @@ because this plan exists.
 
 ### F1.2 Retrieval and chat
 
-- [ ] Token-based chunking with traceable spans; versioned embeddings, HNSW cosine, and
-  per-language FTS with RRF. Tenant/version/tombstone filters in both branches.
+- [ ] Token-based chunking with traceable spans; the §M6 `Chunk` maps field by field to
+  `chunks`/`chunk_segments` (`content`, `transcript_id`, `index_version`, `char_start`,
+  `char_end`, `token_count`) and each link carries the validated `overlap_span` JSON
+  (`segment_ordinal`, segment-local `inicio_char`/`fin_char`, optional overlap region).
+  Versioned embeddings, HNSW cosine, and per-language FTS with RRF. Tenant/version/tombstone
+  filters in both branches.
 - [ ] `GET /search` exposes the shared `SearchService` with plain-text snippets, nullable
   segment times only when reliable, and an opaque `next_cursor` over the bounded 60-hit RRF
   window (`limit` 1..50, default 8; no deep pagination). A per-user Redis quota is checked
@@ -193,8 +213,12 @@ a test gRPC server.
 ## 5. F2 — Action: extraction and Calendar
 
 - [ ] Windowed analysis, Pydantic schema, aggregation/dedupe, and atomic active review.
-  Extraction based on class date/timezone; Unicode spans per segment and literal evidence
-  checking.
+  Extraction based on class date/timezone; Unicode spans per segment, a mandatory verbatim
+  quote per evidence span and literal evidence checking.
+- [ ] Versioned analysis runs: each `processing_runs` row records the transcript,
+  configuration and prompt version it applied; a version change creates a new run while
+  old runs remain queryable, and reanalysis reprocesses only the stages whose version
+  changed.
 - [ ] New classes require independent analysis and index. Explicit backfill over text for F1
   classes; no re-upload. Analysis failure allows chat if the index is valid, and vice versa
   for task review.
@@ -213,12 +237,14 @@ a test gRPC server.
 - [ ] Complete paginated reading of the -7/+60 day window, recurrences/deletions, atomic
   publication, and visible coverage/freshness. Do not combine filters incompatible with
   syncToken.
+- [ ] Bound the manual refresh: per-user cooldown (`429` with `Retry-After`), no row lock
+  held across the Google reads, and a bounded lock wait answered as a transient `503`.
 - [ ] Task/agenda dashboard without duplicating the linked event; reading tools and
   `propose_task`, never direct writing. Time conflict distinct from per-day deadline
   concentration.
-- [ ] Completing/dismissing cancels future reminders; the event is kept unless explicitly
-  deleted. Remote deletion operations survive local purging without losing authorization or
-  the IDs needed.
+- [ ] Completing/dismissing cancels future reminders, increments `tasks.version` so a stale
+  Calendar job is discarded, and keeps the event unless explicitly deleted. Remote deletion
+  operations survive local purging without losing authorization or the IDs needed.
 
 **Exit:** E2E with a Google test account: proposal → review → confirmation → one event;
 reading and confirmed editing. Evidence of no writes before confirmation. Tests for
@@ -230,17 +256,30 @@ clean them up at the end.
 
 - [ ] Incremental/opt-in Gmail; recipient fixed to the verified email. Escaped templates with
   authenticated links; no email GET mutates tasks.
-- [ ] Single ARQ scheduler with atomic claim/leases and persistent dedupe. T-48/T-24/T-2 h for
-  instants; T-3d/T-1d at local time for all-day; no retrospective burst.
+- [ ] Single ARQ scheduler with atomic claim/leases and persistent dedupe; election, expiry
+  and due comparisons use the database clock. The claim persists the election fence on the
+  row for send-time validation, and the cron stays disabled until the Gmail consumer is
+  deployed. T-48/T-24/T-2 h for instants; T-3d/T-1d at local time for all-day; no
+  retrospective burst.
 - [ ] Digests by local date; DST, due-date/preference changes, and cancellation of stale
-  occurrences. Confirm task deletion/completion immediately before claiming a send.
+  occurrences. A future occurrence cancelled by a preference is re-armed only when the same
+  task generation is scheduled again with the threshold enabled, and never after a delivery
+  attempt or a terminal delivery state. Confirm task deletion/completion immediately before
+  claiming a send.
 - [ ] Ambiguous Gmail failure or expired `sending` lease → `delivery_unknown`, no blind
   retry. State that an already sent/in-flight email cannot be recalled when deleting a task.
 - [ ] Delivery/failed-sync panel with warned manual resend, preferences, statistics, and
   Ctrl+K. Re-ranker only through a comparative experiment with quality/cost/latency.
+- [ ] Manual repetitions never mutate the original: a test send or an acknowledged resend is
+  a new audited occurrence with its own `occurrence_seq`, while the five-component automatic
+  dedupe of scheduled reminders stays exact.
 - [ ] Runbooks for cleanup, provider outage, budget, revoked tokens, restore, and account
-  deletion. D8 must already be approved before non-synthetic data; F3 checks restore,
-  expiration, and reapplied deletions.
+  deletion. D8 is approved (A4.5): encrypted text/metadata backups, a 30-day maximum that
+  matches the residual deletion window, and a deletion log reapplied on a clean restore; no
+  audio. F3 checks restore, expiration, and reapplied deletions. Account deletion applies its
+  residual window with a scheduled batched purge of `account_deletions` and
+  `google_remote_operations`; `delete_maulwurf_events=false` keeps Maulwurf-created Google
+  events unless the user opts in, so the UI must state that outcome.
 
 **Exit:** real test send observed and G7-MAIL/G8 approved; uncertain delivery visible, not
 an exactly-once guarantee. Restore verified without reintroducing deleted sources. Security
@@ -297,8 +336,8 @@ synthetic-only evaluation leaves that generalization unverified.
    filter/context combinations, and effective limits. Measure resources and non-persistence
    under load too.
 5. **Build/delivery:** lint, types, suites, and builds of all apps/images; migrations and
-   restore. Record exact commands once the scaffold exists, without inventing commands that
-   do not exist today.
+   restore. Commands are documented in [RUNBOOK-dev.md](RUNBOOK-dev.md); do not invent
+   commands that do not exist today.
 
 ## 8. Risks and closing decisions
 
@@ -315,7 +354,7 @@ synthetic-only evaluation leaves that generalization unverified.
 | D6 Temporal alignment | F0/F1 | Approve exactly G2-T or G2-X and reflect it in API/UI |
 | D7-CAL | Before F2 | Calendar contract and real scopes |
 | D7-MAIL | Before F3 | Gmail contract, opt-in, and uncertain delivery |
-| D8 Local retention | Before non-synthetic data | Active policy/backups/deletion; restore validated in F3 |
+| D8 Local retention | Before non-synthetic data | Approved (A4.5): encrypted text/metadata backups, a 30-day maximum matching the residual deletion window, a deletion log reapplied on a clean restore and no audio; F3 validates restore, expiration and reapplied deletions |
 
 A decision is recorded with state `pending|approved|blocked`, the closure owner, date,
 evidence, and consequences. `blocked` does not equal approved and stops the affected real
@@ -341,8 +380,14 @@ usage.
 - [ ] Mandatory language before bytes; UI formats/limits equal to validated capabilities.
 - [ ] ASR, cleanup, analysis, index, task, Calendar, and notification states remain separate;
   F1 does not depend on F2 analysis.
+- [ ] Cleanup verification requires absence evidence; a persisted `failed` cleanup closes
+  admission, `pending` only blocks the outbox, and an unrecorded cleanup raises
+  `cleanup_unrecorded` plus a failure metric.
 - [ ] The schema supports every API contract: dedupe decided in the PUT, versioned consent,
   spans/task_sources, agenda start/end, revisions, versions, and traceable deletion.
 - [ ] Consent, isolation, and human confirmation also apply to jobs, tools, and later changes.
+- [ ] Private API responses are `Cache-Control: no-store` structurally (routes, errors,
+  redirects and SSE); every rate limit is a recorded decision and answers `429`/`503` with
+  `Retry-After`, failing closed when the limiter is unavailable.
 - [ ] All pending or blocked gates are reported; no documentary test is presented as
   application/provider validation.

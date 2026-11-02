@@ -72,7 +72,8 @@ from app.models import (
     Segment,
     Transcript,
 )
-from app.services.chunking import ChunkDraft, SegmentInput, chunk_segments
+from app.schemas.chunk import Chunk as ChunkContract
+from app.services.chunking import SegmentInput, chunk_segments
 from app.services.embeddings import (
     EmbeddingDimensionMismatch,
     EmbeddingProvider,
@@ -87,6 +88,10 @@ INDEX_RETIRED = "retired"
 TEXT_KINDS = ("synthetic", "redacted", "real")
 TextKind = Literal["synthetic", "redacted", "real"]
 ProgressHook = Callable[["IndexProgress"], Awaitable[None]]
+# A2.18 build-phase fence: called with the build's session right before every commit. The
+# worker passes the run lease check (`services.index_job.require_build_fence`); the optional
+# hook keeps this module independent of the `processing_runs` ledger.
+FenceHook = Callable[[AsyncSession], Awaitable[None]]
 
 
 class IndexingError(Exception):
@@ -195,8 +200,15 @@ async def build_generation(
     provider: EmbeddingProvider,
     text_kind: TextKind,
     on_progress: ProgressHook | None = None,
+    fence: FenceHook | None = None,
 ) -> IndexStats:
-    """Chunk and embed whatever the `version` generation is missing (idempotent)."""
+    """Chunk and embed whatever the `version` generation is missing (idempotent).
+
+    `fence` runs before every commit this function and its batch helpers issue. The worker
+    passes the run-lease check, so a stale batch is rejected before it becomes durable
+    (ADR-0009, A2.18); the owner counter (chunk_count) and every chunk/embedding batch are
+    covered, not only the final activation.
+    """
     require_text_kind(text_kind)
     generation = await _building_generation(db, user_id=user_id, version=version)
     _require_provider_matches(generation, provider)
@@ -209,6 +221,7 @@ async def build_generation(
         transcripts=transcripts,
         chunked_audios=chunked_audios,
         on_progress=on_progress,
+        fence=fence,
     )
     logger.debug("indexing.chunked version=%s chunks=%d", version, chunks)
     embeddings, batches = await _embed_generation(
@@ -218,9 +231,11 @@ async def build_generation(
         generation=generation,
         provider=provider,
         on_progress=on_progress,
+        fence=fence,
     )
     total = await _count(db, _chunk_count_statement(user_id, version=version))
     generation.chunk_count = total
+    await _apply_fence(db, fence)
     await db.commit()
     logger.info(
         "indexing.generation_built version=%s model=%s chunks=%d embeddings=%d audios=%d",
@@ -364,6 +379,7 @@ async def _chunk_generation(
     transcripts: Sequence[Transcript],
     chunked_audios: set[uuid.UUID],
     on_progress: ProgressHook | None,
+    fence: FenceHook | None,
 ) -> int:
     created = 0
     done = 0
@@ -372,17 +388,18 @@ async def _chunk_generation(
         if transcript.audio_id in chunked_audios:
             continue  # Already chunked in this version: a re-run does not duplicate chunks.
         segments = await _segments(db, user_id=user_id, transcript_id=transcript.id)
-        for draft in _drafts(transcript, version=version, segments=segments):
-            _persist_draft(
+        for chunk in _chunks(transcript, version=version, segments=segments):
+            _persist_chunk(
                 db,
                 user_id=user_id,
-                transcript_id=transcript.id,
                 fts_config=transcript.fts_config,
-                draft=draft,
+                chunk=chunk,
             )
             created += 1
         # One commit per class: progress stays durable without a transaction spanning the whole
-        # corpus (the provider network never happens here).
+        # corpus (the provider network never happens here). The fence is checked after the
+        # chunk rows are staged and before they become durable.
+        await _apply_fence(db, fence)
         await db.commit()
         if on_progress is not None:
             await on_progress(
@@ -406,6 +423,7 @@ async def _embed_generation(
     generation: IndexGeneration,
     provider: EmbeddingProvider,
     on_progress: ProgressHook | None,
+    fence: FenceHook | None,
 ) -> tuple[int, int]:
     pending = await _chunks_without_embeddings(db, user_id=user_id, version=version)
     created = 0
@@ -429,6 +447,9 @@ async def _embed_generation(
                     vector=vector,
                 )
             )
+        # The provider call above may be slow; the shared run lock is taken only for the
+        # commit window so the reconciler can still close an actually expired lease.
+        await _apply_fence(db, fence)
         await db.commit()
         batches += 1
         created += len(batch)
@@ -497,12 +518,18 @@ async def _count(db: AsyncSession, statement: Select[tuple[int]]) -> int:
     return int((await db.execute(statement)).scalar_one())
 
 
-def _drafts(
+async def _apply_fence(db: AsyncSession, fence: FenceHook | None) -> None:
+    if fence is not None:
+        await fence(db)
+
+
+def _chunks(
     transcript: Transcript, *, version: str, segments: Sequence[Segment]
-) -> list[ChunkDraft]:
+) -> list[ChunkContract]:
     try:
         return chunk_segments(
             audio_id=transcript.audio_id,
+            transcript_id=transcript.id,
             transcript_version=transcript.version,
             index_version=version,
             transcript_text=transcript.text,
@@ -539,41 +566,45 @@ def chunk_tsvector(fts_config: str, content: str) -> ColumnElement[Any]:
     return func.to_tsvector(sql_cast(literal(fts_config), REGCONFIG), content)
 
 
-def _persist_draft(
+def _persist_chunk(
     db: AsyncSession,
     *,
     user_id: uuid.UUID,
-    transcript_id: uuid.UUID,
     fts_config: str,
-    draft: ChunkDraft,
+    chunk: ChunkContract,
 ) -> None:
+    """Write one §M6 `Chunk`: fields land on their columns and the link payload is the jsonb.
+
+    The only additions are the tenant key (`user_id`) and the derived `tsv`; no field is
+    renamed or reshaped, which is what U-S2-JL-11 pins.
+    """
     # PK generated here (not `server_default`) so `chunk_segments` can link without re-reading.
     chunk_id = uuid.uuid4()
     db.add(
         Chunk(
             id=chunk_id,
             user_id=user_id,
-            audio_id=draft.audio_id,
-            transcript_id=transcript_id,
-            transcript_version=draft.transcript_version,
-            index_version=draft.index_version,
-            ordinal=draft.ordinal,
-            content=draft.content,
-            char_start=draft.char_start,
-            char_end=draft.char_end,
-            token_count=draft.token_count,
-            t_start=draft.t_start,
-            t_end=draft.t_end,
-            tsv=chunk_tsvector(fts_config, draft.content),
+            audio_id=chunk.audio_id,
+            transcript_id=chunk.transcript_id,
+            transcript_version=chunk.transcript_version,
+            index_version=chunk.index_version,
+            ordinal=chunk.ordinal,
+            content=chunk.content,
+            char_start=chunk.char_start,
+            char_end=chunk.char_end,
+            token_count=chunk.token_count,
+            t_start=chunk.t_start,
+            t_end=chunk.t_end,
+            tsv=chunk_tsvector(fts_config, chunk.content),
         )
     )
-    for link in draft.segments:
+    for link in chunk.segments:
         db.add(
             ChunkSegment(
                 user_id=user_id,
                 chunk_id=chunk_id,
                 segment_id=link.segment_id,
-                overlap_span=link.overlap_span,
+                overlap_span=link.overlap_span.model_dump(exclude_none=True),
             )
         )
 

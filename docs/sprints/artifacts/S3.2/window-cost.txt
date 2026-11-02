@@ -1,0 +1,28 @@
+S3.2 — analysis-window token cost (U-S3-SG-02)
+Date (UTC): 2026-10-31T12:34:48Z
+Host: Linux 7.0.0-39-generic x86_64
+Python: Python 3.12.3
+tiktoken: 0.14.0
+Command: cd apps/api && uv run python -m tools.eval.window_cost
+Fixtures: apps/api/tests/fixtures/analysis/windows (s3-window-cost-v1, authored-redacted)
+
+Scope: transcript window tokens and local window-planning latency. Prompt/system
+overhead, output tokens and LLM/provider latency are NOT included; no provider call
+was made and D3-Text is not closed (LLM latency NO VERIFICADO).
+
+Fixture: s3-window-cost-v1 (authored-redacted)
+Tokenizer: cl100k_base (exact=True)
+Latency: window planning only; LLM/provider latency NO VERIFICADO.
+profile     lang class                minutes  segs  tokens wins  total   ovl  ampl max_win  plan_ms  tok/hour
+no-overlap  es   spike-derived-es        7.33    70    1584    3   1584     0 1.000     763   15.369   12960.0
+no-overlap  en   spike-derived-en        7.00    76    1185    2   1185     0 1.000     736    8.158   10157.1
+no-overlap  fr   spike-derived-fr        6.67    73    1570    3   1570     0 1.000     757    8.519   14130.0
+lean        es   spike-derived-es        7.33    70    1584    3   1679    95 1.060     763   11.005   13737.3
+lean        en   spike-derived-en        7.00    76    1185    2   1232    47 1.040     736   10.322   10560.0
+lean        fr   spike-derived-fr        6.67    73    1570    3   1635    65 1.041     756   11.141   14715.0
+default     es   spike-derived-es        7.33    70    1584    3   1756   172 1.109     763   10.558   14367.3
+default     en   spike-derived-en        7.00    76    1185    2   1271    86 1.073     736    7.819   10894.3
+default     fr   spike-derived-fr        6.67    73    1570    3   1745   175 1.111     756   11.089   15705.0
+small       es   spike-derived-es        7.33    70    1584    5   1759   175 1.110     380   12.041   14391.8
+small       en   spike-derived-en        7.00    76    1185    4   1308   123 1.104     376    8.726   11211.4
+small       fr   spike-derived-fr        6.67    73    1570    5   1718   148 1.094     379   11.435   15462.0

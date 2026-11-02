@@ -39,7 +39,7 @@ from maulwurf_ingest.asr.riva_client import (
 )
 from maulwurf_ingest.asr.scripted import load_scripted
 from maulwurf_ingest.audio.ffmpeg import DEFAULT_LIMITS, FfmpegLimits
-from maulwurf_ingest.audio.reconcile import ReconciledTranscript
+from maulwurf_ingest.audio.reconcile import ReconciledTranscript, parse_confidence
 from maulwurf_ingest.config import settings
 from maulwurf_ingest.pipeline import FIRST_FRAGMENT, FragmentWords, process
 
@@ -61,6 +61,7 @@ class JobWord(TypedDict):
     text: str
     start_s: float
     end_s: float
+    confidence: float | None
 
 
 class JobTranscript(TypedDict):
@@ -219,7 +220,12 @@ def _from_service(reconciled: ReconciledTranscript) -> JobTranscript:
         "text": reconciled.text,
         "precision": reconciled.precision,
         "words": [
-            {"text": word.text, "start_s": word.start_s, "end_s": word.end_s}
+            {
+                "text": word.text,
+                "start_s": word.start_s,
+                "end_s": word.end_s,
+                "confidence": word.confidence,
+            }
             for word in reconciled.words
         ],
         "model": MODEL_NAME,
@@ -259,7 +265,14 @@ def _read_stub(workdir: Path) -> JobTranscript:
             raise RuntimeError("stub_transcript")
         if not isinstance(start, int | float) or not isinstance(end, int | float):
             raise RuntimeError("stub_transcript")
-        words.append({"text": word_text, "start_s": float(start), "end_s": float(end)})
+        words.append(
+            {
+                "text": word_text,
+                "start_s": float(start),
+                "end_s": float(end),
+                "confidence": parse_confidence(item.get("confidence")),
+            }
+        )
     return {
         "text": text,
         "precision": precision,

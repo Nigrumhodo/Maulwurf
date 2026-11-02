@@ -27,12 +27,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
-from sqlalchemy import and_, select, update
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.db import bind_user
 from app.models.chat import Conversation, Message, MessageSource
 from app.models.chunk import Chunk
+from app.services.chat_order import ASSISTANT_CREATED_AT_OFFSET, message_role_rank
 from app.services.chunking import count_tokens_default, tokenizer_is_exact
 from app.services.citations import (
     CitationBuffer,
@@ -40,7 +42,6 @@ from app.services.citations import (
     CitationValidator,
     citation_event,
     citation_record,
-    format_timestamp,
     resolve_citation,
     validate_citation_record,
     validate_citation_source,
@@ -55,6 +56,7 @@ from app.services.embeddings import (
     EmbeddingRateLimited,
     embed_query,
 )
+from app.services.evidence import evidence_reference
 from app.services.llm import (
     ChatMessage,
     LLMContextExceeded,
@@ -260,10 +262,13 @@ def render_source(index: int, chunk: RetrievedChunk) -> str:
     an envelope tag or the final question delimiter is neutralized before insertion.
     """
     parts = [chunk.subject_name, chunk.class_date.isoformat()]
-    if chunk.t_start is not None and chunk.t_end is not None:
-        parts.append(format_timestamp(chunk.t_start))
-    elif chunk.segment_ordinal is not None:
-        parts.append(f"segment {chunk.segment_ordinal}")
+    reference = evidence_reference(
+        segment_ordinal=chunk.segment_ordinal,
+        t_start=chunk.t_start,
+        t_end=chunk.t_end,
+    )
+    if reference:
+        parts.append(reference)
     safe_content = _neutralize(chunk.content.strip())
     meta = html.escape(" · ".join(parts), quote=True)
     return f'<source id="S{index}" meta="{meta}">\n{safe_content}\n</source>'
@@ -590,6 +595,16 @@ class RAGService:
                     return await self._replay_prepared(db, existing)
 
             model = self._llm.model if self._llm is not None else None
+            # The turn clock comes from the database, not from this process: `CLOCK_TIMESTAMP`
+            # is read after `_owned_conversation` took the row lock, so a turn that waited
+            # for the lock is still ordered after the previous one even when the API hosts'
+            # clocks disagree. `now()` would be wrong here because it is fixed when this
+            # transaction started, before a lock wait. The assistant is marked one
+            # microsecond later, since both rows otherwise share the transaction timestamp
+            # and the random UUID would decide question-vs-answer order.
+            turn_created_at = await db.scalar(select(func.clock_timestamp()))
+            if turn_created_at is None:  # pragma: no cover - PostgreSQL always returns one row
+                raise RuntimeError("clock_timestamp() returned no value")
             user_message = Message(
                 user_id=user_id,
                 conversation_id=conversation_id,
@@ -597,6 +612,7 @@ class RAGService:
                 content=question,
                 status="completed",
                 citas=[],
+                created_at=turn_created_at,
             )
             assistant = Message(
                 user_id=user_id,
@@ -610,6 +626,7 @@ class RAGService:
                 prompt_version=PROMPT_VERSION,
                 input_tokens=0,
                 output_tokens=0,
+                created_at=turn_created_at + ASSISTANT_CREATED_AT_OFFSET,
             )
             db.add_all([user_message, assistant])
             try:
@@ -776,6 +793,9 @@ class RAGService:
         self, prepared: PreparedStream, *, last_event_id: int = 0
     ) -> AsyncGenerator[str, None]:
         """Yield the SSE frames for a prepared turn, including replay and cancellation."""
+        # The stream task must bind the tenant itself: short-lived sessions opened from
+        # the factory do not share the request's SQL transaction, only this context.
+        bind_user(prepared.user_id)
         if prepared.replay is not None:
             async for event in self._replay_events(prepared, last_event_id):
                 yield event
@@ -1105,12 +1125,17 @@ class RAGService:
     async def _owned_conversation(
         self, db: AsyncSession, user_id: uuid.UUID, conversation_id: uuid.UUID
     ) -> Conversation:
+        # FOR UPDATE serializes `prepare` with `DELETE /chat/conversations/{id}`: a delete
+        # that committed while this transaction waited re-evaluates `deleted_at IS NULL` and
+        # the turn becomes 404 instead of inserting messages after the purge.
         conversation = await db.scalar(
-            select(Conversation).where(
+            select(Conversation)
+            .where(
                 Conversation.user_id == user_id,
                 Conversation.id == conversation_id,
                 Conversation.deleted_at.is_(None),
             )
+            .with_for_update()
         )
         if conversation is None:
             raise ChatConversationNotFound("Conversación no encontrada.")
@@ -1179,7 +1204,11 @@ class RAGService:
                         Message.status == "completed",
                         Message.role.in_(("user", "assistant")),
                     )
-                    .order_by(Message.created_at.desc(), Message.id.desc())
+                    .order_by(
+                        Message.created_at.desc(),
+                        message_role_rank().desc(),
+                        Message.id.desc(),
+                    )
                     .limit(self._history_max_messages)
                 )
             )

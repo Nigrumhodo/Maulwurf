@@ -1,5 +1,10 @@
-"""L1.5 (U-S1-JL-03): formato y validador del dataset G4, sin contenido real."""
+"""L1.5 (U-S1-JL-03): formato y validador del dataset G4, sin contenido real.
+
+L2.7 (G4): integridad del dataset congelado ``g4-v1`` y del smoke de CI.
+"""
+
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +13,15 @@ from pydantic import ValidationError
 
 from tests.fixtures.g4.schema import G4Item
 from tests.fixtures.g4.validate import DatasetFormatError, load, main, validate_dataset
+from tools.eval.dataset import (
+    Dataset,
+    DatasetError,
+    content_sha256,
+    file_sha256,
+    fts_config,
+    load_dataset,
+    write_manifest,
+)
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "fixtures" / "g4" / "example.jsonl"
 LANGUAGES = ("es", "en", "fr")
@@ -217,3 +231,166 @@ def test_cli_exit_codes(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([str(EXAMPLE)]) == 1
     assert main([str(EXAMPLE), "--languages", "es,en", *reduced]) == 1
     assert "idioma no habilitado: fr" in capsys.readouterr().err
+
+
+# --- L2.7 frozen g4-v1 and smoke dataset checks ---
+
+DATASETS = Path(__file__).resolve().parents[1] / "fixtures" / "g4" / "datasets"
+V1 = DATASETS / "v1"
+SMOKE = DATASETS / "smoke-v1"
+
+
+@pytest.fixture(scope="module")
+def v1() -> Dataset:
+    return load_dataset(V1)
+
+
+@pytest.fixture(scope="module")
+def smoke() -> Dataset:
+    return load_dataset(SMOKE)
+
+
+def _g4_copy_dataset(source: Path, destination: Path) -> Path:
+    root = destination / source.name
+    shutil.copytree(source, root)
+    return root
+
+
+def _g4_read_jsonl(path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def _g4_write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    path.write_text(
+        "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+
+def test_g4_v1_has_50_test_items_and_15_unanswerable_per_language(v1: Dataset) -> None:
+    """Every enabled language carries exactly 50 test items, 35 answerable and 15 not."""
+    for language in LANGUAGES:
+        test_items = v1.test_items(language)
+        assert len(test_items) == 50
+        assert sum(1 for item in test_items if item.answerable) == 35
+        assert sum(1 for item in test_items if not item.answerable) == 15
+    assert v1.is_official_size()
+    assert fts_config("fr") == "simple"
+    assert fts_config("es") == "spanish"
+    assert fts_config("en") == "english"
+
+
+def test_g4_v1_has_five_development_items_per_language(v1: Dataset) -> None:
+    """The development partition is small, separate and never scored."""
+    for language in LANGUAGES:
+        development = v1.development_items(language)
+        assert len(development) == 5
+        assert sum(1 for item in development if item.answerable) == 4
+        assert sum(1 for item in development if not item.answerable) == 1
+        assert all(item.partition == "development" for item in development)
+
+
+def test_g4_v1_every_evidence_span_matches_its_segment_text(v1: Dataset) -> None:
+    """Each ``cita_textual`` is the exact Unicode slice of its corpus segment."""
+    checked = 0
+    for language in LANGUAGES:
+        for item in v1.items[language]:
+            for evidence in item.expected_evidence:
+                corpus_class = v1.classes[evidence.class_ref]
+                segment = corpus_class.segment(evidence.segment_ordinal)
+                assert segment is not None
+                assert 0 <= evidence.inicio_char < evidence.fin_char <= len(segment.text)
+                assert (
+                    segment.text[evidence.inicio_char : evidence.fin_char] == evidence.cita_textual
+                )
+                checked += 1
+    assert checked >= 100
+
+
+def test_g4_v1_every_evidence_class_exists_and_version_matches(v1: Dataset) -> None:
+    """Evidence points to a seeded class of the same language and transcript version."""
+    for language in LANGUAGES:
+        for item in v1.items[language]:
+            assert item.id.startswith(f"{language}-")
+            for evidence in item.expected_evidence:
+                corpus_class = v1.classes[evidence.class_ref]
+                assert corpus_class.language == language
+                assert evidence.transcript_version == corpus_class.transcript_version
+
+
+def test_g4_v1_manifest_hashes_match_files(v1: Dataset) -> None:
+    """Every declared file hash and the aggregate ``content_sha256`` match the bytes."""
+    manifest = v1.manifest
+    assert set(manifest.files) == {
+        f"{kind}/{language}.jsonl" for kind in ("corpus", "items") for language in LANGUAGES
+    }
+    for relative, digest in manifest.files.items():
+        assert digest == f"sha256:{file_sha256(V1 / relative)}"
+    assert manifest.content_sha256 == content_sha256(manifest.files)
+    assert v1.content_sha256 == manifest.content_sha256
+
+
+def test_g4_v1_rejects_a_changed_test_partition_hash(tmp_path: Path) -> None:
+    """Editing the frozen items without a new version is detected before scoring."""
+    root = _g4_copy_dataset(V1, tmp_path)
+    items_path = root / "items" / "es.jsonl"
+    records = _g4_read_jsonl(items_path)
+    records[0]["question"] = "¿Pregunta alterada fuera de la versión congelada?"
+    _g4_write_jsonl(items_path, records)
+
+    with pytest.raises(DatasetError, match="hash distinto para items/es.jsonl"):
+        load_dataset(root)
+
+
+def test_g4_v1_ids_are_language_prefixed_and_unique(v1: Dataset) -> None:
+    """IDs are stable, language-prefixed and unique across the whole dataset."""
+    seen: set[str] = set()
+    for language in LANGUAGES:
+        for item in v1.items[language]:
+            assert item.id.startswith(f"{language}-")
+            assert item.id not in seen
+            seen.add(item.id)
+    assert len(seen) == len(LANGUAGES) * 55
+
+
+def test_g4_v1_questions_are_unique_per_language(v1: Dataset) -> None:
+    """No normalized question is repeated inside one language."""
+    for language in LANGUAGES:
+        questions = [" ".join(item.question.split()).casefold() for item in v1.items[language]]
+        assert len(questions) == len(set(questions))
+
+
+def test_g4_loader_rejects_an_unanswerable_item_with_evidence(tmp_path: Path) -> None:
+    """An unanswerable item cannot smuggle expected evidence past the frozen schema."""
+    root = _g4_copy_dataset(V1, tmp_path)
+    items_path = root / "items" / "es.jsonl"
+    records = _g4_read_jsonl(items_path)
+    answerable = next(record for record in records if record["answerable"])
+    unanswerable = next(record for record in records if not record["answerable"])
+    unanswerable["expected_evidence"] = answerable["expected_evidence"]
+    _g4_write_jsonl(items_path, records)
+
+    manifest = load_dataset(V1).manifest
+    write_manifest(
+        root,
+        dataset_version=manifest.dataset_version,
+        created_at=manifest.created_at,
+        provenance=manifest.provenance,
+        languages=manifest.languages,
+        test=manifest.test,
+        development=manifest.development,
+    )
+
+    with pytest.raises(DatasetError, match="no lleva evidencia"):
+        load_dataset(root)
+
+
+def test_g4_smoke_dataset_is_small_and_valid(smoke: Dataset) -> None:
+    """The CI smoke dataset is valid, small and explicitly not official-size."""
+    assert not smoke.is_official_size()
+    for language in LANGUAGES:
+        assert len(smoke.test_items(language)) == 4
+        assert sum(1 for item in smoke.test_items(language) if not item.answerable) == 1
+        assert len(smoke.development_items(language)) == 1
+    with pytest.raises(DatasetError, match="mínimo G4"):
+        load_dataset(SMOKE, require_official=True)

@@ -15,11 +15,14 @@ from __future__ import annotations
 import json
 import math
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
 import asyncpg
 
+from maulwurf_ingest import rls
+from maulwurf_ingest.audio.reconcile import parse_confidence
 from maulwurf_ingest.lease import Lease
 
 PROVIDER = "nvidia-riva"
@@ -29,6 +32,10 @@ _GATED_STAGES = frozenset({"index", "analyze"})
 _STAGE_EVENT = {"index": "index_requested", "analyze": "analyze_requested"}
 _REPETITION_RUN = 3
 _FTS = {"es": "spanish", "en": "english"}
+# Provisional quality signal: confidence is uncalibrated, so the warning only says
+# «review this text» and never blocks or auto-deletes anything (M3).
+LOW_CONFIDENCE_THRESHOLD = 0.6
+LOW_CONFIDENCE_SHARE = 0.5
 
 
 class CommitOutcome(StrEnum):
@@ -47,6 +54,7 @@ class TranscriptWord:
     text: str
     start_s: float
     end_s: float
+    confidence: float | None = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +113,40 @@ def repetition_warnings(text: str) -> tuple[dict[str, object], ...]:
     return tuple(warnings)
 
 
+def quality_warnings(
+    text: str, words: Sequence[TranscriptWord] = ()
+) -> tuple[dict[str, object], ...]:
+    """Non-sensitive ASR quality signals: repetition, empty entries and low confidence.
+
+    Empty word entries are counted before the segment builder drops them. Confidence is
+    only considered when the provider actually reported it; at least half of the scored
+    words below the threshold raises one warning. No spoken word or provider payload is
+    stored in the signal (M3/M9).
+    """
+    warnings: list[dict[str, object]] = list(repetition_warnings(text))
+    if not words:
+        return tuple(warnings)
+    empty = sum(1 for word in words if not word.text.strip())
+    if empty:
+        warnings.append({"code": "empty_segments", "count": empty})
+    scored = [
+        confidence
+        for word in words
+        if word.text.strip()
+        if (confidence := _valid_confidence(word.confidence)) is not None
+    ]
+    low = sum(1 for confidence in scored if confidence < LOW_CONFIDENCE_THRESHOLD)
+    if scored and low >= len(scored) * LOW_CONFIDENCE_SHARE:
+        warnings.append({"code": "low_confidence", "count": low, "total": len(scored)})
+    return tuple(warnings)
+
+
+def _valid_confidence(value: float | None) -> float | None:
+    if value is None or not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        return None
+    return value
+
+
 def prepare_transcript(draft: TranscriptDraft) -> PreparedTranscript | None:
     """Build segments from the draft. ``None`` means there is nothing to store.
 
@@ -122,7 +164,7 @@ def prepare_transcript(draft: TranscriptDraft) -> PreparedTranscript | None:
             return None
         segments = (SegmentDraft(0, text, 0, len(text), None, None),)
         precision = "none"
-    return PreparedTranscript(text, precision, segments, repetition_warnings(text))
+    return PreparedTranscript(text, precision, segments, quality_warnings(text, draft.words))
 
 
 def model_config_document(
@@ -195,6 +237,7 @@ async def commit_transcript(
     flags = json.dumps(list(prepared.warnings))
     try:
         async with pool.acquire() as conn, conn.transaction():
+            await rls.bind_transaction(conn, lease.user_id)
             row = await conn.fetchrow(
                 """
                 SELECT ia.audio_id, a.language_code, a.required_stages
@@ -305,6 +348,7 @@ async def enable_text_outbox(
     """
     try:
         async with pool.acquire() as conn, conn.transaction():
+            await rls.bind_transaction(conn, lease.user_id)
             await conn.execute(
                 """
                 UPDATE outbox_events
@@ -352,13 +396,20 @@ def _timed_segments(draft: TranscriptDraft) -> tuple[tuple[SegmentDraft, ...], s
     if not words or any(not _valid_span(word) for word in words):
         return None
     pieces = [word.text.strip() for word in words]
+    text = " ".join(pieces)
     segments: list[SegmentDraft] = []
     cursor = 0
     for ordinal, (piece, word) in enumerate(zip(pieces, words, strict=True)):
         end = cursor + len(piece)
-        segments.append(SegmentDraft(ordinal, piece, cursor, end, word.start_s, word.end_s))
-        cursor = end + 1
-    return tuple(segments), " ".join(pieces)
+        if ordinal + 1 < len(pieces):
+            # The separator belongs to the preceding word so the ranges partition the
+            # transcript: the chunker (L2.1) rejects any non-contiguous segment.
+            end += 1
+        segments.append(
+            SegmentDraft(ordinal, text[cursor:end], cursor, end, word.start_s, word.end_s)
+        )
+        cursor = end
+    return tuple(segments), text
 
 
 def _required_stages(raw: object) -> tuple[str, ...]:
@@ -385,5 +436,12 @@ def _words_from_job(raw: object) -> tuple[TranscriptWord, ...] | None:
             return None
         if not isinstance(start, int | float) or not isinstance(end, int | float):
             return None
-        words.append(TranscriptWord(text, float(start), float(end)))
+        words.append(
+            TranscriptWord(
+                text,
+                float(start),
+                float(end),
+                parse_confidence(item.get("confidence")),
+            )
+        )
     return tuple(words)

@@ -4,7 +4,9 @@
 allowlist, el token de variante opcional, la materia del tenant, la cuota y el slot ANTES
 de reservar nada, y crea el intento en `awaiting_upload` con una URL relativa de carga.
 No hay dedupe: el hash no existe hasta el `PUT`, así que este POST responde `201`, `422`,
-`429` o `503` (más `401`/`403`/`404`/`409` de contrato).
+`429` o `503` (más `401`/`403`/`404` de contrato). Un token de variante inutilizable
+—desconocido, caducado, consumido o con otros metadatos— comparte el `422 validation_failed`
+opaco, sin revelar estado (A2.19, ADR-0006).
 
 `PUT /audios/{id}/content` (A2.4) valida sesión, CSRF, Origin, propiedad, estado,
 expiración y tamaño declarado SIN leer el cuerpo, y delega la recepción en
@@ -35,8 +37,9 @@ SRT only when the measured times are usable (`409 srt_unavailable`). All SQL liv
 """
 
 import uuid
-from datetime import UTC, date, datetime
-from typing import Annotated, Literal
+from contextlib import suppress
+from datetime import date, datetime
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, Header, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -64,23 +67,27 @@ from app.services import library, progress
 from app.services.audios import (
     allowed_languages,
     cancel_attempt,
+    cancel_reservation,
     check_quota,
     consume_variant_token,
     create_reservation,
+    open_reception,
     reserve_slot,
     tombstone_audio,
 )
 from app.services.exports import render_srt, render_txt, srt_exportable
+from app.services.ingest_sink import get_reception_sink
 from app.services.runs import (
+    RunHistoryEntry,
     ensure_reupload_allowed,
     open_reupload,
     request_retry,
+    run_history,
 )
 from app.services.tenant import get_owned
 from app.services.uploads import (
     ReceptionSink,
     effective_upload_limit,
-    get_reception_sink,
     receive_content,
 )
 
@@ -191,6 +198,9 @@ class TombstonePurged(BaseModel):
     attempts_cancelled: int
     outbox_events_skipped: int
     processing_runs_cancelled: int
+    tasks_deleted: int
+    task_sources_deleted: int
+    task_revisions_deleted: int
     message_sources_deleted: int
     messages_tombstoned: int
     embeddings_deleted: int
@@ -247,6 +257,8 @@ class TranscriptOut(BaseModel):
     version: int
     timestamp_precision: str
     char_count: int
+    # S3.6: non-sensitive ASR signals (code + counts) for the inbox/class page.
+    quality_warnings: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ExportsOut(BaseModel):
@@ -269,8 +281,30 @@ class AudioDetailOut(BaseModel):
     stages: dict[str, str]
     aggregate_status: str
     audio_retained: bool = False
+    analysis_backfill_available: bool = False
     transcript: TranscriptOut | None
     exports: ExportsOut
+
+
+class ProcessingRunOut(BaseModel):
+    """One durable run of the class (S3.4); versions are not secrets."""
+
+    id: str
+    stage: Literal["index", "analyze"]
+    transcript_version: int
+    config_version: str
+    prompt_version: str | None
+    status: Literal["pending", "running", "succeeded", "failed", "cancelled"]
+    attempt_count: int
+    error_code: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime
+    current: bool
+
+
+class ProcessingRunsOut(BaseModel):
+    items: list[ProcessingRunOut]
 
 
 def _subject_out(ref: library.SubjectRef) -> SubjectRefOut:
@@ -320,16 +354,35 @@ def _detail_out(detail: library.AudioDetail) -> AudioDetailOut:
         attempt=_attempt_out(row.attempt),
         stages=dict(row.stages),
         aggregate_status=row.aggregate_status,
+        analysis_backfill_available=detail.analysis_backfill_available,
         transcript=(
             TranscriptOut(
                 version=detail.transcript.version,
                 timestamp_precision=detail.transcript.timestamp_precision,
                 char_count=detail.transcript.char_count,
+                quality_warnings=list(detail.transcript.quality_warnings),
             )
             if detail.transcript is not None
             else None
         ),
         exports=ExportsOut(txt=detail.transcript is not None, srt=detail.srt_exportable),
+    )
+
+
+def _run_out(entry: RunHistoryEntry) -> ProcessingRunOut:
+    return ProcessingRunOut(
+        id=str(entry.id),
+        stage=entry.stage,
+        transcript_version=entry.transcript_version,
+        config_version=entry.config_version,
+        prompt_version=entry.prompt_version,
+        status=entry.status,
+        attempt_count=entry.attempt_count,
+        error_code=entry.error_code,
+        started_at=entry.started_at,
+        finished_at=entry.finished_at,
+        created_at=entry.created_at,
+        current=entry.current,
     )
 
 
@@ -348,8 +401,12 @@ async def _owned_live_audio(db: DbSession, user_id: uuid.UUID, audio_id: uuid.UU
         401: {"description": "Sin sesión (auth_required)"},
         403: {"description": "CSRF u Origin inválido (csrf_invalid)"},
         404: {"description": "Materia inexistente o de otro tenant (not_found)"},
-        409: {"description": "Token de variante ya consumido (invalid_transition)"},
-        422: {"description": "consent_required | language_not_allowed | validation_failed"},
+        422: {
+            "description": (
+                "consent_required | language_not_allowed | validation_failed "
+                "(incluye variant_confirmation_token inválido, caducado o ya consumido)"
+            )
+        },
         429: {"description": "Cuota por usuario (rate_limited), con Retry-After"},
         503: {"description": "Sin slot de ingesta (capacity_unavailable), con Retry-After"},
     },
@@ -442,44 +499,65 @@ async def upload_content(
     sink: Annotated[ReceptionSink, Depends(get_reception_sink)],
     content_length: Annotated[int | None, Header()] = None,
 ) -> Response:
-    """A2.4: recibe el binario en streaming sin spool y devuelve 200/202 (o un error tipado).
+    """A2.4/A2.14: claim the attempt, then receive the stream without spool.
 
-    Todas las validaciones de abajo ocurren ANTES de leer un byte; la recepción, el SHA-256,
-    el corte en caliente, el dedupe y la compensación viven en `services/uploads` (el router
-    no hace SQL ni toca el cuerpo, guardia ADR-0006).
+    Ownership, the upload window and the declared size are checked before any byte; the
+    claim (`awaiting_upload → receiving`, row-locked) also happens before the first byte, so
+    a second PUT stops at the API with `409 attempt_not_active` instead of reaching the sink.
+    The reception, SHA-256, hot cut, dedupe and compensation live in `services/uploads`; this
+    router only resolves ownership and delegates SQL to the services (ADR-0006).
     """
-    audio = await get_owned(db, Audio, session.user_id, audio_id)
-    if audio is None or audio.deleted_at is not None:
-        raise not_found()
-    attempt = await get_owned(db, IngestionAttempt, session.user_id, attempt_id)
-    if attempt is None or attempt.audio_id != audio.id:
-        raise not_found()
-    if attempt.status != "awaiting_upload":
-        raise ApiError(409, "attempt_not_active", "Este intento de subida ya no está activo.")
-    if attempt.upload_expires_at is None:
-        # Un intento sin ventana de subida no admite bytes: no "expiró", nunca estuvo activo.
-        raise ApiError(409, "attempt_not_active", "Este intento de subida ya no está activo.")
-    if attempt.upload_expires_at <= datetime.now(UTC):
-        raise ApiError(410, "upload_expired", "La subida expiró; vuelve a crear la clase.")
-    # Pre-filtro por cabecera, sin leer bytes: el límite real se impone contando los bytes
-    # durante el streaming (una subida chunked no declara Content-Length).
+    # Plain value: `open_reception` commits the claim and a committing session may expire
+    # the ORM `session` object (tests use `expire_on_commit=True`).
+    user_id = session.user_id
+    # Ownership, status, window and the atomic claim: a foreign id is a 404, a second PUT a
+    # 409 and an elapsed window a 410, all before the sink is opened (A2.14).
+    claim = await open_reception(
+        db, user_id=user_id, audio_id=audio_id, attempt_id=attempt_id
+    )
+    # Header pre-filter, no bytes read: the real limit is enforced while streaming (a chunked
+    # upload does not declare Content-Length). A rejection releases the claim now, so the
+    # slot does not stay held until `upload_expires_at`.
     limit = effective_upload_limit()
     if content_length is not None and content_length > limit:
+        await cancel_reservation(
+            db,
+            user_id=user_id,
+            attempt_id=attempt_id,
+            fencing_token=claim.fencing_token,
+            from_status="receiving",
+        )
         raise ApiError(
             413,
             "payload_too_large",
             "El archivo supera el tamaño máximo permitido.",
             {"max_bytes": limit},
         )
-    outcome = await receive_content(
-        db,
-        request,
-        sink,
-        user_id=session.user_id,
-        audio=audio,
-        attempt=attempt,
-        content_length=content_length,
-    )
+    try:
+        outcome = await receive_content(
+            db,
+            request,
+            sink,
+            user_id=user_id,
+            audio=claim.audio,
+            attempt=claim.attempt,
+            content_length=content_length,
+        )
+    except BaseException:
+        # Release only while the API still owns the row: the fencing token in the
+        # conditional update makes this a no-op once `ingest` acquired the reception, so
+        # `ingest` writes the terminal state under its lease (ADR-0008 §5). `BaseException`
+        # includes a client disconnect and task cancellation; the release itself never
+        # raises, and an unreleased row is reaped by `expire_stale_reservations`.
+        with suppress(BaseException):
+            await cancel_reservation(
+                db,
+                user_id=user_id,
+                attempt_id=attempt_id,
+                fencing_token=claim.fencing_token,
+                from_status="receiving",
+            )
+        raise
     return JSONResponse(status_code=outcome.status_code, content=outcome.payload)
 
 
@@ -560,6 +638,9 @@ async def delete_audio(
             attempts_cancelled=result.attempts_cancelled,
             outbox_events_skipped=result.outbox_events_skipped,
             processing_runs_cancelled=result.processing_runs_cancelled,
+            tasks_deleted=result.tasks_deleted,
+            task_sources_deleted=result.task_sources_deleted,
+            task_revisions_deleted=result.task_revisions_deleted,
             message_sources_deleted=result.message_sources_deleted,
             messages_tombstoned=result.messages_tombstoned,
             embeddings_deleted=result.embeddings_deleted,
@@ -713,6 +794,36 @@ async def get_audio(
     audio = await _owned_live_audio(db, session.user_id, audio_id)
     detail = await library.get_audio_detail(db, user_id=session.user_id, audio=audio)
     return _detail_out(detail)
+
+
+@router.get(
+    "/audios/{audio_id}/runs",
+    responses={
+        200: {"description": "Historial durable de runs, más recientes primero"},
+        401: {"description": "Sin sesión (auth_required)"},
+        404: {"description": "Audio inexistente, ajeno o tombstoneado (not_found)"},
+    },
+)
+async def audio_runs(
+    audio_id: uuid.UUID,
+    response: Response,
+    session: CurrentSession,
+    db: DbSession,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> ProcessingRunsOut:
+    """S3.4: every run with the transcript/config/prompt version it applied.
+
+    Version bumps create new rows instead of overwriting the previous one, so this ledger
+    answers «which result came from which prompt/config»; `current` marks the run of the
+    active transcript and current versions. Tenant scoping is enforced by the ownership
+    lookup and by the query filter (ADR-0006).
+    """
+    response.headers["Cache-Control"] = "no-store"
+    audio = await _owned_live_audio(db, session.user_id, audio_id)
+    entries = await run_history(
+        db, user_id=session.user_id, audio=audio, limit=limit
+    )
+    return ProcessingRunsOut(items=[_run_out(entry) for entry in entries])
 
 
 @router.get(

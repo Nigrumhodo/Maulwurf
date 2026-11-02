@@ -107,6 +107,14 @@ class StubSession:
 
     async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> _Rows:
         sql = str(statement)
+        # A2.17: session resolution binds the bootstrap token hash and then the tenant.
+        if "set_config" in sql:
+            self.events.append("sql:set_config")
+            return _Rows(None)
+        # A2.14: the capacity counter runs under a transaction advisory lock.
+        if "pg_advisory_xact_lock" in sql:
+            self.events.append("sql:capacity_lock")
+            return _Rows(None)
         if sql.startswith("UPDATE"):
             self.token_updates += 1
             self.events.append("sql:consume_token")
@@ -115,6 +123,9 @@ class StubSession:
         if "FROM sessions" in sql:
             self.events.append("sql:resolve_session")
             return _Rows(self.session_row)
+        if "FROM users" in sql:
+            self.events.append("sql:owner_status")
+            return _Rows("active")
         if "FROM subjects" in sql:
             self.events.append("sql:subject")
             return _Rows(self.subject)
@@ -143,6 +154,8 @@ def _published(**overrides: Any) -> dict[str, Any]:
         "languages": ["es"],
         "language_policy": "explicit_select_required_no_multi",
         "ttl": {"upload_start_minutes": 10, "receive_minutes": 30, "asr_minutes": 60},
+        "ttl_source_report": "docs/eval/ttl-benchmark.md",
+        "ttl_source_version": "2026-11-01",
         "asr": {
             "provider": "nvidia-riva",
             "model": "whisper-large-v3",
@@ -528,7 +541,9 @@ def test_full_slot_is_503_with_retry_after_and_no_rows(
     assert response.json()["error"]["code"] == "capacity_unavailable"
     assert response.headers["retry-after"] == str(audios_service.RETRY_AFTER_SECONDS)
     _assert_no_writes(stub)
-    assert "sql:count_slot" in stub.events
+    # A2.14: the global counter runs under the advisory lock, so a concurrent POST waits
+    # for this reservation's commit before it counts.
+    assert stub.events.index("sql:capacity_lock") < stub.events.index("sql:count_slot")
 
 
 def test_exhausted_quota_is_429_with_retry_after_and_no_rows(
@@ -544,7 +559,8 @@ def test_exhausted_quota_is_429_with_retry_after_and_no_rows(
     assert response.json()["error"]["code"] == "rate_limited"
     assert response.headers["retry-after"] == str(audios_service.RETRY_AFTER_SECONDS)
     _assert_no_writes(stub)
-    assert "sql:count_quota" in stub.events
+    # A2.14: the per-user lock serializes this user's count-and-insert.
+    assert stub.events.index("sql:capacity_lock") < stub.events.index("sql:count_quota")
 
 
 def test_identical_consecutive_posts_both_reserve() -> None:

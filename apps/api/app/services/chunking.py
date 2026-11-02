@@ -1,8 +1,8 @@
 """Chunking of transcripts into indexable ~800-token windows (L2.1, S2.md §1.1).
 
 Pure decision core: no I/O, no DB, no router imports. It turns a stored
-``transcript.text`` plus its ordered ``segments`` rows into chunk drafts that are 1:1
-with the ``chunks``/``chunk_segments`` tables of migration ``0002_s2_schema``
+``transcript.text`` plus its ordered ``segments`` rows into §M6 `Chunk` objects that are
+1:1 with the ``chunks``/``chunk_segments`` tables of migration ``0002_s2_schema``
 (ESPECIFICACION.md M6: target ~800 tokens with ~100 overlap, preferred cuts at sentence
 and ASR segment boundaries, Unicode offsets ``[start, end)`` preserved).
 
@@ -15,9 +15,10 @@ closed yet. The default now uses the official BPE tokenizer (`tiktoken`, cl100k_
 keeps the old deterministic heuristic only as a conservative fallback when the tokenizer
 cannot be loaded. The definitive ``token_count`` model mapping still arrives with L2.2/D5.
 
-This module deliberately does NOT import the §M6 Pydantic schema: reconciling it with the
-persisted tables is ticket L2.9, which is still open. The drafts below are shaped after the
-tables instead, so they persist with no extra mapping once L2.2 consumes them.
+This module emits the §M6 `Chunk` contract directly (`app.schemas.chunk`) so the indexer
+persists it into `chunks`/`chunk_segments` without remapping fields: `user_id` comes from
+the tenant context and `tsv` is derived at write time. The aligned contract and the
+`overlap_span` JSON shape are ticket L2.9.
 """
 
 import logging
@@ -28,6 +29,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
+
+from app.schemas.chunk import Chunk, ChunkSegmentLink, ChunkSegmentSpan, OverlapRegion
 
 logger = logging.getLogger(__name__)
 
@@ -149,36 +152,12 @@ class SegmentInput:
 
 
 @dataclass(frozen=True)
-class ChunkSegmentDraft:
-    """One `chunk_segments` row: offsets local to the segment, plus the overlap region."""
+class TextUnit:
+    """Atomic sentence span, or a token-bounded piece of one.
 
-    segment_id: UUID
-    segment_ordinal: int
-    inicio_char: int
-    fin_char: int
-    overlap_span: dict[str, int] | None
-
-
-@dataclass(frozen=True)
-class ChunkDraft:
-    """One `chunks` row: global character offsets and its links to segments."""
-
-    audio_id: UUID
-    transcript_version: int
-    index_version: str
-    ordinal: int
-    content: str
-    char_start: int
-    char_end: int
-    token_count: int
-    t_start: float | None
-    t_end: float | None
-    segments: list[ChunkSegmentDraft]
-
-
-@dataclass(frozen=True)
-class _Unit:
-    """Atomic chunker unit: a sentence span, or a token-bounded piece of one."""
+    Shared by the §M6 chunker and the M4 analysis windows so both cut at the same sentence
+    boundaries with the same Unicode offsets.
+    """
 
     start: int
     end: int
@@ -186,9 +165,43 @@ class _Unit:
     segment_index: int
 
 
+def transcript_units(
+    *,
+    transcript_text: str,
+    segments: Sequence[SegmentInput],
+    target_tokens: int = TARGET_TOKENS,
+    count_tokens: TokenCounter = count_tokens_default,
+) -> list[TextUnit]:
+    """Validated contiguous units covering ``transcript_text``.
+
+    Raises ``ValueError`` on the same segment invariants as ``chunk_segments``. A blank
+    transcript has no units; text without segments is rejected because no offset could be
+    trusted.
+    """
+    if target_tokens < 1:
+        raise ValueError("target_tokens debe ser >= 1")
+    if not transcript_text.strip():
+        return []
+    if not segments:
+        raise ValueError("se requiere al menos un segmento cuando hay texto")
+    _validate_segments(transcript_text, segments)
+    units: list[TextUnit] = []
+    for segment_index, segment in enumerate(segments):
+        units.extend(
+            _segment_units(
+                segment_index,
+                segment,
+                target_tokens=target_tokens,
+                count_tokens=count_tokens,
+            )
+        )
+    return units
+
+
 def chunk_segments(
     *,
     audio_id: UUID,
+    transcript_id: UUID,
     transcript_version: int,
     index_version: str,
     transcript_text: str,
@@ -196,8 +209,8 @@ def chunk_segments(
     target_tokens: int = TARGET_TOKENS,
     overlap_tokens: int = OVERLAP_TOKENS,
     count_tokens: TokenCounter = count_tokens_default,
-) -> list[ChunkDraft]:
-    """Produce the ordered chunk drafts for one transcript version.
+) -> list[Chunk]:
+    """Produce the ordered §M6 chunks for one transcript version.
 
     Raises ``ValueError`` when the input violates the frozen invariants (non-increasing
     ordinals, a segment range outside the text, a ``text`` that does not match its range,
@@ -210,38 +223,28 @@ def chunk_segments(
     if overlap_tokens < 0:
         raise ValueError("overlap_tokens debe ser >= 0")
     # A whitespace-only transcript has no indexable content; never emit a blank chunk.
-    if not transcript_text.strip():
-        return []
-    if not segments:
-        raise ValueError("se requiere al menos un segmento cuando hay texto")
-
-    _validate_segments(transcript_text, segments)
-
-    units: list[_Unit] = []
-    for segment_index, segment in enumerate(segments):
-        units.extend(
-            _segment_units(
-                segment_index,
-                segment,
-                target_tokens=target_tokens,
-                count_tokens=count_tokens,
-            )
-        )
+    units = transcript_units(
+        transcript_text=transcript_text,
+        segments=segments,
+        target_tokens=target_tokens,
+        count_tokens=count_tokens,
+    )
     if not units:
         return []
 
-    drafts: list[ChunkDraft] = []
+    chunks: list[Chunk] = []
     previous_range: tuple[int, int] | None = None
     for ordinal, (first, last) in enumerate(_chunk_ranges(units, target_tokens, overlap_tokens)):
         char_start = units[first].start
         char_end = units[last - 1].end
-        drafts.append(
-            _build_draft(
+        chunks.append(
+            _build_chunk(
                 ordinal=ordinal,
                 char_start=char_start,
                 char_end=char_end,
                 previous_range=previous_range,
                 audio_id=audio_id,
+                transcript_id=transcript_id,
                 transcript_version=transcript_version,
                 index_version=index_version,
                 transcript_text=transcript_text,
@@ -250,7 +253,7 @@ def chunk_segments(
             )
         )
         previous_range = (char_start, char_end)
-    return drafts
+    return chunks
 
 
 def _validate_segments(transcript_text: str, segments: Sequence[SegmentInput]) -> None:
@@ -294,14 +297,14 @@ def _segment_units(
     *,
     target_tokens: int,
     count_tokens: TokenCounter,
-) -> list[_Unit]:
-    units: list[_Unit] = []
+) -> list[TextUnit]:
+    units: list[TextUnit] = []
     for local_start, local_end in split_sentences(segment.text):
         global_start = segment.char_start + local_start
         global_end = segment.char_start + local_end
         tokens = count_tokens(segment.text[local_start:local_end])
         if tokens <= target_tokens:
-            units.append(_Unit(global_start, global_end, tokens, segment_index))
+            units.append(TextUnit(global_start, global_end, tokens, segment_index))
         else:
             units.extend(
                 _split_oversized(
@@ -372,19 +375,19 @@ def _split_oversized(
     segment_index: int,
     target_tokens: int,
     count_tokens: TokenCounter,
-) -> list[_Unit]:
+) -> list[TextUnit]:
     """Split a sentence that alone exceeds ``target_tokens``, preserving character offsets.
 
     The cut prefers the last whitespace inside the token-bounded prefix so a word is not
     split unless unavoidable (for example in CJK text with no spaces).
     """
-    units: list[_Unit] = []
+    units: list[TextUnit] = []
     position = start
     while position < end:
         split = _max_prefix_end(text, position, end, target_tokens, count_tokens)
         if split >= end:
             units.append(
-                _Unit(
+                TextUnit(
                     offset + position, offset + end, count_tokens(text[position:end]), segment_index
                 )
             )
@@ -395,7 +398,7 @@ def _split_oversized(
         elif split <= position:
             split = position + 1
         units.append(
-            _Unit(
+            TextUnit(
                 offset + position,
                 offset + split,
                 count_tokens(text[position:split]),
@@ -407,7 +410,7 @@ def _split_oversized(
 
 
 def _chunk_ranges(
-    units: Sequence[_Unit], target_tokens: int, overlap_tokens: int
+    units: Sequence[TextUnit], target_tokens: int, overlap_tokens: int
 ) -> list[tuple[int, int]]:
     """Greedy unit ranges, each overlapping the previous one by up to ``overlap_tokens``.
 
@@ -430,7 +433,7 @@ def _chunk_ranges(
     return ranges
 
 
-def _greedy_end(units: Sequence[_Unit], first: int, target_tokens: int) -> int:
+def _greedy_end(units: Sequence[TextUnit], first: int, target_tokens: int) -> int:
     """Exclusive end of the greedy chunk that starts at ``first`` (at least one unit)."""
     last = first
     tokens = 0
@@ -441,7 +444,7 @@ def _greedy_end(units: Sequence[_Unit], first: int, target_tokens: int) -> int:
 
 
 def _next_start(
-    units: Sequence[_Unit], first: int, last: int, target_tokens: int, overlap_tokens: int
+    units: Sequence[TextUnit], first: int, last: int, target_tokens: int, overlap_tokens: int
 ) -> int:
     """First unit of the next chunk: sentence-aligned overlap that still makes progress.
 
@@ -460,20 +463,21 @@ def _next_start(
     return start
 
 
-def _build_draft(
+def _build_chunk(
     *,
     ordinal: int,
     char_start: int,
     char_end: int,
     previous_range: tuple[int, int] | None,
     audio_id: UUID,
+    transcript_id: UUID,
     transcript_version: int,
     index_version: str,
     transcript_text: str,
     segments: Sequence[SegmentInput],
     count_tokens: TokenCounter,
-) -> ChunkDraft:
-    links: list[ChunkSegmentDraft] = []
+) -> Chunk:
+    links: list[ChunkSegmentLink] = []
     times: list[tuple[float | None, float | None]] = []
     for segment in segments:
         local_start = max(char_start, segment.char_start) - segment.char_start
@@ -481,21 +485,29 @@ def _build_draft(
         if local_end <= local_start:
             continue
         links.append(
-            ChunkSegmentDraft(
+            ChunkSegmentLink(
                 segment_id=segment.id,
-                segment_ordinal=segment.ordinal,
-                inicio_char=local_start,
-                fin_char=local_end,
-                overlap_span=_overlap_span(
-                    char_start, char_end, previous_range, segment, transcript_text, count_tokens
+                overlap_span=ChunkSegmentSpan(
+                    segment_ordinal=segment.ordinal,
+                    inicio_char=local_start,
+                    fin_char=local_end,
+                    overlap=_overlap_region(
+                        char_start,
+                        char_end,
+                        previous_range,
+                        segment,
+                        transcript_text,
+                        count_tokens,
+                    ),
                 ),
             )
         )
         times.append((segment.t_start, segment.t_end))
     t_start, t_end = _derive_times(times)
     content = transcript_text[char_start:char_end]
-    return ChunkDraft(
+    return Chunk(
         audio_id=audio_id,
+        transcript_id=transcript_id,
         transcript_version=transcript_version,
         index_version=index_version,
         ordinal=ordinal,
@@ -509,37 +521,46 @@ def _build_draft(
     )
 
 
-def _overlap_span(
+def _overlap_region(
     char_start: int,
     char_end: int,
     previous_range: tuple[int, int] | None,
     segment: SegmentInput,
     transcript_text: str,
     count_tokens: TokenCounter,
-) -> dict[str, int] | None:
-    """Global overlap region with the previous chunk, clamped to this segment; else ``None``.
+) -> OverlapRegion | None:
+    """Segment-local region shared with the previous chunk, or ``None``.
 
-    The JSON shape is provisional: L2.9 owns validating it against the `overlap_span` jsonb
-    column once the §M6 contract and the persisted tables are reconciled.
+    The chunk-level overlap is intersected with the linked segment; both ends are shifted
+    to the segment's local offsets, the convention frozen by the `chunk_segments`
+    `overlap_span` payload (L2.9).
     """
     if previous_range is None:
         return None
     overlap_start = max(char_start, previous_range[0])
     overlap_end = min(char_end, previous_range[1])
-    span_start = max(overlap_start, segment.char_start)
-    span_end = min(overlap_end, segment.char_end)
+    span_start = max(overlap_start, segment.char_start) - segment.char_start
+    span_end = min(overlap_end, segment.char_end) - segment.char_start
     if span_start >= span_end:
         return None
-    return {
-        "char_start": span_start,
-        "char_end": span_end,
-        "tokens": count_tokens(transcript_text[span_start:span_end]),
-    }
+    return OverlapRegion(
+        inicio_char=span_start,
+        fin_char=span_end,
+        tokens=count_tokens(
+            transcript_text[segment.char_start + span_start : segment.char_start + span_end]
+        ),
+    )
 
 
 def _derive_times(
     times: Sequence[tuple[float | None, float | None]],
 ) -> tuple[float | None, float | None]:
+    """Derived chunk range, or `(None, None)` when the evidence has no positive duration.
+
+    A chunk made only of zero-duration segments has `min(start) == max(end)`; publishing
+    that as a time range would be a degenerate (and misleading) citation anchor, so the
+    contract's `0 <= t_start < t_end` stays strict and the times become nullable.
+    """
     if not times:
         return (None, None)
     starts: list[float] = []
@@ -549,4 +570,6 @@ def _derive_times(
             return (None, None)
         starts.append(start)
         ends.append(end)
+    if min(starts) >= max(ends):
+        return (None, None)
     return (min(starts), max(ends))
