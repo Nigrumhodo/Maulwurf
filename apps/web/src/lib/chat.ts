@@ -72,6 +72,18 @@ export type ChatStreamEvent =
     }
   | { type: "error"; code: string; message: string };
 
+/** Una cita por índice: el historial puede repetir el mismo `[Sn]` en varios fragmentos. */
+export function dedupeCitations(citations: ChatCitation[]): ChatCitation[] {
+  const seen = new Set<number>();
+  const unique: ChatCitation[] = [];
+  for (const citation of citations) {
+    if (seen.has(citation.index)) continue;
+    seen.add(citation.index);
+    unique.push(citation);
+  }
+  return unique;
+}
+
 function pageParams(cursor: string | null): string {
   const params = new URLSearchParams({ limit: "50" });
   if (cursor !== null) params.set("cursor", cursor);

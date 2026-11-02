@@ -6,6 +6,7 @@ import { setCsrfToken, clearCsrfToken } from "@/lib/csrf";
 import {
   chatActionError,
   createConversation,
+  dedupeCitations,
   deleteConversation,
   fetchConversationMessages,
   fetchConversations,
@@ -99,6 +100,27 @@ describe("parseChatEvent", () => {
 });
 
 describe("contrato de conversaciones", () => {
+  it("deduplica citas persistidas por índice", () => {
+    const citation = {
+      index: 1,
+      audio_id: "a1",
+      transcript_version: 1,
+      chunk_id: "c1",
+      segment_id: "s1",
+      t_start: 0,
+      t_end: 5,
+      label: "clase · 0:05",
+      url: "/biblioteca/a1?segment=s1",
+    };
+    expect(
+      dedupeCitations([
+        citation,
+        { ...citation, chunk_id: "c2" },
+        { ...citation, index: 2, chunk_id: "c3" },
+      ]).map((item) => item.index),
+    ).toEqual([1, 2]);
+  });
+
   it("lista y pagina con no-store", async () => {
     const page = { items: [], next_cursor: "next" };
     const fetchMock = vi.fn().mockResolvedValue(json(page));

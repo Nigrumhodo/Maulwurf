@@ -12,6 +12,7 @@ import {
   cancelChatMessage,
   chatActionError,
   createConversation,
+  dedupeCitations,
   deleteConversation,
   fetchConversationMessages,
   fetchConversations,
@@ -57,7 +58,7 @@ function fromServer(message: ChatMessage): UiMessage {
     content: message.content,
     status: message.status,
     clientMessageId: message.client_message_id,
-    citations: Array.isArray(message.citas) ? message.citas : [],
+    citations: Array.isArray(message.citas) ? dedupeCitations(message.citas) : [],
   };
 }
 
