@@ -1,7 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
-import { folder, madriguera } from "@/components/Visual";
+import { folder, folderClaro, madriguera, madrigueraClaro } from "@/components/Visual";
 import { Clock } from "./Clock";
 
 function navClass({ isActive }: { isActive: boolean }): string {
@@ -31,12 +31,22 @@ export function Header() {
 
         <div className="flex items-center gap-2">
           <NavLink to="/" end className={navClass}>
-            <img src={madriguera} alt="" className="h-9 w-9" style={{ imageRendering: "pixelated" }} />
+            <span className="img-dark-only">
+              <img src={madriguera} alt="" className="h-9 w-9 object-contain" style={{ imageRendering: "pixelated" }} />
+            </span>
+            <span className="img-light-only">
+              <img src={madrigueraClaro} alt="" className="h-9 w-9 object-contain" style={{ imageRendering: "pixelated" }} />
+            </span>
             inicio
           </NavLink>
 
           <NavLink to="/gestion" className={navClass}>
-            <img src={folder} alt="" className="h-9 w-9" style={{ imageRendering: "pixelated" }} />
+            <span className="img-dark-only">
+              <img src={folder} alt="" className="h-9 w-9 object-contain" style={{ imageRendering: "pixelated" }} />
+            </span>
+            <span className="img-light-only">
+              <img src={folderClaro} alt="" className="h-9 w-9 object-contain" style={{ imageRendering: "pixelated" }} />
+            </span>
             <span className="capitalize">gestión</span>
           </NavLink>
         </div>
