@@ -476,13 +476,17 @@ async def _embed_generation(
 async def _verify_generation(
     db: AsyncSession, *, user_id: uuid.UUID, version: str
 ) -> _Verification:
+    # Counts stay first: activation's single transaction is pinned to that order.
+    chunks = await _count(db, _chunk_count_statement(user_id, version=version))
+    embeddings = await _count(db, _embedding_count_statement(user_id, version=version))
+    chunks_without_embeddings = await _count(
+        db, _chunks_without_embeddings_count_statement(user_id, version=version)
+    )
     missing = await _missing_audio_ids(db, user_id=user_id, version=version)
     return _Verification(
-        chunks=await _count(db, _chunk_count_statement(user_id, version=version)),
-        embeddings=await _count(db, _embedding_count_statement(user_id, version=version)),
-        chunks_without_embeddings=await _count(
-            db, _chunks_without_embeddings_count_statement(user_id, version=version)
-        ),
+        chunks=chunks,
+        embeddings=embeddings,
+        chunks_without_embeddings=chunks_without_embeddings,
         missing_audios=len(missing),
         missing_audio_ids=tuple(missing),
     )

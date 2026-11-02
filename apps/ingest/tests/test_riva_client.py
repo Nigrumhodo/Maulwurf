@@ -380,7 +380,8 @@ def test_the_riva_channel_cannot_trace_the_bearer(monkeypatch: pytest.MonkeyPatc
         (),
         None,
     )
-    assert logging.getLogger("grpc").filter(record) is True
+    # Logger.filter returns the record on success, not True.
+    assert logging.getLogger("grpc").filter(record)
     assert "nvapi-secret" not in record.getMessage()
     assert "Bearer [REDACTED]" in record.getMessage()
 
