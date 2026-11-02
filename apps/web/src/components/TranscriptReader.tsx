@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/Button";
 import { buttonClasses } from "@/components/ui/buttonStyles";
 import { Card } from "@/components/ui/Card";
@@ -36,6 +36,7 @@ export function TranscriptReader({
   activeSegmentId,
 }: TranscriptReaderProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   const [srtBusy, setSrtBusy] = useState(false);
   const [srtUnavailable, setSrtUnavailable] = useState(false);
   const [srtError, setSrtError] = useState<string | null>(null);
@@ -74,12 +75,23 @@ export function TranscriptReader({
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-2">
-        <Link
-          to="/gestion/biblioteca"
-          className="lowercase font-pixel text-mint hover:underline"
-        >
-          &lt; volver a la biblioteca
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            aria-label="volver atrás"
+            onClick={() => navigate(-1)}
+          >
+            ← atrás
+          </Button>
+          <Link
+            to="/gestion/biblioteca"
+            className="lowercase font-pixel text-mint hover:underline"
+          >
+            &lt; volver a la biblioteca
+          </Link>
+        </div>
         <div className="flex flex-wrap items-center gap-3">
           <span
             aria-hidden="true"

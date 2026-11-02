@@ -97,6 +97,8 @@ describe("TranscriptReader", () => {
     ).toBe("/biblioteca/a1?segment=s2");
     expect(screen.getByText("primer segmento")).toBeTruthy();
     expect(screen.getByText("segundo segmento")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "volver atrás" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /volver a la biblioteca/i })).toBeTruthy();
   });
 
   it("muestra el ordinal cuando no hay tiempos fiables", () => {
