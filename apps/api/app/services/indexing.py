@@ -148,6 +148,8 @@ class _Verification:
     embeddings: int
     chunks_without_embeddings: int
     missing_audios: int
+    # Eligible classes this user-wide generation did not chunk. One of them blocks activation.
+    missing_audio_ids: tuple[uuid.UUID, ...] = ()
 
 
 def require_text_kind(text_kind: str) -> TextKind:
@@ -275,11 +277,15 @@ async def activate_generation(
             details={"reason": "no_content", "chunks": verification.chunks},
         )
     if verification.chunks_without_embeddings or verification.missing_audios:
+        # The version name is one class, but the rows cover every eligible class of the user.
+        # Naming the blocked ids keeps a partial class from looking like a one-class failure.
         raise GenerationIncomplete(
-            "La generación está incompleta: activarla expondría un índice parcial.",
+            "La generación cubre todas las clases elegibles del usuario y está incompleta.",
             details={
+                "scope": "user",
                 "chunks_without_embeddings": verification.chunks_without_embeddings,
                 "missing_audios": verification.missing_audios,
+                "blocked_audio_ids": [str(audio_id) for audio_id in verification.missing_audio_ids],
             },
         )
     activated_at = datetime.now(UTC)
@@ -470,13 +476,19 @@ async def _embed_generation(
 async def _verify_generation(
     db: AsyncSession, *, user_id: uuid.UUID, version: str
 ) -> _Verification:
+    # Counts stay first: activation's single transaction is pinned to that order.
+    chunks = await _count(db, _chunk_count_statement(user_id, version=version))
+    embeddings = await _count(db, _embedding_count_statement(user_id, version=version))
+    chunks_without_embeddings = await _count(
+        db, _chunks_without_embeddings_count_statement(user_id, version=version)
+    )
+    missing = await _missing_audio_ids(db, user_id=user_id, version=version)
     return _Verification(
-        chunks=await _count(db, _chunk_count_statement(user_id, version=version)),
-        embeddings=await _count(db, _embedding_count_statement(user_id, version=version)),
-        chunks_without_embeddings=await _count(
-            db, _chunks_without_embeddings_count_statement(user_id, version=version)
-        ),
-        missing_audios=len(await _missing_audio_ids(db, user_id=user_id, version=version)),
+        chunks=chunks,
+        embeddings=embeddings,
+        chunks_without_embeddings=chunks_without_embeddings,
+        missing_audios=len(missing),
+        missing_audio_ids=tuple(missing),
     )
 
 

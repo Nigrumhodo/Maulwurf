@@ -134,8 +134,8 @@ async def _store(db: AsyncSession, row: Notification) -> Notification:
     return row
 
 
-async def _claim(db: AsyncSession, row: Notification) -> None:
-    claim(row, now=NOW, lease_expires_at=NOW + timedelta(minutes=5))
+async def _claim(db: AsyncSession, row: Notification, *, now: datetime = NOW) -> None:
+    claim(row, now=now, lease_expires_at=now + timedelta(minutes=5))
     await db.flush()
 
 
@@ -540,11 +540,16 @@ async def test_a_lost_response_can_only_return_through_the_warned_resend(
     assert original.attempts == original_attempts
     assert original.updated_at == original_updated_at
 
-    # The new occurrence has its own claim and delivery; the original stays untouched.
+    # The resend endpoint stamps scheduled_at with the server clock, which is later
+    # than the frozen noon once that noon has passed. Claim at the row's own instant.
     new_sender = StubSender("sent")
-    await _claim(db_session, new_row)
+    await _claim(db_session, new_row, now=new_row.scheduled_at)
     report = await settle_delivery(
-        db_session, new_id, sender=new_sender, sender_timeout=SENDER_TIMEOUT, now=NOW
+        db_session,
+        new_id,
+        sender=new_sender,
+        sender_timeout=SENDER_TIMEOUT,
+        now=new_row.scheduled_at,
     )
     assert report.outcome == "sent"
     assert await _count(db_session, actor, status="sent") == 1

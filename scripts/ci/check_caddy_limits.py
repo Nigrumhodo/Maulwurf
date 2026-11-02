@@ -282,7 +282,7 @@ def check(caddyfile: Path) -> Report:
         )
     if api >= upload:
         _fail("request_body.max_size for @api must be lower than the @upload one")
-    # Unknown routes (including POST /search and /chat/*) reach the web fallback.
+    # Routes absent from @api, including an unknown POST, reach the web fallback.
     if fallback > api:
         _fail("the catch-all web handler ceiling must not exceed the @api ceiling")
     if timeouts.read_body < API_UPLOAD_TTL_SECONDS:

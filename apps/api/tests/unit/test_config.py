@@ -27,7 +27,12 @@ def _settings(**overrides: Any) -> Settings:
 
 
 def _prod(**overrides: Any) -> Settings:
-    return _settings(env="prod", **{**PROD_URLS, **overrides})
+    # Non-local refuses to boot without an OAuth window and a metrics bearer.
+    required = {
+        "metrics_token": "m" * 32,
+        "auth_rate_limit_per_minute": 30,
+    }
+    return _settings(env="prod", **{**PROD_URLS, **required, **overrides})
 
 
 @pytest.mark.parametrize("missing", sorted(SECRETS))
@@ -58,13 +63,25 @@ def test_change_me_placeholder_allowed_in_local() -> None:
     assert _settings(secret_key="change-me").env == "local"
 
 
+def test_non_local_requires_an_oauth_limit_and_a_metrics_token() -> None:
+    with pytest.raises(ValidationError, match="auth_rate_limit_per_minute"):
+        _settings(env="prod", **PROD_URLS, metrics_token="m" * 32)
+    with pytest.raises(ValidationError, match="metrics_token"):
+        _settings(env="prod", **PROD_URLS, auth_rate_limit_per_minute=30)
+    with pytest.raises(ValidationError, match="metrics_token"):
+        _prod(metrics_token="short")
+
+
 def test_the_notification_scheduler_is_disabled_by_default() -> None:
     # J4.2 claims into `sending`; J4.1 is the consumer. Without it, claims would expire into
-    # a false `delivery_unknown`, so the flag is opt-in only.
-    assert _settings().notification_scheduler_enabled is False
-    assert (
-        _settings(notification_scheduler_enabled=True).notification_scheduler_enabled is True
-    )
+    # a false `delivery_unknown`, so both flags are opt-in and the scheduler flag alone
+    # must not be enough to claim.
+    settings = _settings()
+    assert settings.notification_scheduler_enabled is False
+    assert settings.notification_delivery_enabled is False
+    enabled = _settings(notification_scheduler_enabled=True, notification_delivery_enabled=True)
+    assert enabled.notification_scheduler_enabled is True
+    assert enabled.notification_delivery_enabled is True
 
 
 # --- A2.16 / U-S2-AN-15: fail-closed settings -----------------------------------------
@@ -287,7 +304,12 @@ def test_dev_defaults_rejected_outside_local(
     urls = {k: v for k, v in PROD_URLS.items() if k != field}
 
     with pytest.raises(ValidationError, match=f"{field} conserva el valor de desarrollo"):
-        _settings(env="prod", **urls)
+        _settings(
+            env="prod",
+            metrics_token="m" * 32,
+            auth_rate_limit_per_minute=30,
+            **urls,
+        )
 
 
 def test_prod_with_explicit_values_is_accepted() -> None:
@@ -333,7 +355,13 @@ def test_dev_default_guard_also_covers_default_factory(
 
     urls = {k: v for k, v in PROD_URLS.items() if k != "redis_url"}
     with pytest.raises(ValidationError, match="redis_url conserva el valor de desarrollo"):
-        FactorySettings(_env_file=None, env="prod", **{**SECRETS, **urls})
+        FactorySettings(
+            _env_file=None,
+            env="prod",
+            metrics_token="m" * 32,
+            auth_rate_limit_per_minute=30,
+            **{**SECRETS, **urls},
+        )
 
 
 def test_empty_language_allowlist_is_rejected() -> None:

@@ -77,11 +77,13 @@ async def schedule_notifications(ctx: dict[str, Any]) -> None:
 
     Disabled by default (`MAULWURF_NOTIFICATION_SCHEDULER_ENABLED=false`): J4.1 (Gmail) owns
     the consumer of `sending`, and claiming before it is deployed would turn due rows into a
-    false, terminal `delivery_unknown` after the delivery lease expires. With the flag off
-    the cron returns before opening a session: it neither elects nor moves any row.
+    false, terminal `delivery_unknown` after the delivery lease expires. With either flag
+    off the cron returns before opening a session: it neither elects nor moves any row.
+    `MAULWURF_NOTIFICATION_DELIVERY_ENABLED` is the consumer gate, so the scheduler flag
+    alone cannot leave due rows in `sending`.
     """
     del ctx  # The cron needs no Redis; delivery is J4.1's job.
-    if not settings.notification_scheduler_enabled:
+    if not settings.notification_scheduler_enabled or not settings.notification_delivery_enabled:
         return
     token = bind_cross_tenant()
     try:

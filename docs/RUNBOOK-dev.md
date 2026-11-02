@@ -74,6 +74,37 @@ The 8 services (`web`, `api`, `ingest`, `worker`, `scheduler`, `postgres`,
 `redis`, `caddy`) end up `healthy`. `api` applies the migrations on startup (§5);
 `worker`/`scheduler` are ARQ processes with healthcheck `arq ... --check` (J1.5).
 
+### What `docker compose up` does not do
+
+A healthy default stack is not an end-to-end class. These gates stay closed until
+an operator sets them, and they must stay closed for real recordings while the F0
+decisions are open:
+
+| Gate | Default | What you see |
+| --- | --- | --- |
+| `MAULWURF_INGEST_URL` and the ingest credential unset | closed | streaming `PUT` answers `503` |
+| published `limits_validated=false` | closed | the web upload form stays disabled |
+| `MAULWURF_D3_TEXT_CLOSED_MODELS` empty | closed | the index job no-ops with `index_text_not_allowed` |
+| embedding or LLM URL/key unset | closed | index and chat fail closed (`provider_unavailable`) |
+
+The synthetic path that does run upload → transcript → cleanup → index → search →
+cited chat is the e2e overlay. It uses local doubles, never NVIDIA or a real model,
+and it must not receive real class audio. From `infra/`:
+
+```bash
+# Generate the ephemeral TLS material the ASR double expects (see the override header).
+bash ../scripts/e2e/gen_riva_tls.sh ../.e2e-tls
+E2E_ALLOW_EPHEMERAL_CREDENTIALS=1 \
+  docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build --wait
+```
+
+`E2E_ALLOW_EPHEMERAL_CREDENTIALS=1` is required or Compose refuses the override.
+The project name is `maulwurf-e2e`, so `down -v` does not wipe the normal stack.
+D3-Texto stays open: the override names only the synthetic model
+`maulwurf-e2e-synthetic-v1`. The browser form still waits on a published
+`limits_validated=true`; the smoke driver calls the API directly
+(`scripts/e2e/smoke_pipeline.py`).
+
 ## 3. Healthchecks
 
 ```bash

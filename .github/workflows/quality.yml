@@ -160,8 +160,20 @@ jobs:
           if [ "${{ matrix.app }}" = "ingest" ]; then
             # Root lee todo /proc. Sin eso, los procesos root del runner
             # cuentan como unreadable y ningún escenario queda verified.
+            # sudo -E is ignored on current runners, which drops MAULWURF_DATABASE_URL
+            # and makes every integration test skip. Pass the job env explicitly.
             set +e
-            output=$(sudo -E env "PATH=$PATH" uv run pytest -m integration -q 2>&1)
+            output=$(sudo env \
+              PATH="$PATH" \
+              HOME="$HOME" \
+              UV_CACHE_DIR="${UV_CACHE_DIR:-}" \
+              MAULWURF_ENV="${MAULWURF_ENV}" \
+              MAULWURF_DATABASE_URL="${MAULWURF_DATABASE_URL}" \
+              MAULWURF_REDIS_URL="${MAULWURF_REDIS_URL}" \
+              MAULWURF_SECRET_KEY="${MAULWURF_SECRET_KEY}" \
+              MAULWURF_ENCRYPTION_KEY="${MAULWURF_ENCRYPTION_KEY}" \
+              MAULWURF_OAUTH_STATE_SECRET="${MAULWURF_OAUTH_STATE_SECRET}" \
+              uv run pytest -m integration -q 2>&1)
             code=$?
             printf '%s\n' "$output"
             passed=$(printf '%s\n' "$output" | awk '{

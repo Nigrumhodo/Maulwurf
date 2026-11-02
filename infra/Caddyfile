@@ -62,8 +62,23 @@ https://localhost {
 		}
 	}
 
-	# 3) API JSON (M1/M2 y /readyz para el smoke I-S1-JF-01).
-	@api path /auth/* /me /me/* /subjects /subjects/* /integrations/* /audios /audios/* /ingestion/* /readyz
+	# 2b) Chat SSE. More specific than @api so the stream is not buffered. Cancel and
+	# the other chat routes stay on the JSON handler below.
+	@chat_sse path /chat/conversations/*/messages
+	handle @chat_sse {
+		request_body {
+			max_size 10MB
+		}
+		reverse_proxy api:8000 {
+			flush_interval -1
+		}
+	}
+
+	# 3) API JSON, including the S2–S4 surfaces. A path missing here falls through to
+	# the web SPA and the browser receives index.html instead of the API.
+	# `*` is one path segment, so nested chat and notification routes are listed
+	# out to the deepest segment they use.
+	@api path /auth/* /me /me/* /subjects /subjects/* /integrations/* /audios /audios/* /ingestion/* /search /chat /chat/* /chat/*/* /chat/*/*/* /chat/*/*/*/* /chat/*/*/*/*/* /calendar /calendar/* /notifications /notifications/* /notifications/*/* /readyz
 	handle @api {
 		# J2.10: JSON bodies are small; this is an abuse guard, not a contract limit.
 		request_body {
