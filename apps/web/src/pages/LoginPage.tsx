@@ -1,9 +1,8 @@
 import { useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { GoogleButton } from "@/components/auth/GoogleButton";
 import { Typewriter } from "@/components/motion/Typewriter";
-import { useAuth } from "@/components/auth/AuthProvider";
 
 // D1.3 — Mapeo de errores del callback OAuth a mensajes accionables. Las razones
 // las define el backend en `routers/auth.py`; aquí solo se traducen para el usuario.
@@ -20,18 +19,7 @@ export function LoginPage() {
   const error = searchParams.get("error");
   const message = error ? (ERROR_MESSAGES[error] ?? "el login con google falló.") : null;
 
-  const navigate = useNavigate();
-  const { enterAsGuest } = useAuth();
-  const [glitching, setGlitching] = useState(false);
-
-  function handleGuest() {
-    if (glitching) return;
-    setGlitching(true);
-    window.setTimeout(() => {
-      enterAsGuest();
-      navigate("/", { replace: true });
-    }, 350);
-  }
+  const [guestNotice, setGuestNotice] = useState(false);
 
   return (
     <AuthShell title="login">
@@ -57,13 +45,15 @@ export function LoginPage() {
         </Link>
       </div>
 
-      {/* TODO(guest): el modo invitado tendrá restricciones; por ahora solo navega. */}
+      {guestNotice && (
+        <p role="alert" className="lowercase border-2 border-lavender bg-surface px-3 py-2 text-lavender">
+          &gt; el modo invitado no tiene sesión. entra con google para subir o ver materias.
+        </p>
+      )}
       <button
         type="button"
-        onClick={handleGuest}
-        className={`lowercase font-pixel w-full border-2 border-lavender/40 px-4 py-2 text-lavender hover:border-mint hover:text-mint ${
-          glitching ? "glitch-once" : ""
-        }`}
+        onClick={() => setGuestNotice(true)}
+        className="lowercase font-pixel w-full border-2 border-lavender/40 px-4 py-2 text-lavender hover:border-mint hover:text-mint"
       >
         ingresar como invitado
       </button>
