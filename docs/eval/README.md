@@ -13,8 +13,8 @@ migration or production service behavior.
 
 > **Latency gate (L2.8):** the retrieval p50/p95 in a G4 report is diagnostic only. The
 > retrieval p95 ≤ 500 ms and chat first-token p95 ≤ 5 s gate has its own harness, protocol
-> and published report: [latency.md](latency.md). It is also `NOT MEASURED` until an
-> authorized real-provider run exists.
+> and published report: [latency.md](latency.md). It is `MEASURED — PASS` since the
+> 2026-11-02 authorized real-provider run; claim closure awaits review.
 
 ## Scope and non-goals
 

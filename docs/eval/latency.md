@@ -9,10 +9,25 @@ The harness calls `SearchService.retrieve` and `RAGService.prepare`/`stream_even
 against a prepared G4 run. It adds no HTTP route, schema, migration, production service or web
 change, and it never stores audio.
 
-> **Status: `NOT MEASURED`.** The harness, the protocol and the fake-provider suites are
-> delivered on the L2.8 branch. No authorized real embedding/LLM measurement has been
-> reviewed and published, so `docs/eval/latency/<run-id>/` does not exist and L2.8 remains
-> `in progress`. A green suite or a `SMOKE` report is not an L2.8 pass.
+> **Status: `MEASURED — PASS` (2026-11-02).** The official `g4-v1` run
+> `g4-v1-f4a4cf47-20261102T070429Z` used authorized NVIDIA embedding and LLM providers and
+> measured all three languages below both p95 targets. The redacted report is
+> [`latency/g4-v1-f4a4cf47-20261102T070429Z/REPORT.md`](latency/g4-v1-f4a4cf47-20261102T070429Z/REPORT.md).
+> L2.8 claim closure still requires PR review and a named cloud-eligibility reviewer; the
+> measurement is not an SLA.
+
+## Published result
+
+| Language | Retrieval p95 (ms) | First-token p95 (ms) | Gate |
+|---|---:|---:|---|
+| es | 363.84 | 1229.91 | PASS |
+| en | 355.00 | 2637.13 | PASS |
+| fr | 372.98 | 1225.39 | PASS |
+
+The run used `nvidia/nemotron-3.5-embed-1b` (1536 dimensions, asymmetric query/passage) and
+`nvidia/nemotron-3.5-bolt-e4b`, on PostgreSQL 16.2 + pgvector 0.8.5, concurrency 1. The
+report records the full environment and nearest-rank details; raw timings stay under the
+gitignored `var/eval/latency/<run-id>/`.
 
 ## Scope and non-goals
 
@@ -187,8 +202,8 @@ integration suite uses real PostgreSQL/pgvector, the `smoke-v1` corpus, the real
 and deterministic fake providers. It proves sample counts, warm-up reporting,
 inactive-generation and empty-retrieval rejection, official fake-provider/dataset/dirty-tree
 rejection, budget exhaustion, streams without a delta or with an error, close-failure
-robustness, redaction and the published metadata. It does not prove provider latency,
-provider retention or a real L2.8 result.
+robustness, redaction and the published metadata. The fake-provider suite does not prove
+provider latency or retention; the official run above is the L2.8 result.
 
 ## Known limitations
 
@@ -202,14 +217,15 @@ provider retention or a real L2.8 result.
 - The corpus is synthetic text only; no real classes, audio or PII are involved.
 - Stopping the chat stream at the first delta persists an isolated cancelled partial.
 
-## What would close L2.8
+## Closure status
 
-1. Authorized real embedding and LLM providers in a protected environment.
-2. A `g4-v1` `prepare` and an official latency measurement with every enabled language
-   passing both p95 targets.
-3. A redacted `latency.json`/`REPORT.md` published under `docs/eval/latency/<run-id>/`.
-4. Evidence recorded in `docs/sprints/andres.md`, `docs/sprints/CLAIMS.md` updated to `done`
-   and the cloud-eligibility column set to `verified` with date and reviewer.
+1. Authorized real embedding and LLM providers: done on 2026-11-02 with the owner-authorized
+   NVIDIA credentials; cloud eligibility still needs a named reviewer.
+2. `g4-v1` prepare and official measurement: done; every enabled language passed both
+   targets.
+3. Redacted publication: done under `docs/eval/latency/g4-v1-f4a4cf47-20261102T070429Z/`.
+4. Logbook evidence: recorded. `CLAIMS.md` stays `in progress` and cloud eligibility
+   `pending` until PR review names the reviewer that can move the row to `done`/`verified`.
 
-Until then the harness is delivered, L2.8 stays `in progress` and the latency gate is
-**`NOT MEASURED`**.
+The latency gate is **measured and PASS**; ticket closure and the cloud-eligibility record
+remain pending review.

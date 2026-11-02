@@ -1,0 +1,135 @@
+{
+  "gate": "L2.8",
+  "status": "PASS",
+  "measured_at": "2026-11-02T07:08:58+00:00",
+  "run_id": "g4-v1-f4a4cf47-20261102T070429Z",
+  "git_commit": "a0b7af8e12f71a91d3b3e2b910639f3b4fac5d21",
+  "git_dirty": false,
+  "environment": {
+    "python": "3.12.3",
+    "platform": "Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "implementation": "CPython",
+    "cpu_count": "8",
+    "memory_total_mb": "15908",
+    "postgres": "PostgreSQL 16.2",
+    "pgvector": "0.8.5",
+    "redis": "not used by the in-process measurement"
+  },
+  "concurrency": 1,
+  "dataset_version": "g4-v1",
+  "dataset_hash": "sha256:f4a4cf474ae26863679d6b69c8fa8266385907ca12c3dd10371d1a69c1934677",
+  "partition": "test",
+  "embedding": {
+    "provider": "HttpEmbeddingProvider",
+    "model": "nvidia/nemotron-3.5-embed-1b",
+    "dimension": 1536
+  },
+  "llm": {
+    "provider": "HttpChatProvider",
+    "model": "nvidia/nemotron-3.5-bolt-e4b",
+    "context_window": 65536
+  },
+  "prompt_version": "v1",
+  "thresholds": {
+    "retrieval_p95_ms": 500.0,
+    "first_token_p95_ms": 5000.0
+  },
+  "languages": {
+    "es": {
+      "expected_items": 50,
+      "classes": 10,
+      "chunks": 30,
+      "retrieval": {
+        "n": 50,
+        "p50_ms": 329.637,
+        "p95_ms": 363.839,
+        "max_ms": 371.148,
+        "target_ms": 500.0,
+        "passed": true
+      },
+      "first_token": {
+        "n": 50,
+        "llm_n": 50,
+        "abstention_n": 0,
+        "p50_ms": 1122.28,
+        "p95_ms": 1229.913,
+        "max_ms": 1316.197,
+        "target_ms": 5000.0,
+        "passed": true
+      },
+      "first_token_llm_only_p95_ms": 1229.913,
+      "cold_start": {
+        "retrieval_ms": 402.33,
+        "first_token_ms": 1251.873
+      }
+    },
+    "en": {
+      "expected_items": 50,
+      "classes": 10,
+      "chunks": 20,
+      "retrieval": {
+        "n": 50,
+        "p50_ms": 332.771,
+        "p95_ms": 355.004,
+        "max_ms": 375.604,
+        "target_ms": 500.0,
+        "passed": true
+      },
+      "first_token": {
+        "n": 50,
+        "llm_n": 50,
+        "abstention_n": 0,
+        "p50_ms": 1207.612,
+        "p95_ms": 2637.13,
+        "max_ms": 6624.385,
+        "target_ms": 5000.0,
+        "passed": true
+      },
+      "first_token_llm_only_p95_ms": 2637.13,
+      "cold_start": {
+        "retrieval_ms": 328.54,
+        "first_token_ms": 1316.849
+      }
+    },
+    "fr": {
+      "expected_items": 50,
+      "classes": 10,
+      "chunks": 30,
+      "retrieval": {
+        "n": 50,
+        "p50_ms": 332.188,
+        "p95_ms": 372.983,
+        "max_ms": 403.627,
+        "target_ms": 500.0,
+        "passed": true
+      },
+      "first_token": {
+        "n": 50,
+        "llm_n": 50,
+        "abstention_n": 0,
+        "p50_ms": 1153.656,
+        "p95_ms": 1225.39,
+        "max_ms": 2804.598,
+        "target_ms": 5000.0,
+        "passed": true
+      },
+      "first_token_llm_only_p95_ms": 1225.39,
+      "cold_start": {
+        "retrieval_ms": 313.74,
+        "first_token_ms": 1127.305
+      }
+    }
+  },
+  "verdict_reasons": [],
+  "cold_start": "One warm-up retrieval and one warm-up chat per language from the development partition; excluded from the p95 distributions.",
+  "limitations": [
+    "In-process measurement: it excludes HTTP, Caddy, authentication, network and provider quota enforcement.",
+    "Concurrency is 1; this is a reference measurement, not a load test.",
+    "Cold start is one warm-up item per language, reported separately; it is not a process-restart benchmark. When no development item exists, the first test item serves as cold start and remains in the p95 distribution.",
+    "Chat first-token timing stops at the first non-empty delta; closing the stream early persists an isolated cancelled partial for that item's conversation.",
+    "The p95 uses nearest-rank over the frozen test partition (N=50 per language); the result is measured, not an SLA or a provider guarantee.",
+    "Synthetic text corpus only: no real classes, audio or personally identifiable data.",
+    "Provider nondeterminism can change a later run.",
+    "Every enabled language must pass on its own; a macro average never compensates a failed language."
+  ]
+}
