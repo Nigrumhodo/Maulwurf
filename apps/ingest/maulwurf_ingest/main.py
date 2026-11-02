@@ -10,6 +10,7 @@ fallo impide servir, así un contenedor mal configurado no llega a aceptar audio
 """
 import asyncio
 import contextlib
+import hmac
 import logging
 import os
 import secrets
@@ -19,7 +20,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 import asyncpg
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from maulwurf_ingest import admission, hardening, metrics, receptions
@@ -248,9 +249,26 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def _metrics_bearer_ok(authorization: str | None) -> bool:
+    """True only when the header carries the ingest credential.
+
+    The credential is already required before the process accepts audio. Reusing it
+    here means a future public ingress cannot read capacity metrics anonymously.
+    """
+    secret = settings.credential_secret
+    if secret is None or not secret.strip():
+        return False
+    if authorization is None or not authorization.startswith("Bearer "):
+        return False
+    presented = authorization.removeprefix("Bearer ")
+    return hmac.compare_digest(presented.encode(), secret.encode())
+
+
 @app.get("/internal/metrics", response_class=PlainTextResponse)
-async def internal_metrics() -> PlainTextResponse:
-    """Instance metrics. Ingest is not public, so there is no extra boundary here."""
+async def internal_metrics(authorization: str | None = Header(default=None)) -> PlainTextResponse:
+    """Instance metrics. Callers must present the ingest credential as a bearer."""
+    if not _metrics_bearer_ok(authorization):
+        raise HTTPException(status_code=401, detail="auth_required")
     samples = metrics.collect_samples(
         tmp_dir=tempfile.gettempdir(),
         slots_in_use=receptions.slots_in_use(),
