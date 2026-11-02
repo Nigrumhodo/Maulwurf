@@ -1,11 +1,12 @@
-import { Button } from "@/components/ui/Button";
+import { Link } from "react-router-dom";
 import { Card } from "@/components/ui/Card";
+import { buttonClasses } from "@/components/ui/buttonStyles";
 import { AvatarSprite } from "@/components/dashboard/AvatarSprite";
 import { avatar, avatarred } from "@/components/Visual";
 
 // D- (Dashboard) — Hero de subida (M9/F1). El avatar es una animación de 18
 // fotogramas en una sola fila: `avatarred` (oscuro) y `avatar` (claro). El
-// botón todavía no abre el formulario (D2.1).
+// enlace abre el formulario real (`/gestion/subir`); los bytes siguen en D2.2.
 const FRAMES = 18;
 const AVATAR_HEIGHT = 112;
 
@@ -43,15 +44,17 @@ export function UploadZone() {
           />
         </div>
 
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 border-2 border-dashed border-lavender/50 px-6 py-8 text-center">
+        <Link
+          to="/gestion/subir"
+          className="flex flex-1 flex-col items-center justify-center gap-3 border-2 border-dashed border-lavender/50 px-6 py-8 text-center hover:border-mint"
+        >
           <span className="text-4xl leading-none text-mint" aria-hidden="true">
             ▾
           </span>
-          <p className="lowercase text-lavender">arrastra tu audio aquí</p>
-          <p className="lowercase text-lavender/50">o</p>
-          {/* TODO(D2.1): abrir formulario (materia, fecha, zona, idioma, consentimiento). */}
-          <Button variant="secondary">seleccionar archivo</Button>
-        </div>
+          <p className="lowercase text-lavender">abre el formulario de subida</p>
+          <p className="lowercase text-lavender/50">materia, fecha, zona e idioma</p>
+          <span className={buttonClasses("secondary")}>continuar</span>
+        </Link>
       </div>
     </Card>
   );
