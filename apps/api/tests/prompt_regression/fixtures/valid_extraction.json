@@ -1,0 +1,27 @@
+{
+  "items": [
+    {
+      "tipo": "examen",
+      "titulo": "Calculus II midterm",
+      "detalle": "Topics 1 to 4",
+      "due_date": "2026-09-21",
+      "due_at": null,
+      "timezone": "America/Mexico_City",
+      "all_day": true,
+      "date_status": "resolved",
+      "confidence_score": 0.9,
+      "fuente": {
+        "spans": [
+          {
+            "segment_id": "3f1c9a52-7d4e-4b8a-9c1e-2a6b5d8e0f11",
+            "inicio_char": 0,
+            "fin_char": 48,
+            "cita_textual": "the midterm exam will be on Monday, September 21"
+          }
+        ]
+      }
+    }
+  ],
+  "resumen_clase": "The class reviewed integration. The midterm was announced for September 21. Students should review topics one to four. No other deadline was stated.",
+  "temas": ["integration", "midterm"]
+}
