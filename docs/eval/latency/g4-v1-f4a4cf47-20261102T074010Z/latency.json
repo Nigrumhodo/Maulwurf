@@ -1,9 +1,9 @@
 {
   "gate": "L2.8",
   "status": "PASS",
-  "measured_at": "2026-11-02T07:08:58+00:00",
-  "run_id": "g4-v1-f4a4cf47-20261102T070429Z",
-  "git_commit": "a0b7af8e12f71a91d3b3e2b910639f3b4fac5d21",
+  "measured_at": "2026-11-02T07:44:18+00:00",
+  "run_id": "g4-v1-f4a4cf47-20261102T074010Z",
+  "git_commit": "2dbf60049b0fdc567b86e227d02fb705ec351583",
   "git_dirty": false,
   "environment": {
     "python": "3.12.3",
@@ -41,9 +41,9 @@
       "chunks": 30,
       "retrieval": {
         "n": 50,
-        "p50_ms": 329.637,
-        "p95_ms": 363.839,
-        "max_ms": 371.148,
+        "p50_ms": 329.726,
+        "p95_ms": 367.439,
+        "max_ms": 559.399,
         "target_ms": 500.0,
         "passed": true
       },
@@ -51,16 +51,16 @@
         "n": 50,
         "llm_n": 50,
         "abstention_n": 0,
-        "p50_ms": 1122.28,
-        "p95_ms": 1229.913,
-        "max_ms": 1316.197,
+        "p50_ms": 1124.547,
+        "p95_ms": 1191.612,
+        "max_ms": 1839.59,
         "target_ms": 5000.0,
         "passed": true
       },
-      "first_token_llm_only_p95_ms": 1229.913,
+      "first_token_llm_only_p95_ms": 1191.612,
       "cold_start": {
-        "retrieval_ms": 402.33,
-        "first_token_ms": 1251.873
+        "retrieval_ms": 394.708,
+        "first_token_ms": 1350.625
       }
     },
     "en": {
@@ -69,9 +69,9 @@
       "chunks": 20,
       "retrieval": {
         "n": 50,
-        "p50_ms": 332.771,
-        "p95_ms": 355.004,
-        "max_ms": 375.604,
+        "p50_ms": 329.202,
+        "p95_ms": 365.367,
+        "max_ms": 388.787,
         "target_ms": 500.0,
         "passed": true
       },
@@ -79,16 +79,16 @@
         "n": 50,
         "llm_n": 50,
         "abstention_n": 0,
-        "p50_ms": 1207.612,
-        "p95_ms": 2637.13,
-        "max_ms": 6624.385,
+        "p50_ms": 1212.698,
+        "p95_ms": 1581.034,
+        "max_ms": 3395.309,
         "target_ms": 5000.0,
         "passed": true
       },
-      "first_token_llm_only_p95_ms": 2637.13,
+      "first_token_llm_only_p95_ms": 1581.034,
       "cold_start": {
-        "retrieval_ms": 328.54,
-        "first_token_ms": 1316.849
+        "retrieval_ms": 325.769,
+        "first_token_ms": 1640.371
       }
     },
     "fr": {
@@ -97,9 +97,9 @@
       "chunks": 30,
       "retrieval": {
         "n": 50,
-        "p50_ms": 332.188,
-        "p95_ms": 372.983,
-        "max_ms": 403.627,
+        "p50_ms": 328.438,
+        "p95_ms": 402.223,
+        "max_ms": 1001.222,
         "target_ms": 500.0,
         "passed": true
       },
@@ -107,16 +107,16 @@
         "n": 50,
         "llm_n": 50,
         "abstention_n": 0,
-        "p50_ms": 1153.656,
-        "p95_ms": 1225.39,
-        "max_ms": 2804.598,
+        "p50_ms": 1126.936,
+        "p95_ms": 1177.478,
+        "max_ms": 1233.281,
         "target_ms": 5000.0,
         "passed": true
       },
-      "first_token_llm_only_p95_ms": 1225.39,
+      "first_token_llm_only_p95_ms": 1177.478,
       "cold_start": {
-        "retrieval_ms": 313.74,
-        "first_token_ms": 1127.305
+        "retrieval_ms": 326.468,
+        "first_token_ms": 1168.472
       }
     }
   },

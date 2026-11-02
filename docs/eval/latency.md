@@ -10,19 +10,21 @@ against a prepared G4 run. It adds no HTTP route, schema, migration, production 
 change, and it never stores audio.
 
 > **Status: `MEASURED — PASS` (2026-11-02).** The official `g4-v1` run
-> `g4-v1-f4a4cf47-20261102T070429Z` used authorized NVIDIA embedding and LLM providers and
-> measured all three languages below both p95 targets. The redacted report is
-> [`latency/g4-v1-f4a4cf47-20261102T070429Z/REPORT.md`](latency/g4-v1-f4a4cf47-20261102T070429Z/REPORT.md).
-> L2.8 claim closure still requires PR review and a named cloud-eligibility reviewer; the
-> measurement is not an SLA.
+> `g4-v1-f4a4cf47-20261102T074010Z`, measured on commit `2dbf600`, used authorized NVIDIA
+> embedding and LLM providers and measured all three languages below both p95 targets. The
+> redacted report is
+> [`latency/g4-v1-f4a4cf47-20261102T074010Z/REPORT.md`](latency/g4-v1-f4a4cf47-20261102T074010Z/REPORT.md).
+> An earlier run on `a0b7af8` was superseded after the develop merge; only this report is the
+> gate evidence. L2.8 claim closure still requires PR review and a named cloud-eligibility
+> reviewer; the measurement is not an SLA.
 
 ## Published result
 
 | Language | Retrieval p95 (ms) | First-token p95 (ms) | Gate |
 |---|---:|---:|---|
-| es | 363.84 | 1229.91 | PASS |
-| en | 355.00 | 2637.13 | PASS |
-| fr | 372.98 | 1225.39 | PASS |
+| es | 367.44 | 1191.61 | PASS |
+| en | 365.37 | 1581.03 | PASS |
+| fr | 402.22 | 1177.48 | PASS |
 
 The run used `nvidia/nemotron-3.5-embed-1b` (1536 dimensions, asymmetric query/passage) and
 `nvidia/nemotron-3.5-bolt-e4b`, on PostgreSQL 16.2 + pgvector 0.8.5, concurrency 1. The
@@ -54,6 +56,7 @@ Out of scope:
   `MAULWURF_EMBEDDING_BASE_URL`, `MAULWURF_EMBEDDING_API_KEY`,
   `MAULWURF_EMBEDDING_MODEL`, `MAULWURF_EMBEDDING_DIMENSION`,
   `MAULWURF_EMBEDDING_ASYMMETRIC` (when the model distinguishes query/passage),
+  `MAULWURF_EMBEDDING_SEND_DIMENSIONS` (when the provider documents the `dimensions` field),
   `MAULWURF_LLM_BASE_URL`, `MAULWURF_LLM_API_KEY`, `MAULWURF_LLM_MODEL` and
   `MAULWURF_LLM_MODEL_WINDOW`.
 - The frozen dataset at `apps/api/tests/fixtures/g4/datasets/v1` (`g4-v1`, test partition
@@ -223,7 +226,8 @@ provider latency or retention; the official run above is the L2.8 result.
    NVIDIA credentials; cloud eligibility still needs a named reviewer.
 2. `g4-v1` prepare and official measurement: done; every enabled language passed both
    targets.
-3. Redacted publication: done under `docs/eval/latency/g4-v1-f4a4cf47-20261102T070429Z/`.
+3. Redacted publication: done under `docs/eval/latency/g4-v1-f4a4cf47-20261102T074010Z/`
+   on commit `2dbf600`.
 4. Logbook evidence: recorded. `CLAIMS.md` stays `in progress` and cloud eligibility
    `pending` until PR review names the reviewer that can move the row to `done`/`verified`.
 

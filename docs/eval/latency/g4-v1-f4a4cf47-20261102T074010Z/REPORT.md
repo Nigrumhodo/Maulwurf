@@ -1,13 +1,13 @@
-# L2.8 latency report — g4-v1-f4a4cf47-20261102T070429Z
+# L2.8 latency report — g4-v1-f4a4cf47-20261102T074010Z
 
 **Gate status:** **PASS**
 
 | Field | Value |
 |---|---|
-| Measured at | `2026-11-02T07:08:58+00:00` |
+| Measured at | `2026-11-02T07:44:18+00:00` |
 | Dataset | `g4-v1` (`sha256:f4a4cf474ae26863679d6b69c8fa8266385907ca12c3dd10371d1a69c1934677`) |
 | Partition | `test` |
-| Git commit | `a0b7af8e12f71a91d3b3e2b910639f3b4fac5d21` |
+| Git commit | `2dbf60049b0fdc567b86e227d02fb705ec351583` |
 | Git dirty | `False` |
 | Concurrency | 1 |
 | Embedding | `HttpEmbeddingProvider` / `nvidia/nemotron-3.5-embed-1b` (dimension 1536) |
@@ -19,17 +19,17 @@
 
 | Language | Retrieval N | Retrieval p50/p95/max (ms) | Retrieval pass | First-token N | First-token p50/p95/max (ms) | First-token pass | LLM-only p95 (ms) |
 |---|---|---|---|---|---|---|---|
-| es | 50 | 329.64 / 363.84 / 371.15 | yes | 50 | 1122.28 / 1229.91 / 1316.20 | yes | 1229.91 |
-| en | 50 | 332.77 / 355.00 / 375.60 | yes | 50 | 1207.61 / 2637.13 / 6624.39 | yes | 2637.13 |
-| fr | 50 | 332.19 / 372.98 / 403.63 | yes | 50 | 1153.66 / 1225.39 / 2804.60 | yes | 1225.39 |
+| es | 50 | 329.73 / 367.44 / 559.40 | yes | 50 | 1124.55 / 1191.61 / 1839.59 | yes | 1191.61 |
+| en | 50 | 329.20 / 365.37 / 388.79 | yes | 50 | 1212.70 / 1581.03 / 3395.31 | yes | 1581.03 |
+| fr | 50 | 328.44 / 402.22 / 1001.22 | yes | 50 | 1126.94 / 1177.48 / 1233.28 | yes | 1177.48 |
 
 ## Cold start (excluded from p95)
 
 | Language | Retrieval (ms) | First token (ms) |
 |---|---|---|
-| es | 402.33 | 1251.87 |
-| en | 328.54 | 1316.85 |
-| fr | 313.74 | 1127.31 |
+| es | 394.71 | 1350.62 |
+| en | 325.77 | 1640.37 |
+| fr | 326.47 | 1168.47 |
 
 ## Method
 
@@ -57,6 +57,6 @@ uv run python -m tools.eval.cli prepare \
   --dataset tests/fixtures/g4/datasets/v1 --languages es,en,fr --reset
 cd ../..
 python scripts/load/latency_rag.py \
-  --run-id g4-v1-f4a4cf47-20261102T070429Z --languages es,en,fr \
-  --publish docs/eval/latency/g4-v1-f4a4cf47-20261102T070429Z
+  --run-id g4-v1-f4a4cf47-20261102T074010Z --languages es,en,fr \
+  --publish docs/eval/latency/g4-v1-f4a4cf47-20261102T074010Z
 ```
