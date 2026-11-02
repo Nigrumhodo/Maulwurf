@@ -393,8 +393,10 @@ versions and statuses. `queued` is the only writing outcome: `already_analyzed`,
 (queue it with `POST /audios/{id}/retry`, not with this script). Only the branch that really
 queues persists the F1 → F2 upgrade, so an `--apply` pass that queues nothing changes no
 row. `GET /audios/{id}` reports `analysis_backfill_available` before the pass and the
-`analyze` stage becomes `pending` after it. Until L3.6 lands, the queued job is the existing
-S2 `analyze` no-op: this command proves the queue, not extraction output.
+`analyze` stage becomes `pending` after it. The queued job is L3.6's `analyze(audio_id)`:
+it reads the persisted transcript, and without `MAULWURF_LLM_BASE_URL` and
+`MAULWURF_LLM_API_KEY` the run fails closed (`llm_not_configured`) and writes no tasks.
+This command proves the queue. It does not call a provider.
 
 ## 11. Provider budgets, alerts and operator runbooks (J4.8)
 

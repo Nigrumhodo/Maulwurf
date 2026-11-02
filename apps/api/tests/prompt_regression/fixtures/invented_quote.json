@@ -10,6 +10,7 @@
       "all_day": true,
       "date_status": "resolved",
       "confidence_score": 0.4,
+      "mencion": {"kind": "all_day", "due_date": "2026-09-21"},
       "fuente": {
         "spans": [
           {
