@@ -32,6 +32,7 @@ def test_analysis_run_spec_records_the_prompt_version_inside_the_config_key() ->
     assert spec.config_version == ANALYSIS_CONFIG_VERSION
     assert spec.prompt_version == ANALYSIS_PROMPT_VERSION
     assert ANALYSIS_PROMPT_VERSION in spec.config_version
+    assert "summary=v1" in spec.config_version
 
 
 def test_prompt_bump_changes_the_analysis_run_key() -> None:

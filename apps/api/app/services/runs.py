@@ -44,7 +44,7 @@ from app.models.ingestion import ACTIVE_INGESTION_STATES
 from app.services import state_machine
 from app.services.analysis_windows import DEFAULT_OVERLAP_TOKENS, DEFAULT_TARGET_TOKENS
 from app.services.audios import UNASSIGNED_OWNER, attempt_deadlines
-from prompts.registry import PROMPT_VERSION
+from prompts.registry import PROMPT_VERSION, SUMMARY_PROMPT_VERSION
 
 INDEX_STAGE = "index"
 ANALYSIS_STAGE = "analyze"
@@ -89,6 +89,7 @@ def analysis_config_version(prompt_version: str = ANALYSIS_PROMPT_VERSION) -> st
         raise ValueError("prompt_version must not be empty")
     return (
         f"analyze-v1:prompt={prompt_version}"
+        f":summary={SUMMARY_PROMPT_VERSION}"
         f":window={DEFAULT_TARGET_TOKENS}/{DEFAULT_OVERLAP_TOKENS}"
     )
 

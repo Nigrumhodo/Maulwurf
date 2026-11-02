@@ -2,9 +2,11 @@
 
 The payload is the class id only. The delivery claims the `analyze` run for the active
 transcript and the current prompt, reads the persisted text, and publishes one batch.
-Nothing is written until every window has returned. A permanent error is recorded and
-not raised, so ARQ does not spend a retry on it; a transient error is raised as `Retry`
-with the S3.6 delay. `LLMNotConfigured` fails the run and writes no tasks.
+Nothing is written until every window and the class summary have returned. The summary,
+topics, and analysis version are written in the same transaction as the tasks. A permanent
+error is recorded and not raised, so ARQ does not spend a retry on it; a transient error
+is raised as `Retry` with the S3.6 delay. `LLMNotConfigured` fails the run and writes no
+tasks.
 """
 
 from __future__ import annotations
@@ -55,6 +57,7 @@ from app.services.index_job import (
 )
 from app.services.llm import HttpChatProvider
 from app.services.runs import latest_attempt, run_spec
+from app.services.summary import assign_class_summary
 from app.workers.retry import retry_decision
 
 logger = logging.getLogger(__name__)
@@ -281,6 +284,14 @@ async def _extract_and_publish(
             run_id=claimed.run.run_id,
             writes=writes,
         )
+        await _store_summary(
+            db,
+            user_id=claimed.user_id,
+            audio_id=claimed.audio_id,
+            transcript_id=context.view.transcript_id,
+            text=batch.summary,
+            topics=batch.topics,
+        )
         outcome = await finish_run(
             db,
             run_id=claimed.run.run_id,
@@ -352,6 +363,30 @@ async def _load_context(db: AsyncSession, claimed: _Claim) -> ClassContext:
         ),
         view=view,
     )
+
+
+async def _store_summary(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    audio_id: uuid.UUID,
+    transcript_id: uuid.UUID,
+    text: str,
+    topics: tuple[str, ...],
+) -> None:
+    """Persist the class summary on the transcript row this run just published."""
+    transcript = (
+        await db.execute(
+            select(Transcript).where(
+                Transcript.user_id == user_id,
+                Transcript.id == transcript_id,
+            )
+        )
+    ).scalar_one()
+    audio = (
+        await db.execute(select(Audio).where(Audio.user_id == user_id, Audio.id == audio_id))
+    ).scalar_one()
+    assign_class_summary(transcript, audio, text=text, topics=topics)
 
 
 async def _record(sessions: SessionFactory, claim: RunClaim, error_code: str) -> None:
