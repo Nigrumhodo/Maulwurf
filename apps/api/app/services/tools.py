@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
 
@@ -142,14 +142,17 @@ class ToolOrchestrator:
         user_id: UUID,
         now: datetime,
     ) -> list[ToolResult]:
+        # `now` is the request clock for dates. The budget is wall time: using `now` as
+        # both ends made the elapsed time always zero when no clock was injected.
+        clock = self._clock or (lambda: datetime.now(UTC))
+        started = clock()
         results: list[ToolResult] = []
         for index, call in enumerate(calls):
-            current = now if self._clock is None else self._clock()
             code = admission_error(
                 call,
                 index=index,
-                started=now,
-                now=current,
+                started=started,
+                now=clock(),
                 max_rounds=self._max_rounds,
                 budget_seconds=self._budget_seconds,
             )

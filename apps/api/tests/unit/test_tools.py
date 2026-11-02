@@ -1,9 +1,12 @@
 """L3.6 tool orchestrator: allowlist, tenant, and the provisional round/time cap."""
 
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import uuid4
 
-from app.services.tools import ToolCall, admission_error
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.services.tools import ToolCall, ToolOrchestrator, admission_error
 
 NOW = datetime(2026, 11, 1, 12, tzinfo=UTC)
 
@@ -37,3 +40,15 @@ def test_the_round_and_time_caps_stop_the_batch() -> None:
         == "tool_budget_exceeded"
     )
     assert admission_error(call, index=3, started=NOW, now=NOW + timedelta(seconds=15)) is None
+
+
+async def test_the_budget_follows_the_clock_not_the_request_instant() -> None:
+    moments = [NOW, NOW + timedelta(seconds=16)]
+    tools = ToolOrchestrator(cast(AsyncSession, object()), clock=lambda: moments.pop(0))
+    result = await tools.execute(
+        (ToolCall("get_pending_tasks", {}),),
+        user_id=uuid4(),
+        now=NOW - timedelta(days=1),
+    )
+    assert result[0].ok is False
+    assert result[0].payload["code"] == "tool_budget_exceeded"

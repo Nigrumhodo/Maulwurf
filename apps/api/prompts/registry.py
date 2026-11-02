@@ -25,6 +25,9 @@ USER_PATH = _DIR / "user_extraction.txt"
 _SEGMENT_CLOSE = re.compile(r"</segment", re.IGNORECASE)
 
 _USER_FIELDS = ("subject", "teacher", "class_date", "class_timezone", "segments")
+# Subject and teacher are user-supplied. Flatten and bound them so a name cannot add a
+# line of instructions or close a tag. The class date and timezone are already closed.
+_METADATA_LIMIT = 200
 
 
 class PromptRegistryError(Exception):
@@ -75,10 +78,11 @@ def render_user_prompt(
     """Fill the user template. Segment text is fenced and cannot close the fence."""
     prompts = load_extraction_prompts()
     blocks = "\n".join(_fence(segment_id, text) for segment_id, text in segments)
-    return Template(prompts.user_template).substitute(
+    return _substitute(
+        prompts.user_template,
         subject=subject,
         teacher=teacher,
-        class_date=class_date.isoformat(),
+        class_date=class_date,
         class_timezone=class_timezone,
         segments=blocks,
     )
@@ -119,13 +123,38 @@ def render_window_prompt(
         _fence(segment_id, text, local_start=local_start)
         for segment_id, text, local_start in segments
     )
-    return Template(prompts.user_template).substitute(
+    return _substitute(
+        prompts.user_template,
         subject=subject,
         teacher=teacher,
-        class_date=class_date.isoformat(),
+        class_date=class_date,
         class_timezone=class_timezone,
         segments=blocks,
     )
+
+
+def _substitute(
+    template: str,
+    *,
+    subject: str,
+    teacher: str,
+    class_date: date,
+    class_timezone: str,
+    segments: str,
+) -> str:
+    return Template(template).substitute(
+        subject=_metadata(subject),
+        teacher=_metadata(teacher),
+        class_date=class_date.isoformat(),
+        class_timezone=class_timezone,
+        segments=segments,
+    )
+
+
+def _metadata(value: str) -> str:
+    """One line, bounded, with no angle brackets that could close the prompt frame."""
+    flat = " ".join(value.split())[:_METADATA_LIMIT]
+    return flat.replace("<", "‹").replace(">", "›")
 
 
 def _fence(segment_id: UUID, text: str, *, local_start: int | None = None) -> str:

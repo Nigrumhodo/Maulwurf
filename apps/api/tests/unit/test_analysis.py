@@ -215,6 +215,20 @@ async def test_a_later_window_failure_returns_no_batch() -> None:
         )
 
 
+async def test_a_transcript_over_the_window_budget_is_rejected() -> None:
+    context = _context(" ".join(f"Word{index}." for index in range(30)))
+    with pytest.raises(AnalysisPayloadError):
+        await analyze_transcript(
+            context,
+            _Scripted([]),
+            now=NOW,
+            count_tokens=lambda text: max(1, len(text.split())),
+            target_tokens=4,
+            overlap_tokens=1,
+            max_windows=1,
+        )
+
+
 async def test_a_resolved_mention_survives_one_window() -> None:
     context = _context()
     batch = await analyze_transcript(

@@ -16,6 +16,7 @@ overwritten, and a revision is never activated here.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
@@ -27,6 +28,7 @@ from pydantic import ValidationError
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings as live_settings
 from app.models import Segment, Task, TaskRevision, TaskSource
 from app.schemas.analysis import AnalysisResult, DateStatus, ProposedItem
 from app.services.analysis_validation import (
@@ -35,6 +37,7 @@ from app.services.analysis_validation import (
     validate_analysis,
 )
 from app.services.analysis_windows import (
+    DEFAULT_TARGET_TOKENS,
     AggregatedProposal,
     AnalysisWindow,
     EvidenceKey,
@@ -57,6 +60,8 @@ from app.services.date_resolution import (
 )
 from app.services.llm import ChatMessage, LLMProvider
 from prompts.registry import load_extraction_prompts, render_window_prompt
+
+logger = logging.getLogger(__name__)
 
 # Provisional output budget until a measured extraction profile replaces it.
 EXTRACTION_MAX_TOKENS = 2048
@@ -283,15 +288,31 @@ async def analyze_transcript(
     count_tokens: TokenCounter = count_tokens_default,
     target_tokens: int | None = None,
     overlap_tokens: int | None = None,
+    max_windows: int | None = None,
 ) -> AnalysisBatch:
-    """Extract every window, then return one batch. A failed window raises before return."""
+    """Extract every window, then return one batch. A failed window raises before return.
+
+    The window count and the token budget are the same cap: one class must stay inside
+    the analyze job timeout. A transcript that cannot fit raises and writes nothing.
+    """
     prompts = load_extraction_prompts()
-    plan = plan_windows(
-        transcript_text=context.transcript_text,
-        segments=context.segments,
-        count_tokens=count_tokens,
-        **_window_sizes(target_tokens, overlap_tokens),
-    )
+    cap = live_settings.analysis_max_windows if max_windows is None else max_windows
+    if cap < 1:
+        raise ValueError("max_windows must be >= 1")
+    window_target = DEFAULT_TARGET_TOKENS if target_tokens is None else target_tokens
+    try:
+        plan = plan_windows(
+            transcript_text=context.transcript_text,
+            segments=context.segments,
+            count_tokens=count_tokens,
+            max_total_tokens=cap * window_target,
+            **_window_sizes(target_tokens, overlap_tokens),
+        )
+    except ValueError as exc:
+        raise AnalysisPayloadError("the transcript exceeds the analysis window budget") from exc
+    if plan.window_count > cap:
+        raise AnalysisPayloadError("the transcript exceeds the analysis window budget")
+    logger.info("analyze.windows count=%d tokens=%d", plan.window_count, plan.total_tokens)
     WindowBatch = tuple[PreparedProposal, tuple[WindowCitation, ...]]
     batches: list[tuple[AnalysisWindow, list[WindowBatch]]] = []
     summaries: list[str] = []
