@@ -23,12 +23,18 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.services.analysis_windows import (
+    AggregatedProposal,
     AnalysisWindow,
     EvidenceSpan,
+    PublicationKind,
+    PublishedIdentity,
+    WindowCitation,
     WindowPlan,
+    aggregate_window_citations,
     dedupe_by_evidence,
     evidence_key,
     evidence_span_in_window,
+    plan_run_publication,
     plan_windows,
 )
 from app.services.chunking import SegmentInput, split_sentences
@@ -546,6 +552,69 @@ def test_evidence_span_in_window_rejects_foreign_ranges() -> None:
             char_start=part.window_char_end,
             char_end=part.window_char_end,
         )
+
+
+def test_overlapping_windows_publish_one_proposal_per_evidence() -> None:
+    """U-S3-JL-04: the overlap cites the same span once, and a replay does not insert."""
+    text, _, plan = _plan(_sentences(40, 8), target_tokens=40, overlap_tokens=10)
+    assert len(plan.windows) >= 2
+    first, second = plan.windows[0], plan.windows[1]
+    assert second.char_start < first.char_end
+    shared_part = next(
+        part
+        for part in second.segments
+        if part.window_char_start < first.char_end and part.window_char_end > second.char_start
+    )
+    shared_start = max(shared_part.window_char_start, second.char_start)
+    shared_end = min(shared_part.window_char_end, first.char_end)
+    assert shared_end > shared_start
+    shared = WindowCitation(
+        segment_id=shared_part.segment_id, char_start=shared_start, char_end=shared_end
+    )
+    only_part = next(part for part in first.segments if part.window_char_start < second.char_start)
+    only_end = min(only_part.window_char_end, second.char_start)
+    assert only_end > only_part.window_char_start
+    only_first = WindowCitation(
+        segment_id=only_part.segment_id,
+        char_start=only_part.window_char_start,
+        char_end=only_end,
+    )
+    aggregated = aggregate_window_citations(
+        (
+            (first, [("from-first", (shared,)), ("only-first", (only_first,))]),
+            (second, [("from-second", (shared,))]),
+        )
+    )
+
+    assert [item.value for item in aggregated] == ["from-first", "only-first"]
+    repeated = aggregated[0].evidence[0]
+    assert repeated.quote == text[shared.char_start : shared.char_end]
+    part = shared_part
+    assert repeated.char_start == shared.char_start - part.segment_char_start
+    assert repeated.char_end == shared.char_end - part.segment_char_start
+
+    run_id = uuid4()
+    other_run = uuid4()
+    published = (PublishedIdentity(identity=aggregated[0].identity, run_id=run_id),)
+    replay = plan_run_publication(run_id, aggregated, published)
+    assert [kind for _, kind in replay] == [PublicationKind.SKIP, PublicationKind.INSERT]
+    revised = plan_run_publication(other_run, aggregated[:1], published)
+    assert revised[0][1] is PublicationKind.REVISE
+    assert revised[0][0].value == "from-first"
+
+
+def test_a_run_does_not_insert_an_identity_it_already_published() -> None:
+    span = EvidenceSpan(segment_id=uuid4(), char_start=0, char_end=4, quote="exam")
+    proposal = AggregatedProposal(value="exam", evidence=(span,))
+    run_id = uuid4()
+    first = plan_run_publication(run_id, (proposal,), ())
+    assert first == [(proposal, PublicationKind.INSERT)]
+    second = plan_run_publication(
+        run_id,
+        (proposal,),
+        (PublishedIdentity(identity=proposal.identity, run_id=run_id),),
+    )
+    assert second == [(proposal, PublicationKind.SKIP)]
 
 
 def test_analysis_window_text_is_the_exact_transcript_slice() -> None:

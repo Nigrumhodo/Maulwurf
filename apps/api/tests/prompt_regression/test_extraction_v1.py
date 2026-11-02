@@ -6,13 +6,14 @@ fails here until this constant is updated in the same change and the outputs sti
 """
 
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import UUID
 
 import pytest
 
 from app.schemas.analysis import AnalysisResult, ProposedItem
+from app.services.analysis import parse_extraction_payload
 from app.services.analysis_validation import (
     AnalysisValidationError,
     ClassTranscript,
@@ -26,7 +27,7 @@ _FIXTURES = Path(__file__).parent / "fixtures"
 SEGMENT = UUID("3f1c9a52-7d4e-4b8a-9c1e-2a6b5d8e0f11")
 SEGMENT_TEXT = "the midterm exam will be on Monday, September 21"
 # SHA-256 of system_extraction.txt, a newline, and user_extraction.txt.
-PROMPT_SHA256 = "6f885479620fae25e3601132fb79721fc4cf595c4da4cfa2de55c130bda14330"
+PROMPT_SHA256 = "f4c259d9b45fdb42b050f773fc41ad2702692161d0a5f3e3bdea626db3388358"
 _REQUIRED = (
     "untrusted",
     "cita_textual",
@@ -36,12 +37,18 @@ _REQUIRED = (
     "midnight",
     "class date",
     "not against today",
+    "mencion",
 )
 
 
 def _load(name: str) -> AnalysisResult:
-    payload = json.loads((_FIXTURES / name).read_text(encoding="utf-8"))
-    return AnalysisResult.model_validate(payload)
+    parsed = parse_extraction_payload(
+        (_FIXTURES / name).read_text(encoding="utf-8"),
+        class_date=date(2026, 9, 16),
+        class_timezone="America/Mexico_City",
+        now=datetime(2026, 9, 16, 15, tzinfo=UTC),
+    )
+    return parsed.result
 
 
 def _view() -> ClassTranscript:
@@ -92,9 +99,16 @@ def test_the_user_prompt_uses_the_class_and_only_the_given_segment() -> None:
 
 
 def test_a_recorded_extraction_validates_against_the_segment() -> None:
+    raw = json.loads((_FIXTURES / "valid_extraction.json").read_text(encoding="utf-8"))
+    assert raw["items"][0]["due_at"] == "2026-09-21T00:00:00-06:00"
     result = _load("valid_extraction.json")
     validate_analysis(result, _view())
-    assert result.items[0].fuente.spans[0].cita_textual == SEGMENT_TEXT
+    item = result.items[0]
+    assert item.fuente.spans[0].cita_textual == SEGMENT_TEXT
+    assert item.all_day is True
+    assert item.due_date == date(2026, 9, 21)
+    assert item.due_at is None
+    assert item.timezone == "America/Mexico_City"
 
 
 def test_a_recorded_invented_quote_is_rejected() -> None:

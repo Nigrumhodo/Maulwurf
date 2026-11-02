@@ -5,9 +5,9 @@ The policy mirrors the indexing budget: one delivery plus at most three transien
 bounded additive jitter from `services.outbox_retry.RetryPolicy`, so a provider outage is
 not hammered by every class at the same instant.
 
-The analyzer (`analyze(audio_id)`) is not part of `develop` yet (L3.6); this module is the
-pure decision core it must consume, and the worker configuration uses `MAX_TRIES` so the
-fail-closed budget cannot drift from the policy.
+`analyze(audio_id)` (L3.6) consumes this decision: a permanent error is recorded and not
+raised, and a transient error is raised as ARQ `Retry` with `delay_seconds`. The worker
+configuration uses the same `MAX_TRIES`, so the fail-closed budget cannot drift.
 """
 
 from dataclasses import dataclass

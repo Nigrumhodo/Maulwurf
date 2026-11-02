@@ -4,12 +4,13 @@
       "tipo": "examen",
       "titulo": "Calculus II midterm",
       "detalle": "Topics 1 to 4",
-      "due_date": "2026-09-21",
-      "due_at": null,
-      "timezone": "America/Mexico_City",
-      "all_day": true,
+      "due_date": null,
+      "due_at": "2026-09-21T00:00:00-06:00",
+      "timezone": "UTC",
+      "all_day": false,
       "date_status": "resolved",
       "confidence_score": 0.9,
+      "mencion": {"kind": "all_day", "due_date": "2026-09-21"},
       "fuente": {
         "spans": [
           {

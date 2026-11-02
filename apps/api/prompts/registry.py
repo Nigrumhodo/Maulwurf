@@ -100,6 +100,35 @@ def _read(path: Path) -> str:
     return text
 
 
-def _fence(segment_id: UUID, text: str) -> str:
+def render_window_prompt(
+    *,
+    subject: str,
+    teacher: str,
+    class_date: date,
+    class_timezone: str,
+    segments: tuple[tuple[UUID, str, int], ...],
+) -> str:
+    """Fill the user template with one window's clipped segments.
+
+    ``local_start`` is the code-point offset of the clip inside the full segment, so a
+    citation can still use segment-local offsets (the §M4 contract) without seeing text
+    that this window does not contain.
+    """
+    prompts = load_extraction_prompts()
+    blocks = "\n".join(
+        _fence(segment_id, text, local_start=local_start)
+        for segment_id, text, local_start in segments
+    )
+    return Template(prompts.user_template).substitute(
+        subject=subject,
+        teacher=teacher,
+        class_date=class_date.isoformat(),
+        class_timezone=class_timezone,
+        segments=blocks,
+    )
+
+
+def _fence(segment_id: UUID, text: str, *, local_start: int | None = None) -> str:
     safe = _SEGMENT_CLOSE.sub("</ segment", text)
-    return f'<segment id="{segment_id}">\n{safe}\n</segment>'
+    extra = f' local_start="{local_start}"' if local_start is not None else ""
+    return f'<segment id="{segment_id}"{extra}>\n{safe}\n</segment>'

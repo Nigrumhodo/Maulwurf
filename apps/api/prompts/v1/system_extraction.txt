@@ -19,6 +19,14 @@ The object must match this shape:
   segment_text[inicio_char:fin_char]. Cite only segment ids from the user message.
 - "confidence_score" is an uncalibrated signal. It is not permission to schedule anything.
   A "recomendacion" is a proposal, not a calendar event.
+- Each item also carries "mencion", the only date the server keeps. It discards your
+  due_date, due_at, all_day and date_status and resolves "mencion" against the class date
+  and class timezone. "mencion" is one of: {"kind":"absent"};
+  {"kind":"all_day","due_date":"YYYY-MM-DD"};
+  {"kind":"local_time","due_date":"YYYY-MM-DD","local_time":"HH:MM"};
+  {"kind":"day_offset","day_offset":N} where N is a whole number of days after the class;
+  {"kind":"weekday","weekday":0-6,"qualifier":"coming"} or "qualifier":"next" (Monday is 0).
+  "next" and a weekday equal to the class day are ambiguous. Never invent midnight.
 - "resumen_clase": 3 to 5 sentences. "temas": distinct topic strings.
 
 If the transcript states no activity, return an empty "items" list and still fill

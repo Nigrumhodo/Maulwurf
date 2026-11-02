@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from uuid import UUID
 
 from app.services.chunking import (
@@ -212,6 +213,113 @@ def dedupe_by_evidence[T](
         seen.add(key)
         kept.append(item)
     return kept
+
+
+class PublicationKind(StrEnum):
+    """What one run may do with one evidence identity (L3.5)."""
+
+    INSERT = "insert"
+    REVISE = "revise"
+    SKIP = "skip"
+
+
+@dataclass(frozen=True)
+class WindowCitation:
+    """A citation measured in transcript offsets, still inside one window."""
+
+    segment_id: UUID
+    char_start: int
+    char_end: int
+
+
+@dataclass(frozen=True)
+class AggregatedProposal[T]:
+    """One proposal after window translation and evidence dedupe."""
+
+    value: T
+    evidence: tuple[EvidenceSpan, ...]
+
+    @property
+    def identity(self) -> frozenset[EvidenceKey]:
+        return frozenset(evidence_key(span) for span in self.evidence)
+
+
+@dataclass(frozen=True)
+class PublishedIdentity:
+    """An evidence identity some run has already published."""
+
+    identity: frozenset[EvidenceKey]
+    run_id: UUID
+
+
+def aggregate_window_citations[T](
+    batches: Sequence[tuple[AnalysisWindow, Sequence[tuple[T, Sequence[WindowCitation]]]]],
+) -> list[AggregatedProposal[T]]:
+    """Translate window-global citations into segment evidence and keep the first.
+
+    A citation outside its window, or a proposal that loses every span, is dropped. Two
+    overlapping windows that cite the same segment range and quote therefore yield one
+    proposal, in the order the windows were planned.
+    """
+    translated: list[AggregatedProposal[T]] = []
+    for window, proposals in batches:
+        for value, citations in proposals:
+            spans: list[EvidenceSpan] = []
+            failed = False
+            for citation in citations:
+                try:
+                    spans.append(
+                        evidence_span_in_window(
+                            window,
+                            segment_id=citation.segment_id,
+                            char_start=citation.char_start,
+                            char_end=citation.char_end,
+                        )
+                    )
+                except ValueError:
+                    failed = True
+                    break
+            if failed or not spans:
+                continue
+            translated.append(AggregatedProposal(value=value, evidence=tuple(spans)))
+
+    def _evidence(item: AggregatedProposal[T]) -> tuple[EvidenceSpan, ...]:
+        return item.evidence
+
+    return [
+        AggregatedProposal(value=item.value, evidence=item.evidence)
+        for item in dedupe_by_evidence(translated, evidence=_evidence)
+    ]
+
+
+def plan_run_publication[T](
+    run_id: UUID,
+    proposals: Sequence[AggregatedProposal[T]],
+    published: Sequence[PublishedIdentity],
+) -> list[tuple[AggregatedProposal[T], PublicationKind]]:
+    """Publish each identity at most once per run.
+
+    Replaying the same ``run_id`` skips identities that run already published. A different
+    run revises the existing identity instead of inserting a second task. A new identity
+    is an insert. A duplicate inside this batch is a skip: the first proposal wins.
+    """
+    by_identity = {row.identity: row.run_id for row in published}
+    seen: set[frozenset[EvidenceKey]] = set()
+    actions: list[tuple[AggregatedProposal[T], PublicationKind]] = []
+    for proposal in proposals:
+        identity = proposal.identity
+        if not identity or identity in seen:
+            actions.append((proposal, PublicationKind.SKIP))
+            continue
+        seen.add(identity)
+        owner = by_identity.get(identity)
+        if owner is None:
+            actions.append((proposal, PublicationKind.INSERT))
+        elif owner == run_id:
+            actions.append((proposal, PublicationKind.SKIP))
+        else:
+            actions.append((proposal, PublicationKind.REVISE))
+    return actions
 
 
 def plan_windows(
