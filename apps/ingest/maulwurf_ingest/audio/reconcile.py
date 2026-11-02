@@ -18,17 +18,19 @@ _EPS_S = 1e-3
 
 
 def parse_confidence(raw: object) -> float | None:
-    """Provider confidence in [0, 1], or None when absent/malformed.
+    """Provider confidence in (0, 1], or None when absent, malformed, or zero.
 
     A missing value is «unknown», never «low»: inventing a confidence would turn a provider
-    that does not report it into a permanent quality warning.
+    that does not report it into a permanent quality warning. Protobuf scalars default to
+    0.0 when the provider omits confidence, so zero is unknown on every path (Riva, JSON
+    and scripted), not only at the protobuf boundary.
     """
     if raw is None or isinstance(raw, bool):
         return None
     if not isinstance(raw, int | float):
         return None
     value = float(raw)
-    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+    if not math.isfinite(value) or not 0.0 < value <= 1.0:
         return None
     return value
 

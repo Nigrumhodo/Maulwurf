@@ -203,6 +203,9 @@ writes no repository file and prints no audio. `--slots` is bounded to 4 and the
   audio sent to the provider, not an invoice.
 - The stub transcriber does not include the Riva SDK, network latency, retries or provider
   memory. It measures the local audio path only.
+- Worker peak RSS prefers `VmHWM` and falls back to `getrusage(RUSAGE_SELF).ru_maxrss` when
+  a sandbox hides it. With neither source the RAM rows stay `NO VERIFICADO` and the load
+  case skips with that reason; the harness never substitutes zero.
 - The source is a WAV synthesized by espeak-ng. Real uploads are compressed and may have a
   different tmpfs original size; the provisional 200 MiB and 3 h are not tested.
 - The class-hour projection is linear and ignores silence, questions and non-speech audio.

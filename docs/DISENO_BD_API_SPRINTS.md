@@ -121,6 +121,13 @@ version; `embeddings.index_version` is part of the FK to its chunk. `dimension` 
 vector column's 1536 and a transcript's `text` must not be blank. `0009_s2_schema_integrity`
 follows `0008`; `alembic check` runs in the integration suite and fails on metadata drift.
 
+Implementation (A2.12, revision `0010`): `messages_by_conversation_order`
+`(user_id, conversation_id, created_at, id)` replaces the FK-only
+`messages_by_conversation` index. It backs the paginated history order and the
+`max(created_at)` aggregate that orders the conversation listing; its prefix still covers the
+`(user_id, conversation_id)` FK. The revision only swaps indexes, so no table or column is
+added.
+
 ### 2.1.1 Extensions
 
 ```sql
@@ -189,7 +196,9 @@ CREATE TABLE sessions (
   created_at   timestamptz NOT NULL DEFAULT now(),
   expires_at   timestamptz NOT NULL,
   revoked_at   timestamptz,
-  last_seen_at timestamptz
+  last_seen_at timestamptz,
+  deletion_operation_id uuid                     -- A4.4: restricted initiator only
+    REFERENCES account_deletions(id) ON DELETE SET NULL
 );
 CREATE INDEX sessions_user ON sessions (user_id, expires_at);
 
@@ -377,7 +386,9 @@ Design notes ([ESPECIFICACION.md](ESPECIFICACION.md) §6.2):
   active `ingestion_attempts` to `cancelled` with `fencing_token + 1` (a late `ingest`
   commit fails its token check) → `outbox_events` `pending` to `skipped` (never
   `enabled=false`, which the `cleanup_gate` CHECK would reject as a lie) →
-  `processing_runs` `pending|running` to `cancelled` → `message_sources` of the class →
+  `processing_runs` `pending|running` to `cancelled` → `task_revisions` and
+  `task_sources` of the class → `tasks` with `audio_id` = the class (so `tasks.audio_id`
+  never blocks the purge) → `message_sources` of the class →
   content-free `messages` (`content=''`, `citas='[]'`) → `embeddings` → `chunk_segments`
   → `chunks` → `segments` → `transcripts` (summary and topics go with the transcript).
   Final attempts keep their `error_code`; existing Google events are kept by default.
@@ -651,6 +662,10 @@ CREATE TABLE messages (
 CREATE UNIQUE INDEX messages_client_idem
   ON messages (conversation_id, client_message_id)
   WHERE client_message_id IS NOT NULL;
+-- A2.12, revision 0010: replaces the FK-only (user_id, conversation_id) index. The trailing
+-- keys serve history pagination and `max(created_at)` per conversation.
+CREATE INDEX messages_by_conversation_order
+  ON messages (user_id, conversation_id, created_at, id);
 
 CREATE TABLE message_sources (
   id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -759,6 +774,8 @@ CREATE TABLE tasks (
 -- be ambiguous.
 CREATE INDEX tasks_inbox_due_at ON tasks (user_id, status, due_at) WHERE due_at IS NOT NULL;
 CREATE INDEX tasks_inbox_due_date ON tasks (user_id, status, due_date) WHERE due_date IS NOT NULL;
+-- `ambiguous`/`missing` carry no due column, so the unresolved tray needs the plain key.
+CREATE INDEX tasks_inbox_status ON tasks (user_id, status);
 
 CREATE TABLE task_evidence (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -778,6 +795,8 @@ CREATE TABLE task_evidence (
 CREATE INDEX task_evidence_by_task ON task_evidence (user_id, task_id, task_version);
 
 -- A transcript/chat-based proposal may reference several classes; the manual task uses zero rows.
+-- Parent keys added by A3.1/0012: segments UNIQUE (user_id, transcript_id, id) and
+-- transcripts UNIQUE (user_id, audio_id, id); transcripts (user_id, id, version) came from A2.18.
 CREATE TABLE task_sources (
   user_id            uuid NOT NULL,
   task_id            uuid NOT NULL,
@@ -785,16 +804,23 @@ CREATE TABLE task_sources (
   audio_id           uuid NOT NULL,
   FOREIGN KEY (user_id, audio_id) REFERENCES audios (user_id, id) ON DELETE CASCADE,
   transcript_id      uuid NOT NULL,
-  FOREIGN KEY (user_id, transcript_id) REFERENCES transcripts (user_id, id),
   transcript_version integer NOT NULL,
+  FOREIGN KEY (user_id, audio_id, transcript_id)
+    REFERENCES transcripts (user_id, audio_id, id),
+  FOREIGN KEY (user_id, transcript_id, transcript_version)
+    REFERENCES transcripts (user_id, id, version),
   segment_id         uuid NOT NULL,
-  FOREIGN KEY (user_id, segment_id) REFERENCES segments (user_id, id),
+  FOREIGN KEY (user_id, transcript_id, segment_id)
+    REFERENCES segments (user_id, transcript_id, id),
   char_start         integer NOT NULL,
   char_end           integer NOT NULL,
   PRIMARY KEY (user_id, task_id, segment_id, char_start, char_end),
   CHECK (char_start < char_end)
 );
-CREATE INDEX task_sources_by_audio ON task_sources (user_id, audio_id);
+CREATE INDEX task_sources_by_audio ON task_sources (user_id, audio_id, transcript_id);
+CREATE INDEX task_sources_by_transcript
+  ON task_sources (user_id, transcript_id, transcript_version);
+CREATE INDEX task_sources_by_segment ON task_sources (user_id, transcript_id, segment_id);
 
 CREATE TABLE task_revisions (
   id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -812,6 +838,8 @@ CREATE TABLE task_revisions (
                        CHECK (status IN ('pending_confirmation','activated','discarded')),
   activated_at       timestamptz,
   created_at         timestamptz NOT NULL DEFAULT now(),
+  -- NULL-distinct on purpose: several pending `edit_of_confirmed` rows may share a base
+  -- version; a repeated reanalysis of the same run is rejected. See ESPECIFICACION §M4.
   UNIQUE (task_id, base_task_version, revision_type, run_id)
 );
 
@@ -822,7 +850,8 @@ CREATE TABLE calendar_events (
   event_id           text NOT NULL,              -- remote Google ID
   source             text NOT NULL CHECK (source IN ('google','maulwurf')),
   task_id            uuid,                       -- nullable: most events have no task
-  FOREIGN KEY (user_id, task_id) REFERENCES tasks (user_id, id),
+  FOREIGN KEY (user_id, task_id) REFERENCES tasks (user_id, id)
+    ON DELETE SET NULL (task_id),                -- class purge unlinks, keeps the event
   title              text NOT NULL,
   start_at           timestamptz,                -- pairs with end_at: events with time
   end_at             timestamptz,
@@ -848,7 +877,7 @@ CREATE UNIQUE INDEX calendar_events_one_link
 
 CREATE TABLE google_remote_operations (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id     uuid NOT NULL,                     -- no FK: survives the purge (A4.4)
   kind        text NOT NULL CHECK (kind IN ('delete_event','delete_calendar','account_cleanup')),
   calendar_id text,
   event_id    text,
@@ -857,21 +886,25 @@ CREATE TABLE google_remote_operations (
   attempts    integer NOT NULL DEFAULT 0,
   error_code  text,
   created_at  timestamptz NOT NULL DEFAULT now(),
-  finished_at timestamptz
+  finished_at timestamptz,
+  expires_at  timestamptz NOT NULL               -- deleted by the retention job
 );
+CREATE INDEX google_remote_operations_expiry ON google_remote_operations (expires_at);
 
 -- Residual record without FK: it survives the purge to report the outcome without retaining
--- profile/text.
+-- profile/text. `claimed_at` is the execution lease; a crashed process is reclaimable.
 CREATE TABLE account_deletions (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   former_user_id uuid NOT NULL,
   status        text NOT NULL
-    CHECK (status IN ('pending','completed','completed_with_remote_failures')),
+    CHECK (status IN ('pending','running','completed','completed_with_remote_failures')),
   delete_events boolean NOT NULL DEFAULT false,
   error_summary text,
   expires_at    timestamptz NOT NULL,
   created_at    timestamptz NOT NULL DEFAULT now(),
-  completed_at  timestamptz
+  completed_at  timestamptz,
+  claimed_at    timestamptz,
+  attempts      integer NOT NULL DEFAULT 0
 );
 CREATE INDEX account_deletions_expiry ON account_deletions (expires_at);
 ```
@@ -885,9 +918,18 @@ CREATE INDEX account_deletions_expiry ON account_deletions (expires_at);
   receives `revision_id` and `expected_version`, activates exactly that revision, bumps the
   version, and creates/reuses the Calendar outbox in a single transaction.
 - Remote class/task deletion lives in `google_remote_operations` and **survives** its purge
-  until resolved. Account deletion creates `account_deletions`, which keeps only the former
-  ID, status, redacted error, and expiry; it allows `GET /me/deletion/{id}` after profile
-  and tokens are purged.
+  until resolved (A4.4 resolves the illustrative `ON DELETE CASCADE` by keeping `user_id` as
+  an opaque UUID without a FK). Account deletion creates `account_deletions`, which keeps only
+  the former ID, status, redacted error, and expiry; it allows `GET /me/deletion/{id}` after
+  profile and tokens are purged. The initiating session is linked through
+  `sessions.deletion_operation_id` and stays in restricted mode (status, authorized resume,
+  and logout only). Execution uses an atomic `pending -> running` claim with a bounded lease;
+  a purge failure after the tombstone leaves a resumable `pending` operation and still answers
+  `202`. An hourly scheduled job runs as the cross-tenant jobs role and deletes both residual
+  tables once `expires_at` passes; the window is 30 days (D8, A4.5) and matches the backup
+  retention.
+  `delete_maulwurf_events` defaults to `false`, so Maulwurf-created Google events stay in the
+  user's calendar unless the deletion explicitly opts in (the UI must say so; A4.5).
 - Complete/dismiss cancels future reminders but keeps the event with a notice, unless
   remote deletion is explicitly requested.
 
@@ -917,36 +959,100 @@ CREATE TABLE notifications (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id             uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   task_id             uuid,                       -- nullable: digests and test do not depend on a task
-  FOREIGN KEY (user_id, task_id) REFERENCES tasks (user_id, id) ON DELETE SET NULL,
+  -- A4.1: CASCADE, not SET NULL. A bare composite SET NULL would try to null the NOT NULL
+  -- user_id; nulling only task_id would leave a reminder without its due generation and two
+  -- deleted tasks would then collide under the NULLS NOT DISTINCT occurrence key.
+  FOREIGN KEY (user_id, task_id) REFERENCES tasks (user_id, id) ON DELETE CASCADE,
   type                text NOT NULL CHECK (type IN
     ('reminder_t48','reminder_t24','reminder_t2',
      'reminder_t3d','reminder_t1d','digest_daily','digest_weekly','test')),
   occurrence          date,                       -- target local date
   due_version         integer,
   scheduled_at        timestamptz NOT NULL,
-  dedupe_key          text NOT NULL,              -- (user_id, type, task_id, due_version, occurrence)
+  dedupe_key          text NOT NULL,              -- canonical identity (occurrence_seq suffix if > 0)
+  occurrence_seq      integer NOT NULL DEFAULT 0, -- 0 = scheduled; > 0 = manual test/resend
   status              text NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending','sending','sent','failed','delivery_unknown','cancelled')),
   lease_expires_at    timestamptz,                -- expired 'sending' = uncertain delivery
   attempts            integer NOT NULL DEFAULT 0,
+  claimed_by_fence    bigint,                     -- election that moved the row to 'sending'
   sent_at             timestamptz,
   provider_message_id text,
   last_error_code     text,                       -- redacted, no PII
   created_at          timestamptz NOT NULL DEFAULT now(),
   updated_at          timestamptz NOT NULL DEFAULT now(),
-  UNIQUE NULLS NOT DISTINCT (user_id, type, task_id, due_version, occurrence)
+  UNIQUE NULLS NOT DISTINCT
+    (user_id, type, task_id, due_version, occurrence, occurrence_seq)
 );
 CREATE INDEX notifications_due ON notifications (status, scheduled_at) WHERE status = 'pending';
 ```
 
 - Persistent dedupe `(user_id, type, task_id, due_version, occurrence)`; changing the due
   date or preferences cancels obsolete future occurrences; **never** a retrospective burst
-  when confirming late.
+  when confirming late. A4.3 owns the rule: only `pending` rows are cancelled (a `sending`
+  row may already be leaving through Gmail, and `sent`/`failed`/`delivery_unknown` are
+  history); a new `due_version` retires the pending reminders of the previous generation of
+  **that** task, and a preference change retires the reminder/digest types no longer
+  enabled. The task scope belongs to the due-date rule only: digests are user-level and a
+  preference change still evaluates them when both rules are applied together. A stale
+  pending row whose instant already passed is cancelled too, so it can
+  never fire late. Deleting a task cascades to its reminders (A4.1): an unlinked
+  reminder would be undeliverable and would also collide with another deleted task's
+  occurrence under `NULLS NOT DISTINCT`. A **scheduled** occurrence that A4.3 cancelled can
+  be re-armed when the same task generation is scheduled again and the threshold is enabled
+  (for example after disabling and re-enabling a preference): it was never claimed or
+  delivered. The re-arm targets `uq_notifications_dedupe_key` and only reopens `cancelled`
+  rows; `sending`, `sent`, `failed` and `delivery_unknown` keep their history, and a manual
+  resend of a cancelled row remains forbidden.
+- J4.3 resolves `occurrence` as the user-local target day of the delivery: the local date of
+  `due_at - threshold` for timed reminders and `due_date - offset` for all-day ones. A4.1
+  freezes no reminder wall-clock preference (only the digest time), so the all-day default is
+  09:00 local with an explicit override; the digest preference is not reused. Thresholds
+  already past at confirmation are not inserted, so a late confirmation never fires a
+  retrospective burst. J4.4 normalizes both DST edges in `_resolve_local_wall`: a repeated
+  wall clock is armed once at its first fold, and a nonexistent one moves to the first valid
+  instant after the gap; the identity keeps the user-local target day, so the transition
+  cannot duplicate an occurrence.
+- A manual test send or warned resend is a new audited occurrence of the same identity; it
+  carries `occurrence_seq` 1, 2, … (0 is the scheduled row). Automatic dedupe is unchanged,
+  and the original `delivery_unknown` row is never mutated to `pending`.
 - DST: nonexistent time → next valid instant; repeated time → a single local occurrence.
   Tasks without a date have no scaled reminders.
 - Gmail does not guarantee exactly-once delivery: lost response or expired `sending` lease
   → `delivery_unknown`, **no automatic retry**; visible in the panel; manual resending
   warns about the risk.
+
+J4.2 elects the scheduler role with a global row:
+
+```sql
+CREATE TABLE scheduler_leases (
+  name              text PRIMARY KEY,          -- notification_scheduler
+  holder            text NOT NULL,             -- host:pid:nonce
+  fencing_token     bigint NOT NULL DEFAULT 1, -- grows on takeover
+  lease_expires_at  timestamptz NOT NULL,
+  heartbeat_at      timestamptz NOT NULL DEFAULT now(),
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  CHECK (lease_expires_at > heartbeat_at),
+  CHECK (fencing_token >= 1)
+);
+```
+
+- There is no tenant column and no RLS: the row is infrastructure state, never user data.
+  The `maulwurf_jobs` role owns access; the API and ingest roles cannot read or rewrite the
+  election.
+- The same holder renews in place and keeps the fence; only an expired row can be taken
+  over, and a takeover increments the fence. The cron runs every minute and at startup.
+  Election, expiry and due comparisons use PostgreSQL's clock (`now()`), not each host's
+  wall clock.
+- The claim keeps the occurrence's `dedupe_key` unique and adds a bounded delivery lease;
+  `FOR UPDATE SKIP LOCKED` lets multiple workers drain a backlog without claiming twice. It
+  also copies the elected `fencing_token` into `notifications.claimed_by_fence` (migration
+  `0018`); the J4.1 sender must compare it with the live election before delivering, and a
+  row claimed by a superseded scheduler must not be sent.
+- The scheduler is disabled by default (`MAULWURF_NOTIFICATION_SCHEDULER_ENABLED=false`)
+  until J4.1 consumes `sending`: a disabled tick elects no role and moves no row, so no
+  occurrence becomes a false terminal `delivery_unknown` before delivery exists.
 
 ### 2.10 State machines (frozen contracts)
 
@@ -1036,11 +1142,11 @@ assign a person or ticket ownership. The effective owner is looked up in
 | Origin | Same-origin behind Caddy; absolute routes as in the specification (no `/api` prefix) |
 | Session | Opaque cookie `mw_session` (`Secure`, `HttpOnly`, `SameSite=Lax`); the server stores only the hash |
 | CSRF | `GET /me` delivers the plain token under `Cache-Control: no-store`; the server keeps only `csrf_hash`. Every mutation (`POST`/`PUT`/`PATCH`/`DELETE`, including binary) requires a valid `X-CSRF-Token` and a matching `Origin`. Rotates with the session, not per read. |
-| HTTP privacy | `Cache-Control: no-store` on private content; the service worker (if any, S4) excludes upload/API/transcripts/chat/SSE |
+| HTTP privacy | `Cache-Control: no-store` on private content, enforced structurally on every API response (routes, errors, redirects and SSE); the service worker (if any, S4) excludes upload/API/transcripts/chat/SSE |
 | Identity | `user_id` always from backend session state; never from a payload or LLM output |
 | Tracing | JSON logs with `request_id`, `audio_id`, `attempt_id`, `run_id`; no sensitive payloads |
 | Pagination | `limit` (1–200, default 50) + opaque `cursor` |
-| Quotas | `429` with `Retry-After` for per-user quota; `503` with `Retry-After` for ingestion capacity. Effective values TBD after F0 |
+| Quotas | `429` with `Retry-After` for per-user quota; `503` with `Retry-After` for ingestion capacity or a limiter outage (fail closed). Active values come only from recorded decisions: M5/M6/M7 and D4/D5. Authentication and incremental consent have no published number yet, so their fixed-window mechanism is configuration-driven and unset means no limit |
 | Language | No preselection or autodetection; `multi` and translation out of MVP/v1. Codes are compared case-insensitively (BCP-47) and stored lowercase |
 
 ### 3.2 Error envelope and codes
@@ -1074,6 +1180,7 @@ Typed codes (no PII or sensitive content):
 | `not_found` | 404 | Nonexistent, tombstoned, or unknown route |
 | `method_not_allowed` | 405 | HTTP method not allowed on an existing route |
 | `validation_failed` | 422 | Invalid fields (per-field detail) |
+| `chat_mode_invalid` | 422 | Conversation `mode`/scope mismatch or unknown mode (M7) |
 | `language_not_allowed` | 422 | Code outside the tested allowlist |
 | `consent_required` | 422 | Missing cloud-processing acceptance |
 | `upload_expired` | 410 | Ingestion session TTL expired |
@@ -1128,21 +1235,32 @@ itself `retryable=false` in `details`: the header is the retry signal (A2.19).
 
 | Method | Route | Sprint | Description | Response |
 |---|---|---|---|---|
-| `GET` | `/auth/google/start` | S1 | OAuth Authorization Code with `state`, PKCE, and `nonce`; scopes `openid email profile` | `302` to Google |
-| `GET` | `/auth/google/callback` | S1 | Validates `nonce`/issuer/audience; creates the user by `sub`; issues an opaque session | `302` to `/` with cookie |
+| `GET` | `/auth/google/start` | S1 | OAuth Authorization Code with `state`, PKCE, and `nonce`; scopes `openid email profile` | `302` to Google · `429` conditional · `503` |
+| `GET` | `/auth/google/callback` | S1 | Validates `nonce`/issuer/audience; creates the user by `sub`; issues an opaque session | `302` to `/` with cookie · `429` conditional · `503` |
 | `POST` | `/auth/logout` | S1 | Revokes the session | `204` |
 | `GET` | `/me` | S1 | Profile + non-cacheable CSRF bootstrap; integration status is `GET /integrations/status` | `200` (shape below) |
 | `PATCH` | `/me` | S1 | Updates `timezone` (IANA) only | `200` |
 | `GET` | `/integrations/status` | S1 | Login/Calendar/Gmail status, scopes, freshness | `200` |
-| `POST` | `/integrations/google/connect` | S3 | Incremental OAuth with Calendar scopes (real verification D7) | `302` to Google |
-| `POST` | `/integrations/google/reconnect` | S3 | Re-authorization after `invalid_grant` (Testing expires after 7 days) | `302` to Google |
+| `POST` | `/integrations/google/connect` | S3 | Incremental OAuth with Calendar scopes (real verification D7) | `302` to Google · `429` conditional · `503` |
+| `POST` | `/integrations/google/reconnect` | S3 | Re-authorization after `invalid_grant` (Testing expires after 7 days) | `302` to Google · `429` conditional · `503` |
+| `GET` | `/me/notifications` | S4 | Current M8 preferences (read companion of the PATCH) | `200` |
 | `PATCH` | `/me/notifications` | S4 | M8 preferences (Gmail opt-in, digests, thresholds) | `200` |
 | `POST` | `/notifications/test` | S4 | Test send to the verified email | `202` |
-| `DELETE` | `/me` | S4 | Account deletion; accepts explicit `delete_maulwurf_events`, creates the operation, and requests remote deletions before revoking tokens | `202 {deletion_operation_id}` |
-| `GET` | `/me/deletion/{id}` | S4 | Non-sensitive deletion status; accepts the restricted initiator session | `pending\|completed\|completed_with_remote_failures` |
+| `DELETE` | `/me` | S4 | Account deletion; accepts explicit `delete_maulwurf_events` (default `false` keeps Maulwurf-created Google events), creates the operation, claims it atomically, and requests remote deletions before revoking tokens; a post-tombstone failure still answers `202` and stays resumable | `202 {deletion_operation_id}` |
+| `GET` | `/me/deletion/{id}` | S4 | Non-sensitive deletion status; accepts the restricted initiator session | `pending\|running\|completed\|completed_with_remote_failures` |
+| `POST` | `/me/deletion/{id}/resume` | S4 | Authorized retry of a `pending`/`running` operation; accepts the restricted initiator session with Origin/CSRF; an already-closed operation is a no-op | `202` (still open) · `200` (closed) · `403` · `404` |
+
+The four OAuth entry points carry A4.6's fixed-window abuse guard. `/auth/google/start`
+and `/auth/google/callback` are keyed by a hash of the peer address; `connect`/`reconnect`
+are keyed by the authenticated user. No numeric decision exists yet (D4/D5 open), so the
+limits are configuration (`MAULWURF_AUTH_RATE_LIMIT_PER_MINUTE`,
+`MAULWURF_INTEGRATION_RATE_LIMIT_PER_MINUTE`) and unset means "no limit", the same rule as
+the A2.3 upload quota. When enabled they answer `429 rate_limited` with `Retry-After`; a
+Redis outage fails closed with `503 capacity_unavailable` and `Retry-After`.
 
 After `DELETE /me`, the session that started the operation enters **restricted mode**: only
-`GET /me/deletion/{id}` and `POST /auth/logout`; every other session is revoked. This way
+`GET /me/deletion/{id}`, `POST /me/deletion/{id}/resume` and `POST /auth/logout`; every other
+session is revoked. This way
 the client can show the deletion status without keeping access to the rest of the account.
 
 `GET /me` example:
@@ -1301,7 +1419,10 @@ across tenants).
     "quality_warnings": [
       { "code": "repetition", "count": 3 },
       { "code": "low_confidence", "count": 4, "total": 10 }
-    ]
+    ],
+    "summary": null,
+    "topics": [],
+    "analysis_version": null
   },
   "exports": { "txt": true, "srt": true }
 }
@@ -1313,7 +1434,10 @@ client can enable the download without probing the `409`. `transcript.quality_wa
 carries the non-sensitive ASR signals (`code` plus counts) persisted by ingestion — for
 example `repetition`, `empty_segments` and `low_confidence` — so the inbox/class page can
 warn before proposing dates or tasks. Unknown fields are dropped and the list is bounded;
-no spoken text or provider payload is part of the signal (S3.6).
+no spoken text or provider payload is part of the signal (S3.6). `summary` is the v1
+class summary (3–5 sentences) or null until analysis publishes it; `topics` is that
+version's list, empty until then; `analysis_version` is the integer written in the same
+transaction. A class whose analyze stage is `not_requested` keeps all three empty.
 
 `analysis_backfill_available` is the explicit S3.1/D3.5 action and mirrors the decision of
 `classify_existing_run`, so the class page never offers an action the service resolves as a
@@ -1545,8 +1669,8 @@ It does not reactivate revisions, tombstoned tasks, or obsolete versions.
 | Method | Route | Sprint | Description | Responses |
 |---|---|---|---|---|
 | `POST` | `/chat/conversations` | S2 | Creates a conversation (`mode: all\|subject\|class` + `subject_id`/`audio_id` per mode) | `201` · `422 chat_mode_invalid` |
-| `GET` | `/chat/conversations` | S2 | Tenant list | `200` |
-| `GET` | `/chat/conversations/{id}/messages` | S2 | Paginated history | `200` |
+| `GET` | `/chat/conversations` | S2 | Tenant list, keyset paginated (`limit` 1–100, default 50) | `200` |
+| `GET` | `/chat/conversations/{id}/messages` | S2 | Paginated history, deterministic user-before-assistant order | `200` |
 | `POST` | `/chat/conversations/{id}/messages` | S2 | Sends a question; **SSE consumed with `fetch`**; an idempotent `client_message_id` returns the existing message without re-executing; at most two concurrent streams per user | `200 text/event-stream` · `429 rate_limited` |
 | `DELETE` | `/chat/conversations/{id}` | S2 | Tombstone and purge of content/sources | `204` |
 | `POST` | `/chat/conversations/{id}/messages/{message_id}/cancel` | S2 | Cancels the in-flight stream; the partial is left `cancelled` | `202` |
@@ -1597,14 +1721,31 @@ Contract rules:
   ranges and schemas validated by the backend.
 - Modes validated by the `conversations` CHECK; everything within the tenant.
 - L2.5 implements `POST .../messages` and `.../cancel` with the minimal turn persistence;
-  conversation create/list/history/delete remain A2.12. `Last-Event-ID` is the last received
+  A2.12 adds conversation create/list/paginated history/delete over the same tables; `DELETE`
+  cancels assistant rows still `streaming` in the same transaction and signals their
+  producers after the commit, so an in-flight answer stops consuming model tokens.
+  `Last-Event-ID` is the last received
   character offset: every connect/reconnect re-sends `snapshot` and skips that prefix from the
   persisted message.
+- A turn's two rows are inserted in one transaction, so ordering by `created_at` alone can
+  interleave a question and its answer. `RAGService.prepare` reads the turn clock from
+  PostgreSQL (`clock_timestamp()`) after taking the conversation lock and writes the user row
+  at that mark and the assistant one microsecond later; the database clock keeps turns
+  ordered across API hosts whose clocks disagree. The history query, its keyset cursor and
+  the RAG history also break a legacy equal-timestamp tie with a `user < system < assistant`
+  role rank. The v2 history cursor carries that role, so v1 cursors are rejected instead of
+  silently skipping or duplicating a message.
+- Both conversation reads are bounded: history pages use `limit` 1–100 (default 50) and the
+  listing uses the same keyset pattern. Revision `0010` replaces the FK-only
+  `messages_by_conversation` index with
+  `messages_by_conversation_order (user_id, conversation_id, created_at, id)`, which supports
+  the history order and the per-conversation `max(created_at)` used by the listing.
 
 ### 3.11 M8/M9 — Notifications and dashboard (S4)
 
 | Method | Route | Sprint | Description |
 |---|---|---|---|
+| `GET` | `/me/notifications` | S4 | Current M8 preferences: Gmail opt-in, digest switches/time/weekday, visible thresholds |
 | `PATCH` | `/me/notifications` | S4 | M8 preferences: Gmail opt-in, daily digest time/weekday, visible thresholds |
 | `POST` | `/notifications/test` | S4 | Test send to the verified email (Gmail `gmail.send`); `202` with an uncertain-delivery warning |
 | `GET` | `/notifications?status=&from=&to=&limit=&cursor=` | S4 | Paginated delivery panel; does not mix sensitive payloads |
@@ -1651,8 +1792,8 @@ no new endpoints in the MVP.
 | `/tasks*` (M4) | — | — | ✓ | — |
 | `/calendar/*` (M5) | — | — | ✓ | — |
 | `/integrations/google/connect\|reconnect` | — | — | ✓ | — |
-| `PATCH /me/notifications`, `POST /notifications/test`, `GET /notifications`, `POST /notifications/{id}/resend` | — | — | — | ✓ |
-| `DELETE /me`, `GET /me/deletion/{id}` | — | — | — | ✓ |
+| `GET/PATCH /me/notifications`, `POST /notifications/test`, `GET /notifications`, `POST /notifications/{id}/resend` | — | — | — | ✓ |
+| `DELETE /me`, `GET /me/deletion/{id}`, `POST /me/deletion/{id}/resume` | — | — | — | ✓ |
 
 ---
 
@@ -1991,7 +2132,7 @@ delivery tested; runbooks and security/cost review; final demo.
 | Day | Ticket | Task | Verifiable deliverable |
 |---|---|---|---|
 | 1 | A4.1 | `notifications` table per M8: `scheduled_at`, `due_version`, `dedupe_key`, statuses (`pending\|sending\|sent\|failed\|delivery_unknown\|cancelled`), `provider_message_id`, redacted errors | Tested schema |
-| 1–2 | A4.2 | `PATCH /me/notifications` and `POST /notifications/test` | Endpoints |
+| 1–2 | A4.2 | Preferences (`GET/PATCH /me/notifications`), test send, cursor listing and warned resend | Endpoints |
 | 2 | A4.3 | Changing the due date/preferences cancels obsolete future occurrences; never a retrospective burst when confirming late | Cancellation tests |
 | 2–3 | A4.4 | Observable account deletion: `DELETE /me` → 202 + `deletion_operation_id`; tombstone, session/job blocking, remote deletion **before** revoking, idempotent purge, and `GET /me/deletion/{id}` | Deletion E2E |
 | 3 | A4.5 | D8 already approved: validate encrypted text/metadata backups, agreed retention, and tombstones reapplied on restore | Restore verified |

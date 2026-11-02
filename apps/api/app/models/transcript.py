@@ -26,6 +26,10 @@ class Transcript(TenantOwned, Base):
         UniqueConstraint("user_id", "id"),
         # Target of the 3-column FKs that pin a child row to this exact transcript version.
         UniqueConstraint("user_id", "id", "version"),
+        # Target of the provenance FK that pins a citation to the transcript's class.
+        # `(user_id, id)` cannot serve a 3-column reference and `(audio_id, version)` is not
+        # tenant-scoped.
+        UniqueConstraint("user_id", "audio_id", "id"),
         UniqueConstraint("audio_id", "version"),
         ForeignKeyConstraint(
             ["user_id", "audio_id"], ["audios.user_id", "audios.id"], ondelete="CASCADE"
@@ -38,6 +42,9 @@ class Transcript(TenantOwned, Base):
         # never reach the durable text table (defense in depth next to S2.10).
         CheckConstraint("btrim(text) <> ''", name="nonblank_text"),
         Index("transcripts_by_audio", "user_id", "audio_id"),
+        # J4.8: the internal budget aggregate starts from the month's committed classes
+        # (`created_at`) and pairs the audio id to count each class once.
+        Index("transcripts_by_created_at", "created_at", "audio_id"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -68,6 +75,9 @@ class Segment(TenantOwned, Base):
     __tablename__ = "segments"
     __table_args__ = (
         UniqueConstraint("user_id", "id"),
+        # Target of `task_sources`' 3-column FK: the cited segment must belong to the
+        # cited transcript, not merely to the same tenant.
+        UniqueConstraint("user_id", "transcript_id", "id"),
         UniqueConstraint("transcript_id", "ordinal"),
         ForeignKeyConstraint(
             ["user_id", "transcript_id"],

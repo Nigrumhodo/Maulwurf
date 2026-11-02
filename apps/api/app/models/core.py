@@ -46,7 +46,10 @@ class Session(TenantOwned, Base):
     """Sesión opaca: solo se guardan hashes; la cookie y el CSRF planos no llegan a la BD."""
 
     __tablename__ = "sessions"
-    __table_args__ = (Index("sessions_user", "user_id", "expires_at"),)
+    __table_args__ = (
+        Index("sessions_user", "user_id", "expires_at"),
+        Index("sessions_by_deletion", "deletion_operation_id"),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
@@ -55,6 +58,11 @@ class Session(TenantOwned, Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # A4.4: set only on the session that started the deletion. It keeps that session alive
+    # in restricted mode after the account tombstone; every other session is revoked.
+    deletion_operation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("account_deletions.id", ondelete="SET NULL")
+    )
 
 
 class GoogleCredential(Base):

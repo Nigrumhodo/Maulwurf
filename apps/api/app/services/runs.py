@@ -44,6 +44,7 @@ from app.models.ingestion import ACTIVE_INGESTION_STATES
 from app.services import state_machine
 from app.services.analysis_windows import DEFAULT_OVERLAP_TOKENS, DEFAULT_TARGET_TOKENS
 from app.services.audios import UNASSIGNED_OWNER, attempt_deadlines
+from prompts.registry import PROMPT_VERSION, SUMMARY_PROMPT_VERSION
 
 INDEX_STAGE = "index"
 ANALYSIS_STAGE = "analyze"
@@ -52,10 +53,9 @@ STAGES = (INDEX_STAGE, ANALYSIS_STAGE)
 # row, so bumping it (chunk/embedding pipeline change) creates new runs instead of silently
 # reusing results produced by another configuration.
 INDEX_CONFIG_VERSION = "v1"
-# The analysis prompt is owned by L3.1. Until it publishes the versioned extraction prompts,
-# this provisional prompt version is recorded on each `analyze` run; the config version is
-# derived from it so a prompt bump always creates a new run.
-ANALYSIS_PROMPT_VERSION = "v1"
+# L3.1 publishes the extraction prompts. The run stores that version, and the config key is
+# derived from it, so a prompt bump creates a new run instead of reusing the old one.
+ANALYSIS_PROMPT_VERSION = PROMPT_VERSION
 # The only terminal run states a retry may requeue (M2: failed/cancelled work can be redone;
 # `succeeded` is a conflict and `pending`/`running` an idempotent no-op).
 RETRYABLE_RUN_STATES = ("failed", "cancelled")
@@ -89,6 +89,7 @@ def analysis_config_version(prompt_version: str = ANALYSIS_PROMPT_VERSION) -> st
         raise ValueError("prompt_version must not be empty")
     return (
         f"analyze-v1:prompt={prompt_version}"
+        f":summary={SUMMARY_PROMPT_VERSION}"
         f":window={DEFAULT_TARGET_TOKENS}/{DEFAULT_OVERLAP_TOKENS}"
     )
 

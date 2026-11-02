@@ -28,6 +28,8 @@ INGEST_ENV_ALLOWLIST = frozenset(
         "MAULWURF_DATABASE_URL",
         "INGEST_CREDENTIAL_SECRET",
         "INGEST_CREDENTIAL_KID",
+        "INGEST_CREDENTIAL_PREVIOUS_SECRET",
+        "INGEST_CREDENTIAL_PREVIOUS_KID",
         "INGEST_MAX_UPLOAD_BYTES",
         "INGEST_FRAGMENT_OVERLAP_S",
         "INGEST_FRAGMENT_SECONDS",
@@ -70,6 +72,8 @@ DUMMY_ENV: dict[str, str] = {
     "RIVA_USE_SSL": "true",
     INGEST_SECRET_NAME: DUMMY_INGEST_SECRET,
     INGEST_URL_NAME: "http://ingest:8000",
+    "INGEST_CREDENTIAL_PREVIOUS_SECRET": "cd" * 32,
+    "INGEST_CREDENTIAL_PREVIOUS_KID": "k1",
 }
 
 
@@ -161,6 +165,10 @@ def check_ingest(report: Report, model: Mapping, *, all_set: bool) -> None:
         report.check(
             env.get("NVIDIA_API_KEY") is not None,
             "NVIDIA_API_KEY reaches ingest when set",
+        )
+        report.check(
+            env.get("INGEST_CREDENTIAL_PREVIOUS_KID") == "k1",
+            "the optional previous credential kid reaches ingest during rotation",
         )
 
 

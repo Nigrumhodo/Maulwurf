@@ -57,6 +57,7 @@ async def enforce_search_quota(
             "capacity_unavailable",
             "El limitador de búsquedas no está disponible; inténtalo más tarde.",
             {"reason": "search_quota_unavailable"},
+            headers={"Retry-After": str(SEARCH_QUOTA_WINDOW_SECONDS)},
         ) from exc
     if int(count) > maximum:
         raise ApiError(

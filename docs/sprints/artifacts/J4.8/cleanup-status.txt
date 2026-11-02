@@ -1,0 +1,42 @@
+J4.8 / C-S4-JF-10 — cleanup runbook drill (S4.1 procedure)
+Date (UTC): 2026-11-01
+Environment: local PostgreSQL 16.15, database `maulwurf_j48_cleanup` migrated to head;
+  ingest package from this worktree; no container runtime in the sandbox.
+
+Seed: one user/subject/audio whose `ingestion_attempts` row is
+  `status='succeeded', cleanup_status='failed'`, owner `j48-drill`, fence 1.
+
+Command (runbook §4 detection; the operator form uses the same module):
+  $ cd apps/ingest
+  $ MAULWURF_DATABASE_URL='postgresql+asyncpg://maulwurf:<local-only>@127.0.0.1:5432/maulwurf_j48_cleanup' \
+      uv run python ../../scripts/ops/cleanup_recover.py status --check
+  admission_expected=closed
+  attention_required=true
+  failed_cleanups=1
+  failed_attempt_ids=faf09c2d-e033-4232-9417-1d7d489852f9
+  committed_pending=0
+  committed_pending_ids=
+  stranded=0
+  stranded_ids=
+  local_attempt_dirs=0
+  oldest_temporary_age_seconds=0.000
+  tmpfs_free_bytes=502906880
+  tmpfs_total_bytes=536870912
+  tmpfs_is_tmpfs=true
+  exit=3
+
+  $ MAULWURF_DATABASE_URL='...' uv run python ../../scripts/ops/cleanup_recover.py sweep
+  pass=1 enabled=0 held=0 cleanup_failed=0 lost=0 stranded_ended=0
+  exit=0
+
+Interpretation:
+- `status --check` detects the persisted failed cleanup and exits 3; admission is expected
+  closed until the row is resolved. The sweep pass itself found no new recovery action,
+  which is consistent with a row already marked `failed`; the status command is the
+  detection step in the runbook.
+- No audio, path, transcript or secret is printed: only booleans, counters, attempt UUIDs
+  and tmpfs capacity.
+
+Not run here: the compose restart in §5.1 and the host-loss attestation in §7, because the
+sandbox has no Docker/podman and no real destroyed host. The reference-host drill remains
+NOT RUN until J4.7 exists.

@@ -26,19 +26,20 @@ import logging
 import time
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import RedirectResponse
 
 from app.core.deps import (
     COOKIE_NAME,
     OAUTH_COOKIE_NAME,
+    AnyMutationSession,
     DbSession,
-    MutationSession,
     clear_oauth_state_cookie,
     clear_session_cookie,
     set_oauth_state_cookie,
     set_session_cookie,
 )
+from app.core.redis import RedisDep
 from app.core.security import sign_state, verify_state
 from app.models import GoogleCredential, User
 from app.services import calendar_connection, calendar_resume, oauth_google, sessions
@@ -47,6 +48,7 @@ from app.services.google_calendar import (
     GoogleCalendarInvalidGrant,
     disconnect_google_credential,
 )
+from app.services.limits import enforce_auth_limit
 from app.services.oauth_google import OAUTH_STATE_TTL_SECONDS, OAuthError
 
 logger = logging.getLogger(__name__)
@@ -57,6 +59,18 @@ CALENDAR_CONNECT = "connect"
 CALENDAR_RECONNECT = "reconnect"
 CALENDAR_MODES = frozenset({CALENDAR_CONNECT, CALENDAR_RECONNECT})
 SETTINGS_PATH = "/settings"
+
+
+async def _auth_rate_limit(request: Request, redis: RedisDep) -> None:
+    """A4.6: OAuth start/callback abuse guard.
+
+    With no published limit the helper returns before touching Redis, so an unconfigured
+    deployment behaves exactly as before and a test without Redis still works.
+    """
+    await enforce_auth_limit(redis, request)
+
+
+AuthRateLimit = Annotated[None, Depends(_auth_rate_limit)]
 
 
 def _constant_eq(a: str, b: str) -> bool:
@@ -82,9 +96,10 @@ def _calendar_result(result: str, *, reason: str | None = None) -> RedirectRespo
 
 
 @router.post("/auth/logout", status_code=204, response_model=None)
-async def logout(response: Response, session: MutationSession, db: DbSession) -> Response:
+async def logout(response: Response, session: AnyMutationSession, db: DbSession) -> Response:
     # Revocación inmediata: la cookie deja de valer en la siguiente petición. Un segundo
-    # logout con esa cookie ya no tiene sesión y recibe 401 (fail closed).
+    # logout con esa cookie ya no tiene sesión y recibe 401 (fail closed). A4.4: the
+    # restricted deletion session may use this same logout to end itself.
     await sessions.revoke_session(db, session)
     await db.commit()
     response.status_code = 204
@@ -92,8 +107,15 @@ async def logout(response: Response, session: MutationSession, db: DbSession) ->
     return response
 
 
-@router.get("/auth/google/start", response_model=None)
-async def google_start() -> RedirectResponse:
+@router.get(
+    "/auth/google/start",
+    response_model=None,
+    responses={
+        429: {"description": "rate_limited when the configured OAuth limit is exceeded"},
+        503: {"description": "capacity_unavailable: el limitador no está disponible"},
+    },
+)
+async def google_start(_limit: AuthRateLimit) -> RedirectResponse:
     try:
         request = oauth_google.build_authorization_request()
     except OAuthError:
@@ -226,10 +248,18 @@ async def _calendar_callback(
     return _calendar_result("connected")
 
 
-@router.get("/auth/google/callback", response_model=None)
+@router.get(
+    "/auth/google/callback",
+    response_model=None,
+    responses={
+        429: {"description": "rate_limited when the configured OAuth limit is exceeded"},
+        503: {"description": "capacity_unavailable: el limitador no está disponible"},
+    },
+)
 async def google_callback(
     request: Request,
     db: DbSession,
+    _limit: AuthRateLimit,
     error: Annotated[str | None, Query()] = None,
     code: Annotated[str | None, Query()] = None,
     state: Annotated[str | None, Query()] = None,

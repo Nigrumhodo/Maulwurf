@@ -24,7 +24,7 @@ with unreviewed durable persistence.
 | Eviction | `maxmemory-policy noeviction` | Visible failure instead of silently evicting jobs |
 | `maxmemory` | `${REDIS_MAXMEMORY:-256mb}` (provisional) | Caps the container; revisited in S2/S4 |
 | Value threshold | **4 KiB per value** | IDs, states, counters, and short ARQ results; nothing larger belongs in Redis |
-| Key catalog | `arq:*` (queues `arq:queue` and `arq:scheduler`, health keys `arq:queue:health-check` and `arq:scheduler:health-check`), `mw:*` IDs/status only | Every new key is documented here |
+| Key catalog | `arq:*` (queues `arq:queue` and `arq:scheduler`, health keys `arq:queue:health-check` and `arq:scheduler:health-check`), `mw:*` IDs/status only. `mw:limits:<scope>:<opaque identity>:<window>` is A4.6's fixed-window counter (hashed peer/user identity, TTL = window + 1 s; never a raw IP) | Every new key is documented here |
 | TTL | ARQ results `keep_result=60` s; health keys 30–60 s | No long-lived state |
 | Forbidden | Audio, transcripts, texts, prompts, tokens, credentials, PII | G1 and non-negotiable rules |
 | Exposure | No port to the host; locally only `127.0.0.1:6379` for the sweep test | Shrinks surface without blocking I-S1-JF-03 |

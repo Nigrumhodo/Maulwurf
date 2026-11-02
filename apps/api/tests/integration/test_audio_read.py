@@ -122,6 +122,9 @@ async def test_detail_reports_per_stage_aggregate_attempt_and_exports(
         "timestamp_precision": "none",
         "char_count": transcript.char_count,
         "quality_warnings": [],
+        "summary": None,
+        "topics": [],
+        "analysis_version": None,
     }
     # No segments and precision `none`: TXT yes, SRT no.
     assert body["exports"] == {"txt": True, "srt": False}

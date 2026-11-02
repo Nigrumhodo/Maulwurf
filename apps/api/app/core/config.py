@@ -107,6 +107,12 @@ class Settings(BaseSettings):
     # A2.11: provisional per-user search quota (one embeddings call per search). D5/F0
     # must replace it with the provider quota measured by the contract spike.
     search_rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
+    # A4.6: authentication and incremental consent have no published numeric decision yet
+    # (D4/D5 open), so the fixed-window mechanism ships wired but unset. `None` means "no
+    # limit", the same rule as the A2.3 upload quota; a deployment that freezes a number
+    # enables it without a code change.
+    auth_rate_limit_per_minute: int | None = Field(default=None, ge=1, le=600)
+    integration_rate_limit_per_minute: int | None = Field(default=None, ge=1, le=600)
     # Contrato de ingesta S1 (A1.8). Valores provisionales hasta D2/D4 (S1.A8/A2.2):
     # allowlist propuesta por S1.A3 y límite de bytes de `.env.example` (200 MiB, no aprobado).
     privacy_notice_version: str = "2026-09-v1"
@@ -169,6 +175,11 @@ class Settings(BaseSettings):
     llm_context_margin_tokens: int = Field(default=512, ge=0)
     llm_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
     llm_max_retries: int = Field(default=2, ge=0, le=5)
+    # Provisional until a measured extraction profile replaces it (L3.6). This caps how many
+    # windows (and therefore how many tokens) one class may send. It does not bound wall
+    # time: each call can take llm_timeout_seconds, so analyze_transcript enforces its own
+    # deadline below the 600 s job timeout.
+    analysis_max_windows: int = Field(default=24, ge=1, le=64)
     # D3-Texto: models/providers whose decision is closed (ESPECIFICACION §12). Empty by
     # default — fail closed: with the decision open only synthetic or redacted text is
     # indexed (S2.md §0.6, rule 6). Only the lead's recorded closure fills it in.
@@ -183,6 +194,17 @@ class Settings(BaseSettings):
     # with SET LOCAL ROLE before touching tenant rows; migrations keep the DSN owner.
     database_role: str = Field(default="maulwurf_app", pattern=r"^[a-z_][a-z0-9_]{0,62}$")
     redis_url: RedisDsn = cast(RedisDsn, "redis://localhost:6379/0")
+    # J4.2/J4.1: without a deployed Gmail consumer, claiming due rows would move them to
+    # `sending` only to expire them as a false `delivery_unknown` (terminal). The scheduler
+    # therefore starts disabled and must only be enabled once J4.1 consumes `sending`.
+    notification_scheduler_enabled: bool = False
+    # J4.8: monthly provider caps over units the application already measures. They are
+    # operator inputs from the S4.5 cost table and the real provider contract, not invented
+    # limits: unset means usage is reported with `configured=0` and nothing alarms.
+    budget_llm_tokens: int | None = Field(default=None, ge=1)
+    budget_asr_minutes: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    budget_google_operations: int | None = Field(default=None, ge=1)
+    budget_warning_ratio: float = Field(default=0.8, gt=0, le=1, allow_inf_nan=False)
 
     @property
     def allowed_origin(self) -> str:

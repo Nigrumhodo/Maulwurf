@@ -802,8 +802,11 @@ async def _insert_task(
     task_id = uuid.uuid4()
     await db_session.execute(
         text(
-            "INSERT INTO tasks (id, user_id, status, calendar_sync_status, version) "
-            "VALUES (:id, :user, :status, :sync, :version)"
+            "INSERT INTO tasks (id, user_id, status, calendar_sync_status, version, "
+            " tipo, titulo, timezone, all_day, date_status) "
+            "VALUES (:id, :user, :status, :sync, :version, "
+            "        'recordatorio', 'Recordatorio de prueba', 'America/Bogota', true, "
+            "        'missing')"
         ),
         {"id": task_id, "user": actor.user_id, "status": status, "sync": sync, "version": version},
     )

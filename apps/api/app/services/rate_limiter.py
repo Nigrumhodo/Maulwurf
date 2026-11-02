@@ -94,6 +94,7 @@ async def acquire_stream(
             "capacity_unavailable",
             "El limitador de chat no está disponible; inténtalo más tarde.",
             {"reason": "chat_stream_limit_unavailable"},
+            headers={"Retry-After": str(ttl_seconds)},
         ) from exc
 
     if int(acquired) != 1:
@@ -102,6 +103,8 @@ async def acquire_stream(
             "rate_limited",
             "Demasiadas conexiones de chat simultáneas.",
             {"limit": limit, "window_seconds": ttl_seconds},
+            # M7 fixes the budget (two streams) and DISENO §3.1 requires the header on 429.
+            headers={"Retry-After": str(ttl_seconds)},
         )
 
 

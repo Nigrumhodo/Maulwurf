@@ -198,6 +198,9 @@ class TombstonePurged(BaseModel):
     attempts_cancelled: int
     outbox_events_skipped: int
     processing_runs_cancelled: int
+    tasks_deleted: int
+    task_sources_deleted: int
+    task_revisions_deleted: int
     message_sources_deleted: int
     messages_tombstoned: int
     embeddings_deleted: int
@@ -256,6 +259,10 @@ class TranscriptOut(BaseModel):
     char_count: int
     # S3.6: non-sensitive ASR signals (code + counts) for the inbox/class page.
     quality_warnings: list[dict[str, Any]] = Field(default_factory=list)
+    # L3.8: null / empty until analysis publishes the versioned summary.
+    summary: str | None = None
+    topics: list[str] = Field(default_factory=list)
+    analysis_version: int | None = None
 
 
 class ExportsOut(BaseModel):
@@ -358,6 +365,9 @@ def _detail_out(detail: library.AudioDetail) -> AudioDetailOut:
                 timestamp_precision=detail.transcript.timestamp_precision,
                 char_count=detail.transcript.char_count,
                 quality_warnings=list(detail.transcript.quality_warnings),
+                summary=detail.transcript.summary,
+                topics=list(detail.transcript.topics),
+                analysis_version=detail.transcript.analysis_version,
             )
             if detail.transcript is not None
             else None
@@ -635,6 +645,9 @@ async def delete_audio(
             attempts_cancelled=result.attempts_cancelled,
             outbox_events_skipped=result.outbox_events_skipped,
             processing_runs_cancelled=result.processing_runs_cancelled,
+            tasks_deleted=result.tasks_deleted,
+            task_sources_deleted=result.task_sources_deleted,
+            task_revisions_deleted=result.task_revisions_deleted,
             message_sources_deleted=result.message_sources_deleted,
             messages_tombstoned=result.messages_tombstoned,
             embeddings_deleted=result.embeddings_deleted,

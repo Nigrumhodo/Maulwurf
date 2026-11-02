@@ -99,4 +99,6 @@ async def test_search_quota_fails_closed_when_redis_is_down() -> None:
 
     assert exc.value.status_code == 503
     assert exc.value.code == "capacity_unavailable"
+    assert exc.value.headers["Retry-After"] == str(SEARCH_QUOTA_WINDOW_SECONDS)
+    assert exc.value.code == "capacity_unavailable"
     assert exc.value.details == {"reason": "search_quota_unavailable"}

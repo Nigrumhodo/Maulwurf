@@ -1,0 +1,110 @@
+# J4.5 / MAULW-143 local gates
+
+Date (UTC): 2026-11-01 11:32 UTC
+Branch: task/MAULW-143
+Code head: 331f733 (the later evidence commit is documentation only)
+Base: origin/develop 2d4bc2d (J4.2 / PR #151 merged)
+Host: Linux x86_64
+Python: Python 3.12.3 | uv 0.13.1
+PostgreSQL: PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)
+Redis: redis-cli 7.0.15
+
+Scope: the delivery-side half of I-S4-JF-05. No real Gmail/Google call, credential,
+secret, class audio or `apps/web` change is involved. The sender is a deterministic double
+behind `NotificationSender`; no provider dependency was added.
+
+## apps/api static
+
+```text
+$ uv run ruff check .
+All checks passed!
+
+$ uv run mypy .
+Success: no issues found in 286 source files
+```
+
+## apps/api unit
+
+```text
+$ env -u no_proxy -u NO_PROXY uv run pytest tests/unit -q
+1593 passed, 35 warnings
+```
+
+The new `tests/unit/test_notification_delivery.py` pins the sender-outcome taxonomy: only
+an explicit rejection is `failed`; a lost response, a timeout, a connection reset and any
+unexpected sender exception become terminal `delivery_unknown` with a redacted code.
+
+## I-S4-JF-05 (J4.5) targeted integration
+
+```text
+$ env -u no_proxy -u NO_PROXY uv run pytest \
+    tests/integration/test_notification_delivery_unknown.py \
+    tests/integration/test_notifications_endpoints.py \
+    tests/integration/test_notification_scheduler.py -q
+61 passed
+```
+
+The 11 new cases in `tests/integration/test_notification_delivery_unknown.py` prove:
+
+- a lost response is terminal `delivery_unknown` (`response_lost`), the at-least-once
+  retry is a `skipped` no-op and the sender is called once;
+- a timeout / unexpected sender exception is also uncertain (`response_lost`);
+- a sender that exceeds the caller-supplied `sender_timeout` is cancelled by the settlement
+  and ends `delivery_unknown` (`response_lost`), so a hung adapter cannot hold the row lock
+  indefinitely;
+- when the delivery lease has less time left than the caller timeout, the settlement uses
+  the remaining lease as the effective bound and the call ends `delivery_unknown`;
+- an expired `sending` lease is closed as `delivery_unknown` (`lease_expired`) without
+  calling the sender and never returns to `pending`;
+- a `CancelledError` is not swallowed: the row stays `sending` and the lease closes it as
+  uncertain, never as `pending` (the adapter receives an immutable `DeliveryRequest`, not
+  the ORM row);
+- only a proven rejection becomes `failed` (`provider_rejected`);
+- a confirmed send records its provider message id once, and a retry is a no-op;
+- a success without a provider identity fails closed as uncertain;
+- a row that was never claimed is never sent by a settlement;
+- the warned resend requires `acknowledge_duplicate_risk=true`, creates sequence 1 with
+  the `|n:1` dedupe suffix, leaves the original `delivery_unknown` untouched (status, key,
+  attempts, `updated_at`), and the new occurrence can be delivered on its own.
+
+The same targeted run was repeated after the immutable `DeliveryRequest`, the enforced
+`sender_timeout`/lease bound and the `CancelledError` case: **61 passed** on head `331f733`.
+
+## Migration module (isolated run)
+
+```text
+$ env -u no_proxy -u NO_PROXY uv run pytest tests/integration/test_migrations.py -q
+30 passed
+```
+
+No migration was added by this ticket.
+
+## Full API integration (shared sandbox host, code head 47f799c)
+
+```text
+$ env -u no_proxy -u NO_PROXY uv run pytest -m integration -q
+17 failed, 758 passed, 1594 deselected
+```
+
+All 17 failures are `tests/integration/test_ingest_reception.py`, the pre-existing sandbox
+cases where the default ingest sink answers `503 capacity_unavailable` without
+`MAULWURF_INGEST_URL`/credential (the same set recorded by A4.1/A4.2/J4.2 on pristine
+develop). A later re-run on the shared host reproduced those 17 and added one teardown
+`ALTER ROLE` flake in `test_migrations.py`; the migration module passes 30/30 when run
+alone (above). This is the documented sibling-worktree race on one PostgreSQL cluster, not
+a failure of this diff; CI uses isolated service containers.
+
+The DTO/timeout/cancellation follow-up (`331f733`) only touches the new sender boundary and
+three new integration cases; the targeted suite is 61 passed on that head. Later commits are
+documentation only; Quality CI is green in all 17 checks on the PR head, including
+`integration (api)`. A post-restart repeat on the rebuilt local
+PostgreSQL (pgvector 0.6.0 instead of the earlier 0.8) reproduces the documented
+pre-existing `test_search`/`test_chat_sse`/`test_g4_eval` failures plus the 17 ingest `503`
+cases; they are environment-only and do not belong to this diff.
+
+## Documentation references
+
+```text
+$ python3 scripts/docs/check_refs.py
+OK: 955 documented repository paths exist or are expected.
+```

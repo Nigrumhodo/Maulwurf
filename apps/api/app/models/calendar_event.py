@@ -5,15 +5,20 @@ keep instants; all-day events keep a date pair with an exclusive end. The two pa
 mutually exclusive, exactly like the confirmed task block (M5), so the dashboard never has to
 guess whether a row is an instant or a whole day.
 
-`tasks` (A3.1) is not in `develop`, so `task_id` is deliberately a plain column without the
-composite foreign key of the design document; the unique partial index for "one linked event
-per task" is already in place for when A3.1 lands. J3.7 publishes `source='google'` rows and
-never links tasks: the link belongs to the write path (J3.4/A3.8).
+A3.8 completes the link to A3.1's tasks: `(user_id, task_id)` references
+`tasks (user_id, id)`, so an event can only point at a task of the same tenant. Deleting the
+task (for example the class purge) drops only the link (`ON DELETE SET NULL (task_id)`); the
+mirrored event and its ETag survive. `calendar_events_one_link` still guarantees one linked
+event per task, and `calendar_events_by_task` gives the composite FK a non-partial index.
 
 `remote_status` keeps what the last read observed: Google's own status (`confirmed`,
 `tentative`, …) for a returned event, `missing` for a task-linked row the read did not
 return, and `cancelled` for a task-linked row Google reported cancelled. The two local values
 are only written on linked rows; a later read that returns the event rewrites the status.
+A blank ETag (empty or only ASCII whitespace: space, tab, newline, carriage return, form
+feed or vertical tab) is unknown, never a conditional-write baseline (`etag_not_blank`);
+the same criterion applies to `calendar_id`, `event_id` and `remote_status` through the
+`IMMUTABLE` helper created by migration `0013`.
 """
 
 import uuid
@@ -23,6 +28,7 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    ForeignKeyConstraint,
     Index,
     Text,
     UniqueConstraint,
@@ -40,6 +46,21 @@ class CalendarEvent(TenantOwned, Base):
         UniqueConstraint("user_id", "calendar_id", "event_id"),
         CheckConstraint("source IN ('google', 'maulwurf')", name="source"),
         CheckConstraint(
+            "NOT public.maulwurf_text_is_blank(calendar_id)",
+            name="calendar_id_not_blank",
+        ),
+        CheckConstraint(
+            "NOT public.maulwurf_text_is_blank(event_id)", name="event_id_not_blank"
+        ),
+        CheckConstraint(
+            "NOT public.maulwurf_text_is_blank(remote_status)",
+            name="remote_status_not_blank",
+        ),
+        CheckConstraint(
+            "etag IS NULL OR NOT public.maulwurf_text_is_blank(etag)",
+            name="etag_not_blank",
+        ),
+        CheckConstraint(
             "(start_at IS NOT NULL AND end_at IS NOT NULL "
             "AND start_date IS NULL AND end_date_exclusive IS NULL) "
             "OR (start_date IS NOT NULL AND end_date_exclusive IS NOT NULL "
@@ -52,11 +73,18 @@ class CalendarEvent(TenantOwned, Base):
         ),
         Index("calendar_events_by_window", "user_id", "start_at"),
         Index("calendar_events_by_window_date", "user_id", "start_date"),
+        Index("calendar_events_by_task", "user_id", "task_id"),
         Index(
             "calendar_events_one_link",
             "task_id",
             unique=True,
             postgresql_where=text("task_id IS NOT NULL"),
+        ),
+        ForeignKeyConstraint(
+            ["user_id", "task_id"],
+            ["tasks.user_id", "tasks.id"],
+            name="fk_calendar_events_user_id_task_id_tasks",
+            ondelete="SET NULL (task_id)",
         ),
     )
 

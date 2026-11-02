@@ -12,9 +12,9 @@ mismo `sub` de la sesión (ver `services/calendar_connection.py`).
 
 import time
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Depends, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
@@ -26,15 +26,25 @@ from app.core.deps import (
     set_oauth_state_cookie,
 )
 from app.core.errors import auth_required, google_integration_unavailable, google_not_connected
+from app.core.redis import RedisDep
 from app.core.security import sign_state
 from app.models import CalendarSettings, GoogleCredential, User
 from app.services import calendar_connection, oauth_google
+from app.services.limits import enforce_integration_limit
 from app.services.oauth_google import OAUTH_STATE_TTL_SECONDS
 
 router = APIRouter(tags=["integrations"])
 
 CALENDAR_CONNECT = "connect"
 CALENDAR_RECONNECT = "reconnect"
+
+
+async def _integration_rate_limit(session: MutationSession, redis: RedisDep) -> None:
+    """A4.6: incremental-consent abuse guard per authenticated user (unset = no limit)."""
+    await enforce_integration_limit(redis, session.user_id)
+
+
+IntegrationRateLimit = Annotated[None, Depends(_integration_rate_limit)]
 
 
 class GoogleStatus(BaseModel):
@@ -115,11 +125,31 @@ async def _start_calendar_flow(
     return redirect
 
 
-@router.post("/integrations/google/connect", status_code=302, response_model=None)
-async def google_connect(db: DbSession, session: MutationSession) -> RedirectResponse:
+@router.post(
+    "/integrations/google/connect",
+    status_code=302,
+    response_model=None,
+    responses={
+        429: {"description": "rate_limited when the configured consent limit is exceeded"},
+        503: {"description": "capacity_unavailable: el limitador no está disponible"},
+    },
+)
+async def google_connect(
+    db: DbSession, session: MutationSession, _limit: IntegrationRateLimit
+) -> RedirectResponse:
     return await _start_calendar_flow(db, session, reconnect=False)
 
 
-@router.post("/integrations/google/reconnect", status_code=302, response_model=None)
-async def google_reconnect(db: DbSession, session: MutationSession) -> RedirectResponse:
+@router.post(
+    "/integrations/google/reconnect",
+    status_code=302,
+    response_model=None,
+    responses={
+        429: {"description": "rate_limited when the configured consent limit is exceeded"},
+        503: {"description": "capacity_unavailable: el limitador no está disponible"},
+    },
+)
+async def google_reconnect(
+    db: DbSession, session: MutationSession, _limit: IntegrationRateLimit
+) -> RedirectResponse:
     return await _start_calendar_flow(db, session, reconnect=True)

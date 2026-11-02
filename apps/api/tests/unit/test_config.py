@@ -58,6 +58,15 @@ def test_change_me_placeholder_allowed_in_local() -> None:
     assert _settings(secret_key="change-me").env == "local"
 
 
+def test_the_notification_scheduler_is_disabled_by_default() -> None:
+    # J4.2 claims into `sending`; J4.1 is the consumer. Without it, claims would expire into
+    # a false `delivery_unknown`, so the flag is opt-in only.
+    assert _settings().notification_scheduler_enabled is False
+    assert (
+        _settings(notification_scheduler_enabled=True).notification_scheduler_enabled is True
+    )
+
+
 # --- A2.16 / U-S2-AN-15: fail-closed settings -----------------------------------------
 
 

@@ -508,7 +508,11 @@ dates, recommendations) with traceability to the source.
   task/study block with a date and explicit confirmation.
 - Generate a summary (3–5 sentences) and topics; keep evidence per item. Windowed analysis
   with overlap and aggregation/dedupe by evidence, without sending full transcripts that
-  exceed the context.
+  exceed the context. The stored summary is the v1 summary prompt's output, written with
+  `analysis_version` on the transcript in the same transaction as the proposals.
+  `GET /audios/{id}` returns `summary`, `topics`, and `analysis_version` on `transcript`
+  (null or empty until that write). A summary of the wrong length, or one that contains a
+  secret, is rejected and nothing from that run is published.
 - **Idempotency:** `processing_runs` unique per class, stage, transcript version, and
   configuration. Upsert proposals with an evidence/type key; re-analysis creates a new
   revision and does not delete or overwrite edited, confirmed, or scheduled tasks. Activate a
@@ -740,9 +744,15 @@ consults the persisted message; it does not re-run the LLM with the same
   or another provider is out of scope and requires a new decision, privacy/retention review,
   delivery contract, budget, and a joint update of the specification and plan.
 - **Anti-spam:** group reminders and deduplicate scheduling with a unique key
-  `(user_id, tipo, task_id, due_version, occurrence)`. Digest per user/local date. Changing
-  the due date/preferences cancels stale future occurrences; never send all expired
-  thresholds retrospectively for a newly confirmed task.
+  `(user_id, tipo, task_id, due_version, occurrence)`. Digest per user/local date. A manual
+  repetition (a test send or a warned resend) is an audited occurrence too and carries an
+  `occurrence_seq` inside the same identity: `0` is the scheduled occurrence and each manual
+  repetition takes the next number, so automatic dedupe stays exact and a resend never
+  mutates the original. Changing the due date/preferences cancels stale future occurrences;
+  never send all expired thresholds retrospectively for a newly confirmed task. A future
+  occurrence cancelled by a preference is re-armed only when the same task generation is
+  scheduled again with that threshold enabled; it was never delivered. A `sending`, `sent`,
+  `failed` or `delivery_unknown` occurrence is never revived.
 - Gmail does not offer exactly-once delivery with `gmail.send`: if the response is lost
   after sending, mark `delivery_unknown` and do not retry automatically to avoid duplicates.
   Show it in the panel; a manual resend warns about the risk. A stable `Message-ID` does not
@@ -755,7 +765,13 @@ consults the persisted message; it does not re-run the LLM with the same
 
 - Native ARQ cron scheduler with a single active role; it computes due dates/local times
   every minute and claims rows atomically. Target send SLA within 15 min, not second-level
-  exactness; multiple workers protected by uniqueness and leases.
+  exactness; multiple workers protected by uniqueness and leases. Lease expiry and due
+  comparisons use the database clock, not each host's wall clock.
+- Every atomic claim persists the election's fencing token on the occurrence
+  (`claimed_by_fence`). The sender validates it against the live election before delivering,
+  so a row claimed by a superseded scheduler cannot be sent under the current authority.
+  Until the Gmail sender consumes `sending`, the scheduler runs disabled so no occurrence is
+  labeled `delivery_unknown` for a send that never started.
 - HTML + plain-text templates, escaped content and minimal data; recipient limited to the
   user's verified email in MVP. Do not expose arbitrary sending to the LLM.
 - `notifications`: `scheduled_at`, `due_version`, `dedupe_key`,
@@ -763,7 +779,8 @@ consults the persisted message; it does not re-run the LLM with the same
   `provider_message_id`, attempts, and a redacted error. An expired `sending` lease counts
   as uncertain delivery, not automatically pending.
 
-**Endpoints:** `PATCH /me/notifications` (preferences); `POST /notifications/test`;
+**Endpoints:** `GET /me/notifications` (current preferences) and `PATCH /me/notifications`
+(preferences); `POST /notifications/test`;
 `GET /notifications?status=&from=&to=&limit=&cursor=`; `POST /notifications/{id}/resend`
 with `{acknowledge_duplicate_risk:true}`. Resending creates a new audited occurrence and
 never changes a `delivery_unknown` delivery to `pending`.
@@ -985,7 +1002,8 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   Sweeper target every 60 s; normal cleanup is immediate, it does not wait for the TTL.
 - `transcripts`: unique `(audio_id, version)`, text, requested language,
   provider/model/configuration, `timestamp_precision`, quality, and summary/topics with the
-  analysis version. `segments`: stable ID within a version, ordinal, text, and character
+  analysis version. `GET /audios/{id}` returns those three fields on `transcript`.
+  `segments`: stable ID within a version, ordinal, text, and character
   offsets; `t_inicio/t_fin` nullable, with `0 ≤ start < end ≤ duration` when present. Do not
   duplicate a mutable segments JSON and rows as two sources of truth.
 - `chunk_segments` links chunks to segments/spans and keeps evidence even with overlap.
@@ -1008,10 +1026,21 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   source, but normative provenance lives in `task_sources` to support chat proposals with
   zero, one, or several classes.
 - `task_sources` links task, audio, transcript version, segment, and validated span;
-  deleting a source invalidates/purges pending proposals that depend on it.
+  deleting a source invalidates/purges pending proposals that depend on it. The reference is
+  self-consistent, not merely same-tenant: `(user_id, audio_id, transcript_id)` pins the
+  class of the cited transcript, `(user_id, transcript_id, transcript_version)` pins that
+  transcript's version, and `(user_id, transcript_id, segment_id)` pins a segment that
+  belongs to it, so a citation can never mix another class, version or transcript of the
+  same user.
   `task_revisions` stores `base_task_version`, proposed fields, state
   `pending_confirmation|activated|discarded`, and a tenant-aware relation to the run that
-  produced it.
+  produced it. Its unique key `(task_id, base_task_version, revision_type, run_id)` is
+  intentionally NULL-distinct: `run_id` is NULL for `edit_of_confirmed`, so several pending
+  edits of the same base version are legitimate proposals until one is confirmed; a repeated
+  reanalysis of the same run is still rejected. Only the explicit confirm promotes one
+  revision and bumps `tasks.version`, so the rest answer `409 version_conflict`. Enforcing
+  one edit per base version would require `NULLS NOT DISTINCT` (PostgreSQL 15+) and a new
+  revision of this contract.
 - Date CHECK: resolved all-day → only `due_date`; resolved with time → only `due_at`;
   ambiguous/no date → both null. Store the original date text, review reason, due version,
   and timezone snapshot. Persist `event_start_at/event_end_at` or
@@ -1020,9 +1049,13 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   revision. `confidence_score` nullable on manual tasks, bounded [0,1], no probabilistic
   semantics.
 - `calendar_events`: key `(user_id, calendar_id, event_id)`; nullable link to task and
-  source `google|maulwurf`. A task has at most one linked event; other Google events have no
-  task. Persist the write calendar in settings, the selected read calendars, and sync
-  status/ETag/coverage.
+  source `google|maulwurf`. The link is tenant-pinned (`(user_id, task_id) -> tasks`) and
+  `ON DELETE SET NULL (task_id)`: deleting the task unlinks the mirror row and keeps the
+  event. A task has at most one linked event; other Google events have no task. Persist the
+  write calendar in settings, the selected read calendars, and sync status/ETag/coverage;
+  a blank (empty or whitespace-only) ETag is unknown, never a conditional-write baseline.
+  Blank calendar ids, event ids, remote statuses and array elements are rejected under the
+  same whitespace-aware criterion.
 - `messages.citas` references
   `{audio_id, transcript_version, chunk_id, segment_id, t_inicio, t_fin}` and validated
   text; normalize links in `message_sources` to locate/purge derived responses when deleting
@@ -1068,7 +1101,11 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   is not used as an implicit JWT/JWKS issuer.
 - Distributed rate limit and per-user quotas: audio bytes/minutes, ingestion slots, LLM
   tokens, chat, and Google. Admission rejects before receiving audio when there is no
-  capacity (`429`/`503` with retry), without a queue of files waiting on disk.
+  capacity (`429`/`503` with retry), without a queue of files waiting on disk. Every
+  active limit answers `429` with `Retry-After`; a limiter or capacity outage answers
+  `503` with `Retry-After` (fail closed). Numbers come only from recorded decisions
+  (M5/M6/M7 and D4/D5); authentication and incremental consent have no published number
+  yet, so their fixed-window mechanism stays configuration-driven and unset means no limit.
 - Ingestion defense per M2/M3: streaming parser, byte/duration/time limits, ffmpeg sandbox,
   random internal names. Proxy without disk buffering, caching, or body capture; do not use a
   CDN that stores upload requests.
@@ -1076,19 +1113,29 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   duration, sizes, status, and redacted errors. Disable core dumps, persistent swap, and
   memory snapshots/hibernation on ingestion hosts; tmpfs alone is **not** enough if it can
   swap.
-- Browser: `Cache-Control: no-store` for private content; the service worker excludes
-  upload, API, transcripts/chat, and SSE responses; do not store audio in IndexedDB/Cache
-  Storage. Release `File`/object URLs on finish/cancel; the user's local original is not
-  deleted by the application.
+- Browser: `Cache-Control: no-store` for private content, guaranteed structurally on every
+  API response (routes, errors, redirects and SSE) rather than per route; the service worker
+  excludes upload, API, transcripts/chat, and SSE responses; do not store audio in
+  IndexedDB/Cache Storage. Release `File`/object URLs on finish/cancel; the user's local
+  original is not deleted by the application.
 - Account deletion: `DELETE /me` returns `202 {deletion_operation_id}`. The flow applies
   tombstones, blocks sessions/jobs, leaves the initiating session in a restricted mode (check
-  the deletion status and sign out; other sessions are revoked), requests authorized remote
-  deletions while credentials exist, purges data, and then removes tokens.
-  `GET /me/deletion/{id}` exposes `pending|completed|completed_with_remote_failures`; the
-  residual record keeps only remote IDs, authorization, status, redacted error, and
-  expiration. Do not delete other people's events; without permissions, deletion in Google
-  is not guaranteed.
-- Backups only of encrypted text/metadata, proposed maximum retention 30 days, and a
+  the status, resume an authorized operation, and sign out; other sessions are revoked),
+  claims the operation atomically, requests authorized remote deletions while credentials
+  exist, purges data, and then removes tokens. `GET /me/deletion/{id}` exposes
+  `pending|running|completed|completed_with_remote_failures`; a purge failure after the
+  tombstone still answers `202` and stays resumable through
+  `POST /me/deletion/{id}/resume` (CSRF/Origin checked, owner-scoped). An already-succeeded
+  remote delete is never repeated. The residual record keeps only remote IDs, authorization,
+  status, redacted error, and expiration; an hourly batched job deletes both residual tables
+  (`account_deletions`, `google_remote_operations`) once `expires_at` passes (30-day window,
+  D8 approved in A4.5). Once that job removes the operation row, the session link is
+  cleared and the restricted cookie gets `401` instead of `404`. `delete_maulwurf_events`
+  defaults to `false`: local tasks and
+  links are purged, but Maulwurf-created events remain in the user's Google calendar unless
+  the user explicitly opts in. Do not delete other people's events; without permissions,
+  deletion in Google is not guaranteed.
+- Backups only of encrypted text/metadata, maximum retention 30 days (D8 approved), and a
   deletion log reapplied on restore. The UI distinguishes deletion of active data, backup
   expiration, and data already sent to third parties. Consent for third-party voices and
   cloud processing before the upload.
@@ -1218,7 +1265,7 @@ are not offered again as retention/autodetection options. Real pending items:
 | D5 | Quality/cost of the proposed LLM and embeddings | F1/F2 evaluation per language; do not assume valid JSON or high confidence implies accuracy |
 | D6 | Timestamps unavailable or insufficient at the endpoint | Blocks F1's temporal promise; decide validated ephemeral alignment or accept a text-only product. Do not implement a hidden fallback |
 | D7 | Minimum scopes and real Google behavior | **D7-CAL** before F2; **D7-MAIL** and uncertain delivery before F3. Each half requires a real contract and a protected account |
-| D8 | Text/chat retention and backups | Approve the policy before persisting the first non-synthetic transcript/chat; F3 validates restore, expiration, and reapplication of deletions |
+| D8 | Text/chat retention and backups | Approved (A4.5): encrypted text/metadata backups, a 30-day maximum that matches the residual deletion window, and a deletion log reapplied on every clean restore; never audio. F3 validates restore, expiration, and reapplication of deletions |
 
 Out of MVP/v1: diarization, URL/bot sources, collaboration, local mode, per-subject
 calendars, and other task managers. Future diarization would have to run during ingestion or

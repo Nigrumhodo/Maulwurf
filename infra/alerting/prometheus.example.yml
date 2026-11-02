@@ -1,0 +1,32 @@
+# J4.8 — example Prometheus scrape configuration for the Maulwurf reference deployment.
+#
+# The local 8-service compose stack does not run Prometheus. The J4.7 deployment is the
+# owner of this wiring; adapt target names, TLS and retention to that host. The API and
+# ingest endpoints are internal-only (Caddy answers 404 to /internal/*).
+#
+# A 60 s interval bounds the cost of the cross-tenant budget aggregate on
+# `api:8000/internal/metrics`, which runs on every scrape and has no cache. Do not lower it
+# into the sub-minute range without adding a bounded cache and rechecking freshness.
+global:
+  scrape_interval: 60s
+  evaluation_interval: 60s
+  external_labels:
+    deployment: maulwurf-reference
+
+rule_files:
+  - /etc/prometheus/maulwurf.rules.yml
+
+scrape_configs:
+  - job_name: maulwurf-api
+    metrics_path: /internal/metrics
+    static_configs:
+      - targets: ["api:8000"]
+        labels:
+          service: api
+
+  - job_name: maulwurf-ingest
+    metrics_path: /internal/metrics
+    static_configs:
+      - targets: ["ingest:8000"]
+        labels:
+          service: ingest

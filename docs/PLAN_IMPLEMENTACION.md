@@ -256,17 +256,30 @@ clean them up at the end.
 
 - [ ] Incremental/opt-in Gmail; recipient fixed to the verified email. Escaped templates with
   authenticated links; no email GET mutates tasks.
-- [ ] Single ARQ scheduler with atomic claim/leases and persistent dedupe. T-48/T-24/T-2 h for
-  instants; T-3d/T-1d at local time for all-day; no retrospective burst.
+- [ ] Single ARQ scheduler with atomic claim/leases and persistent dedupe; election, expiry
+  and due comparisons use the database clock. The claim persists the election fence on the
+  row for send-time validation, and the cron stays disabled until the Gmail consumer is
+  deployed. T-48/T-24/T-2 h for instants; T-3d/T-1d at local time for all-day; no
+  retrospective burst.
 - [ ] Digests by local date; DST, due-date/preference changes, and cancellation of stale
-  occurrences. Confirm task deletion/completion immediately before claiming a send.
+  occurrences. A future occurrence cancelled by a preference is re-armed only when the same
+  task generation is scheduled again with the threshold enabled, and never after a delivery
+  attempt or a terminal delivery state. Confirm task deletion/completion immediately before
+  claiming a send.
 - [ ] Ambiguous Gmail failure or expired `sending` lease → `delivery_unknown`, no blind
   retry. State that an already sent/in-flight email cannot be recalled when deleting a task.
 - [ ] Delivery/failed-sync panel with warned manual resend, preferences, statistics, and
   Ctrl+K. Re-ranker only through a comparative experiment with quality/cost/latency.
+- [ ] Manual repetitions never mutate the original: a test send or an acknowledged resend is
+  a new audited occurrence with its own `occurrence_seq`, while the five-component automatic
+  dedupe of scheduled reminders stays exact.
 - [ ] Runbooks for cleanup, provider outage, budget, revoked tokens, restore, and account
-  deletion. D8 must already be approved before non-synthetic data; F3 checks restore,
-  expiration, and reapplied deletions.
+  deletion. D8 is approved (A4.5): encrypted text/metadata backups, a 30-day maximum that
+  matches the residual deletion window, and a deletion log reapplied on a clean restore; no
+  audio. F3 checks restore, expiration, and reapplied deletions. Account deletion applies its
+  residual window with a scheduled batched purge of `account_deletions` and
+  `google_remote_operations`; `delete_maulwurf_events=false` keeps Maulwurf-created Google
+  events unless the user opts in, so the UI must state that outcome.
 
 **Exit:** real test send observed and G7-MAIL/G8 approved; uncertain delivery visible, not
 an exactly-once guarantee. Restore verified without reintroducing deleted sources. Security
@@ -341,7 +354,7 @@ synthetic-only evaluation leaves that generalization unverified.
 | D6 Temporal alignment | F0/F1 | Approve exactly G2-T or G2-X and reflect it in API/UI |
 | D7-CAL | Before F2 | Calendar contract and real scopes |
 | D7-MAIL | Before F3 | Gmail contract, opt-in, and uncertain delivery |
-| D8 Local retention | Before non-synthetic data | Active policy/backups/deletion; restore validated in F3 |
+| D8 Local retention | Before non-synthetic data | Approved (A4.5): encrypted text/metadata backups, a 30-day maximum matching the residual deletion window, a deletion log reapplied on a clean restore and no audio; F3 validates restore, expiration and reapplied deletions |
 
 A decision is recorded with state `pending|approved|blocked`, the closure owner, date,
 evidence, and consequences. `blocked` does not equal approved and stops the affected real
@@ -373,5 +386,8 @@ usage.
 - [ ] The schema supports every API contract: dedupe decided in the PUT, versioned consent,
   spans/task_sources, agenda start/end, revisions, versions, and traceable deletion.
 - [ ] Consent, isolation, and human confirmation also apply to jobs, tools, and later changes.
+- [ ] Private API responses are `Cache-Control: no-store` structurally (routes, errors,
+  redirects and SSE); every rate limit is a recorded decision and answers `429`/`503` with
+  `Retry-After`, failing closed when the limiter is unavailable.
 - [ ] All pending or blocked gates are reported; no documentary test is presented as
   application/provider validation.

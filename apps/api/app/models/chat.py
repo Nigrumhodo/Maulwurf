@@ -67,7 +67,19 @@ class Message(TenantOwned, Base):
             unique=True,
             postgresql_where=text("client_message_id IS NOT NULL"),
         ),
-        Index("messages_by_conversation", "user_id", "conversation_id"),
+        # Replaces the FK-only index: the prefix still covers the composite FK, and the
+        # trailing keys support history pagination and `max(created_at)` per conversation
+        # (A2.12, revision 0010).
+        Index(
+            "messages_by_conversation_order",
+            "user_id",
+            "conversation_id",
+            "created_at",
+            "id",
+        ),
+        # J4.8: the internal budget aggregate is cross-tenant and filters only by
+        # `created_at`; the tenant-first index above cannot serve that range.
+        Index("messages_by_created_at", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()

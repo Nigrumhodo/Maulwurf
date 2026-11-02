@@ -90,6 +90,10 @@ async def test_rag_embedding_outside_db_session(monkeypatch: pytest.MonkeyPatch)
         async def execute(self, statement: Any) -> None:
             return None
 
+        async def scalar(self, statement: Any) -> datetime:
+            # `prepare` reads the turn clock from the database after the row lock.
+            return datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
+
     class FakeFactory:
         def __call__(self) -> FakeSession:
             return FakeSession()

@@ -10,30 +10,21 @@ previous version can no longer win its compare-and-set. A task of another user i
 indistinguishable from a missing one (`NOT_FOUND`). Google Calendar is not touched here:
 the linked event is kept, and removing it requires the explicit remote-operation flow (S4).
 
-A3.1 owns the real ``tasks`` table and S4 owns ``notifications``. Until their migrations
-land, `TASKS` comes from `task_event_store` and `NOTIFICATIONS` mirrors the frozen §2.9
-projection; both are created by the integration suite when the real tables are absent.
+A3.1 owns the real ``tasks`` table and A4.1 owns ``notifications``. Both now exist; the
+`TASKS` projection comes from `task_event_store` and `NOTIFICATIONS` is the real M8 table from
+`app.models.notification`, so the cancellation query cannot drift from the persisted shape.
 """
 
 import uuid
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import (
-    Column,
-    DateTime,
-    MetaData,
-    Table,
-    Text,
-    func,
-    select,
-    update,
-)
-from sqlalchemy.dialects.postgresql import UUID as PgUUID
+from sqlalchemy import Table, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.notification import Notification
 from app.services.task_event_store import TASKS
 from app.services.task_lifecycle import (
     LifecycleOutcome,
@@ -46,17 +37,7 @@ SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 # `complete` and `dismiss` are the only commands this adapter writes.
 LIFECYCLE_TARGETS = frozenset({"completed", "dismissed"})
 
-NOTIFICATIONS = Table(
-    "notifications",
-    MetaData(),
-    Column("id", PgUUID(as_uuid=True), primary_key=True),
-    Column("user_id", PgUUID(as_uuid=True), nullable=False),
-    Column("task_id", PgUUID(as_uuid=True)),
-    Column("type", Text, nullable=False),
-    Column("scheduled_at", DateTime(timezone=True), nullable=False),
-    Column("status", Text, nullable=False),
-    Column("updated_at", DateTime(timezone=True), nullable=False),
-)
+NOTIFICATIONS = cast(Table, Notification.__table__)
 
 
 class SqlTaskLifecycleStore:

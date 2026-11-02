@@ -61,6 +61,16 @@ def test_a_majority_of_low_confidence_words_is_required() -> None:
     assert prepared.warnings == ()
 
 
+def test_zero_confidence_is_unknown_not_low() -> None:
+    prepared = prepare_transcript(_draft(
+        TranscriptWord("La", 0.0, 0.2, confidence=0.0),
+        TranscriptWord("derivada", 0.3, 0.8, confidence=0.0),
+    ))
+
+    assert prepared is not None
+    assert prepared.warnings == ()
+
+
 def test_missing_confidence_is_unknown_not_low() -> None:
     prepared = prepare_transcript(_draft(
         TranscriptWord("La", 0.0, 0.2),
@@ -108,6 +118,8 @@ def test_quality_warnings_are_optional_for_text_only_transcripts() -> None:
     ("raw", "expected"),
     [
         (None, None),
+        (0.0, None),
+        (0, None),
         (0.42, 0.42),
         ("0.42", None),
         (True, None),
