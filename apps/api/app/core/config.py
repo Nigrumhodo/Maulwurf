@@ -153,6 +153,11 @@ class Settings(BaseSettings):
     # distinguish a search query from an indexed passage. Symmetric providers ignore it, so
     # the adapter only sends the field when this is enabled.
     embedding_asymmetric: bool = False
+    # OpenAI-compatible endpoints disagree on the optional `dimensions` field: some reject
+    # unknown fields with a 400 that is not retried. Keep the previous `{"input", "model"}`
+    # payload by default and send `dimensions` only for an asymmetric model or an explicit
+    # opt-in, because the fixed schema dimension must be requested there.
+    embedding_send_dimensions: bool = False
     # Bounded per-batch budget (guardrail 10: no loop or burst without a limit).
     embedding_batch_size: int = Field(default=100, ge=1, le=512)
     embedding_max_retries: int = Field(default=3, ge=0, le=10)

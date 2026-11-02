@@ -154,6 +154,7 @@ class HttpEmbeddingProvider:
         dimension: int,
         batch_size: int,
         asymmetric: bool = False,
+        send_dimensions: bool = False,
         max_retries: int = 3,
         timeout_seconds: float = 30.0,
         max_concurrency: int = 1,
@@ -167,6 +168,7 @@ class HttpEmbeddingProvider:
         self._dimension = dimension
         self._batch_size = batch_size
         self._asymmetric = asymmetric
+        self._send_dimensions = send_dimensions
         self._max_attempts = max_retries + 1
         self._timeout = timeout_seconds
         # 1 = sequential: the default until D5 fixes the provider quota (guardrail 10).
@@ -190,6 +192,7 @@ class HttpEmbeddingProvider:
             dimension=settings.embedding_dimension,
             batch_size=settings.embedding_batch_size,
             asymmetric=settings.embedding_asymmetric,
+            send_dimensions=settings.embedding_send_dimensions,
             max_retries=settings.embedding_max_retries,
             timeout_seconds=settings.embedding_timeout_seconds,
             max_concurrency=settings.embedding_max_concurrency,
@@ -272,8 +275,9 @@ class HttpEmbeddingProvider:
         payload: dict[str, Any] = {
             "input": list(batch),
             "model": self._model,
-            "dimensions": self._dimension,
         }
+        if self._asymmetric or self._send_dimensions:
+            payload["dimensions"] = self._dimension
         if self._asymmetric:
             payload["input_type"] = input_type
         headers = {"Authorization": f"Bearer {self._api_key}"}
@@ -360,7 +364,8 @@ class HttpEmbeddingProvider:
                 raise EmbeddingProviderError("Elemento inválido en la respuesta de embeddings.")
             index = item.get("index")
             embedding = item.get("embedding")
-            if not isinstance(index, int) or not 0 <= index < expected or index in slots:
+            # bool is a subclass of int: True must not pass as vector index 1.
+            if type(index) is not int or not 0 <= index < expected or index in slots:
                 raise EmbeddingProviderError(
                     "Índice de vector inválido o duplicado.",
                     details={"status": response.status_code},
