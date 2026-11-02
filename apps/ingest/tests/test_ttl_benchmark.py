@@ -225,8 +225,9 @@ def test_the_supervisor_asr_cap_matches_the_published_ttl() -> None:
     config = _asr_config(request)  # type: ignore[arg-type]
     assert config.asr_timeout_s == settings.asr_timeout_s == 60 * 60
 
-    with pytest.raises(ValidationError):
-        Settings(INGEST_ASR_TIMEOUT_S="600")  # type: ignore[call-arg]
+    for raw in ("600", "7200"):
+        with pytest.raises(ValidationError):
+            Settings(INGEST_ASR_TIMEOUT_S=raw)  # type: ignore[call-arg]
 
 
 @pytest.mark.load

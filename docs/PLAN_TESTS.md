@@ -212,9 +212,10 @@ These associations complete the backlog references without changing the stable I
 
 **G4 criterion (weekly, reproducible script):** Recall@8 ≥ 0.85 (answerables, with tenant/version
 filters active), citation precision
-≥ 0.95, abstention ≥ 0.90; retrieval p95 ≤ 500 ms. Numbers per language with
-numerator/denominator, versioned dataset with a frozen `test` partition, formula and adjudication
-published per the PLAN_IMPLEMENTACION §7.1 protocol.
+≥ 0.95, abstention ≥ 0.90; retrieval p95 ≤ 500 ms and chat first-token p95 ≤ 5 s. Numbers per
+language with numerator/denominator, versioned dataset with a frozen `test` partition, formula
+and adjudication published per the PLAN_IMPLEMENTACION §7.1 protocol; latency follows the
+L2.8 protocol in `docs/eval/latency.md`.
 
 ### 2.4 Durable work — outbox, workers and observability
 

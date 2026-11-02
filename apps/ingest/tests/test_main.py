@@ -8,7 +8,7 @@ import asyncpg
 import pytest
 from fastapi.testclient import TestClient
 
-from maulwurf_ingest import admission, hardening, main
+from maulwurf_ingest import admission, hardening, main, supervisor
 from maulwurf_ingest.config import Settings, settings
 
 
@@ -186,6 +186,33 @@ def test_lifespan_runs_one_reconcile_pass(monkeypatch: pytest.MonkeyPatch) -> No
     with TestClient(main.app):
         pass
     assert calls == 1
+
+
+async def test_startup_reconcile_restores_the_latch_before_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: list[str] = []
+
+    class Pool:
+        async def close(self) -> None:
+            return None
+
+    async def fake_pool(*_args: object, **_kwargs: object) -> Pool:
+        return Pool()
+
+    async def fake_restore(_pool: object) -> None:
+        order.append("restore")
+
+    async def fake_sweep(*_args: object, **_kwargs: object) -> supervisor.SweepResult:
+        order.append("sweep")
+        return supervisor.SweepResult(committed=(), stranded=())
+
+    monkeypatch.setattr(settings, "database_url", DATABASE_URL)
+    monkeypatch.setattr(asyncpg, "create_pool", fake_pool)
+    monkeypatch.setattr(admission, "restore_from_database", fake_restore)
+    monkeypatch.setattr(supervisor, "sweep_once", fake_sweep)
+    await main.reconcile_on_startup()
+    assert order == ["restore", "sweep"]
 
 
 async def test_startup_reconcile_skips_without_a_database_url(

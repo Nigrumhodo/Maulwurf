@@ -30,7 +30,7 @@ from maulwurf_ingest.prometheus_text import PROMETHEUS_CONTENT_TYPE, render
 from maulwurf_ingest.receptions import open_service_pool
 from maulwurf_ingest.receptions import router as receptions_router
 from maulwurf_ingest.request_context import RequestIdMiddleware
-from maulwurf_ingest.supervisor import run_sweeper, sweep_once
+from maulwurf_ingest.supervisor import run_sweeper, sweep_pass
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +58,11 @@ def enforce_hardening() -> None:
 async def reconcile_on_startup() -> None:
     """One recovery pass before serving. A database miss keeps admission closed.
 
-    The periodic sweeper repeats this recovery every 60 s; when the service pool
-    cannot be opened here, ``run_sweeper_when_pool_ready`` retries until it can.
-    A persisted failed cleanup closes admission before the process serves.
+    The pass matches the periodic sweeper: restore the admission latch from
+    durable ``failed`` rows, then recover. The sweeper repeats that every 60 s;
+    when the service pool cannot be opened here, ``run_sweeper_when_pool_ready``
+    retries until it can. A persisted failed cleanup closes admission before
+    recovery and before the process serves.
     """
     if not settings.database_url:
         return
@@ -73,10 +75,9 @@ async def reconcile_on_startup() -> None:
         if created is None:
             admission.close()
             return
-        await sweep_once(
+        await sweep_pass(
             created, instance=f"ingest:{socket.gethostname()}", tmp_dir=tempfile.gettempdir(),
         )
-        await admission.restore_from_database(created)
     except Exception as exc:
         # The DSN is in the exception text. Log only the type.
         logger.warning("reconciler.startup_failed error=%s", type(exc).__name__)

@@ -11,6 +11,11 @@ migration or production service behavior.
 > `docs/eval/g4/<run-id>/REPORT.md` exists yet. G4 closes only with the real run and human
 > adjudication described below.
 
+> **Latency gate (L2.8):** the retrieval p50/p95 in a G4 report is diagnostic only. The
+> retrieval p95 ≤ 500 ms and chat first-token p95 ≤ 5 s gate has its own harness, protocol
+> and published report: [latency.md](latency.md). It is `MEASURED — PASS` since the
+> 2026-11-02 authorized real-provider run; claim closure awaits review.
+
 ## Scope and non-goals
 
 In scope:
@@ -168,7 +173,7 @@ Overall G4 passes only when **every** enabled language passes. The macro average
 for information and never compensates a failed language. Thresholds compare integers
 (`hits * 100 >= percent * total`), so 30/35 and 14/15 pass while 29/35 and 13/15 fail.
 Wilson 95% intervals, span recall, citation coverage, answerable abstentions and retrieval
-p50/p95 are diagnostic only; L2.8 owns the latency gate.
+p50/p95 are diagnostic only; [L2.8](latency.md) owns the latency gate.
 
 ## Human review
 

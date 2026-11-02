@@ -430,7 +430,7 @@ async def _embed_generation(
     batches = 0
     for start in range(0, len(pending), provider.batch_size):
         batch = pending[start : start + provider.batch_size]
-        vectors = await provider.embed([chunk.content for chunk in batch])
+        vectors = await provider.embed([chunk.content for chunk in batch], input_type="passage")
         if len(vectors) != len(batch):
             raise EmbeddingProviderError(
                 "El proveedor devolvió un número de vectores distinto del lote.",

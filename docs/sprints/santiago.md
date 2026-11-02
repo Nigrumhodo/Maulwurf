@@ -53,6 +53,16 @@
 | S2.12 | S | done | Same run. I-S2-SG-15: a persisted `cleanup_status=failed` keeps admission closed after `restore_from_database`. Unit: any heartbeat error, including `InterfaceError`, marks the lease lost; a hung ffprobe is killed with its child (`test_ffprobe_containment`, POSIX). |
 | S2.13 | S | done | Same run. U-S2-SG-16: every persisted code is in `outcomes.CATALOG` and has an HTTP mapping. API `tests/unit/test_ingest_error_mapping.py` plus `test_upload_stream.py`: 12 passed. `probe_unavailable` is `requires_reupload`. |
 
+## Directed S3/S4 work (sprints not opened)
+
+Ownership is only in [CLAIMS.md](CLAIMS.md). These rows are evidence.
+
+| Ticket | Area | Status | Evidence (command, date, environment, result) |
+|---|---|---|---|
+| L3.8 | L | in progress | 2026-11-02, WSL, `apps/api`. Branch `task/L3.8-L4.1-L4.2`. `uv run ruff check .` and `uv run mypy .` clean (325 files). `uv run pytest tests/unit/test_summary.py tests/unit/test_analysis.py tests/unit/test_run_versions.py tests/unit/test_analyze_job.py tests/prompt_regression -q` → **57 passed**. `python3 scripts/docs/check_refs.py` OK (1050 paths). Integration not run: no listener on PostgreSQL 5432 or 55432. No model call. |
+| L4.1 | L | in progress | Same run. `docs/eval/final-metrics.md`: G4 `NOT EVALUATED` (no numerator); G6 replay 47/48, 47/50, 44/45 for `es` and `en`. Hard slices: activities 0 and 1 omitted, activity 2 `day_offset` +7, one invented quote rejected. Real provider `NO VERIFICADO`. Neither gate approved. |
+| L4.2 | L | in progress | Same date. `docs/reviews/security-cross-review.md` drafted. Signature blank. C-S4-JL-02 is not done. |
+
 ## Blockers and dependencies
 
 - The 1 h synthetic class was not used for S2.9. The Caddy demo from the browser stays blocked on J2.8, D2.2/D2.3, and D2/D6. The short in-RAM harness does not close G2-T or G2-X.

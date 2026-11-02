@@ -48,6 +48,8 @@ def _provider(
     max_retries: int = 3,
     max_concurrency: int = 1,
     dimension: int = DIMENSION,
+    asymmetric: bool = False,
+    send_dimensions: bool = False,
     sleeper: _Sleeper | None = None,
 ) -> HttpEmbeddingProvider:
     return HttpEmbeddingProvider(
@@ -56,6 +58,8 @@ def _provider(
         model="text-embedding-3-small",
         dimension=dimension,
         batch_size=batch_size,
+        asymmetric=asymmetric,
+        send_dimensions=send_dimensions,
         max_retries=max_retries,
         max_concurrency=max_concurrency,
         timeout_seconds=5.0,
@@ -118,6 +122,129 @@ async def test_embeddings_preserve_order_by_index_field() -> None:
     vectors = await _provider(handler).embed(texts)
 
     assert [vector[0] for vector in vectors] == [0.0, 1.0, 2.0]
+
+
+async def test_embeddings_reject_a_boolean_vector_index() -> None:
+    """`True` is an int subclass but not a vector index; it must not occupy slot 1."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"index": 0, "embedding": [0.1] * DIMENSION},
+                    {"index": True, "embedding": [0.2] * DIMENSION},
+                ]
+            },
+        )
+
+    with pytest.raises(EmbeddingProviderError) as failure:
+        await _provider(handler).embed(["uno", "dos"])
+
+    assert failure.value.code == "embedding_provider_error"
+
+
+# --- 2b. Registered dimension and asymmetric roles --------------------------------------
+
+
+async def test_embeddings_request_the_registered_dimension_when_opted_in() -> None:
+    """Opt-in providers receive the schema dimension instead of a native mismatch."""
+    payloads: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content))
+        return _ok(request)
+
+    await _provider(handler, send_dimensions=True).embed(["uno"])
+
+    assert payloads[0]["dimensions"] == DIMENSION
+
+
+async def test_embeddings_default_payload_keeps_the_symmetric_contract() -> None:
+    """A symmetric provider gets the previous `{"input", "model"}` shape, no `dimensions`.
+
+    Some OpenAI-compatible endpoints reject unknown fields with a 400 that is never retried.
+    """
+    payloads: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content))
+        return _ok(request)
+
+    await _provider(handler).embed(["uno"])
+
+    assert set(payloads[0]) == {"input", "model"}
+
+
+async def test_embeddings_asymmetric_payload_carries_dimension_and_role() -> None:
+    """The asymmetric run keeps requesting the schema dimension and the explicit role."""
+    payloads: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content))
+        return _ok(request)
+
+    await _provider(handler, asymmetric=True).embed(["consulta"], input_type="query")
+
+    assert payloads[0]["dimensions"] == DIMENSION
+    assert payloads[0]["input_type"] == "query"
+
+
+async def test_embeddings_asymmetric_sends_query_and_passage() -> None:
+    """An asymmetric model receives the role; the wrong side would degrade retrieval."""
+    roles: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        roles.append(json.loads(request.content)["input_type"])
+        return _ok(request)
+
+    provider = _provider(handler, asymmetric=True)
+    await provider.embed(["consulta"], input_type="query")
+    await provider.embed(["pasaje"], input_type="passage")
+
+    assert roles == ["query", "passage"]
+
+
+async def test_embeddings_asymmetric_requires_an_input_type() -> None:
+    """A missing role fails closed instead of silently defaulting to passage."""
+    provider = _provider(_ok, asymmetric=True)
+
+    with pytest.raises(EmbeddingProviderError) as failure:
+        await provider.embed(["uno"])
+
+    assert failure.value.details == {"reason": "missing_input_type"}
+
+
+async def test_embeddings_symmetric_ignores_the_input_type() -> None:
+    """Symmetric providers never receive an `input_type` field they did not ask for."""
+    payloads: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content))
+        return _ok(request)
+
+    await _provider(handler).embed(["uno"], input_type="query")
+
+    assert "input_type" not in payloads[0]
+
+
+async def test_embed_query_uses_the_query_role() -> None:
+    """The shared query helper always marks the call as a search query."""
+    seen: list[str | None] = []
+
+    class _Recording:
+        model = "model"
+        dimension = DIMENSION
+        batch_size = 100
+
+        async def embed(self, texts: Any, *, input_type: str | None = None) -> list[list[float]]:
+            seen.append(input_type)
+            return [[0.0] * DIMENSION for _ in texts]
+
+    vector = await embeddings_module.embed_query(_Recording(), "consulta")
+
+    assert seen == ["query"]
+    assert len(vector) == DIMENSION
 
 
 # --- 3. Empty input ---------------------------------------------------------------------
