@@ -64,11 +64,21 @@ class AnalysisPointer(Protocol):
 
 
 def sentence_count(text: str) -> int:
-    """How many terminator-ended sentences `text` contains. A fragment counts as zero."""
+    """How many sentences `text` contains.
+
+    A terminator ends a sentence. A trailing fragment still counts when the text already
+    has one, so a summary that only omits the final period is not discarded. A fragment
+    with no terminator at all counts as zero.
+    """
     stripped = text.strip()
-    if not stripped or stripped[-1] not in ".!?":
+    if not stripped:
         return 0
-    return len([part for part in _SENTENCE_BREAK.split(stripped) if part.strip()])
+    parts = [part for part in _SENTENCE_BREAK.split(stripped) if part.strip()]
+    if stripped[-1] in ".!?":
+        return len(parts)
+    if _SENTENCE_BREAK.search(stripped) is None:
+        return 0
+    return len(parts)
 
 
 def parse_summary_payload(raw: str) -> ClassSummary:
