@@ -62,7 +62,19 @@ https://localhost {
 		}
 	}
 
-	# 3) API JSON (M1/M2 y /readyz para el smoke I-S1-JF-01).
+	# 3) Chat: M7 CRUD and POST SSE. The POST stream is a fetch response, so it
+	# needs the same no-buffering treatment as progress; JSON bodies stay bounded.
+	@chat path /chat /chat/*
+	handle @chat {
+		request_body {
+			max_size 10MB
+		}
+		reverse_proxy api:8000 {
+			flush_interval -1
+		}
+	}
+
+	# 4) API JSON (M1/M2 y /readyz para el smoke I-S1-JF-01).
 	@api path /auth/* /me /me/* /subjects /subjects/* /integrations/* /audios /audios/* /ingestion/* /readyz
 	handle @api {
 		# J2.10: JSON bodies are small; this is an abuse guard, not a contract limit.
@@ -72,7 +84,7 @@ https://localhost {
 		reverse_proxy api:8000
 	}
 
-	# 4) Web (fallback). Every route that does not match above lands here, including
+	# 5) Web (fallback). Every route that does not match above lands here, including
 	# unknown PUT/POST paths. Without this ceiling the fallback would forward an
 	# unbounded body; `read_body` bounds time, not size.
 	handle {
