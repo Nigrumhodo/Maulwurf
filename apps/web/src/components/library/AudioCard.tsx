@@ -36,6 +36,10 @@ export function AudioCard({
   const partial = audio.aggregate_status === "partial";
   const processing = audio.aggregate_status === "processing";
   const failed = audio.aggregate_status === "failed";
+  // A succeeded ingestion has committed usable text even while a text stage is still owed;
+  // keep the reader reachable without treating the aggregate as final.
+  const hasReader =
+    partial || audio.aggregate_status === "ready" || audio.attempt?.status === "succeeded";
   const retryLabel =
     retryStages.length === 1
       ? `reintentar ${stageLabel(retryStages[0])}`
@@ -104,7 +108,7 @@ export function AudioCard({
           </Button>
         )}
 
-        {(partial || audio.aggregate_status === "ready") && (
+        {hasReader && (
           <Link
             to={`/biblioteca/${encodeURIComponent(audio.id)}`}
             className={buttonClasses("secondary", "sm")}
