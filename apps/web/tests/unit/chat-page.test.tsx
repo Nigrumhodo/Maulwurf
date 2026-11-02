@@ -3,10 +3,16 @@
 // D2.6 — C-S2-DA-05: chat académico, panel general, streaming y recuperación por historial.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ChatPage } from "@/pages/ChatPage";
+import { TranscriptReaderPage } from "@/pages/TranscriptReaderPage";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import type { ChatConversation, ChatMessage } from "@/lib/chat";
+import type { LibraryAudioDetail } from "@/lib/library";
+import type { ReaderTranscript } from "@/lib/reader";
+
+const AUDIO_ID = "123e4567-e89b-12d3-a456-426614174000";
+const SEGMENT_ID = "223e4567-e89b-12d3-a456-426614174000";
 
 const CONVERSATION: ChatConversation = {
   id: "c1",
@@ -39,10 +45,56 @@ const ASSISTANT_MESSAGE: ChatMessage = {
   created_at: "2026-11-02T12:01:01Z",
 };
 
+const AUDIO_DETAIL: LibraryAudioDetail = {
+  id: AUDIO_ID,
+  subject: { id: "sub1", name: "materia sintetica", color: "#112233" },
+  title: "clase de prueba",
+  class_date: "2026-11-04",
+  class_timezone: "America/Bogota",
+  language_code: "es",
+  duration_seconds: 10,
+  created_at: "2026-11-04T12:00:00Z",
+  attempt: null,
+  stages: { index: "succeeded", analyze: "not_requested" },
+  aggregate_status: "ready",
+  audio_retained: false,
+  transcript: {
+    version: 1,
+    timestamp_precision: "segment",
+    char_count: 15,
+    quality_warnings: [],
+    summary: null,
+    topics: [],
+    analysis_version: null,
+  },
+  exports: { txt: true, srt: true },
+};
+
+const AUDIO_TRANSCRIPT: ReaderTranscript = {
+  audio_id: AUDIO_ID,
+  version: 1,
+  timestamp_precision: "segment",
+  char_count: 15,
+  summary: null,
+  topics: [],
+  analysis_version: null,
+  segments: [
+    {
+      id: SEGMENT_ID,
+      ordinal: 1,
+      text: "primer segmento",
+      char_start: 0,
+      char_end: 15,
+      t_start: 0,
+      t_end: 10,
+    },
+  ],
+};
+
 const SSE_HAPPY = [
   'event: snapshot\nid: 0\ndata: {"message_id":"m1","status":"streaming"}\n\n',
   'event: delta\nid: 15\ndata: {"text":"respuesta sintética"}\n\n',
-  'event: citation\nid: 15\ndata: {"index":1,"audio_id":"a1","transcript_version":1,"chunk_id":"ch1","segment_id":"s1","t_start":0,"t_end":5,"label":"clase · 0:05","url":"/biblioteca/a1?segment=s1"}\n\n',
+  'event: citation\nid: 15\ndata: {"index":1,"audio_id":"123e4567-e89b-12d3-a456-426614174000","transcript_version":1,"chunk_id":"ch1","segment_id":"223e4567-e89b-12d3-a456-426614174000","t_start":0,"t_end":5,"label":"clase · 0:05","url":"/biblioteca/123e4567-e89b-12d3-a456-426614174000?segment=223e4567-e89b-12d3-a456-426614174000"}\n\n',
   'event: done\nid: 16\ndata: {"message_id":"m1","conversation_id":"c1","status":"completed","sources":[]}\n\n',
 ].join("");
 
@@ -82,6 +134,10 @@ function installChatFetch(options: {
     }
     if (method === "GET" && url === "/subjects") return json({ items: [] });
     if (method === "GET" && url === "/audios?limit=100") return json({ items: [] });
+    if (method === "GET" && url === `/audios/${AUDIO_ID}`) return json(AUDIO_DETAIL);
+    if (method === "GET" && url === `/audios/${AUDIO_ID}/transcript`) {
+      return json(AUDIO_TRANSCRIPT);
+    }
     if (method === "POST" && url === "/chat/conversations/c1/messages") {
       if (options.hang === true) {
         const encoder = new TextEncoder();
@@ -147,7 +203,7 @@ describe("ChatPage", () => {
     sendQuestion();
 
     expect(await screen.findByText("respuesta sintética")).toBeTruthy();
-    expect(screen.getByText("[1] clase · 0:05")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "abrir cita 1 en el lector" })).toBeTruthy();
     expect(screen.getByText("completed")).toBeTruthy();
     const post = calls.find(
       (call) =>
@@ -214,6 +270,30 @@ describe("ChatPage", () => {
           (call.init.method ?? "GET") === "POST",
       ),
     ).toBe(true);
+  });
+
+  it("abre la cita en el lector y resalta el segmento enlazado", async () => {
+    installChatFetch({});
+    render(
+      <MemoryRouter initialEntries={["/gestion/chat"]}>
+        <Routes>
+          <Route path="/gestion/chat" element={<ChatPage />} />
+          <Route path="/biblioteca/:audioId" element={<TranscriptReaderPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await waitForComposer();
+
+    sendQuestion();
+    const citation = await screen.findByRole("link", {
+      name: "abrir cita 1 en el lector",
+    });
+    fireEvent.click(citation);
+
+    expect(await screen.findByText("primer segmento")).toBeTruthy();
+    expect(document.getElementById(`segment-${SEGMENT_ID}`)?.getAttribute("aria-current")).toBe(
+      "location",
+    );
   });
 
   it("un EOF sin terminal recupera el historial persistido sin duplicar la pregunta", async () => {

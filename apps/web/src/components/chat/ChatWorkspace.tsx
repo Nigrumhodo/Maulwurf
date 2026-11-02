@@ -4,6 +4,8 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { CitationList } from "@/components/chat/Citation";
+import { MarkdownBody } from "@/components/chat/MarkdownBody";
 import { audioLabel, fetchAudios } from "@/lib/library";
 import type { LibraryAudio } from "@/lib/library";
 import { fetchSubjects } from "@/lib/subjects";
@@ -624,31 +626,30 @@ export function ChatWorkspace({
                   {message.role === "assistant" && <StatusBadge status={message.status} />}
                 </div>
                 <div
-                  className={`whitespace-pre-wrap border-2 px-3 py-2 ${
+                  className={`border-2 px-3 py-2 ${
                     message.role === "user"
-                      ? "border-mint bg-mint/10 text-lavender"
+                      ? "whitespace-pre-wrap border-mint bg-mint/10 text-lavender"
                       : "border-lavender/30 text-lavender"
                   }`}
                 >
-                  {message.content !== ""
-                    ? message.content
-                    : message.status === "streaming"
-                      ? "▍"
-                      : message.status === "failed"
-                        ? "la respuesta falló; vuelve a preguntar."
-                        : message.status === "cancelled"
-                          ? "respuesta cancelada."
-                          : "—"}
+                  {message.content !== "" ? (
+                    message.role === "assistant" ? (
+                      <MarkdownBody content={message.content} />
+                    ) : (
+                      message.content
+                    )
+                  ) : message.status === "streaming" ? (
+                    "…"
+                  ) : message.status === "failed" ? (
+                    "la respuesta falló; vuelve a preguntar."
+                  ) : message.status === "cancelled" ? (
+                    "respuesta cancelada."
+                  ) : (
+                    "-"
+                  )}
                 </div>
-                {message.citations.length > 0 && (
-                  <ul className="flex flex-col gap-1 text-xs text-lavender/60">
-                    {message.citations.map((citation) => (
-                      <li key={`${message.key}-${citation.index}`}>
-                        [{citation.index}] {citation.label}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                <CitationList citations={message.citations} />
+
               </div>
             ))}
           </>
