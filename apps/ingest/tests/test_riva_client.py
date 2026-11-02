@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 import threading
 import time
 
@@ -17,6 +19,7 @@ from maulwurf_ingest.asr.riva_client import (
     TransportError,
     _transcript_from,
     riva_transport_from_env,
+    silence_grpc_metadata_trace,
 )
 
 _WAV = b"RIFF"
@@ -358,6 +361,28 @@ def test_factory_refuses_a_missing_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     with pytest.raises(RuntimeError, match="riva_unconfigured"):
         riva_transport_from_env()
+
+
+def test_the_riva_channel_cannot_trace_the_bearer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GRPC_TRACE", "api")
+    monkeypatch.setenv("GRPC_VERBOSITY", "DEBUG")
+
+    silence_grpc_metadata_trace()
+
+    assert os.environ["GRPC_TRACE"] == ""
+    assert os.environ["GRPC_VERBOSITY"] == "ERROR"
+    record = logging.getLogger("grpc").makeRecord(
+        "grpc",
+        logging.INFO,
+        __file__,
+        1,
+        "metadata authorization Bearer nvapi-secret",
+        (),
+        None,
+    )
+    assert logging.getLogger("grpc").filter(record) is True
+    assert "nvapi-secret" not in record.getMessage()
+    assert "Bearer [REDACTED]" in record.getMessage()
 
 
 class _Start:

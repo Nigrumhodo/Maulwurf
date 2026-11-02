@@ -9,6 +9,7 @@ no se registra.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import os
 import secrets
@@ -19,6 +20,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from maulwurf_ingest.audio.reconcile import LocalWord, parse_confidence
+from maulwurf_ingest.logs import RedactionFilter
 
 MAX_ATTEMPTS = 3
 # Presupuesto entre llamadas. No es una cuota medida de Riva.
@@ -30,6 +32,20 @@ _INVALID = frozenset({"INVALID_ARGUMENT"})
 _DEFAULT_SERVER = "grpc.nvcf.nvidia.com:443"
 _DEFAULT_FUNCTION_ID = "b702f636-f60c-4a3d-a6f4-f3568c13bd7d"
 _CLIENT_MAX_MESSAGE_LENGTH = 1_073_741_824
+
+
+def silence_grpc_metadata_trace() -> None:
+    """Keep the bearer out of gRPC traces.
+
+    The C-core tracer writes call metadata to stderr, outside the Python redacting
+    handler, when ``GRPC_TRACE`` or a debug verbosity is set. Pin both off before the
+    channel exists, and scrub any ``grpc`` logger record that still carries a bearer.
+    """
+    os.environ["GRPC_VERBOSITY"] = "ERROR"
+    os.environ["GRPC_TRACE"] = ""
+    grpc_logger = logging.getLogger("grpc")
+    if not any(isinstance(item, RedactionFilter) for item in grpc_logger.filters):
+        grpc_logger.addFilter(RedactionFilter())
 
 
 class AsrReupload(RuntimeError):
@@ -213,6 +229,7 @@ class GrpcRivaTransport:
             return self._asr
         import riva.client
 
+        silence_grpc_metadata_trace()
         auth = riva.client.Auth(
             use_ssl=True,
             uri=self._server,
