@@ -21,7 +21,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.services.embeddings import EmbeddingProvider
+from app.services.embeddings import EmbeddingInputType, EmbeddingProvider
 from app.services.llm import ChatMessage, LLMProvider
 from app.services.rag import ABSTENTION_TEXT, PROMPT_VERSION
 from tools.eval.chat import AnswerOutcome, answer_from_dict, answer_to_dict, run_answers
@@ -110,9 +110,11 @@ class _CountingEmbedding:
     def batch_size(self) -> int:
         return self._provider.batch_size
 
-    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+    async def embed(
+        self, texts: Sequence[str], *, input_type: EmbeddingInputType | None = None
+    ) -> list[list[float]]:
         self._budget.consume()
-        return await self._provider.embed(texts)
+        return await self._provider.embed(texts, input_type=input_type)
 
 
 class _CountingLLM:

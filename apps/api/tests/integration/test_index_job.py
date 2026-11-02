@@ -59,7 +59,7 @@ class ScriptedProvider(FakeProvider):
         super().__init__()
         self.error = error
 
-    async def embed(self, texts: Any) -> list[list[float]]:
+    async def embed(self, texts: Any, *, input_type: str | None = None) -> list[list[float]]:
         self.calls.append(list(texts))
         raise self.error
 
@@ -75,7 +75,7 @@ class ClosingProvider(FakeProvider):
         super().__init__(batch_size=1)
         self.close_run = close_run
 
-    async def embed(self, texts: Any) -> list[list[float]]:
+    async def embed(self, texts: Any, *, input_type: str | None = None) -> list[list[float]]:
         self.calls.append(list(texts))
         if len(self.calls) == 2:
             await self.close_run()

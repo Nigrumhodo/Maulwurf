@@ -65,7 +65,9 @@ class FakeEmbeddingProvider:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+    async def embed(
+        self, texts: Sequence[str], *, input_type: str | None = None
+    ) -> list[list[float]]:
         self.calls += 1
         return [list(QUERY_VECTOR) for _ in texts]
 
