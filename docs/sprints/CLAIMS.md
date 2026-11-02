@@ -1,11 +1,11 @@
 # Canonical claims registry — Maulwurf
 
-> Status: **S2 open**. Review: 2026-10-09. A3.1, A3.8, L3.2, L3.3, L3.4, S3.1, S3.2, S3.3, S3.4,
+> Status: **S2 open**. Review: 2026-10-09. A3.1, A3.8, L3.1, L3.2, L3.3, L3.4, S3.1, S3.2, S3.3, S3.4,
 > S3.5 and S3.6 plus J3.2, J3.3, J3.4, J3.5, J3.6, J3.7 and J3.8 are recorded under
 > directed claims for MAULW-99, MAULW-106, MAULW-92, MAULW-108, MAULW-109, MAULW-110,
 > MAULW-111, MAULW-112, MAULW-113, MAULW-115, MAULW-116, MAULW-117, MAULW-118,
-> MAULW-119, MAULW-120 and MAULW-121. L3.3 and L3.4 are recorded in this change without a
-> separate MAULW id. The rest of S3 remains closed.
+> MAULW-119, MAULW-120 and MAULW-121. L3.1, L3.3 and L3.4 are recorded in this change without
+> a separate MAULW id. The rest of S3 remains closed.
 > S4.1 is recorded under a directed claim for MAULW-149, S4.2 under a directed claim for
 > MAULW-150, S4.3 under a directed claim for MAULW-151, S4.4 under a directed claim for
 > MAULW-152, S4.5 under a directed claim for MAULW-153, A4.1 under a directed claim for
@@ -56,8 +56,8 @@ These six values are **all** the status vocabulary: there are no `claimed`, `in_
 ## 3. Active sprint
 
 **S2 is open.** S1 has every implementation ticket `done`; only L1.7 (coordination and the
-formal S1 close) is unclaimed. S3 and S4 remain closed except the directed L3.2, L3.3,
-L3.4, S3.1, S3.2, S3.3, S3.4, S3.5 and S3.6 claims plus the directed S4.1, S4.2, S4.3,
+formal S1 close) is unclaimed. S3 and S4 remain closed except the directed L3.1, L3.2,
+L3.3, L3.4, S3.1, S3.2, S3.3, S3.4, S3.5 and S3.6 claims plus the directed S4.1, S4.2, S4.3,
 S4.4, S4.5 and A4.1 claims recorded below. D2 and D6 remain `pending`; D3-Audio and D4
 remain `blocked`.
 
@@ -178,15 +178,16 @@ remain `blocked`.
 
 ### S3 — Action (extraction and Calendar)
 
-> Only A3.1, A3.8, L3.2, L3.3, L3.4, S3.1, S3.2, S3.3, S3.4, S3.5 and S3.6 plus J3.2, J3.3, J3.4,
+> Only A3.1, A3.8, L3.1, L3.2, L3.3, L3.4, S3.1, S3.2, S3.3, S3.4, S3.5 and S3.6 plus J3.2, J3.3, J3.4,
 > J3.5, J3.6, J3.7 and J3.8 are recorded: they were directed by MAULW-99, MAULW-106,
 > MAULW-92, MAULW-108, MAULW-109, MAULW-110, MAULW-111, MAULW-112, MAULW-113, MAULW-115,
-> MAULW-116, MAULW-117, MAULW-118, MAULW-119, MAULW-120 and MAULW-121. L3.3 and L3.4 were
+> MAULW-116, MAULW-117, MAULW-118, MAULW-119, MAULW-120 and MAULW-121. L3.1, L3.3 and L3.4 were
 > directed with the L3.2 closure and have no separate MAULW id. The remaining S3
 > backlog stays unclaimable until the lead opens the sprint and updates the status above.
 
 | Action | Ticket | Owner | Status | Claimed at (UTC) | Cloud eligibility | Contributors / reviewers | Reason, evidence, or PR |
 |---|---|---|---|---|---|---|---|
+| claim | L3.1 | NigrumH0do | in progress | 2026-11-01 | not applicable | — / area L | Directed with the L3.2 closure (no separate MAULW id). `prompts/v1/system_extraction.txt` and `user_extraction.txt` are the v1 extraction prompts. `prompts/registry.py` loads them, exposes `PROMPT_VERSION` (`v1`) and the SHA-256 of the two files, and renders the user template with the class date, timezone and allowed segment ids. `analyze` runs store that version (`runs.py` imports the registry); the frozen §M4 object still rejects `prompt_version` as an extra field. R-S3-JL-06 (`tests/prompt_regression/test_extraction_v1.py`, 5 cases) replays authored JSON through `AnalysisResult`, `validate_analysis` and `dedupe_by_evidence`. The fixtures are not a provider capture. A prompt edit fails until the recorded digest is updated in the same change. No model call. 2026-11-01, WSL, Python 3.12, branch `task/L3.3-L3.4-validation`: `ruff check .` and `mypy .` clean (311 files); pytest of `tests/prompt_regression` and `tests/unit/test_run_versions.py` is **18 passed**; `check_refs.py` OK (1030 paths). |
 | claim | L3.2 | NigrumH0do | done | 2026-11-01 | not applicable | — / area L, area A | MAULW-92: freeze the final §M4 Pydantic contract in `apps/api/app/schemas/analysis.py` (exclusive `due_date`/`due_at`, `date_status`, `confidence_score`, Unicode code-point spans and one mandatory verbatim quote per evidence) with the pure `check_against` seam; U-S3-JL-01 (61 cases, 18 new). `ruff`/`mypy` clean (239 files), **1320 API unit passed**; `apps/ingest` is untouched (9 espeak-ng-only failures, 237 passed with them deselected); `check_refs.py` OK (841 paths); capture in `docs/sprints/artifacts/L3.2/local-gates.txt`. Quality CI run `41261621535` (head `6fa7538`) is green in all 17 checks, including `python-unit (api)`, `integration (api)`, `integration (ingest)`, `e2e-smoke`, `docs`, `web`, `build-images` and `secret-scan`. PR #139, branch `task/MAULW-92`. |
 | claim | L3.3 | NigrumH0do | in progress | 2026-11-01 | not applicable | — / area L, area A | Directed with the L3.2 closure (no separate MAULW id). `app/services/analysis_validation.py` rejects a proposal whose segment is outside the class, tenant and transcript version, or whose quote is not the exact Unicode slice of that segment. Closed codes: `segment_not_in_class`, `span_out_of_range`, `quote_mismatch`, `transcript_not_in_class`; the message never echoes the transcript. `class_segments_statement` joins `segments` to `transcripts` and `audios` and excludes a tombstoned class; a missing version is not an empty class. U-S3-JL-01/02 is `tests/unit/test_analysis_validation.py` (13 cases). 2026-11-01, WSL, Python 3.12, branch `task/L3.3-L3.4-validation`: `ruff check .` and `mypy .` clean (308 files); pytest of this file, `test_date_resolution.py` and `test_schema_analysis.py` is **91 passed**. `check_refs.py` OK (1027 paths). No provider call and no persistence (A3.2/A3.6). S3 is not opened. |
 | claim | L3.4 | NigrumH0do | in progress | 2026-11-01 | not applicable | — / area L | Directed with the L3.2 closure (no separate MAULW id). `app/services/date_resolution.py` resolves a closed `DateMention` against the class date and timezone. `now` is required and does not move the result; the upload instant is not an input. An all-day mention stays `due_date` and never becomes midnight. An explicit local time uses J4.4 `resolve_local_wall` (a gap moves to the next valid instant, a repeated hour is kept once, both `date_status=resolved`). "next Friday" and the class's own weekday are `date_status=ambiguous` with `needs_review` and both dates null. Impossible dates and unknown timezones raise and produce no proposal. U-S3-JL-03 is `tests/unit/test_date_resolution.py` (17 cases), included in the **91 passed** recorded on L3.3. No provider call. S3 is not opened. |
@@ -370,3 +371,4 @@ remain `blocked`.
 | 2026-11-01 | J4.8 review fix2 (hoplite finding 1 on head `e9e0b1e`): migration `0019` builds its five budget indexes with `CREATE INDEX CONCURRENTLY` inside `op.get_context().autocommit_block()` and drops them with `DROP INDEX CONCURRENTLY`, so a deploy over live traffic does not take a SHARE lock on `messages`, `transcripts`, `notifications`, `outbox_events` or `google_remote_operations`. The non-transactional build is retry-safe: each index is dropped first with `DROP INDEX CONCURRENTLY IF EXISTS`, so a crash between indexes (version stays `0018`, possibly with an invalid leftover) converges on the next `upgrade` instead of failing with "already exists". `alembic/env.py` now holds the migration advisory lock at session scope and acquires it with `pg_try_advisory_lock` polls: `pg_advisory_xact_lock` was released by `0019`'s commit (a second replica re-ran `0019` and failed the version update, reproduced 3/3) and a blocking session lock deadlocks with `CREATE INDEX CONCURRENTLY`, which waits for older snapshots (reproduced `DeadlockDetected`). TDD coverage in `test_migrations.py`: `0019` round trip, offline-SQL assertion that every `CREATE`/`DROP` is `CONCURRENTLY` and outside `BEGIN`, and partial-run recovery with a finished and an invalid leftover index; the four-replica serialization case stays green. Red/green evidence and the rendered DDL are in `docs/sprints/artifacts/J4.8/local-gates.txt`. Local gates: `ruff`/`mypy` clean (304 API and 83 ingest files), **1752 API unit** with the sanitized proxy (raw 1750 + the same two pre-existing bracketed-IPv6 failures in `test_ingest_sink`/`test_llm`), **308 ingest unit**, the full migration module **33 passed**, and 9 budget/observability metric integration cases. No `apps/web` change; the reference-host drill stays **NOT RUN**; PR #157 stays open and unmerged. | #157 |
 | 2026-11-01 | L3.2 moves to `done`. The §M4 Pydantic contract in `apps/api/app/schemas/analysis.py` is complete (exclusive `due_date`/`due_at`, `date_status`, `confidence_score`, Unicode spans and one verbatim quote per evidence, plus the pure `check_against` seam) and U-S3-JL-01 is already recorded. Class/tenant/transcript-version membership stays in L3.3. PR #139 (`task/MAULW-92`) remains the review vehicle and is not merged. | This PR |
 | 2026-11-01 | L3.3 and L3.4 are claimed by NigrumH0do (`in progress`) on `task/L3.3-L3.4-validation`, directed with the L3.2 closure and without a separate MAULW id. L3.3 validates segment membership and the literal quote against the class transcript version. L3.4 resolves a closed date mention against the class date and timezone (DST normalized, "next Friday" ambiguous, no invented midnight). U-S3-JL-01/02/03: 13 + 17 cases, and with the L3.2 schema suite **91 passed**. S3 is not opened; the rest of the backlog stays blocked. | This PR |
+| 2026-11-01 | L3.1 is claimed by NigrumH0do (`in progress`) on `task/L3.3-L3.4-validation`, directed with the L3.2 closure and without a separate MAULW id. The v1 extraction prompts and `prompts/registry.py` register `prompt_version=v1`; `analyze` runs store it. R-S3-JL-06 replays authored JSON through the schema, the literal quote check and evidence dedupe, and fails if the prompt digest changes. No model call. S3 is not opened. | This PR |

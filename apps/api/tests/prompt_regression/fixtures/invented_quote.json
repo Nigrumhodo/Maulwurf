@@ -1,0 +1,27 @@
+{
+  "items": [
+    {
+      "tipo": "examen",
+      "titulo": "Calculus II midterm",
+      "detalle": null,
+      "due_date": "2026-09-21",
+      "due_at": null,
+      "timezone": "America/Mexico_City",
+      "all_day": true,
+      "date_status": "resolved",
+      "confidence_score": 0.4,
+      "fuente": {
+        "spans": [
+          {
+            "segment_id": "3f1c9a52-7d4e-4b8a-9c1e-2a6b5d8e0f11",
+            "inicio_char": 0,
+            "fin_char": 48,
+            "cita_textual": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        ]
+      }
+    }
+  ],
+  "resumen_clase": "The class reviewed integration. A date was mentioned. The quote below is not in the segment. The validator must reject it.",
+  "temas": ["integration"]
+}
