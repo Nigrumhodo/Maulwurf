@@ -16,9 +16,10 @@ from typing import Protocol
 
 from prompts.registry import SUMMARY_PROMPT_VERSION, load_summary_prompts
 
-# Terminal punctuation ends a sentence. "Dr." counts as a break: the prompt requires each
-# sentence to end with . ? or !, and the check stays deterministic instead of linguistic.
-_SENTENCE_END = re.compile(r"[.!?]+")
+# Break only where terminal punctuation is followed by whitespace or the end of the text.
+# "3.5" and "..." therefore stay inside a sentence. "Dr." and "e.g." still break when a
+# space follows: the v1 check stays deterministic and does not keep an abbreviation list.
+_SENTENCE_BREAK = re.compile(r"[.!?]+(?=\s|$)")
 _SECRETS = (
     re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"),
     re.compile(r"Bearer\s+\S+", re.IGNORECASE),
@@ -67,7 +68,7 @@ def sentence_count(text: str) -> int:
     stripped = text.strip()
     if not stripped or stripped[-1] not in ".!?":
         return 0
-    return len([part for part in _SENTENCE_END.split(stripped) if part.strip()])
+    return len([part for part in _SENTENCE_BREAK.split(stripped) if part.strip()])
 
 
 def parse_summary_payload(raw: str) -> ClassSummary:

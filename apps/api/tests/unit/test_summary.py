@@ -34,6 +34,29 @@ class _Audio:
     active_analysis_version: int | None = None
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Costo 3.5 horas. Fin. Ok.", 3),
+        ("Uno. Dos. Tres.", 3),
+        ("Primera... Segunda. Tercera.", 3),
+        ("Sin punto final", 0),
+        ("Dr. Perez explained the proof. Three topics were covered. The class ended.", 4),
+    ],
+)
+def test_sentence_count_ignores_decimals_and_ellipsis(text: str, expected: int) -> None:
+    assert sentence_count(text) == expected
+
+
+def test_a_decimal_does_not_reject_a_three_sentence_summary() -> None:
+    parsed = parse_summary_payload(
+        '{"resumen_clase":"The class lasted 3.5 hours. Students should review. '
+        'No other work was assigned.","temas":["review"]}'
+    )
+
+    assert sentence_count(parsed.text) == 3
+
+
 def test_a_recorded_summary_has_four_sentences_and_distinct_topics() -> None:
     parsed = parse_summary_payload(_VALID)
 
