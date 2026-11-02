@@ -43,12 +43,14 @@ class Settings(BaseSettings):
         default=30, ge=1, validation_alias="INGEST_FRAGMENT_SECONDS"
     )
     # S4.4: the published ASR TTL is 60 min. The old 600 s child cap was below the
-    # benchmark's 3 h projection (788 s local + provider), so the effective cap follows
-    # the publication; the floor refuses a deployment that would silently shorten it.
+    # benchmark's 3 h projection (788 s local + provider). The child cap is that
+    # TTL exactly: a lower value would cut off a class the publication still
+    # allows, and a higher value would keep transcribing after capabilities and
+    # asr_deadline promise 60 min. Tests inject a shorter SupervisorConfig directly.
     asr_timeout_s: float = Field(
         default=3_600.0,
         ge=3_600.0,
-        le=7_200.0,
+        le=3_600.0,
         validation_alias="INGEST_ASR_TIMEOUT_S",
     )
     # Unset: internal routes answer 503 and /readyz reports credential.

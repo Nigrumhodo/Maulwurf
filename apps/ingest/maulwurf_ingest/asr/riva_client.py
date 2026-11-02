@@ -332,7 +332,6 @@ def _word_from(word: object) -> LocalWord | None:
     if end_s <= start_s:
         return None
     raw_confidence = getattr(word, "confidence", None)
-    # Protobuf scalars default to 0.0 when the provider does not report them, so 0.0 at
-    # this boundary means «unknown» instead of flagging every word as low confidence.
-    confidence = None if raw_confidence in (None, 0.0) else parse_confidence(raw_confidence)
+    # parse_confidence maps the protobuf default 0.0 to unknown on this path too.
+    confidence = parse_confidence(raw_confidence)
     return LocalWord(text, start_s, end_s, confidence)

@@ -142,7 +142,8 @@ def quality_warnings(
 
 
 def _valid_confidence(value: float | None) -> float | None:
-    if value is None or not math.isfinite(value) or not 0.0 <= value <= 1.0:
+    # 0.0 is unknown (protobuf default and parse_confidence), never a scored low word.
+    if value is None or not math.isfinite(value) or not 0.0 < value <= 1.0:
         return None
     return value
 
