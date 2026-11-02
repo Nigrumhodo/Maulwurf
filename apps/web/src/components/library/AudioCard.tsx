@@ -1,5 +1,7 @@
+import { Link } from "react-router-dom";
 import { IngestProgress } from "@/components/IngestProgress";
 import { Button } from "@/components/ui/Button";
+import { buttonClasses } from "@/components/ui/buttonStyles";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
   audioLabel,
@@ -103,15 +105,12 @@ export function AudioCard({
         )}
 
         {(partial || audio.aggregate_status === "ready") && (
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            disabled
-            title="el lector llega con D2.5"
+          <Link
+            to={`/biblioteca/${encodeURIComponent(audio.id)}`}
+            className={buttonClasses("secondary", "sm")}
           >
             abrir transcripción
-          </Button>
+          </Link>
         )}
 
         {partial && retryStages.length > 0 && (
@@ -129,10 +128,6 @@ export function AudioCard({
           <Button type="button" size="sm" disabled={busy} onClick={onReupload}>
             volver a subir
           </Button>
-        )}
-
-        {(partial || audio.aggregate_status === "ready") && (
-          <span className="text-lavender/50">&gt; lector disponible en D2.5</span>
         )}
       </div>
 

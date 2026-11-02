@@ -1498,6 +1498,7 @@ Other M2 endpoints:
 | `DELETE` | `/audios/{id}` | S2 | Tombstone: cancels attempts/jobs, deletes derived transcripts/chunks/embeddings/tasks/summary/citations; existing Google events are kept by default (notice); removing them requires an explicit option via `google_remote_operations` | `202` |
 | `GET` | `/audios/{id}/transcript.txt` | S2 | TXT export of the active transcript, or of one `?segment={segment_id}` (owner-scoped) | `200` · `404` |
 | `GET` | `/audios/{id}/transcript.srt` | S2 | SRT export **only** with valid, ordered timestamps within the duration | `200` · `404` sin transcript · `409 srt_unavailable` |
+| `GET` | `/audios/{id}/transcript` | S2 · D2.5 | Active transcript metadata + ordered segments (`id`, `ordinal`, text, Unicode offsets, nullable times); no audio or storage locations; owner-scoped | `200` · `404` |
 
 ### 3.6 M3 — Internal transcription contract (not a public API)
 

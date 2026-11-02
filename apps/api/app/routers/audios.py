@@ -265,6 +265,31 @@ class TranscriptOut(BaseModel):
     analysis_version: int | None = None
 
 
+class TranscriptSegmentOut(BaseModel):
+    """One ordered segment of the active transcript (D2.5 reader contract)."""
+
+    id: str
+    ordinal: int
+    text: str
+    char_start: int
+    char_end: int
+    t_start: float | None
+    t_end: float | None
+
+
+class TranscriptReaderOut(BaseModel):
+    """Active transcript plus its ordered segments, without audio or storage locations."""
+
+    audio_id: str
+    version: int
+    timestamp_precision: str
+    char_count: int
+    summary: str | None = None
+    topics: list[str] = Field(default_factory=list)
+    analysis_version: int | None = None
+    segments: list[TranscriptSegmentOut]
+
+
 class ExportsOut(BaseModel):
     """Which exports the class can serve RIGHT NOW; `srt` is false unless times are valid."""
 
@@ -801,6 +826,54 @@ async def get_audio(
     audio = await _owned_live_audio(db, session.user_id, audio_id)
     detail = await library.get_audio_detail(db, user_id=session.user_id, audio=audio)
     return _detail_out(detail)
+
+
+@router.get(
+    "/audios/{audio_id}/transcript",
+    responses={
+        200: {"description": "Transcripción activa con segmentos ordenados (lector D2.5)"},
+        401: {"description": "Sin sesión (auth_required)"},
+        404: {"description": "Audio o transcripción inexistente, ajeno o tombstoneado"},
+    },
+)
+async def read_transcript(
+    audio_id: uuid.UUID, response: Response, session: CurrentSession, db: DbSession
+) -> TranscriptReaderOut:
+    """D2.5: ordered segments of the active transcript for the linkable reader.
+
+    The response carries identifiers, text, Unicode offsets and measured times only. It never
+    exposes audio, storage locations or a second transcript writer; a foreign or tombstoned
+    class is indistinguishable from a missing one (ADR-0006).
+    """
+    response.headers["Cache-Control"] = "no-store"
+    audio = await _owned_live_audio(db, session.user_id, audio_id)
+    transcript = await library.active_transcript(db, user_id=session.user_id, audio=audio)
+    if transcript is None:
+        raise not_found()
+    segments = await library.segments_for(
+        db, user_id=session.user_id, transcript_id=transcript.id
+    )
+    return TranscriptReaderOut(
+        audio_id=str(audio.id),
+        version=transcript.version,
+        timestamp_precision=transcript.timestamp_precision,
+        char_count=transcript.char_count,
+        summary=transcript.summary,
+        topics=list(transcript.topics or []),
+        analysis_version=transcript.analysis_version,
+        segments=[
+            TranscriptSegmentOut(
+                id=str(segment.id),
+                ordinal=segment.ordinal,
+                text=segment.text,
+                char_start=segment.char_start,
+                char_end=segment.char_end,
+                t_start=segment.t_start,
+                t_end=segment.t_end,
+            )
+            for segment in segments
+        ],
+    )
 
 
 @router.get(

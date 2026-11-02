@@ -43,6 +43,10 @@ export interface LibraryTranscript {
   version: number;
   timestamp_precision: string;
   char_count: number;
+  quality_warnings: Array<Record<string, unknown>>;
+  summary: string | null;
+  topics: string[];
+  analysis_version: number | null;
 }
 
 export interface LibraryExports {

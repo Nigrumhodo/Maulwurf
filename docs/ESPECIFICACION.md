@@ -358,7 +358,9 @@ optional `variant_confirmation_token` → `audio_id`, `attempt_id`, URL, and exp
 `POST /audios/{id}/reupload` (only without a usable transcript);
 `POST /audios/{id}/attempts/{attempt_id}/cancel`; `DELETE /audios/{id}`;
 `GET /audios/{id}/transcript.txt`; `GET /audios/{id}/transcript.srt` (only with valid
-timestamps); `GET /audios/{id}/runs` (durable run history with the transcript, configuration
+timestamps); `GET /audios/{id}/transcript` (active transcript metadata plus ordered segments
+with stable ids, Unicode offsets and nullable measured times for the linkable reader);
+`GET /audios/{id}/runs` (durable run history with the transcript, configuration
 and prompt version each run applied, its status/timestamps and whether it is the run of the
 active transcript and current versions). The `GET /audios/{id}` detail reports the derived
 per-stage states, whether the explicit analysis backfill is available, and the non-sensitive

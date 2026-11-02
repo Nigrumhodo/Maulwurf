@@ -96,7 +96,15 @@ const ITEMS: LibraryAudio[] = [
 const DETAIL_A2: LibraryAudioDetail = {
   ...ITEMS[1],
   audio_retained: false,
-  transcript: { version: 7, timestamp_precision: "segment", char_count: 1200 },
+  transcript: {
+    version: 7,
+    timestamp_precision: "segment",
+    char_count: 1200,
+    quality_warnings: [],
+    summary: null,
+    topics: [],
+    analysis_version: null,
+  },
   exports: { txt: true, srt: true },
 };
 
@@ -200,9 +208,12 @@ describe("BibliotecaPage", () => {
     expect(screen.getByText(/audio no conservado/i)).toBeTruthy();
     expect(screen.getByText(/parcial · falló análisis/i)).toBeTruthy();
 
-    const readerButtons = screen.getAllByRole("button", { name: "abrir transcripción" });
-    expect(readerButtons.length).toBeGreaterThan(0);
-    expect(readerButtons.every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+    const readerLinks = screen.getAllByRole("link", { name: "abrir transcripción" });
+    expect(readerLinks.length).toBeGreaterThan(0);
+    expect(readerLinks.map((link) => link.getAttribute("href"))).toEqual([
+      "/biblioteca/a1",
+      "/biblioteca/a2",
+    ]);
 
     expect(screen.getByRole("button", { name: "reintentar análisis" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "volver a subir" })).toBeTruthy();

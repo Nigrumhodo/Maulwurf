@@ -127,7 +127,15 @@ describe("llamadas al contrato", () => {
     const detail: LibraryAudioDetail = {
       ...audio({ aggregate_status: "partial", stages: { index: "succeeded", analyze: "failed" } }),
       audio_retained: false,
-      transcript: { version: 3, timestamp_precision: "segment", char_count: 900 },
+      transcript: {
+        version: 3,
+        timestamp_precision: "segment",
+        char_count: 900,
+        quality_warnings: [],
+        summary: null,
+        topics: [],
+        analysis_version: null,
+      },
       exports: { txt: true, srt: true },
     };
     const fetchMock = vi
