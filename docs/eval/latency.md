@@ -38,6 +38,7 @@ Out of scope:
 - Authorized **real** embedding and LLM providers configured through the environment:
   `MAULWURF_EMBEDDING_BASE_URL`, `MAULWURF_EMBEDDING_API_KEY`,
   `MAULWURF_EMBEDDING_MODEL`, `MAULWURF_EMBEDDING_DIMENSION`,
+  `MAULWURF_EMBEDDING_ASYMMETRIC` (when the model distinguishes query/passage),
   `MAULWURF_LLM_BASE_URL`, `MAULWURF_LLM_API_KEY`, `MAULWURF_LLM_MODEL` and
   `MAULWURF_LLM_MODEL_WINDOW`.
 - The frozen dataset at `apps/api/tests/fixtures/g4/datasets/v1` (`g4-v1`, test partition

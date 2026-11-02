@@ -60,7 +60,9 @@ class HashEmbeddingProvider:
         self.batch_size = settings.embedding_batch_size
         self.calls = 0
 
-    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+    async def embed(
+        self, texts: Sequence[str], *, input_type: str | None = None
+    ) -> list[list[float]]:
         self.calls += 1
         return [self._vector(text) for text in texts]
 

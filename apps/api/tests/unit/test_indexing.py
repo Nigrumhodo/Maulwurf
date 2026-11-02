@@ -158,6 +158,7 @@ class FakeProvider:
         self._dimension = settings.embedding_dimension if dimension is None else dimension
         self._batch_size = batch_size
         self.calls: list[list[str]] = []
+        self.roles: list[str | None] = []
 
     @property
     def model(self) -> str:
@@ -171,8 +172,11 @@ class FakeProvider:
     def batch_size(self) -> int:
         return self._batch_size
 
-    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+    async def embed(
+        self, texts: Sequence[str], *, input_type: str | None = None
+    ) -> list[list[float]]:
         self.calls.append(list(texts))
+        self.roles.append(input_type)
         return [[0.25] * self._dimension for _ in texts]
 
 
@@ -501,6 +505,7 @@ async def test_indexing_uses_chunker_with_the_new_version() -> None:
     assert {chunk.index_version for chunk in chunks} == {VERSION}
     assert {chunk.id for chunk in chunks} == {row.chunk_id for row in embeddings}
     assert provider.calls == [[chunk.content for chunk in chunks]]
+    assert provider.roles == ["passage"]
 
 
 # --- 17b. Lexical vector materialized (L2.3) ------------------------------------

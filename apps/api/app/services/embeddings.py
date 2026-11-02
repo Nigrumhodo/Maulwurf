@@ -31,7 +31,7 @@ import logging
 import math
 import secrets
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import httpx
 
@@ -41,6 +41,7 @@ from app.core.config import settings as live_settings
 logger = logging.getLogger(__name__)
 
 EMBEDDINGS_PATH = "embeddings"
+EmbeddingInputType = Literal["query", "passage"]
 # Backoff base with a 2^(attempt-1) factor plus multiplicative jitter. `Retry-After` is capped
 # too: a huge header must not block the job indefinitely.
 _BACKOFF_BASE_SECONDS = 0.5
@@ -94,7 +95,9 @@ class EmbeddingProvider(Protocol):
     @property
     def batch_size(self) -> int: ...
 
-    async def embed(self, texts: Sequence[str]) -> list[list[float]]: ...
+    async def embed(
+        self, texts: Sequence[str], *, input_type: EmbeddingInputType | None = None
+    ) -> list[list[float]]: ...
 
 
 async def embed_query(provider: EmbeddingProvider, text: str) -> list[float]:
@@ -103,7 +106,7 @@ async def embed_query(provider: EmbeddingProvider, text: str) -> list[float]:
     Keeping this helper outside `SearchService` lets callers run the network call while no
     database session is open and still share the same strict response validation.
     """
-    vectors = await provider.embed([text])
+    vectors = await provider.embed([text], input_type="query")
     if len(vectors) != 1:
         raise EmbeddingProviderError(
             "El proveedor devolvió un número de vectores inesperado.",
@@ -150,6 +153,7 @@ class HttpEmbeddingProvider:
         model: str,
         dimension: int,
         batch_size: int,
+        asymmetric: bool = False,
         max_retries: int = 3,
         timeout_seconds: float = 30.0,
         max_concurrency: int = 1,
@@ -162,6 +166,7 @@ class HttpEmbeddingProvider:
         self._model = model
         self._dimension = dimension
         self._batch_size = batch_size
+        self._asymmetric = asymmetric
         self._max_attempts = max_retries + 1
         self._timeout = timeout_seconds
         # 1 = sequential: the default until D5 fixes the provider quota (guardrail 10).
@@ -184,6 +189,7 @@ class HttpEmbeddingProvider:
             model=settings.embedding_model,
             dimension=settings.embedding_dimension,
             batch_size=settings.embedding_batch_size,
+            asymmetric=settings.embedding_asymmetric,
             max_retries=settings.embedding_max_retries,
             timeout_seconds=settings.embedding_timeout_seconds,
             max_concurrency=settings.embedding_max_concurrency,
@@ -206,7 +212,9 @@ class HttpEmbeddingProvider:
     def max_concurrency(self) -> int:
         return self._max_concurrency
 
-    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+    async def embed(
+        self, texts: Sequence[str], *, input_type: EmbeddingInputType | None = None
+    ) -> list[list[float]]:
         """One vector per text, in input order. An empty batch never calls the provider.
 
         All batches share a single `httpx.AsyncClient` (one connection pool) and are limited by
@@ -214,7 +222,16 @@ class HttpEmbeddingProvider:
         returns the batch results in argument order, so the vectors stay aligned with the input.
         With `return_exceptions=True` no batch is left orphaned when another one fails: the
         loop below re-raises the first failure in batch order after the in-flight batches end.
+
+        `input_type` is required only when the configured model is asymmetric. Sending the
+        wrong side of the query/passage pair degrades retrieval, so a missing role fails closed
+        instead of silently defaulting to one side.
         """
+        if self._asymmetric and input_type not in ("query", "passage"):
+            raise EmbeddingProviderError(
+                "El modelo de embeddings exige distinguir consulta y pasaje.",
+                details={"reason": "missing_input_type"},
+            )
         pending = list(texts)
         if not pending:
             return []
@@ -225,7 +242,7 @@ class HttpEmbeddingProvider:
         slots = asyncio.Semaphore(self._max_concurrency)
         async with httpx.AsyncClient(transport=self._transport, timeout=self._timeout) as client:
             grouped = await asyncio.gather(
-                *(self._embed_with_slot(client, slots, batch) for batch in batches),
+                *(self._embed_with_slot(client, slots, batch, input_type) for batch in batches),
                 return_exceptions=True,
             )
         vectors: list[list[float]] = []
@@ -236,16 +253,29 @@ class HttpEmbeddingProvider:
         return vectors
 
     async def _embed_with_slot(
-        self, client: httpx.AsyncClient, slots: asyncio.Semaphore, batch: Sequence[str]
+        self,
+        client: httpx.AsyncClient,
+        slots: asyncio.Semaphore,
+        batch: Sequence[str],
+        input_type: EmbeddingInputType | None,
     ) -> list[list[float]]:
         """One batch holding one semaphore slot, so at most `max_concurrency` run at once."""
         async with slots:
-            return await self._embed_batch(client, batch)
+            return await self._embed_batch(client, batch, input_type)
 
     async def _embed_batch(
-        self, client: httpx.AsyncClient, batch: Sequence[str]
+        self,
+        client: httpx.AsyncClient,
+        batch: Sequence[str],
+        input_type: EmbeddingInputType | None,
     ) -> list[list[float]]:
-        payload = {"input": list(batch), "model": self._model}
+        payload: dict[str, Any] = {
+            "input": list(batch),
+            "model": self._model,
+            "dimensions": self._dimension,
+        }
+        if self._asymmetric:
+            payload["input_type"] = input_type
         headers = {"Authorization": f"Bearer {self._api_key}"}
         attempt = 0
         while True:
@@ -263,10 +293,11 @@ class HttpEmbeddingProvider:
             if response.status_code == httpx.codes.OK:
                 vectors = self._parse(response, expected=len(batch))
                 logger.info(
-                    "embeddings.batch model=%s size=%d dimension=%d",
+                    "embeddings.batch model=%s size=%d dimension=%d input_type=%s",
                     self._model,
                     len(batch),
                     self._dimension,
+                    input_type,
                 )
                 return vectors
             if response.status_code in _RETRYABLE_STATUS:
