@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Segment, Task, TaskSource, Transcript
+from app.models import Audio, Segment, Task, TaskSource, Transcript
 from app.services.tools import ToolCall, ToolOrchestrator
 from tests.integration import actors
 
@@ -16,7 +16,7 @@ QUOTE = "bring the lab report on Friday"
 NOW = datetime(2026, 11, 1, 16, tzinfo=UTC)
 
 
-async def _class(db: AsyncSession, actor: actors.Actor) -> tuple[object, Segment]:
+async def _class(db: AsyncSession, actor: actors.Actor) -> tuple[Audio, Segment]:
     audio = await actors.make_audio(db, actor)
     transcript = Transcript(
         user_id=actor.user_id,

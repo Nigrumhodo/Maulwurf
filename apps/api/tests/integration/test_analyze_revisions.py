@@ -4,8 +4,8 @@ The PATCH half (an edit creates ``pending_confirmation``) stays with A3.5. This 
 drives ``analyze(audio_id)`` against PostgreSQL with a scripted model: no provider call.
 """
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime
 
 import pytest
@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
+    Audio,
     IngestionAttempt,
     ProcessingRun,
     Segment,
@@ -49,17 +50,18 @@ def _document(title: str) -> str:
 
 
 class _Model:
+    segment_id: str = ""
+
     def __init__(self, title: str) -> None:
         self.title = title
 
     async def complete(self, *, system: str, user: str) -> str:
-        return _document(self.title) % _Model.segment_id
+        return _document(self.title) % self.segment_id
 
 
-_Model.segment_id = ""
-
-
-def _factory(db: AsyncSession):
+def _factory(
+    db: AsyncSession,
+) -> Callable[[], AbstractAsyncContextManager[AsyncSession]]:
     @asynccontextmanager
     async def sessions() -> AsyncIterator[AsyncSession]:
         yield db
@@ -67,7 +69,7 @@ def _factory(db: AsyncSession):
     return sessions
 
 
-async def _class(db: AsyncSession) -> tuple[actors.Actor, object]:
+async def _class(db: AsyncSession) -> tuple[actors.Actor, Audio]:
     actor = await actors.make_actor(db)
     audio = await actors.make_audio(db, actor)
     attempt = await actors.make_attempt(db, actor, audio=audio)

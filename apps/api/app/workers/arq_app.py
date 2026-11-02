@@ -23,7 +23,7 @@ from app.services.scheduler_lease import run_notification_scheduler
 from app.workers.dispatcher import dispatch_pending
 from app.workers.index_job import JOB_TIMEOUT_S, MAX_TRIES, index
 from app.workers.jobs.analyze import JOB_TIMEOUT_S as ANALYZE_TIMEOUT_S
-from app.workers.jobs.analyze import analyze
+from app.workers.jobs.analyze import analyze as analyze
 from app.workers.jobs.calendar_sync import JOB_TIMEOUT_S as CALENDAR_SYNC_TIMEOUT_S
 from app.workers.jobs.calendar_sync import MAX_TRIES as CALENDAR_SYNC_MAX_TRIES
 from app.workers.jobs.calendar_sync import sync_task_event
