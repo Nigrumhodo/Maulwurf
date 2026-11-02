@@ -30,9 +30,9 @@ point is ``POST /audios/{id}/retry``). Only the branch that actually calls
 ``ensure_stage_run`` promotes ``required_stages`` from F1 to F2, so a dry run or a no-op pass
 never persists the upgrade.
 
-The analyzer (L3.6) and the ``tasks``/``task_sources`` tables (A3.1) are not part of this
-module. Until they land, the existing ``analyze`` ARQ function is still the S2 no-op, so this
-ticket delivers the explicit queue and its evidence, not extraction output.
+This module only queues. The consumer is L3.6 ``analyze``
+(``app/workers/jobs/analyze.py``), which reads the persisted transcript and writes
+reviewable tasks. Extraction does not happen in the backfill itself.
 """
 
 from __future__ import annotations
