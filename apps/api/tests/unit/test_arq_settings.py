@@ -105,6 +105,7 @@ async def test_notification_scheduler_cron_survives_a_database_failure(
 
     monkeypatch.setattr(arq_app, "session_scope", broken_scope)
     monkeypatch.setattr(app_settings, "notification_scheduler_enabled", True)
+    monkeypatch.setattr(app_settings, "notification_delivery_enabled", True)
 
     await schedule_notifications({})
 
@@ -135,6 +136,7 @@ async def test_notification_scheduler_cron_uses_the_cross_tenant_jobs_policy(
         return SchedulerReport(active=True, claimed=1)
 
     monkeypatch.setattr(app_settings, "notification_scheduler_enabled", True)
+    monkeypatch.setattr(app_settings, "notification_delivery_enabled", True)
     monkeypatch.setattr(arq_app, "bind_cross_tenant", _bind)
     monkeypatch.setattr(arq_app, "reset_cross_tenant", _reset)
     monkeypatch.setattr(arq_app, "session_scope", scope)
@@ -162,6 +164,33 @@ async def test_notification_scheduler_cron_is_a_no_op_while_disabled(
         return SchedulerReport(active=True, claimed=1)
 
     monkeypatch.setattr(app_settings, "notification_scheduler_enabled", False)
+    monkeypatch.setattr(arq_app, "bind_cross_tenant", lambda: events.append("bind"))
+    monkeypatch.setattr(arq_app, "session_scope", scope)
+    monkeypatch.setattr(arq_app, "run_notification_scheduler", fake_run)
+
+    await schedule_notifications({})
+
+    assert events == []
+
+
+async def test_notification_scheduler_cron_does_not_claim_without_a_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The scheduler flag alone must not move due rows to `sending`."""
+    events: list[str] = []
+
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[object]:
+        events.append("session")
+        yield object()
+
+    async def fake_run(db: object, *, enabled: bool) -> SchedulerReport:
+        del db, enabled
+        events.append("run")
+        return SchedulerReport(active=True, claimed=1)
+
+    monkeypatch.setattr(app_settings, "notification_scheduler_enabled", True)
+    monkeypatch.setattr(app_settings, "notification_delivery_enabled", False)
     monkeypatch.setattr(arq_app, "bind_cross_tenant", lambda: events.append("bind"))
     monkeypatch.setattr(arq_app, "session_scope", scope)
     monkeypatch.setattr(arq_app, "run_notification_scheduler", fake_run)

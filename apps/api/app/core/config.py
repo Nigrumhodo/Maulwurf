@@ -203,6 +203,9 @@ class Settings(BaseSettings):
     # `sending` only to expire them as a false `delivery_unknown` (terminal). The scheduler
     # therefore starts disabled and must only be enabled once J4.1 consumes `sending`.
     notification_scheduler_enabled: bool = False
+    # Separate from the scheduler flag. Turning the scheduler on must not claim rows into
+    # `sending` until a delivery consumer exists; otherwise they sit there and then expire.
+    notification_delivery_enabled: bool = False
     # J4.8: monthly provider caps over units the application already measures. They are
     # operator inputs from the S4.5 cost table and the real provider contract, not invented
     # limits: unset means usage is reported with `configured=0` and nothing alarms.

@@ -60,11 +60,14 @@ def test_change_me_placeholder_allowed_in_local() -> None:
 
 def test_the_notification_scheduler_is_disabled_by_default() -> None:
     # J4.2 claims into `sending`; J4.1 is the consumer. Without it, claims would expire into
-    # a false `delivery_unknown`, so the flag is opt-in only.
-    assert _settings().notification_scheduler_enabled is False
-    assert (
-        _settings(notification_scheduler_enabled=True).notification_scheduler_enabled is True
-    )
+    # a false `delivery_unknown`, so both flags are opt-in and the scheduler flag alone
+    # must not be enough to claim.
+    settings = _settings()
+    assert settings.notification_scheduler_enabled is False
+    assert settings.notification_delivery_enabled is False
+    enabled = _settings(notification_scheduler_enabled=True, notification_delivery_enabled=True)
+    assert enabled.notification_scheduler_enabled is True
+    assert enabled.notification_delivery_enabled is True
 
 
 # --- A2.16 / U-S2-AN-15: fail-closed settings -----------------------------------------
