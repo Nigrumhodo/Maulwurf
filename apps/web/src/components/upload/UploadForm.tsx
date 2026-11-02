@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Link } from "react-router-dom";
+import { IngestProgress } from "@/components/IngestProgress";
+import { AudioUploadPanel } from "@/components/upload/AudioUploadPanel";
 import { Button } from "@/components/ui/Button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DateInput } from "@/components/ui/DateInput";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Input } from "@/components/ui/Input";
@@ -14,27 +17,41 @@ import { fetchSubjects } from "@/lib/subjects";
 import type { Subject } from "@/lib/subjects";
 import {
   buildAudioCreate,
+  cancelAttempt,
   capabilitiesUsable,
+  formatBytes,
   languageOptions,
+  mapUploadError,
+  pickUploadFile,
   publishedLanguageCodes,
+  releaseUploadResources,
+  uploadContent,
   uploadFormError,
   validateUpload,
+  variantConflict,
 } from "@/lib/upload";
-import type { AudioCreated, UploadDraft, UploadErrors } from "@/lib/upload";
+import type {
+  AudioCreated,
+  UploadDraft,
+  UploadErrors,
+  UploadProgress,
+  UploadResult,
+  VariantConflict,
+} from "@/lib/upload";
 
 // D2.1 — Formulario de subida (M2). Reserva la clase con `POST /audios` antes de aceptar
 // bytes: materia del tenant, fecha, zona, idioma SIN preselección (opciones publicadas por
 // `/ingestion/capabilities`), título/profesor opcionales y consentimiento versionado con DOS
-// acknowledgements obligatorios. El envío del binario es D2.2; aquí solo se crea la reserva.
+// acknowledgements obligatorios.
+//
+// D2.2 — Envío binario (U-S2-DA-02): `PUT` en streaming a la URL relativa de la reserva con
+// progreso real de bytes; cancelar aborta el `fetch` y llama a la API de cancelación, y
+// libera el `File`. Un `409 duplicate_variant` pide confirmación y repite `POST` + `PUT` con
+// el token; `duplicate_exact` se muestra como duplicado. Nunca se persiste el audio.
+type Phase = "form" | "ready" | "uploading" | "done";
+
 const selectClass =
   "bg-surface text-lavender border-2 border-lavender px-3 py-2 caret-mint focus:border-mint focus:outline-none";
-
-function formatBytes(value: number | null): string {
-  if (value === null) return "no publicado";
-  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
-  if (value >= 1024) return `${Math.round(value / 1024)} KiB`;
-  return `${value} B`;
-}
 
 const EMPTY_DRAFT: UploadDraft = {
   subjectId: "",
@@ -55,8 +72,17 @@ export function UploadForm() {
   const [draft, setDraft] = useState<UploadDraft>(EMPTY_DRAFT);
   const [errors, setErrors] = useState<UploadErrors>({ fields: {} });
   const [busy, setBusy] = useState(false);
-  const [reservation, setReservation] = useState<AudioCreated | null>(null);
   const [languageOverride, setLanguageOverride] = useState<string[] | null>(null);
+
+  const [reservation, setReservation] = useState<AudioCreated | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<UploadProgress | null>(null);
+  const [phase, setPhase] = useState<Phase>("form");
+  const [result, setResult] = useState<UploadResult | null>(null);
+  const [variant, setVariant] = useState<VariantConflict | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -83,6 +109,14 @@ export function UploadForm() {
     void load();
   }, [load]);
 
+  // Un desmontaje a mitad de subida cancela el intento (el servidor limpia al desconectar).
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
+  }, []);
+
   const usable = capabilitiesUsable(capabilities);
   const noticeVersion = capabilities?.privacy_notice_version ?? null;
   // A server hint about allowed languages still must not expose the `multi` policy value.
@@ -98,35 +132,44 @@ export function UploadForm() {
     setDraft((current) => ({ ...current, [key]: value }));
   }
 
+  const releaseFile = useCallback(() => {
+    // No hay vista previa ni object URL: se suelta el `File` y, si existiera, se revoca.
+    releaseUploadResources(null);
+    setSelectedFile(null);
+    setProgress(null);
+  }, []);
+
   function reset() {
+    releaseFile();
     setDraft(EMPTY_DRAFT);
     setErrors({ fields: {} });
     setReservation(null);
+    setResult(null);
+    setVariant(null);
     setLanguageOverride(null);
+    setPhase("form");
   }
 
-  async function handleSubmit(event: FormEvent) {
-    event.preventDefault();
-    setErrors({ fields: {} });
-    const validation = validateUpload(draft, capabilities);
-    if (validation.form != null || validation.consent != null || Object.keys(validation.fields).length > 0) {
-      setErrors(validation);
-      return;
-    }
-    if (noticeVersion === null) return;
-
+  async function reserve(token?: string): Promise<AudioCreated | null> {
+    if (noticeVersion === null) return null;
     setBusy(true);
     try {
       const res = await apiFetch("/audios", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(buildAudioCreate(draft, noticeVersion)),
+        body: JSON.stringify(buildAudioCreate(draft, noticeVersion, token)),
       });
-      setReservation((await res.json()) as AudioCreated);
+      const created = (await res.json()) as AudioCreated;
+      setReservation(created);
+      setResult(null);
+      setVariant(null);
+      setConfirmOpen(false);
+      setPhase("ready");
+      return created;
     } catch (error) {
       if (!(error instanceof ApiHttpError)) {
         setErrors({ fields: {}, form: "no se pudo reservar la subida; revisa tu conexión." });
-        return;
+        return null;
       }
       const mapped = uploadFormError(error);
       if (mapped.field === "consent") {
@@ -141,9 +184,110 @@ export function UploadForm() {
       } else {
         setErrors({ fields: {}, form: mapped.message });
       }
+      return null;
     } finally {
       setBusy(false);
     }
+  }
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    setErrors({ fields: {} });
+    const validation = validateUpload(draft, capabilities);
+    if (
+      validation.form != null ||
+      validation.consent != null ||
+      Object.keys(validation.fields).length > 0
+    ) {
+      setErrors(validation);
+      return;
+    }
+    await reserve();
+  }
+
+  async function runUpload(target: AudioCreated, file: File) {
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setFileError(null);
+    setProgress({ sentBytes: 0, totalBytes: file.size });
+    setPhase("uploading");
+    try {
+      const next = await uploadContent({
+        uploadUrl: target.upload_url,
+        file,
+        signal: controller.signal,
+        onProgress: setProgress,
+      });
+      setResult(next);
+      setPhase("done");
+      releaseFile();
+    } catch (error) {
+      // La cancelación la gobierna `handleCancel`; aquí solo se evita pisar su estado.
+      if (controller.signal.aborted) return;
+      if (error instanceof ApiHttpError) {
+        const conflict = variantConflict(error);
+        if (conflict !== null) {
+          setVariant(conflict);
+          setConfirmOpen(true);
+          setPhase("ready");
+          return;
+        }
+        const view = mapUploadError(error);
+        setErrors({ fields: {}, form: view.message });
+        if (view.resetReservation === true) {
+          releaseFile();
+          setReservation(null);
+          setPhase("form");
+        } else {
+          setPhase("ready");
+        }
+        return;
+      }
+      setErrors({
+        fields: {},
+        form: "no se pudo enviar el audio; revisa tu conexión.",
+      });
+      setPhase("ready");
+    } finally {
+      abortRef.current = null;
+    }
+  }
+
+  async function handleCancel() {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    if (reservation !== null) {
+      try {
+        await cancelAttempt(reservation.audio_id, reservation.attempt_id);
+      } catch {
+        // El servidor también cancela al detectar la desconexión (`_abort_disconnected`).
+      }
+    }
+    releaseFile();
+    setReservation(null);
+    setVariant(null);
+    setConfirmOpen(false);
+    setResult(null);
+    setErrors({ fields: {} });
+    setPhase("form");
+  }
+
+  function handleFileChange(file: File | null) {
+    setFileError(null);
+    setResult(null);
+    const picked = pickUploadFile(file, capabilities);
+    setSelectedFile(picked.file);
+    setFileError(picked.error);
+  }
+
+  async function handleConfirmVariant() {
+    const file = selectedFile;
+    const token = variant?.token;
+    setConfirmOpen(false);
+    setVariant(null);
+    if (file === null || token === undefined) return;
+    const created = await reserve(token);
+    if (created !== null) await runUpload(created, file);
   }
 
   if (loading) {
@@ -163,33 +307,107 @@ export function UploadForm() {
     );
   }
 
-  if (reservation !== null) {
+  if (phase === "done" && result !== null) {
+    const accepted = result.outcome === "accepted";
+    // El `PUT` admite la reserva, así que su audio_id es el que progresa; `duplicate_exact`
+    // devuelve la clase canónica que ya existía.
+    const progressAudioId =
+      result.outcome === "duplicate_exact" ? result.audioId : (reservation?.audio_id ?? null);
     return (
       <div className="lowercase flex flex-col gap-3">
-        <p className="text-mint">&gt; reserva creada · la clase está lista para recibir el audio</p>
+        <p className="text-mint">
+          &gt;{" "}
+          {accepted
+            ? "contenido admitido · la transcripción empezará en breve"
+            : "este audio ya estaba en la biblioteca"}
+        </p>
         <dl className="grid gap-1 text-lavender/70">
-          <div className="flex gap-2">
-            <dt className="text-lavender/50">clase</dt>
-            <dd>{reservation.audio_id}</dd>
-          </div>
-          <div className="flex gap-2">
-            <dt className="text-lavender/50">intento</dt>
-            <dd>{reservation.attempt_id}</dd>
-          </div>
-          <div className="flex gap-2">
-            <dt className="text-lavender/50">expira</dt>
-            <dd>{new Date(reservation.upload_expires_at).toLocaleString()}</dd>
-          </div>
+          {accepted ? (
+            <>
+              <div className="flex gap-2">
+                <dt className="text-lavender/50">intento</dt>
+                <dd>{result.attemptId ?? "—"}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="text-lavender/50">bytes recibidos</dt>
+                <dd>
+                  {result.receivedBytes !== null ? formatBytes(result.receivedBytes) : "—"}
+                </dd>
+              </div>
+            </>
+          ) : (
+            <div className="flex gap-2">
+              <dt className="text-lavender/50">clase existente</dt>
+              <dd>{result.audioId ?? "—"}</dd>
+            </div>
+          )}
         </dl>
         <p className="text-lavender/60">
-          &gt; el envío del audio (streaming) llega en la siguiente entrega; aún no se ha
-          transferido ningún byte.
+          &gt; el audio no se conserva; solo queda el texto de la transcripción.
         </p>
-        <div>
+        {progressAudioId !== null && <IngestProgress audioId={progressAudioId} />}
+        <div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="secondary" onClick={reset}>
             subir otra clase
           </Button>
+          <Link
+            to="/gestion/biblioteca"
+            className="lowercase font-pixel border-2 border-mint px-3 py-2 text-mint hover:bg-mint hover:text-on-accent"
+          >
+            ir a la biblioteca
+          </Link>
         </div>
+      </div>
+    );
+  }
+
+  if (reservation !== null) {
+    const uploading = phase === "uploading";
+    const subjectName = subjects.find((subject) => subject.id === draft.subjectId)?.name ?? "clase";
+    return (
+      <div className="lowercase flex flex-col gap-4">
+        <div className="border-2 border-lavender/40 px-3 py-2 text-lavender/70">
+          <p>
+            &gt; reserva creada · {subjectName} · {draft.classDate || "sin fecha"}
+          </p>
+          <p className="text-lavender/50">
+            &gt; expira {new Date(reservation.upload_expires_at).toLocaleString()} · solo falta el
+            archivo
+          </p>
+        </div>
+
+        <AudioUploadPanel
+          capabilities={capabilities}
+          selectedFile={selectedFile}
+          fileError={fileError}
+          progress={progress}
+          uploading={uploading}
+          formError={errors.form ?? null}
+          onFileChange={handleFileChange}
+          onUpload={() => {
+            if (selectedFile !== null) void runUpload(reservation, selectedFile);
+          }}
+          onCancel={() => void handleCancel()}
+        />
+
+        <ConfirmDialog
+          open={confirmOpen}
+          title="contenido ya registrado"
+          description={
+            variant !== null ? (
+              <span>
+                existe una clase con el mismo audio en otro contexto ({variant.existingAudioId}).
+                Si confirmas, se enviará como variante de esa clase.
+              </span>
+            ) : null
+          }
+          confirmLabel="enviar variante"
+          onConfirm={() => void handleConfirmVariant()}
+          onCancel={() => {
+            setConfirmOpen(false);
+            setVariant(null);
+          }}
+        />
       </div>
     );
   }
