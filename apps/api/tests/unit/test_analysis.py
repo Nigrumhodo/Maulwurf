@@ -30,6 +30,7 @@ from app.services.analysis_validation import ClassTranscript
 from app.services.analysis_windows import AggregatedProposal, EvidenceSpan
 from app.services.chunking import SegmentInput
 from app.services.llm import LLMRateLimited
+from prompts.registry import SUMMARY_PROMPT_VERSION, load_summary_prompts
 
 SEGMENT = UUID("3f1c9a52-7d4e-4b8a-9c1e-2a6b5d8e0f11")
 TEXT = "the midterm exam will be on Monday, September 21"
@@ -37,11 +38,19 @@ NOW = datetime(2026, 9, 16, 15, tzinfo=UTC)
 RUN = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 
 
+_SUMMARY = (
+    '{"resumen_clase":"The class announced one exam. Students should review. '
+    'Nothing else was assigned.","temas":["midterm"]}'
+)
+
+
 class _Scripted:
     def __init__(self, payloads: list[str | Exception]) -> None:
         self._payloads = list(payloads)
 
     async def complete(self, *, system: str, user: str) -> str:
+        if system == load_summary_prompts().system:
+            return _SUMMARY
         nxt = self._payloads.pop(0)
         if isinstance(nxt, Exception):
             raise nxt
@@ -268,6 +277,25 @@ async def test_a_resolved_mention_survives_one_window() -> None:
     assert len(batch.proposals) == 1
     assert batch.proposals[0].value.item.due_at is None
     assert batch.proposals[0].evidence[0].quote == TEXT
+    assert batch.summary.startswith("The class announced one exam.")
+    assert batch.topics == ("midterm",)
+    assert batch.prompt_version == SUMMARY_PROMPT_VERSION
+
+
+async def test_a_summary_that_is_too_short_fails_the_batch() -> None:
+    class _Short:
+        async def complete(self, *, system: str, user: str) -> str:
+            if system == load_summary_prompts().system:
+                return '{"resumen_clase":"Too short. Still short.","temas":["midterm"]}'
+            return _payload(SEGMENT, TEXT)
+
+    with pytest.raises(AnalysisPayloadError):
+        await analyze_transcript(
+            _context(),
+            _Short(),
+            now=NOW,
+            count_tokens=lambda text: len(text.split()) or 1,
+        )
 
 
 def test_a_confirmed_task_becomes_a_pending_revision() -> None:

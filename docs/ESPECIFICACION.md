@@ -508,7 +508,11 @@ dates, recommendations) with traceability to the source.
   task/study block with a date and explicit confirmation.
 - Generate a summary (3–5 sentences) and topics; keep evidence per item. Windowed analysis
   with overlap and aggregation/dedupe by evidence, without sending full transcripts that
-  exceed the context.
+  exceed the context. The stored summary is the v1 summary prompt's output, written with
+  `analysis_version` on the transcript in the same transaction as the proposals.
+  `GET /audios/{id}` returns `summary`, `topics`, and `analysis_version` on `transcript`
+  (null or empty until that write). A summary of the wrong length, or one that contains a
+  secret, is rejected and nothing from that run is published.
 - **Idempotency:** `processing_runs` unique per class, stage, transcript version, and
   configuration. Upsert proposals with an evidence/type key; re-analysis creates a new
   revision and does not delete or overwrite edited, confirmed, or scheduled tasks. Activate a
@@ -998,7 +1002,8 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   Sweeper target every 60 s; normal cleanup is immediate, it does not wait for the TTL.
 - `transcripts`: unique `(audio_id, version)`, text, requested language,
   provider/model/configuration, `timestamp_precision`, quality, and summary/topics with the
-  analysis version. `segments`: stable ID within a version, ordinal, text, and character
+  analysis version. `GET /audios/{id}` returns those three fields on `transcript`.
+  `segments`: stable ID within a version, ordinal, text, and character
   offsets; `t_inicio/t_fin` nullable, with `0 ≤ start < end ≤ duration` when present. Do not
   duplicate a mutable segments JSON and rows as two sources of truth.
 - `chunk_segments` links chunks to segments/spans and keeps evidence even with overlap.

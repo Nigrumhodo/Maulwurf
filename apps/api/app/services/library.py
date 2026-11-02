@@ -75,6 +75,10 @@ class TranscriptInfo:
     timestamp_precision: str
     char_count: int
     quality_warnings: tuple[dict[str, Any], ...]
+    # L3.8: null / empty until the analyze run publishes the v1 summary.
+    summary: str | None
+    topics: tuple[str, ...]
+    analysis_version: int | None
 
 
 @dataclass(frozen=True)
@@ -309,6 +313,9 @@ async def get_audio_detail(
                 timestamp_precision=transcript.timestamp_precision,
                 char_count=transcript.char_count,
                 quality_warnings=_quality_warnings(transcript),
+                summary=transcript.summary,
+                topics=tuple(transcript.topics or ()),
+                analysis_version=transcript.analysis_version,
             )
             segments = await segments_for(db, user_id=user_id, transcript_id=transcript.id)
             exportable = srt_exportable(

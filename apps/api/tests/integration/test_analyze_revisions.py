@@ -34,6 +34,7 @@ from app.services.analysis import (
 )
 from app.services.analysis_windows import AggregatedProposal, EvidenceSpan
 from app.workers.jobs.analyze import run_analyze
+from prompts.registry import load_summary_prompts
 from tests.integration import actors
 
 pytestmark = pytest.mark.integration
@@ -66,6 +67,12 @@ class _Model:
         self.title = title
 
     async def complete(self, *, system: str, user: str) -> str:
+        if system == load_summary_prompts().system:
+            return (
+                '{"resumen_clase":"One exam was announced for the following week. '
+                'Students should review the chapter. No other work was assigned.",'
+                '"temas":["midterm"]}'
+            )
         return _document(self.title) % self.segment_id
 
 
@@ -133,6 +140,17 @@ async def test_reanalysis_revises_a_confirmed_task_without_changing_it(
     assert task.calendar_sync_status == "not_requested"
     assert task.due_at is None
     assert task.all_day is True
+    transcript = (
+        await db_session.execute(select(Transcript).where(Transcript.audio_id == audio.id))
+    ).scalar_one()
+    await db_session.refresh(audio)
+    assert transcript.summary == (
+        "One exam was announced for the following week. "
+        "Students should review the chapter. No other work was assigned."
+    )
+    assert transcript.topics == ["midterm"]
+    assert transcript.analysis_version == 1
+    assert audio.active_analysis_version == 1
     sources = (
         await db_session.execute(select(func.count()).select_from(TaskSource))
     ).scalar_one()

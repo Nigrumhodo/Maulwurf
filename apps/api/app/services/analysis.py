@@ -1,9 +1,10 @@
 """Windowed class analysis (L3.6) over the L3.5 publication rules.
 
 `analyze_transcript` is pure aside from the injected model: it plans windows, asks the
-model once per window, and returns nothing until every window has answered. A transport
-error or a payload that is not the §M4 object fails the whole run, so a later window
-cannot publish the items of an earlier one.
+model once per window, then once more for the v1 class summary, and returns nothing until
+every call has answered. A transport error, a payload that is not the §M4 object, or a
+summary that is not 3–5 sentences fails the whole run, so a later call cannot publish the
+items of an earlier one.
 
 Dates come from `resolve_due`. The model's `due_date`, `due_at`, `all_day` and
 `date_status` are discarded. A mention that cannot be resolved drops that item and
@@ -60,7 +61,13 @@ from app.services.date_resolution import (
     resolve_due,
 )
 from app.services.llm import ChatMessage, LLMProvider
-from prompts.registry import load_extraction_prompts, render_window_prompt
+from app.services.summary import SummaryRejected, parse_summary_payload
+from prompts.registry import (
+    load_extraction_prompts,
+    load_summary_prompts,
+    render_summary_prompt,
+    render_window_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +126,7 @@ class AnalysisBatch:
     proposals: tuple[AggregatedProposal[PreparedProposal], ...]
     summary: str
     topics: tuple[str, ...]
+    prompt_version: str
 
 
 @dataclass(frozen=True)
@@ -324,8 +332,7 @@ async def analyze_transcript(
     deadline = ANALYSIS_DEADLINE_S if deadline_seconds is None else deadline_seconds
     WindowBatch = tuple[PreparedProposal, tuple[WindowCitation, ...]]
     batches: list[tuple[AnalysisWindow, list[WindowBatch]]] = []
-    summaries: list[str] = []
-    topics: list[str] = []
+    notes: list[tuple[str, tuple[str, ...]]] = []
     async with asyncio.timeout(deadline):
         for window in plan.windows:
             if not window.segments:
@@ -349,23 +356,31 @@ async def analyze_transcript(
                 class_timezone=context.class_timezone,
                 now=now,
             )
-            summaries.append(parsed.result.resumen_clase)
-            topics.extend(parsed.result.temas)
+            notes.append((parsed.result.resumen_clase, tuple(parsed.result.temas)))
             batches.append((window, _accepted(parsed, window, context.view)))
+        if not notes:
+            raise AnalysisPayloadError("the class produced no summary notes")
+        summary_prompts = load_summary_prompts()
+        raw_summary = await model.complete(
+            system=summary_prompts.system,
+            user=render_summary_prompt(
+                subject=context.subject,
+                teacher=context.teacher,
+                class_date=context.class_date,
+                class_timezone=context.class_timezone,
+                windows=tuple(notes),
+            ),
+        )
+    try:
+        class_summary = parse_summary_payload(raw_summary)
+    except SummaryRejected as exc:
+        raise AnalysisPayloadError("the summary payload does not match the schema") from exc
     aggregated = aggregate_window_citations(batches)
-    seen: set[str] = set()
-    unique_topics: list[str] = []
-    for topic in topics:
-        folded = topic.casefold()
-        if folded in seen:
-            continue
-        seen.add(folded)
-        unique_topics.append(topic)
-    summary = next((item for item in summaries if item.strip()), "")
     return AnalysisBatch(
         proposals=tuple(aggregated),
-        summary=summary,
-        topics=tuple(unique_topics),
+        summary=class_summary.text,
+        topics=class_summary.topics,
+        prompt_version=class_summary.prompt_version,
     )
 
 

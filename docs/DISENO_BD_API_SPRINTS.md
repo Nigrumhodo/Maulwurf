@@ -1419,7 +1419,10 @@ across tenants).
     "quality_warnings": [
       { "code": "repetition", "count": 3 },
       { "code": "low_confidence", "count": 4, "total": 10 }
-    ]
+    ],
+    "summary": null,
+    "topics": [],
+    "analysis_version": null
   },
   "exports": { "txt": true, "srt": true }
 }
@@ -1431,7 +1434,10 @@ client can enable the download without probing the `409`. `transcript.quality_wa
 carries the non-sensitive ASR signals (`code` plus counts) persisted by ingestion — for
 example `repetition`, `empty_segments` and `low_confidence` — so the inbox/class page can
 warn before proposing dates or tasks. Unknown fields are dropped and the list is bounded;
-no spoken text or provider payload is part of the signal (S3.6).
+no spoken text or provider payload is part of the signal (S3.6). `summary` is the v1
+class summary (3–5 sentences) or null until analysis publishes it; `topics` is that
+version's list, empty until then; `analysis_version` is the integer written in the same
+transaction. A class whose analyze stage is `not_requested` keeps all three empty.
 
 `analysis_backfill_available` is the explicit S3.1/D3.5 action and mirrors the decision of
 `classify_existing_run`, so the class page never offers an action the service resolves as a
