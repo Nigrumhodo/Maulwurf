@@ -34,8 +34,8 @@ function VuRow({ label, active }: { label: string; active: number }) {
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between text-xs">
-        <span className="lowercase text-lavender/60">{label}</span>
-        <span className="lowercase text-mint">-{12 + active * 2}db</span>
+        <span className="capitalize text-lavender/60">{label}</span>
+        <span className="capitalize text-mint">-{12 + active * 2}db</span>
       </div>
       <div className="flex gap-0.5 h-2" aria-hidden="true">
         {Array.from({ length: 10 }, (_, i) => (
@@ -50,11 +50,11 @@ export function TapeDeck() {
   return (
     <section className="border-2 border-pure-black bg-surface shadow-block">
       <header className="flex items-center justify-between border-b-2 border-pure-black bg-mint px-3 py-2 text-on-accent">
-        <span className="lowercase flex items-center gap-2 font-bold">
+        <span className="capitalize flex items-center gap-2 font-bold">
           <span aria-hidden="true">■</span>
           01 · unidad de ingesta de audio
         </span>
-        <span className="lowercase border-2 border-on-accent px-1.5 py-0.5 text-xs">
+        <span className="capitalize border-2 border-on-accent px-1.5 py-0.5 text-xs">
           rec_standby
         </span>
       </header>
@@ -63,8 +63,8 @@ export function TapeDeck() {
         {/* Pixel tape-reel hardware frame */}
         <div className="retro-grid relative flex flex-col items-center justify-center border-2 border-pure-black bg-surface p-3">
           <div className="mb-2 flex w-full items-center justify-between text-xs">
-            <span className="lowercase text-lavender/60">model: reel-98 pro</span>
-            <span className="lowercase flex items-center gap-1 text-mint">
+            <span className="capitalize text-lavender/60">model: reel-98 pro</span>
+            <span className="capitalize flex items-center gap-1 text-mint">
               <span className="inline-block h-2 w-2 animate-pulse bg-mint" aria-hidden="true" />
               ready
             </span>
@@ -90,7 +90,7 @@ export function TapeDeck() {
         {/* Dropzone */}
         <button
           type="button"
-          className="lowercase flex cursor-pointer flex-col items-center justify-center gap-1 border-2 border-dashed border-lavender/50 px-4 py-5 text-center hover:border-mint"
+          className="capitalize flex cursor-pointer flex-col items-center justify-center gap-1 border-2 border-dashed border-lavender/50 px-4 py-5 text-center hover:border-mint"
         >
           <span className="text-2xl text-mint" aria-hidden="true">
             ▾
@@ -102,7 +102,7 @@ export function TapeDeck() {
 
         {/* Target subject selector */}
         <div className="flex flex-col gap-2">
-          <span className="lowercase text-xs text-lavender/60">
+          <span className="capitalize text-xs text-lavender/60">
             asignar al tomo de destino: <span className="text-mint">01. ia</span>
           </span>
           <div className="grid grid-cols-3 gap-1.5">
@@ -110,7 +110,7 @@ export function TapeDeck() {
               <button
                 key={subject}
                 type="button"
-                className={`lowercase truncate border-2 border-pure-black p-1 text-center ${
+                className={`capitalize truncate border-2 border-pure-black p-1 text-center ${
                   i === 0
                     ? "bg-mint text-on-accent"
                     : "bg-surface text-lavender hover:text-mint"
@@ -125,7 +125,7 @@ export function TapeDeck() {
         {/* Hardware switches */}
         <div className="flex flex-col gap-2 border-t-2 border-pure-black pt-3">
           {SWITCHES.map((s) => (
-            <div key={s.label} className="lowercase flex items-center justify-between text-lavender">
+            <div key={s.label} className="capitalize flex items-center justify-between text-lavender">
               <span className="text-lavender/70">&gt; {s.label}:</span>
               <span className="border-2 border-pure-black bg-mint px-2 py-0.5 text-on-accent">
                 [ on ]

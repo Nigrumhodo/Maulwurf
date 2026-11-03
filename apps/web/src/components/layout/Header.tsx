@@ -5,7 +5,7 @@ import { folder, folderClaro, madriguera, madrigueraClaro } from "@/components/V
 import { Clock } from "./Clock";
 
 function navClass({ isActive }: { isActive: boolean }): string {
-  return `lowercase font-pixel flex items-center gap-2 border-2 border-pure-black px-3 py-1 text-lavender hover:text-mint ${
+  return `capitalize font-pixel flex items-center gap-2 border-2 border-pure-black px-3 py-1 text-lavender hover:text-mint ${
     isActive ? "bg-mint text-on-accent" : ""
   }`;
 }
@@ -59,7 +59,7 @@ export function Header() {
           <button
             type="button"
             onClick={() => void logout()}
-            className="lowercase font-pixel border-2 border-pure-black px-3 py-1 text-lavender hover:text-mint active:translate-x-[1px] active:translate-y-[1px]"
+            className="capitalize font-pixel border-2 border-pure-black px-3 py-1 text-lavender hover:text-mint active:translate-x-[1px] active:translate-y-[1px]"
           >
             salir
           </button>

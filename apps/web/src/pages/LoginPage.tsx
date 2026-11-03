@@ -61,7 +61,7 @@ export function LoginPage() {
       <button
         type="button"
         onClick={handleGuest}
-        className={`lowercase font-pixel w-full border-2 border-lavender/40 px-4 py-2 text-lavender hover:border-mint hover:text-mint ${
+        className={`capitalize font-pixel w-full border-2 border-lavender/40 px-4 py-2 text-lavender hover:border-mint hover:text-mint ${
           glitching ? "glitch-once" : ""
         }`}
       >

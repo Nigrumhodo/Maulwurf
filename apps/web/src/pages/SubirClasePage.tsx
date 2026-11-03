@@ -7,7 +7,7 @@ import { UploadForm } from "@/components/upload/UploadForm";
 export function SubirClasePage() {
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="lowercase text-2xl text-mint">subir clase</h1>
+      <h1 className="capitalize text-2xl text-mint">subir clase</h1>
 
       <Card title="datos de la clase" variant="accent">
         <UploadForm />

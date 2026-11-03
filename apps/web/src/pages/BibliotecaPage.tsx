@@ -251,7 +251,7 @@ export function BibliotecaPage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="lowercase text-2xl text-mint">biblioteca</h1>
+        <h1 className="capitalize text-2xl text-mint">biblioteca</h1>
         <Button
           type="button"
           size="sm"
@@ -330,7 +330,7 @@ export function BibliotecaPage() {
           <div className="mt-3 flex flex-col gap-4">
             {groups.map((group) => (
               <section key={group.id} className="flex flex-col gap-2">
-                <h2 className="lowercase font-pixel flex items-center gap-2 text-mint">
+                <h2 className="capitalize font-pixel flex items-center gap-2 text-mint">
                   <span
                     aria-hidden="true"
                     className="inline-block h-3 w-3 border-2 border-pure-black"

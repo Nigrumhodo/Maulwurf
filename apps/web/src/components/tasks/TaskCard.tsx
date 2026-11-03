@@ -24,7 +24,7 @@ export function TaskCard({ task, quality }: TaskCardProps) {
     <li className="lowercase flex flex-col gap-3 border-2 border-pure-black bg-surface px-3 py-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-lg text-lavender">{task.titulo}</p>
+          <p className="capitalize text-lg text-lavender">{task.titulo}</p>
           <p className="text-xs text-lavender/60">
             {task.tipo}
             {task.subject !== null ? ` · ${task.subject.name}` : " · sin materia"}
@@ -64,7 +64,7 @@ export function TaskCard({ task, quality }: TaskCardProps) {
       </div>
 
       {hasQualityWarning && (
-        <div role="status" className="border-2 border-mint px-2 py-1 text-mint">
+        <div role="status" className="capitalize border-2 border-mint px-2 py-1 text-mint">
           {quality?.unavailable ? (
             <span>calidad ASR no disponible; revisa la cita antes de decidir.</span>
           ) : (
@@ -95,7 +95,7 @@ export function TaskCard({ task, quality }: TaskCardProps) {
                 {href !== null && (
                   <Link
                     to={href}
-                    className="text-xs text-mint underline decoration-dotted hover:text-on-accent hover:bg-mint"
+                    className="capitalize text-xs text-mint underline decoration-dotted hover:text-on-accent hover:bg-mint"
                   >
                     ver cita en la clase
                   </Link>

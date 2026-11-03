@@ -98,7 +98,7 @@ export function TranscriptReader({
             className="inline-block h-3 w-3 border-2 border-pure-black"
             style={{ backgroundColor: detail.subject.color }}
           />
-          <h1 className="lowercase text-2xl text-mint">{audioLabel(detail)}</h1>
+          <h1 className="capitalize text-2xl text-mint">{audioLabel(detail)}</h1>
           <StatusBadge status={detail.aggregate_status} />
         </div>
         <p className="lowercase text-lavender/60">

@@ -105,7 +105,7 @@ export function MateriasPage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
-        <h1 className="lowercase text-2xl text-mint">materias</h1>
+        <h1 className="capitalize text-2xl text-mint">materias</h1>
         {form === null && (
           <Button onClick={() => setForm({ mode: "create" })}>nueva materia</Button>
         )}

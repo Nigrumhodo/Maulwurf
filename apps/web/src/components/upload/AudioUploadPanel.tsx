@@ -40,7 +40,7 @@ export function AudioUploadPanel({
 
   return (
     <div className="lowercase flex flex-col gap-4">
-      <label className="lowercase font-pixel flex flex-col gap-1">
+      <label className="capitalize font-pixel flex flex-col gap-1">
         <span className="text-mint">&gt; archivo de audio</span>
         <input
           type="file"

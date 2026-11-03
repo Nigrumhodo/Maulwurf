@@ -36,7 +36,7 @@ export function ConfirmDialog({
     >
       <div className="lowercase font-pixel w-full max-w-md border-2 border-pure-black bg-surface shadow-block">
         <header className="flex items-center justify-between border-b-2 border-pure-black bg-mint px-3 py-2 text-on-accent">
-          <span className="font-bold">› {title}</span>
+          <span className="capitalize font-bold">› {title}</span>
           <button
             type="button"
             onClick={onCancel}

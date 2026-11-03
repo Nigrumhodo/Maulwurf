@@ -2,7 +2,7 @@ export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
 export type ButtonSize = 'sm' | 'md' | 'lg'
 
 const base =
-  'lowercase font-pixel inline-flex items-center justify-center gap-2 border-2 border-pure-black cursor-pointer select-none whitespace-nowrap transition-none active:translate-x-[2px] active:translate-y-[2px] disabled:pointer-events-none disabled:opacity-40'
+  'capitalize font-pixel inline-flex items-center justify-center gap-2 border-2 border-pure-black cursor-pointer select-none whitespace-nowrap transition-none active:translate-x-[2px] active:translate-y-[2px] disabled:pointer-events-none disabled:opacity-40'
 
 const variants: Record<ButtonVariant, string> = {
   primary:

@@ -15,7 +15,7 @@ export function GestionOverview() {
             <span className="animate-blink text-mint" aria-hidden="true">
               &gt;
             </span>
-            <h1 className="lowercase text-xl text-mint">gestión // panel académico</h1>
+            <h1 className="capitalize text-xl text-mint">gestión // panel académico</h1>
             <span className="lowercase border-2 border-mint px-1.5 py-0.5 text-mint">[demo]</span>
           </div>
           <div className="flex items-center gap-2">

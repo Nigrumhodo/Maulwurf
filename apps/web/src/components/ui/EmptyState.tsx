@@ -12,7 +12,7 @@ export interface EmptyStateProps {
 export function EmptyState({ title, description, action, className = "" }: EmptyStateProps) {
   return (
     <div
-      className={`lowercase font-pixel flex flex-col items-center justify-center gap-3 border-2 border-dashed border-lavender/50 px-6 py-10 text-center ${className}`}
+      className={`capitalize font-pixel flex flex-col items-center justify-center gap-3 border-2 border-dashed border-lavender/50 px-6 py-10 text-center ${className}`}
     >
       <span className="text-4xl leading-none text-mint" aria-hidden="true">
         ░

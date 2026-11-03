@@ -30,7 +30,7 @@ export const LanguageSelect = forwardRef<HTMLSelectElement, LanguageSelectProps>
     },
     ref,
   ) => (
-    <label className="lowercase font-pixel flex flex-col gap-1">
+    <label className="capitalize font-pixel flex flex-col gap-1">
       {label != null && (
         <span className="text-mint">
           {prompt ? "> " : ""}

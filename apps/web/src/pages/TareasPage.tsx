@@ -131,7 +131,7 @@ export function TareasPage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-1">
-        <h1 className="lowercase text-2xl text-mint">tareas</h1>
+        <h1 className="capitalize text-2xl text-mint">tareas</h1>
         <p className="lowercase text-lavender/60">
           &gt; propuestas del análisis para revisar; ninguna se escribe en Calendar desde aquí.
         </p>
@@ -140,14 +140,14 @@ export function TareasPage() {
       <Card title="filtros">
         <div className="lowercase flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1">
-            <span className="text-mint">estado</span>
+            <span className="capitalize text-mint">estado</span>
             <select
               aria-label="estado de la tarea"
               value={statusFilter}
               onChange={(event) => {
                 setStatusFilter(event.target.value as TaskStatusFilter);
               }}
-              className="bg-surface text-lavender border-2 border-lavender px-3 py-2"
+              className="capitalize bg-surface text-lavender border-2 border-lavender px-3 py-2"
             >
               {filters.map((filter) => (
                 <option key={filter.value} value={filter.value}>
@@ -157,14 +157,14 @@ export function TareasPage() {
             </select>
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-mint">materia</span>
+            <span className="capitalize text-mint">materia</span>
             <select
               aria-label="materia de la tarea"
               value={subjectFilter}
               onChange={(event) => {
                 setSubjectFilter(event.target.value);
               }}
-              className="bg-surface text-lavender border-2 border-lavender px-3 py-2"
+              className="capitalize bg-surface text-lavender border-2 border-lavender px-3 py-2"
             >
               <option value="">todas las materias</option>
               {subjects.map((subject) => (

@@ -8,7 +8,7 @@ export function SettingsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="lowercase text-2xl text-mint">settings</h1>
+      <h1 className="capitalize text-2xl text-mint">settings</h1>
 
       <Card title="perfil">
         {user === null ? (

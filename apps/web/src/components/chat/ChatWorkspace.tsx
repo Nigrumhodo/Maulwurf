@@ -553,7 +553,7 @@ export function ChatWorkspace({
     <div className={`lowercase flex min-h-0 flex-col gap-3 ${compact ? "h-[24rem]" : "h-[30rem]"}`}>
       <div className="flex flex-wrap items-center justify-between gap-2 border-b-2 border-lavender/20 pb-2">
         <div className="min-w-0">
-          <p className="truncate text-mint">
+          <p className="truncate capitalize text-mint">
             &gt;{" "}
             {generalOnly
               ? "chat general · todas las clases"

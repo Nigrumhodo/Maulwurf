@@ -78,7 +78,7 @@ export function ActivityFeed() {
           </div>
 
           <div>
-            <h3 className="lowercase text-lavender">{c.title}</h3>
+            <h3 className="capitalize text-lavender">{c.title}</h3>
             <p className="lowercase mt-0.5 text-lavender/50">{c.meta}</p>
           </div>
 
