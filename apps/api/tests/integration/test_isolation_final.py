@@ -52,6 +52,7 @@ from app.models import (
     ProcessingRun,
     Segment,
     Task,
+    TaskEvidence,
     TaskRevision,
     TaskSource,
     Transcript,
@@ -288,16 +289,27 @@ async def _seed_full_class(
     )
     db.add(task)
     await db.flush()
+    task_source = TaskSource(
+        user_id=actor.user_id,
+        task_id=task.id,
+        audio_id=audio.id,
+        transcript_id=transcript.id,
+        transcript_version=transcript.version,
+        segment_id=segment.id,
+        char_start=0,
+        char_end=len(text),
+    )
+    db.add(task_source)
+    await db.flush()
     db.add(
-        TaskSource(
+        TaskEvidence(
             user_id=actor.user_id,
             task_id=task.id,
-            audio_id=audio.id,
-            transcript_id=transcript.id,
-            transcript_version=transcript.version,
+            task_version=task.version,
             segment_id=segment.id,
             char_start=0,
             char_end=len(text),
+            quote=text,
         )
     )
     db.add(
@@ -859,6 +871,7 @@ async def test_class_deletion_purges_every_derived_row_and_the_sweep_stays_clean
     assert purged["message_sources_deleted"] == 1
     assert purged["tasks_deleted"] == 1
     assert purged["task_sources_deleted"] == 1
+    assert purged["task_evidence_deleted"] == 1
     assert purged["task_revisions_deleted"] == 1
 
     for model, where in (
@@ -870,6 +883,7 @@ async def test_class_deletion_purges_every_derived_row_and_the_sweep_stays_clean
         (MessageSource, {"user_id": alice.user_id}),
         (Task, {"user_id": alice.user_id}),
         (TaskSource, {"user_id": alice.user_id}),
+        (TaskEvidence, {"user_id": alice.user_id}),
         (TaskRevision, {"user_id": alice.user_id}),
         (Notification, {"user_id": alice.user_id}),
     ):
@@ -917,6 +931,7 @@ async def test_account_deletion_leaves_no_derived_rows_and_the_sweep_stays_clean
         MessageSource,
         Task,
         TaskSource,
+        TaskEvidence,
         TaskRevision,
         Notification,
         Conversation,

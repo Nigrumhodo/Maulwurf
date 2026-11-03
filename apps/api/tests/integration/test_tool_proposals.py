@@ -1,12 +1,13 @@
 """L3.6 tools against PostgreSQL: proposals stay in the inbox and inside the tenant."""
 
 from datetime import UTC, datetime
+from uuid import UUID
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Audio, Segment, Task, TaskSource, Transcript
+from app.models import Audio, Segment, Task, TaskEvidence, TaskSource, Transcript
 from app.services.tools import ToolCall, ToolOrchestrator
 from tests.integration import actors
 
@@ -74,6 +75,11 @@ async def test_propose_task_never_writes_the_calendar_and_stays_in_the_tenant(
     assert suggestion[0].payload["source"] == "chat"
     assert suggestion[0].payload["calendar_sync_status"] == "not_requested"
     assert suggestion[0].payload["status"] == "needs_review"
+    suggested = await db_session.get(Task, UUID(suggestion[0].payload["task_id"]))
+    assert suggested is not None
+    assert suggested.date_text is None
+    assert suggested.date_reason == "missing"
+    assert suggested.due_version == 1
 
     cited = await tools.execute(
         (
@@ -106,6 +112,12 @@ async def test_propose_task_never_writes_the_calendar_and_stays_in_the_tenant(
         await db_session.execute(select(func.count()).select_from(TaskSource))
     ).scalar_one()
     assert sources == 1
+    evidence = (await db_session.execute(select(TaskEvidence))).scalar_one()
+    assert evidence.quote == QUOTE
+    assert evidence.task_version == 1
+    cited_task = await db_session.get(Task, UUID(cited[0].payload["task_id"]))
+    assert cited_task is not None
+    assert cited_task.date_text == "Friday, November 6"
 
     rejected = await tools.execute(
         (
@@ -133,6 +145,12 @@ async def test_propose_task_never_writes_the_calendar_and_stays_in_the_tenant(
     )
     assert rejected[0].ok is False
     assert rejected[0].payload["code"] == "evidence_rejected"
+    assert (
+        await db_session.execute(select(func.count()).select_from(Task))
+    ).scalar_one() == 2
+    assert (
+        await db_session.execute(select(func.count()).select_from(TaskEvidence))
+    ).scalar_one() == 1
 
     own = await tools.execute(
         (ToolCall("get_pending_tasks", {}),),

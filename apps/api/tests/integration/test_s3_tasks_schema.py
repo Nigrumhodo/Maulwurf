@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Segment, Task, TaskRevision, TaskSource, Transcript
+from app.models import Segment, Task, TaskEvidence, TaskRevision, TaskSource, Transcript
 from tests.integration.actors import (
     Actor,
     make_actor,
@@ -405,6 +405,154 @@ async def test_a_task_source_cannot_mismatch_the_cited_transcript(
         else transcript.version + 1
     )
     await _expect_integrity_error(db_session, TaskSource(**values))
+
+
+# --- Persisted evidence (A3.2) ---------------------------------------------------------
+
+
+def _source(
+    actor: Actor,
+    task: Task,
+    transcript: Transcript,
+    segment: Segment,
+    *,
+    char_start: int = 0,
+    char_end: int = 5,
+) -> TaskSource:
+    return TaskSource(
+        user_id=actor.user_id,
+        task_id=task.id,
+        audio_id=transcript.audio_id,
+        transcript_id=transcript.id,
+        transcript_version=transcript.version,
+        segment_id=segment.id,
+        char_start=char_start,
+        char_end=char_end,
+    )
+
+
+def _evidence(
+    actor: Actor,
+    task: Task,
+    segment: Segment,
+    *,
+    quote: str,
+    char_start: int = 0,
+    char_end: int = 5,
+    task_version: int | None = None,
+) -> TaskEvidence:
+    return TaskEvidence(
+        user_id=actor.user_id,
+        task_id=task.id,
+        task_version=task.version if task_version is None else task_version,
+        segment_id=segment.id,
+        char_start=char_start,
+        char_end=char_end,
+        quote=quote,
+    )
+
+
+async def test_task_evidence_is_anchored_to_a_real_source_span(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    task = await make_task(db_session, actor)
+    transcript, segment = await _transcript_with_segment(db_session, actor)
+    source = _source(actor, task, transcript, segment)
+    db_session.add(source)
+    await db_session.flush()
+
+    evidence = _evidence(actor, task, segment, quote=segment.text[0:5])
+    db_session.add(evidence)
+    await db_session.flush()
+    assert evidence.task_version == task.version
+
+
+async def test_task_evidence_requires_a_matching_source_span(
+    db_session: AsyncSession,
+) -> None:
+    alice, bob = await make_actor(db_session), await make_actor(db_session)
+    task = await make_task(db_session, alice)
+    transcript, segment = await _transcript_with_segment(db_session, alice)
+    db_session.add(_source(alice, task, transcript, segment, char_start=0, char_end=5))
+    await db_session.flush()
+
+    # Same task and segment but a span that has no source row.
+    await _expect_integrity_error(
+        db_session,
+        _evidence(alice, task, segment, quote=segment.text[1:6], char_start=1, char_end=6),
+    )
+    # Another tenant cannot quote Alice's source.
+    await _expect_integrity_error(
+        db_session,
+        _evidence(bob, task, segment, quote=segment.text[0:5]),
+    )
+
+
+async def test_task_evidence_rejects_bad_quote_shape_and_version(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    task = await make_task(db_session, actor)
+    transcript, segment = await _transcript_with_segment(db_session, actor)
+    db_session.add(_source(actor, task, transcript, segment))
+    await db_session.flush()
+
+    # Length must equal the span.
+    await _expect_integrity_error(
+        db_session, _evidence(actor, task, segment, quote=segment.text[0:4])
+    )
+    # A whitespace-only quote is not evidence.
+    await _expect_integrity_error(
+        db_session, _evidence(actor, task, segment, quote="     ")
+    )
+    await _expect_integrity_error(
+        db_session, _evidence(actor, task, segment, quote=segment.text[0:5], task_version=0)
+    )
+
+
+async def test_one_quote_per_span_and_task_version(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    task = await make_task(db_session, actor)
+    transcript, segment = await _transcript_with_segment(db_session, actor)
+    db_session.add(_source(actor, task, transcript, segment))
+    await db_session.flush()
+
+    db_session.add(_evidence(actor, task, segment, quote=segment.text[0:5]))
+    await db_session.flush()
+    await _expect_integrity_error(
+        db_session, _evidence(actor, task, segment, quote=segment.text[0:5])
+    )
+    # A later task version may quote the same span.
+    db_session.add(
+        _evidence(actor, task, segment, quote=segment.text[0:5], task_version=task.version + 1)
+    )
+    await db_session.flush()
+
+
+async def test_deleting_a_source_cascades_to_its_evidence(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    task = await make_task(db_session, actor)
+    transcript, segment = await _transcript_with_segment(db_session, actor)
+    source = _source(actor, task, transcript, segment)
+    db_session.add(source)
+    await db_session.flush()
+    db_session.add(_evidence(actor, task, segment, quote=segment.text[0:5]))
+    await db_session.flush()
+
+    await db_session.delete(source)
+    await db_session.flush()
+
+    assert (
+        await db_session.scalar(
+            text("SELECT count(*) FROM task_evidence WHERE task_id = :task"),
+            {"task": task.id},
+        )
+    ) == 0
 
 
 # --- Pending revisions -----------------------------------------------------------------

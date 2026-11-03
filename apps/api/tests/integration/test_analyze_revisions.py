@@ -18,6 +18,7 @@ from app.models import (
     ProcessingRun,
     Segment,
     Task,
+    TaskEvidence,
     TaskRevision,
     TaskSource,
     Transcript,
@@ -140,6 +141,9 @@ async def test_reanalysis_revises_a_confirmed_task_without_changing_it(
     assert task.calendar_sync_status == "not_requested"
     assert task.due_at is None
     assert task.all_day is True
+    assert task.date_text == "Monday, September 28"
+    assert task.date_reason is None
+    assert task.due_version == 1
     transcript = (
         await db_session.execute(select(Transcript).where(Transcript.audio_id == audio.id))
     ).scalar_one()
@@ -155,6 +159,11 @@ async def test_reanalysis_revises_a_confirmed_task_without_changing_it(
         await db_session.execute(select(func.count()).select_from(TaskSource))
     ).scalar_one()
     assert sources == 1
+    evidence = (
+        await db_session.execute(select(TaskEvidence))
+    ).scalar_one()
+    assert evidence.task_version == 1
+    assert evidence.quote == QUOTE
 
     task_id = task.id
     audio_id = audio.id
@@ -198,7 +207,15 @@ async def test_reanalysis_revises_a_confirmed_task_without_changing_it(
     assert revision.run_id == run.id
     assert revision.activated_at is None
     assert revision.proposed_fields["titulo"] == "Second title"
+    assert revision.proposed_fields["date_text"] == "Monday, September 28"
     assert revision.evidence_validated is True
+    # A pending revision never touches the active version's evidence or reminder
+    # generation.
+    assert task.due_version == 1
+    assert task.date_text == "Monday, September 28"
+    assert (
+        await db_session.execute(select(func.count()).select_from(TaskEvidence))
+    ).scalar_one() == 1
 
     await db_session.refresh(run)
     run.status = "failed"

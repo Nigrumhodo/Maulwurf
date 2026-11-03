@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Audio, Task, TaskSource
+from app.models import Audio, Task
 from app.schemas.analysis import ActivityType
 from app.services.analysis import (
     AnalysisPayloadError,
@@ -35,8 +35,15 @@ from app.services.analysis_validation import (
     load_class_transcript,
     validate_analysis,
 )
+from app.services.analysis_windows import EvidenceSpan
 from app.services.calendar_sync import CalendarService, CalendarWindowInvalid
-from app.services.date_resolution import DateResolutionError, MentionKind, resolve_due
+from app.services.date_resolution import (
+    DateResolutionError,
+    MentionKind,
+    render_due_text,
+    resolve_due,
+)
+from app.services.task_evidence import ProvenanceInvalid, persist_task_spans
 
 MAX_TOOL_ROUNDS = 4
 TOOL_BUDGET_SECONDS = 15.0
@@ -337,27 +344,44 @@ class ToolOrchestrator:
             timezone=item.timezone,
             all_day=item.all_day,
             date_status=item.date_status.value,
+            date_text=render_due_text(
+                due_date=item.due_date,
+                due_at=item.due_at,
+                timezone=item.timezone,
+                all_day=item.all_day,
+                date_status=item.date_status.value,
+            ),
             date_reason=extracted.reasons[0],
             confidence_score=item.confidence_score,
             status="needs_review",
             calendar_sync_status="not_requested",
         )
-        self._db.add(task)
-        await self._db.flush()
-        for span in item.fuente.spans:
-            self._db.add(
-                TaskSource(
-                    user_id=user_id,
-                    task_id=task.id,
+        try:
+            # The savepoint keeps a late provenance rejection from committing the task
+            # that was already flushed for its id.
+            async with self._db.begin_nested():
+                self._db.add(task)
+                await self._db.flush()
+                await persist_task_spans(
+                    self._db,
+                    task=task,
                     audio_id=audio_id,
                     transcript_id=view.transcript_id,
                     transcript_version=view.transcript_version,
-                    segment_id=span.segment_id,
-                    char_start=span.inicio_char,
-                    char_end=span.fin_char,
+                    spans=tuple(
+                        EvidenceSpan(
+                            segment_id=span.segment_id,
+                            char_start=span.inicio_char,
+                            char_end=span.fin_char,
+                            quote=span.cita_textual,
+                        )
+                        for span in item.fuente.spans
+                    ),
                 )
-            )
-        await self._db.flush()
+        except ProvenanceInvalid as exc:
+            raise ToolError(
+                "evidence_rejected", "the cited evidence does not match the class"
+            ) from exc
         return _proposal_payload(task, evidence="corpus")
 
     async def _suggest(
@@ -392,6 +416,13 @@ class ToolOrchestrator:
             timezone=resolved.timezone,
             all_day=resolved.all_day if resolved.date_status.value == "resolved" else False,
             date_status=resolved.date_status.value,
+            date_text=render_due_text(
+                due_date=resolved.due_date,
+                due_at=resolved.due_at,
+                timezone=resolved.timezone,
+                all_day=resolved.all_day,
+                date_status=resolved.date_status.value,
+            ),
             date_reason=resolved.reason,
             status="needs_review",
             calendar_sync_status="not_requested",

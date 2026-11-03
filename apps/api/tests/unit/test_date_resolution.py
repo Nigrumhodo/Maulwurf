@@ -20,6 +20,7 @@ from app.services.date_resolution import (
     ResolvedDue,
     WeekdayQualifier,
     mention_from_calendar,
+    render_due_text,
     resolve_due,
 )
 
@@ -292,6 +293,109 @@ def test_a_resolved_date_fits_the_m4_item() -> None:
     assert item.date_status is DateStatus.RESOLVED
     assert item.due_date == date(2026, 9, 21)
     assert item.due_at is None
+
+
+def test_an_all_day_date_renders_an_english_day_without_a_time() -> None:
+    assert (
+        render_due_text(
+            due_date=date(2026, 9, 21),
+            due_at=None,
+            timezone=MEXICO,
+            all_day=True,
+            date_status="resolved",
+        )
+        == "Monday, September 21"
+    )
+
+
+def test_a_timed_date_renders_in_the_class_timezone() -> None:
+    # 00:00 UTC is still the previous local day in Mexico City.
+    assert (
+        render_due_text(
+            due_date=None,
+            due_at=datetime(2026, 9, 22, 0, 0, tzinfo=UTC),
+            timezone=MEXICO,
+            all_day=False,
+            date_status=DateStatus.RESOLVED,
+        )
+        == "Monday, September 21 at 18:00"
+    )
+
+
+def test_seconds_appear_only_when_nonzero() -> None:
+    exact = render_due_text(
+        due_date=None,
+        due_at=datetime(2026, 9, 21, 18, 0, tzinfo=UTC),
+        timezone="UTC",
+        all_day=False,
+        date_status="resolved",
+    )
+    with_seconds = render_due_text(
+        due_date=None,
+        due_at=datetime(2026, 9, 21, 18, 0, 5, tzinfo=UTC),
+        timezone="UTC",
+        all_day=False,
+        date_status="resolved",
+    )
+    assert exact == "Monday, September 21 at 18:00"
+    assert with_seconds == "Monday, September 21 at 18:00:05"
+
+
+@pytest.mark.parametrize("status", ["ambiguous", "missing"])
+def test_an_unresolved_date_has_no_rendering(status: str) -> None:
+    assert (
+        render_due_text(
+            due_date=None,
+            due_at=None,
+            timezone=MEXICO,
+            all_day=False,
+            date_status=status,
+        )
+        is None
+    )
+
+
+def test_an_incoherent_due_pair_has_no_rendering() -> None:
+    assert (
+        render_due_text(
+            due_date=date(2026, 9, 21),
+            due_at=datetime(2026, 9, 21, 18, 0, tzinfo=UTC),
+            timezone="UTC",
+            all_day=True,
+            date_status="resolved",
+        )
+        is None
+    )
+    assert (
+        render_due_text(
+            due_date=date(2026, 9, 21),
+            due_at=None,
+            timezone="UTC",
+            all_day=False,
+            date_status="resolved",
+        )
+        is None
+    )
+    assert (
+        render_due_text(
+            due_date=None,
+            due_at=datetime(2026, 9, 21, 18, 0),
+            timezone="UTC",
+            all_day=False,
+            date_status="resolved",
+        )
+        is None
+    )
+    assert (
+        render_due_text(
+            due_date=date(2026, 9, 21),
+            due_at=None,
+            timezone="Mars/Base",
+            all_day=True,
+            date_status="resolved",
+        )
+        is None
+    )
 
 
 def test_an_ambiguous_date_fits_the_m4_item_with_no_due() -> None:

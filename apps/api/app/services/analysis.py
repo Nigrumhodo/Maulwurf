@@ -58,10 +58,12 @@ from app.services.date_resolution import (
     MentionKind,
     ResolvedDue,
     WeekdayQualifier,
+    render_due_text,
     resolve_due,
 )
 from app.services.llm import ChatMessage, LLMProvider
 from app.services.summary import SummaryRejected, parse_summary_payload
+from app.services.task_evidence import persist_task_spans
 from prompts.registry import (
     load_extraction_prompts,
     load_summary_prompts,
@@ -441,6 +443,13 @@ def proposed_fields_payload(proposal: AggregatedProposal[PreparedProposal]) -> d
         "timezone": fields.timezone,
         "all_day": fields.all_day,
         "date_status": fields.date_status,
+        "date_text": render_due_text(
+            due_date=fields.due_date,
+            due_at=fields.due_at,
+            timezone=fields.timezone,
+            all_day=fields.all_day,
+            date_status=fields.date_status,
+        ),
         "confidence_score": fields.confidence_score,
         "date_reason": fields.date_reason,
     }
@@ -559,6 +568,9 @@ async def apply_task_writes(
                 task_id=write.task_id,
                 base_version=write.base_version,
                 proposal=write.proposal,
+                audio_id=audio_id,
+                transcript_id=transcript_id,
+                transcript_version=transcript_version,
             )
             if updated == "revise":
                 await _revise_task(
@@ -769,6 +781,13 @@ async def _insert_task(
         timezone=fields.timezone,
         all_day=fields.all_day,
         date_status=fields.date_status,
+        date_text=render_due_text(
+            due_date=fields.due_date,
+            due_at=fields.due_at,
+            timezone=fields.timezone,
+            all_day=fields.all_day,
+            date_status=fields.date_status,
+        ),
         date_reason=fields.date_reason,
         confidence_score=fields.confidence_score,
         status="needs_review",
@@ -776,14 +795,13 @@ async def _insert_task(
     )
     db.add(task)
     await db.flush()
-    _add_sources(
+    await persist_task_spans(
         db,
-        user_id=user_id,
-        task_id=task.id,
+        task=task,
         audio_id=audio_id,
         transcript_id=transcript_id,
         transcript_version=transcript_version,
-        proposal=proposal,
+        spans=proposal.evidence,
     )
 
 
@@ -805,11 +823,16 @@ async def _update_task(
     task_id: UUID,
     base_version: int,
     proposal: AggregatedProposal[PreparedProposal],
+    audio_id: UUID,
+    transcript_id: UUID,
+    transcript_version: int,
 ) -> str:
     """Lock the row. Return ``updated``, ``revise``, or ``missing``.
 
     ``revise`` keeps the proposal as a pending revision and does not touch active columns.
-    ``missing`` means the task disappeared; the caller must not invent a revision.
+    ``missing`` means the task disappeared; the caller must not invent a revision. An
+    in-place update replaces the task's sources and evidence with the newly validated
+    set, and bumps `due_version` only when the due representation actually changed.
     """
     task = (
         await db.execute(
@@ -823,6 +846,13 @@ async def _update_task(
     if not update_is_safe(task.status, task.version, base_version):
         return "revise"
     fields = proposal_fields(proposal)
+    due_changed = (
+        task.due_date != fields.due_date
+        or not _same_instant(task.due_at, fields.due_at)
+        or task.timezone != fields.timezone
+        or task.all_day != fields.all_day
+        or task.date_status != fields.date_status
+    )
     task.tipo = fields.tipo
     task.titulo = fields.titulo
     task.detalle = fields.detalle
@@ -831,8 +861,26 @@ async def _update_task(
     task.timezone = fields.timezone
     task.all_day = fields.all_day
     task.date_status = fields.date_status
+    task.date_text = render_due_text(
+        due_date=fields.due_date,
+        due_at=fields.due_at,
+        timezone=fields.timezone,
+        all_day=fields.all_day,
+        date_status=fields.date_status,
+    )
     task.date_reason = fields.date_reason
     task.confidence_score = fields.confidence_score
+    if due_changed:
+        task.due_version += 1
+    await persist_task_spans(
+        db,
+        task=task,
+        audio_id=audio_id,
+        transcript_id=transcript_id,
+        transcript_version=transcript_version,
+        spans=proposal.evidence,
+        replace=True,
+    )
     return "updated"
 
 
@@ -857,28 +905,3 @@ async def _revise_task(
             status="pending_confirmation",
         )
     )
-
-
-def _add_sources(
-    db: AsyncSession,
-    *,
-    user_id: UUID,
-    task_id: UUID,
-    audio_id: UUID,
-    transcript_id: UUID,
-    transcript_version: int,
-    proposal: AggregatedProposal[PreparedProposal],
-) -> None:
-    for span in proposal.evidence:
-        db.add(
-            TaskSource(
-                user_id=user_id,
-                task_id=task_id,
-                audio_id=audio_id,
-                transcript_id=transcript_id,
-                transcript_version=transcript_version,
-                segment_id=span.segment_id,
-                char_start=span.char_start,
-                char_end=span.char_end,
-            )
-        )

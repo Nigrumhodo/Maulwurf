@@ -212,6 +212,30 @@ ORPHAN_CHECKS: tuple[OrphanCheck, ...] = (
         """,
     ),
     OrphanCheck(
+        "task_evidence_without_live_source",
+        "Task evidence whose source, class, transcript or segment is missing",
+        f"""
+        SELECT count(*) FROM task_evidence e
+        LEFT JOIN task_sources ts
+          ON ts.user_id = e.user_id
+         AND ts.task_id = e.task_id
+         AND ts.segment_id = e.segment_id
+         AND ts.char_start = e.char_start
+         AND ts.char_end = e.char_end
+        LEFT JOIN audios a ON a.user_id = ts.user_id AND a.id = ts.audio_id
+        LEFT JOIN transcripts tr
+          ON tr.user_id = ts.user_id
+         AND tr.id = ts.transcript_id
+         AND tr.version = ts.transcript_version
+        LEFT JOIN segments s ON s.user_id = ts.user_id AND s.id = ts.segment_id
+        WHERE (ts.task_id IS NULL OR a.id IS NULL OR a.deleted_at IS NOT NULL
+               OR tr.id IS NULL OR s.id IS NULL
+               OR tr.audio_id <> ts.audio_id
+               OR s.transcript_id <> ts.transcript_id)
+          AND {_scope("e")}
+        """,
+    ),
+    OrphanCheck(
         "task_revisions_without_live_task",
         "Pending task revision whose task or class is missing or tombstoned",
         f"""

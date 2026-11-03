@@ -154,6 +154,67 @@ def resolve_due(
     return _resolved_day(class_date + timedelta(days=delta), class_timezone)
 
 
+_WEEKDAYS = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
+_MONTHS = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+
+
+def render_due_text(
+    *,
+    due_date: date | None,
+    due_at: datetime | None,
+    timezone: str,
+    all_day: bool,
+    date_status: str,
+) -> str | None:
+    """Canonical English rendering of the persisted due representation.
+
+    `date_text` is display data; `due_date`/`due_at`/`timezone` remain normative. The
+    result is locale-independent (names are hard-coded) and `None` for an unresolved date
+    or an incoherent pair, so it never invents a day or a time.
+    """
+    if date_status != DateStatus.RESOLVED:
+        return None
+    if not is_iana_timezone(timezone):
+        return None
+    if all_day:
+        if due_date is None or due_at is not None:
+            return None
+        return f"{_WEEKDAYS[due_date.weekday()]}, {_MONTHS[due_date.month - 1]} {due_date.day}"
+    if due_at is None or due_date is not None:
+        return None
+    if due_at.tzinfo is None or due_at.utcoffset() is None:
+        return None
+    local = due_at.astimezone(ZoneInfo(timezone))
+    text = (
+        f"{_WEEKDAYS[local.weekday()]}, {_MONTHS[local.month - 1]} {local.day} "
+        f"at {local.hour:02d}:{local.minute:02d}"
+    )
+    if local.second:
+        text += f":{local.second:02d}"
+    return text
+
+
 def _require_clock(now: datetime) -> None:
     if now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
         _fail("clock_invalid", "the clock must be timezone-aware")

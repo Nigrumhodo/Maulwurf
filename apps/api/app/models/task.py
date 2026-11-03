@@ -20,13 +20,16 @@ The database enforces the parts the service layer must not be able to break:
   `proposed_fields` plus a `pending_confirmation` state instead of mutating the task.
 
 `task_sources` stores the corpus provenance (class/transcript/segment plus Unicode span); a
-manual task has zero rows. The literal evidence with its verbatim quote (`task_evidence`) is
-A3.2's table: this revision creates only the shape A3.1 owns.
+manual task has zero rows. `task_evidence` stores the literal quote for one source span of
+one task version, anchored to the exact `task_sources` row: deleting a source deletes its
+quote, and the same span may exist for a later task version while the active version's quote
+is the one the review inbox reads.
 
 `task_sources` declares `user_id` directly instead of using `TenantOwned`: its primary key is
 composite and the table has no `id` column for the generic tenant repository. It still
 carries the composite tenant FK, so a row can never point at another user's task.
-`task_revisions` is `TenantOwned` because it has an `id` and the tenant helpers apply.
+`task_evidence` and `task_revisions` are `TenantOwned` because they have an `id` and the
+tenant helpers apply.
 """
 
 import uuid
@@ -255,6 +258,75 @@ class TaskSource(Base):
     segment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     char_start: Mapped[int] = mapped_column(Integer, nullable=False)
     char_end: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class TaskEvidence(TenantOwned, Base):
+    """The literal quote behind one `task_sources` span of one task version.
+
+    The composite FK makes the quote impossible to detach from its provenance: a row can
+    only exist for an existing source of the same tenant/task/segment/span, and deleting
+    that source deletes the quote. `task_version` versions the evidence without touching
+    the source list, which stays the active task's provenance.
+
+    The quote is checked on write and on read against the persisted segment text (A3.2):
+    the database can enforce the length, the non-blank rule and the source membership, but
+    only the service can compare the text itself.
+    """
+
+    __tablename__ = "task_evidence"
+    __table_args__ = (
+        # One quote per span per task version; a later version may repeat the same span.
+        UniqueConstraint(
+            "user_id",
+            "task_id",
+            "task_version",
+            "segment_id",
+            "char_start",
+            "char_end",
+        ),
+        ForeignKeyConstraint(
+            [
+                "user_id",
+                "task_id",
+                "segment_id",
+                "char_start",
+                "char_end",
+            ],
+            [
+                "task_sources.user_id",
+                "task_sources.task_id",
+                "task_sources.segment_id",
+                "task_sources.char_start",
+                "task_sources.char_end",
+            ],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("task_version >= 1", name="task_version"),
+        CheckConstraint("char_start >= 0 AND char_start < char_end", name="char_range"),
+        CheckConstraint(
+            "char_length(quote) = char_end - char_start", name="quote_length"
+        ),
+        CheckConstraint("btrim(quote) <> ''", name="quote_non_blank"),
+        Index("task_evidence_by_task", "user_id", "task_id", "task_version"),
+        # Non-partial covering index for the composite FK (A2.18).
+        Index(
+            "task_evidence_by_source",
+            "user_id",
+            "task_id",
+            "segment_id",
+            "char_start",
+            "char_end",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    task_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    segment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    char_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    quote: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = created_at()
 
 
 class TaskRevision(TenantOwned, Base):

@@ -1031,7 +1031,14 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   class of the cited transcript, `(user_id, transcript_id, transcript_version)` pins that
   transcript's version, and `(user_id, transcript_id, segment_id)` pins a segment that
   belongs to it, so a citation can never mix another class, version or transcript of the
-  same user.
+  same user. A manual task has zero sources; an extraction proposal requires at least one
+  validated source; a chat proposal may be a general suggestion with none.
+  `task_evidence` stores the literal quote for one source span of one task version,
+  anchored by the composite key `(user_id, task_id, segment_id, char_start, char_end)` to
+  its `task_sources` row: an orphan quote is impossible and deleting the source deletes the
+  quote. The quote and span are revalidated against the persisted segment text on write and
+  on read, so the DB alone reconstructs the citation (class, transcript version, segment,
+  ordinal, absolute offsets and quote).
   `task_revisions` stores `base_task_version`, proposed fields, state
   `pending_confirmation|activated|discarded`, and a tenant-aware relation to the run that
   produced it. Its unique key `(task_id, base_task_version, revision_type, run_id)` is
@@ -1042,8 +1049,10 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   one edit per base version would require `NULLS NOT DISTINCT` (PostgreSQL 15+) and a new
   revision of this contract.
 - Date CHECK: resolved all-day → only `due_date`; resolved with time → only `due_at`;
-  ambiguous/no date → both null. Store the original date text, review reason, due version,
-  and timezone snapshot. Persist `event_start_at/event_end_at` or
+  ambiguous/no date → both null. Persist `date_text` as a canonical English rendering of the
+  resolved due fields, plus the review reason, due version and timezone snapshot; `date_text`
+  is display data, never the source of truth, and is not re-derived on read. Persist
+  `event_start_at/event_end_at` or
   `event_start_date/event_end_date_exclusive` directly on `tasks`, with mutually exclusive
   pairs and end after start. Confirming validates the due date, the agenda block, and the
   revision. `confidence_score` nullable on manual tasks, bounded [0,1], no probabilistic

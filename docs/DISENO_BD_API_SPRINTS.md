@@ -777,26 +777,10 @@ CREATE INDEX tasks_inbox_due_date ON tasks (user_id, status, due_date) WHERE due
 -- `ambiguous`/`missing` carry no due column, so the unresolved tray needs the plain key.
 CREATE INDEX tasks_inbox_status ON tasks (user_id, status);
 
-CREATE TABLE task_evidence (
-  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id        uuid NOT NULL,
-  task_id        uuid NOT NULL,
-  FOREIGN KEY (user_id, task_id) REFERENCES tasks (user_id, id) ON DELETE CASCADE,
-  task_version   integer NOT NULL,
-  transcript_id  uuid NOT NULL,
-  FOREIGN KEY (user_id, transcript_id) REFERENCES transcripts (user_id, id),
-  segment_id     uuid NOT NULL,
-  FOREIGN KEY (user_id, segment_id) REFERENCES segments (user_id, id),
-  char_start     integer NOT NULL,               -- Unicode offsets over the segment text
-  char_end       integer NOT NULL,
-  quote          text NOT NULL,                  -- verbatim quote checked against the segment
-  CHECK (char_start < char_end)
-);
-CREATE INDEX task_evidence_by_task ON task_evidence (user_id, task_id, task_version);
-
 -- A transcript/chat-based proposal may reference several classes; the manual task uses zero rows.
--- Parent keys added by A3.1/0012: segments UNIQUE (user_id, transcript_id, id) and
--- transcripts UNIQUE (user_id, audio_id, id); transcripts (user_id, id, version) came from A2.18.
+-- Provenance rule (A3.2): manual = 0, extraction >= 1, chat 0+. Parent keys added by
+-- A3.1/0012: segments UNIQUE (user_id, transcript_id, id) and transcripts UNIQUE
+-- (user_id, audio_id, id); transcripts (user_id, id, version) came from A2.18.
 CREATE TABLE task_sources (
   user_id            uuid NOT NULL,
   task_id            uuid NOT NULL,
@@ -821,6 +805,34 @@ CREATE INDEX task_sources_by_audio ON task_sources (user_id, audio_id, transcrip
 CREATE INDEX task_sources_by_transcript
   ON task_sources (user_id, transcript_id, transcript_version);
 CREATE INDEX task_sources_by_segment ON task_sources (user_id, transcript_id, segment_id);
+
+-- A3.2: the literal quote behind one source span of one task version. The five-column FK
+-- anchors it to the exact `task_sources` row (class, transcript version, segment and span),
+-- so an orphan quote is impossible and deleting the source deletes the quote. `task_version`
+-- versions the evidence without versioning the source. Only `quote` is text: the service
+-- compares it with the persisted segment on write and read because the database cannot.
+CREATE TABLE task_evidence (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      uuid NOT NULL,
+  task_id      uuid NOT NULL,
+  task_version integer NOT NULL CHECK (task_version >= 1),
+  segment_id   uuid NOT NULL,
+  char_start   integer NOT NULL,                 -- segment-local Unicode offsets
+  char_end     integer NOT NULL,
+  quote        text NOT NULL,                    -- verbatim slice of the segment text
+  FOREIGN KEY (user_id, task_id, segment_id, char_start, char_end)
+    REFERENCES task_sources (user_id, task_id, segment_id, char_start, char_end)
+    ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+  UNIQUE (user_id, task_id, task_version, segment_id, char_start, char_end),
+  CHECK (char_start >= 0 AND char_start < char_end),
+  CHECK (char_length(quote) = char_end - char_start),
+  CHECK (btrim(quote) <> '')
+);
+CREATE INDEX task_evidence_by_task ON task_evidence (user_id, task_id, task_version);
+-- Non-partial covering index for the composite FK (A2.18).
+CREATE INDEX task_evidence_by_source
+  ON task_evidence (user_id, task_id, segment_id, char_start, char_end);
 
 CREATE TABLE task_revisions (
   id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -910,8 +922,10 @@ CREATE INDEX account_deletions_expiry ON account_deletions (expires_at);
 ```
 
 - The task lifecycle (`status`) is **separate** from `calendar_sync_status`; `scheduled` is
-  not a task status. A manual task has zero `task_sources`; an extraction/chat grounded in
-  the corpus must have at least one validated row before being published.
+  not a task status. Provenance follows the origin: a manual task has zero `task_sources`,
+  an extraction proposal requires at least one validated row, and a chat proposal may be a
+  general suggestion with none. Each validated source span has one `task_evidence` row with
+  the literal quote, so the citation is reconstructible from PostgreSQL alone.
 - Confirming requires a valid date + checked evidence for extracted tasks. A `PATCH` of a
   confirmed task creates `task_revisions(status='pending_confirmation')` with
   `base_task_version`, without mutating active fields or writing to Google. `confirm`
