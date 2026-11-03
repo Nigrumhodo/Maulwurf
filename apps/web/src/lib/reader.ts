@@ -94,9 +94,14 @@ function triggerDownload(blob: Blob, filename: string): void {
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = filename;
-  anchor.click();
-  // The browser has already consumed the URL after click; release it immediately.
-  URL.revokeObjectURL(url);
+  try {
+    document.body.append(anchor);
+    anchor.click();
+  } finally {
+    anchor.remove();
+    // D2.8: release the blob URL even when the browser refuses the click.
+    URL.revokeObjectURL(url);
+  }
 }
 
 /**

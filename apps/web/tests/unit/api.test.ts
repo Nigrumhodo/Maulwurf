@@ -122,6 +122,21 @@ describe("inyección de X-CSRF-Token", () => {
   });
 });
 
+describe("no-store privado", () => {
+  it("fuerza no-store aunque el caller pida otra caché", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(200, {})));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await apiFetch("/subjects");
+    await apiFetch("/subjects", { cache: "force-cache" });
+
+    const calls = fetchMock.mock.calls as Array<[string, RequestInit]>;
+    expect(calls[0][1].cache).toBe("no-store");
+    expect(calls[0][1].credentials).toBe("include");
+    expect(calls[1][1].cache).toBe("no-store");
+  });
+});
+
 describe("interceptor 401", () => {
   it("limpia el token y avisa (onUnauthorized)", async () => {
     setCsrfToken("tok-a");

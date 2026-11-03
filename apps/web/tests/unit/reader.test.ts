@@ -167,4 +167,26 @@ describe("contrato del lector", () => {
     expect(revoke).toHaveBeenCalledWith("blob:srt");
     expect(click).toHaveBeenCalledOnce();
   });
+
+  it("revoca el object URL aunque el click falle", async () => {
+    const create = vi.fn().mockReturnValue("blob:error");
+    const revoke = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL: create, revokeObjectURL: revoke });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {
+      throw new Error("descarga bloqueada");
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("1\n00:00:00,000 --> 00:00:01,000\nhola\n", {
+          status: 200,
+          headers: { "content-type": "application/x-subrip" },
+        }),
+      ),
+    );
+
+    await expect(downloadSrt("a1")).rejects.toThrow("descarga bloqueada");
+    expect(create).toHaveBeenCalledOnce();
+    expect(revoke).toHaveBeenCalledWith("blob:error");
+  });
 });

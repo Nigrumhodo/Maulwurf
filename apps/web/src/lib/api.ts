@@ -137,7 +137,14 @@ export async function apiFetch(path: string, init: ApiRequestInit = {}): Promise
     if (token !== null) headers.set(CSRF_HEADER, token);
   }
 
-  const res = await fetch(apiUrl(path), { ...init, headers, credentials: "include" });
+  // D2.8: every API response is tenant-private. This override is deliberate: a caller
+  // must not be able to opt into browser caching for private class or chat data.
+  const res = await fetch(apiUrl(path), {
+    ...init,
+    headers,
+    credentials: "include",
+    cache: "no-store",
+  });
 
   if (res.status === 429 && mayRetry) {
     const retryAfter = parseRetryAfter(res.headers.get("retry-after"));

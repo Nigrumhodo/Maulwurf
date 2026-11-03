@@ -183,4 +183,19 @@ describe("UploadForm · cancelar subida (U-S2-DA-02)", () => {
     ).toBe(true);
     expect(screen.getByText(/4 B/)).toBeTruthy();
   });
+
+  it("no crea object URLs de audio al seleccionar o cancelar", async () => {
+    const createObjectURL = vi.fn();
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+
+    await reserveClass();
+    pickFile();
+    fireEvent.click(screen.getByRole("button", { name: "enviar audio" }));
+    await screen.findByRole("progressbar");
+    fireEvent.click(screen.getByRole("button", { name: "cancelar subida" }));
+
+    await screen.findByRole("button", { name: "reservar subida" });
+    expect(createObjectURL).not.toHaveBeenCalled();
+  });
 });
