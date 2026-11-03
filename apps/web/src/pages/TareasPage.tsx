@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { TaskEditor } from "@/components/tasks/TaskEditor";
 import { TaskInbox } from "@/components/tasks/TaskInbox";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -16,6 +17,7 @@ import type {
   Task,
   TaskQualityState,
   TaskStatusFilter,
+  TaskUpdate,
 } from "@/lib/tasks";
 
 const TASK_PAGE_SIZE = 20;
@@ -58,6 +60,7 @@ export function TareasPage() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -128,6 +131,13 @@ export function TareasPage() {
     tasks.length === 0 &&
     error === null;
 
+  function handleSaved(update: TaskUpdate) {
+    setTasks((current) =>
+      current.map((item) => (item.id === update.task.id ? update.task : item)),
+    );
+    setEditingTask(update.task);
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-1">
@@ -186,6 +196,15 @@ export function TareasPage() {
         </div>
       </Card>
 
+      {editingTask !== null && (
+        <TaskEditor
+          key={editingTask.id}
+          task={editingTask}
+          onSaved={handleSaved}
+          onCancel={() => setEditingTask(null)}
+        />
+      )}
+
       {error !== null && (
         <p role="alert" className="lowercase border-2 border-mint px-3 py-2 text-mint">
           &gt; {error}
@@ -204,7 +223,11 @@ export function TareasPage() {
       ) : (
         <Card title="propuestas">
           <div aria-busy={loading} className="flex flex-col gap-4">
-            <TaskInbox tasks={tasks} qualityByAudio={qualityByAudio} />
+            <TaskInbox
+              tasks={tasks}
+              qualityByAudio={qualityByAudio}
+              onEdit={setEditingTask}
+            />
             {nextCursor !== null && (
               <Button
                 type="button"

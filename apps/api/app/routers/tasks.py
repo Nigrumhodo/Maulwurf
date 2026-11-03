@@ -11,8 +11,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query
 
-from app.core.deps import CurrentSession, DbSession
-from app.schemas.tasks import TaskListOut, TaskOut
+from app.core.deps import CurrentSession, DbSession, MutationSession
+from app.schemas.tasks import TaskListOut, TaskOut, TaskPatch, TaskUpdateOut
 from app.services import tasks as task_service
 
 router = APIRouter(tags=["tasks"])
@@ -60,3 +60,29 @@ async def get_task(
     task_id: uuid.UUID, session: CurrentSession, db: DbSession
 ) -> TaskOut:
     return await task_service.get_task(db, session.user_id, task_id)
+
+
+@router.patch(
+    "/tasks/{task_id}",
+    responses={
+        200: {
+            "description": (
+                "Updated active task, or the unchanged active task plus a pending revision"
+            )
+        },
+        401: {"description": "Sin sesión (auth_required)"},
+        403: {"description": "CSRF/Origin inválido (csrf_invalid)"},
+        404: {"description": "Tarea inexistente o ajena (not_found)"},
+        409: {"description": "version_conflict o invalid_transition"},
+        422: {"description": "validation_failed: fecha, zona o bloque de agenda inválidos"},
+    },
+)
+async def patch_task(
+    task_id: uuid.UUID,
+    body: TaskPatch,
+    session: MutationSession,
+    db: DbSession,
+) -> TaskUpdateOut:
+    updated = await task_service.patch_task(db, session.user_id, task_id, body)
+    await db.commit()
+    return updated

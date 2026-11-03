@@ -5,8 +5,9 @@ detail routes share `TaskOut` so the inbox and the future editor cannot drift.
 """
 
 from datetime import date, datetime
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 
 class TaskSubjectOut(BaseModel):
@@ -39,10 +40,20 @@ class TaskEventBlockOut(BaseModel):
     duration_default_editable: bool = True
 
 
+class TaskEventBlockPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start_at: AwareDatetime | None = None
+    end_at: AwareDatetime | None = None
+    start_date: date | None = None
+    end_date_exclusive: date | None = None
+
+
 class PendingRevisionOut(BaseModel):
     id: str
     base_task_version: int
     status: str
+    proposed_fields: dict[str, Any] = Field(default_factory=dict)
 
 
 class TaskOut(BaseModel):
@@ -79,7 +90,7 @@ class TaskListOut(BaseModel):
 
 
 class TaskPatch(BaseModel):
-    """Partial edit; evidence/source rewrites are intentionally not part of this slice."""
+    """Partial task edit; the block is replaced as a whole when present."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -88,14 +99,14 @@ class TaskPatch(BaseModel):
     titulo: str | None = Field(default=None, min_length=1, max_length=200)
     detalle: str | None = Field(default=None, max_length=2000)
     due_date: date | None = None
-    due_at: datetime | None = None
+    due_at: AwareDatetime | None = None
     timezone: str | None = None
     all_day: bool | None = None
     date_status: str | None = None
     date_text: str | None = None
     date_reason: str | None = None
     confidence_score: float | None = Field(default=None, ge=0, le=1)
-    subject_id: str | None = None
+    event_block: TaskEventBlockPatch | None = None
 
 
 class TaskVersionBody(BaseModel):

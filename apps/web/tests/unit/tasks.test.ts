@@ -1,11 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  addMinutes,
   confidenceLabel,
+  dateOnlyAddDays,
   fetchTasks,
   formatTaskDue,
+  instantToWall,
+  patchTask,
   qualitySignals,
   taskEvidenceHref,
   taskStatusFilters,
+  wallTimeToInstant,
 } from "@/lib/tasks";
 import type { Task } from "@/lib/tasks";
 import type { LibraryAudioDetail } from "@/lib/library";
@@ -128,5 +133,48 @@ describe("task inbox helpers", () => {
     expect(confidenceLabel(null)).toBe("sin confianza");
     expect(taskStatusFilters()[0]).toEqual({ value: "all", label: "todas" });
     expect(taskStatusFilters().some((item) => item.value === "needs_review")).toBe(true);
+  });
+
+  it("converts wall time in the task timezone and preserves the instant", () => {
+    expect(wallTimeToInstant("2026-11-09", "09:00", "America/Bogota")).toBe(
+      "2026-11-09T14:00:00.000Z",
+    );
+    expect(instantToWall("2026-11-09T14:00:00.000Z", "America/Bogota")).toEqual({
+      date: "2026-11-09",
+      time: "09:00",
+    });
+    expect(wallTimeToInstant("2026-03-08", "02:30", "America/New_York")).toBeNull();
+    expect(wallTimeToInstant("2026-03-08", "03:30", "America/New_York")).toBe(
+      "2026-03-08T07:30:00.000Z",
+    );
+  });
+
+  it("builds date-only and duration defaults without inventing teacher data", () => {
+    expect(dateOnlyAddDays("2026-11-09", 1)).toBe("2026-11-10");
+    expect(addMinutes("2026-11-09T14:00:00.000Z", 30)).toBe(
+      "2026-11-09T14:30:00.000Z",
+    );
+    expect(dateOnlyAddDays("not-a-date", 1)).toBeNull();
+    expect(addMinutes("not-an-instant", 30)).toBeNull();
+  });
+
+  it("sends PATCH with the task version", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ task: TASK, revision_id: null }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await patchTask(TASK.id, { version: TASK.version, titulo: "Otra" });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`/tasks/${TASK.id}`);
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(String(init.body))).toEqual({
+      version: TASK.version,
+      titulo: "Otra",
+    });
   });
 });

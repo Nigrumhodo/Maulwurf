@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { Button } from "@/components/ui/Button";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
   confidenceLabel,
@@ -13,9 +14,10 @@ import type { Task, TaskQualityState } from "@/lib/tasks";
 export interface TaskCardProps {
   task: Task;
   quality: TaskQualityState | null;
+  onEdit?: () => void;
 }
 
-export function TaskCard({ task, quality }: TaskCardProps) {
+export function TaskCard({ task, quality, onEdit }: TaskCardProps) {
   const due = formatTaskDue(task);
   const hasQualityWarning =
     quality !== null && (quality.unavailable || quality.signals.length > 0);
@@ -105,6 +107,17 @@ export function TaskCard({ task, quality }: TaskCardProps) {
           })}
         </ul>
       )}
+
+      {onEdit !== undefined &&
+        (task.status === "needs_review" ||
+          task.status === "pending" ||
+          task.status === "confirmed") && (
+          <div>
+            <Button type="button" size="sm" variant="secondary" onClick={onEdit}>
+              editar
+            </Button>
+          </div>
+        )}
     </li>
   );
 }
