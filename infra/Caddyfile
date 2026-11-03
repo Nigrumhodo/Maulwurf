@@ -75,7 +75,7 @@ https://localhost {
 	}
 
 	# 4) API JSON (M1/M2 y /readyz para el smoke I-S1-JF-01).
-	@api path /auth/* /me /me/* /subjects /subjects/* /integrations/* /audios /audios/* /ingestion/* /readyz
+	@api path /auth/* /me /me/* /subjects /subjects/* /integrations/* /audios /audios/* /tasks /tasks/* /ingestion/* /readyz
 	handle @api {
 		# J2.10: JSON bodies are small; this is an abuse guard, not a contract limit.
 		request_body {

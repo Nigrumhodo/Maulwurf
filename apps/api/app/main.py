@@ -23,6 +23,7 @@ from app.routers import (
     notifications,
     search,
     subjects,
+    tasks,
 )
 from app.services.ingest_sink import close_ingest_client
 from app.services.llm import close_llm_http_client
@@ -60,5 +61,6 @@ app.include_router(integrations.router)
 app.include_router(subjects.router)
 app.include_router(search.router)
 app.include_router(chat.router)
+app.include_router(tasks.router)
 app.include_router(calendar.router)
 app.include_router(internal_metrics.router)
