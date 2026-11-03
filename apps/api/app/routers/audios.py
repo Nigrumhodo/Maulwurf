@@ -200,6 +200,7 @@ class TombstonePurged(BaseModel):
     processing_runs_cancelled: int
     tasks_deleted: int
     task_sources_deleted: int
+    task_evidence_deleted: int
     task_revisions_deleted: int
     message_sources_deleted: int
     messages_tombstoned: int
@@ -651,6 +652,7 @@ async def delete_audio(
             processing_runs_cancelled=result.processing_runs_cancelled,
             tasks_deleted=result.tasks_deleted,
             task_sources_deleted=result.task_sources_deleted,
+            task_evidence_deleted=result.task_evidence_deleted,
             task_revisions_deleted=result.task_revisions_deleted,
             message_sources_deleted=result.message_sources_deleted,
             messages_tombstoned=result.messages_tombstoned,

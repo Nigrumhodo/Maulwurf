@@ -11,7 +11,7 @@ from app.models.notification import Notification
 from app.models.processing_run import ProcessingRun
 from app.models.scheduler_lease import SchedulerLease
 from app.models.settings import CalendarSettings
-from app.models.task import Task, TaskRevision, TaskSource
+from app.models.task import Task, TaskEvidence, TaskRevision, TaskSource
 from app.models.transcript import Segment, Transcript
 
 __all__ = [
@@ -38,6 +38,7 @@ __all__ = [
     "Session",
     "Subject",
     "Task",
+    "TaskEvidence",
     "TaskRevision",
     "TaskSource",
     "Transcript",

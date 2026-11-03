@@ -68,6 +68,7 @@ from tests.integration.actors import (
     make_outbox_event,
     make_subject,
     make_task,
+    make_task_evidence,
     make_task_revision,
 )
 
@@ -94,6 +95,7 @@ TENANT_TABLES = (
     "message_sources",
     "tasks",
     "task_sources",
+    "task_evidence",
     "task_revisions",
     "calendar_events",
     "settings",
@@ -192,6 +194,7 @@ async def _seed_full_tenant(db: AsyncSession, actor: Actor) -> dict[str, Any]:
     conversation = await make_conversation(db, actor)
     outbox = await make_outbox_event(db, actor)
     task = await make_task(db, actor)
+    evidence = await make_task_evidence(db, actor)
     revision = await make_task_revision(db, actor)
     mirror = await make_calendar_event(db, actor)
     settings_row = CalendarSettings(user_id=actor.user_id)
@@ -206,6 +209,7 @@ async def _seed_full_tenant(db: AsyncSession, actor: Actor) -> dict[str, Any]:
         "conversation": conversation,
         "outbox": outbox,
         "task": task,
+        "evidence": evidence,
         "revision": revision,
         "mirror": mirror,
         "settings": settings_row,

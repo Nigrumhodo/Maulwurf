@@ -63,12 +63,16 @@ S2_TABLES = S1_TABLES | {
 # linear, so the head of the graph includes all of them.
 S3_TABLES = S2_TABLES | {"settings", "calendar_events"}
 A31_TABLES = S3_TABLES | {"tasks", "task_sources", "task_revisions"}
+# A3.2 adds the anchored literal quote; it is the head of the chain at `0020`.
+A32_TABLES = A31_TABLES | {"task_evidence"}
 # A4.1 adds the M8 delivery table; it reuses `settings` instead of creating a second one.
 S4_TABLES = A31_TABLES | {"notifications"}
 # A4.4 adds the residual account-deletion record and the surviving remote operations.
 A44_TABLES = S4_TABLES | {"account_deletions", "google_remote_operations"}
-# J4.2 adds the global scheduler election row (no tenant and no RLS by design).
-J42_TABLES = A44_TABLES | {"scheduler_leases"}
+# J4.2 adds the global scheduler election row (no tenant and no RLS by design); the linear
+# head also includes A3.2's table.
+J42_TABLES = A44_TABLES | {"scheduler_leases", "task_evidence"}
+PRE_A32_TABLES = J42_TABLES - {"task_evidence"}
 
 S2_COMPOSITE_FOREIGN_KEYS = {
     "variant_confirmation_tokens": {
@@ -395,10 +399,11 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     revision = ScriptDirectory.from_config(cfg).get_revision(_head(empty_schema))
     assert revision is not None
     parent = revision.down_revision
-    assert parent == "0018"  # this chain is linear
+    assert parent == "0019"  # this chain is linear
     command.upgrade(cfg, "head")
 
-    # `0019` only adds the J4.8 budget-aggregate indexes (no table/column/policy change);
+    # `0020` adds A3.2's `task_evidence`; `0019` only adds the J4.8 budget-aggregate
+    # indexes (no table/column/policy change);
     # `0018` only adds `notifications.claimed_by_fence` (no table/column removal);
     # `0017` only adds the global scheduler lease (no tenant and no RLS by design);
     # `0016` only adds the manual-occurrence sequence and swaps the natural unique key;
@@ -413,10 +418,13 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     # `chunks.tsv` (data, not schema) and `0004` only adds the run fencing token, so the
     # steps back stay on the previous schemas and only remove those additions.
     command.downgrade(cfg, "-1")
-    assert _state(empty_schema) == (J42_TABLES, ["0018"])
+    assert _state(empty_schema) == (PRE_A32_TABLES, ["0019"])
 
     command.downgrade(cfg, "-1")
-    assert _state(empty_schema) == (J42_TABLES, ["0017"])
+    assert _state(empty_schema) == (PRE_A32_TABLES, ["0018"])
+
+    command.downgrade(cfg, "-1")
+    assert _state(empty_schema) == (PRE_A32_TABLES, ["0017"])
 
     command.downgrade(cfg, "-1")
     assert _state(empty_schema) == (A44_TABLES, ["0016"])
@@ -911,6 +919,64 @@ def test_budget_aggregate_indexes_revision_round_trips(empty_schema: str) -> Non
     command.upgrade(cfg, "0019")
     _foreign_keys, indexes, _columns = _s2_catalog(empty_schema)
     assert set(BUDGET_INDEX_FRAGMENTS) <= set(indexes)
+
+
+def test_task_evidence_revision_round_trips(empty_schema: str) -> None:
+    """A3.2: `0020` adds and removes the anchored quote table without leftovers."""
+    cfg = alembic_config(empty_schema)
+    command.upgrade(cfg, "0019")
+    assert "task_evidence" not in _state(empty_schema)[0]
+
+    command.upgrade(cfg, "0020")
+    tables, versions = _state(empty_schema)
+    assert "task_evidence" in tables
+    assert versions == ["0020"]
+    assert _table_columns(empty_schema, "task_evidence") == {
+        "id",
+        "user_id",
+        "task_id",
+        "task_version",
+        "segment_id",
+        "char_start",
+        "char_end",
+        "quote",
+        "created_at",
+    }
+    assert _rls_state(empty_schema, ("task_evidence",)) == {
+        "task_evidence": (True, True)
+    }
+    privileges = _table_privileges(empty_schema, "task_evidence")
+    assert privileges["maulwurf_app"] == {
+        "select": True,
+        "insert": True,
+        "update": True,
+        "delete": True,
+    }
+    assert privileges["maulwurf_jobs"] == privileges["maulwurf_app"]
+    assert privileges["maulwurf_ingest"] == {
+        "select": False,
+        "insert": False,
+        "update": False,
+        "delete": False,
+    }
+
+    foreign_keys, indexes, _columns = _s2_catalog(empty_schema)
+    assert (
+        "FOREIGN KEY (user_id, task_id, segment_id, char_start, char_end) "
+        "REFERENCES task_sources(user_id, task_id, segment_id, char_start, char_end) "
+        "ON DELETE CASCADE"
+    ) in foreign_keys["task_evidence"]
+    assert "ON public.task_evidence USING btree (user_id, task_id, task_version)" in (
+        indexes["task_evidence_by_task"]
+    )
+    assert (
+        "ON public.task_evidence USING btree "
+        "(user_id, task_id, segment_id, char_start, char_end)"
+    ) in indexes["task_evidence_by_source"]
+
+    command.downgrade(cfg, "0019")
+    assert "task_evidence" not in _state(empty_schema)[0]
+    command.upgrade(cfg, "head")
 
 
 def test_budget_aggregate_indexes_are_built_concurrently(

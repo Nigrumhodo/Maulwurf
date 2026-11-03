@@ -27,6 +27,7 @@ from app.models.task import (
     TASK_ORIGINS,
     TASK_STATUSES,
     Task,
+    TaskEvidence,
     TaskRevision,
     TaskSource,
 )
@@ -35,6 +36,7 @@ from app.schemas.analysis import ActivityType, DateStatus
 
 TASKS = cast(Table, Task.__table__)
 SOURCES = cast(Table, TaskSource.__table__)
+EVIDENCE = cast(Table, TaskEvidence.__table__)
 REVISIONS = cast(Table, TaskRevision.__table__)
 SEGMENTS = cast(Table, Segment.__table__)
 TRANSCRIPTS = cast(Table, Transcript.__table__)
@@ -344,7 +346,12 @@ def test_revisions_are_unique_per_base_version_type_and_run() -> None:
 
 @pytest.mark.parametrize(
     ("table", "name"),
-    [("tasks", TASKS), ("task_sources", SOURCES), ("task_revisions", REVISIONS)],
+    [
+        ("tasks", TASKS),
+        ("task_sources", SOURCES),
+        ("task_evidence", EVIDENCE),
+        ("task_revisions", REVISIONS),
+    ],
 )
 def test_every_task_table_is_tenant_owned(table: str, name: Table) -> None:
     assert "user_id" in name.c
@@ -374,6 +381,62 @@ def test_task_sources_do_not_duplicate_the_evidence_contract() -> None:
     assert "quote" not in names
     assert "task_version" not in SOURCES.c
     assert "task_version" not in REVISIONS.c
+    assert {"quote", "task_version"} <= set(EVIDENCE.c.keys())
+
+
+def test_task_evidence_is_anchored_to_the_exact_source_span() -> None:
+    assert _foreign_key_targets(EVIDENCE) == {
+        (
+            ("user_id", "task_id", "segment_id", "char_start", "char_end"),
+            "task_sources",
+            ("user_id", "task_id", "segment_id", "char_start", "char_end"),
+        ),
+    }
+    anchored = next(
+        constraint
+        for constraint in EVIDENCE.foreign_key_constraints
+        if len(constraint.column_keys) == 5
+    )
+    assert anchored.ondelete == "CASCADE"
+    assert list(EVIDENCE.primary_key.columns) == [EVIDENCE.c.id]
+
+
+def test_task_evidence_checks_quote_shape_and_version() -> None:
+    assert _check(EVIDENCE, "task_version") == "task_version >= 1"
+    assert _check(EVIDENCE, "char_range") == "char_start >= 0 AND char_start < char_end"
+    assert _check(EVIDENCE, "quote_length") == (
+        "char_length(quote) = char_end - char_start"
+    )
+    assert _check(EVIDENCE, "quote_non_blank") == "btrim(quote) <> ''"
+    assert EVIDENCE.c.quote.nullable is False
+    assert EVIDENCE.c.task_version.nullable is False
+
+
+def test_task_evidence_has_one_quote_per_span_and_version() -> None:
+    unique_keys = {
+        tuple(constraint.columns.keys())
+        for constraint in EVIDENCE.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    assert (
+        "user_id",
+        "task_id",
+        "task_version",
+        "segment_id",
+        "char_start",
+        "char_end",
+    ) in unique_keys
+
+
+def test_task_evidence_indexes_serve_version_reads_and_the_anchored_fk() -> None:
+    assert _index(EVIDENCE, "task_evidence_by_task") == (
+        ("user_id", "task_id", "task_version"),
+        None,
+    )
+    assert _index(EVIDENCE, "task_evidence_by_source") == (
+        ("user_id", "task_id", "segment_id", "char_start", "char_end"),
+        None,
+    )
 
 
 def test_column_types_keep_instants_aware_and_days_as_dates() -> None:

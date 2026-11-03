@@ -46,6 +46,7 @@ def test_the_catalog_covers_chunks_embeddings_and_every_derived_table() -> None:
         "message_sources_without_live_source",
         "tasks_without_live_class",
         "task_sources_without_live_class",
+        "task_evidence_without_live_source",
         "task_revisions_without_live_task",
         "notifications_without_live_task",
     } <= names

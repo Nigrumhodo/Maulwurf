@@ -33,7 +33,7 @@ from typing import Any
 import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from alembic import command
 from app.core.config import settings
@@ -46,7 +46,12 @@ from app.models import (
     Embedding,
     Message,
     MessageSource,
+    Segment,
     Subject,
+    Task,
+    TaskEvidence,
+    TaskSource,
+    Transcript,
 )
 from app.services.audios import tombstone_audio
 from app.services.conversations import delete_conversation
@@ -56,6 +61,7 @@ from app.services.deletion import (
     execute_account_deletion,
 )
 from tests.integration.actors import (
+    Actor,
     make_actor,
     make_calendar_event,
     make_class_with_timed_segments,
@@ -65,6 +71,7 @@ from tests.integration.actors import (
     make_outbox_event,
     make_processing_run,
     make_task,
+    make_task_evidence,
     make_task_revision,
     make_variant_confirmation_token,
 )
@@ -98,6 +105,7 @@ ALICE_TENANT_TABLES = (
     "tasks",
     "task_revisions",
     "task_sources",
+    "task_evidence",
     "notifications",
     "processing_runs",
     "outbox_events",
@@ -148,6 +156,55 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
     )
+
+
+async def _make_evidenced_task(
+    db: AsyncSession,
+    actor: Actor,
+    *,
+    audio: Audio,
+    transcript: Transcript,
+    segment: Segment,
+    quote: str,
+) -> tuple[Task, TaskEvidence]:
+    """Extraction task whose only source and evidence share the exact validated span (A3.2)."""
+    task = Task(
+        user_id=actor.user_id,
+        audio_id=audio.id,
+        source="extraction",
+        tipo="tarea",
+        titulo=f"Tarea {uuid.uuid4().hex[:6]}",
+        timezone="America/Bogota",
+        all_day=True,
+        date_status="missing",
+    )
+    db.add(task)
+    await db.flush()
+    db.add(
+        TaskSource(
+            user_id=actor.user_id,
+            task_id=task.id,
+            audio_id=audio.id,
+            transcript_id=transcript.id,
+            transcript_version=transcript.version,
+            segment_id=segment.id,
+            char_start=0,
+            char_end=len(quote),
+        )
+    )
+    await db.flush()
+    evidence = TaskEvidence(
+        user_id=actor.user_id,
+        task_id=task.id,
+        task_version=task.version,
+        segment_id=segment.id,
+        char_start=0,
+        char_end=len(quote),
+        quote=quote,
+    )
+    db.add(evidence)
+    await db.flush()
+    return task, evidence
 
 
 async def _seed(source_url: str) -> dict[str, Any]:
@@ -220,6 +277,7 @@ async def _seed(source_url: str) -> dict[str, Any]:
             )
         )
         alice_task = await make_task(db, alice)
+        alice_evidence = await make_task_evidence(db, alice)
         await make_notification(db, alice)
         db.add(CalendarSettings(user_id=alice.user_id))
         await make_google_credential(db, alice)
@@ -230,11 +288,13 @@ async def _seed(source_url: str) -> dict[str, Any]:
         await make_task_revision(db, alice)
 
         bob = await make_actor(db, email="bob-a45@example.test")
-        bob_kept_audio, _bob_attempt, bob_kept_transcript, _ = (
+        bob_kept_audio, _bob_attempt, bob_kept_transcript, bob_kept_segments = (
             await make_class_with_timed_segments(db, bob)
         )
         bob_kept_transcript.text = BOB_KEPT_MARKER
         bob_kept_transcript.char_count = len(BOB_KEPT_MARKER)
+        bob_kept_segments[0].text = BOB_KEPT_MARKER
+        bob_kept_segments[0].char_end = len(BOB_KEPT_MARKER)
         bob_kept_generation = await make_index_generation(db, bob)
         bob_kept_chunk = Chunk(
             user_id=bob.user_id,
@@ -249,12 +309,22 @@ async def _seed(source_url: str) -> dict[str, Any]:
             token_count=3,
         )
         db.add(bob_kept_chunk)
+        bob_kept_task, bob_kept_evidence = await _make_evidenced_task(
+            db,
+            bob,
+            audio=bob_kept_audio,
+            transcript=bob_kept_transcript,
+            segment=bob_kept_segments[0],
+            quote=BOB_KEPT_MARKER,
+        )
 
-        bob_deleted_audio, _bob_deleted_attempt, bob_deleted_transcript, _ = (
+        bob_deleted_audio, _bob_deleted_attempt, bob_deleted_transcript, bob_deleted_segments = (
             await make_class_with_timed_segments(db, bob)
         )
         bob_deleted_transcript.text = BOB_DELETED_MARKER
         bob_deleted_transcript.char_count = len(BOB_DELETED_MARKER)
+        bob_deleted_segments[0].text = BOB_DELETED_MARKER
+        bob_deleted_segments[0].char_end = len(BOB_DELETED_MARKER)
         bob_deleted_generation = await make_index_generation(db, bob)
         bob_deleted_chunk = Chunk(
             user_id=bob.user_id,
@@ -269,6 +339,14 @@ async def _seed(source_url: str) -> dict[str, Any]:
             token_count=3,
         )
         db.add(bob_deleted_chunk)
+        bob_deleted_task, bob_deleted_evidence = await _make_evidenced_task(
+            db,
+            bob,
+            audio=bob_deleted_audio,
+            transcript=bob_deleted_transcript,
+            segment=bob_deleted_segments[0],
+            quote=BOB_DELETED_MARKER,
+        )
 
         bob_deleted_conversation = Conversation(
             user_id=bob.user_id, mode="all", title="bob deleted conversation"
@@ -313,11 +391,16 @@ async def _seed(source_url: str) -> dict[str, Any]:
             "alice_session": alice.session.id,
             "alice_audio": alice_audio.id,
             "alice_task": alice_task.id,
+            "alice_evidence": alice_evidence.id,
             "bob_user": bob.user_id,
             "bob_kept_audio": bob_kept_audio.id,
             "bob_kept_transcript": bob_kept_transcript.id,
+            "bob_kept_task": bob_kept_task.id,
+            "bob_kept_evidence": bob_kept_evidence.id,
             "bob_deleted_audio": bob_deleted_audio.id,
             "bob_deleted_transcript": bob_deleted_transcript.id,
+            "bob_deleted_task": bob_deleted_task.id,
+            "bob_deleted_evidence": bob_deleted_evidence.id,
             "bob_deleted_conversation": bob_deleted_conversation.id,
             "bob_deleted_subject": bob_deleted_subject.id,
             "bob_kept_conversation": bob_kept_conversation.id,
@@ -548,6 +631,13 @@ async def test_i_s4_an_05_restore_reapplies_tombstones_on_a_clean_database(
                     marker=ALICE_MARKER,
                 )
             ) == 0
+            assert (
+                await _scalar(
+                    connection,
+                    "SELECT count(*) FROM task_evidence WHERE id = :id",
+                    id=ids["alice_evidence"],
+                )
+            ) == 0
 
             # Carol had no account_deletions row at backup time; only the log's `users`
             # array proves the purge. Without consuming it she would return active with her
@@ -607,7 +697,28 @@ async def test_i_s4_an_05_restore_reapplies_tombstones_on_a_clean_database(
             assert (
                 await _scalar(
                     connection,
+                    "SELECT count(*) FROM task_sources WHERE audio_id = :id",
+                    id=ids["bob_deleted_audio"],
+                )
+            ) == 0
+            assert (
+                await _scalar(
+                    connection,
+                    "SELECT count(*) FROM task_evidence WHERE task_id = :id",
+                    id=ids["bob_deleted_task"],
+                )
+            ) == 0
+            assert (
+                await _scalar(
+                    connection,
                     "SELECT count(*) FROM messages WHERE content = :marker",
+                    marker=BOB_DELETED_MARKER,
+                )
+            ) == 0
+            assert (
+                await _scalar(
+                    connection,
+                    "SELECT count(*) FROM task_evidence WHERE quote = :marker",
                     marker=BOB_DELETED_MARKER,
                 )
             ) == 0
@@ -651,6 +762,16 @@ async def test_i_s4_an_05_restore_reapplies_tombstones_on_a_clean_database(
                 await _scalar(
                     connection,
                     "SELECT count(*) FROM chunks WHERE content = :marker",
+                    marker=BOB_KEPT_MARKER,
+                )
+            ) == 1
+            assert (
+                await _scalar(
+                    connection,
+                    "SELECT count(*) FROM task_evidence "
+                    "WHERE id = :id AND task_id = :task AND quote = :marker",
+                    id=ids["bob_kept_evidence"],
+                    task=ids["bob_kept_task"],
                     marker=BOB_KEPT_MARKER,
                 )
             ) == 1
