@@ -1,0 +1,11 @@
+{
+  "scripts": {
+    "run": {
+      "command": "cd apps/web && { [ -d node_modules ] || npm ci --no-audit --no-fund; } && npm run dev -- --host 0.0.0.0"
+    }
+  },
+  "ports": {
+    "preview": 3000,
+    "additional": []
+  }
+}
