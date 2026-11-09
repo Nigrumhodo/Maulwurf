@@ -78,7 +78,7 @@ https://localhost {
 	# the web SPA and the browser receives index.html instead of the API.
 	# `*` is one path segment, so nested chat and notification routes are listed
 	# out to the deepest segment they use.
-	@api path /auth/* /me /me/* /subjects /subjects/* /integrations/* /audios /audios/* /ingestion/* /search /chat /chat/* /chat/*/* /chat/*/*/* /chat/*/*/*/* /chat/*/*/*/*/* /calendar /calendar/* /notifications /notifications/* /notifications/*/* /readyz
+	@api path /auth/* /me /me/* /subjects /subjects/* /integrations/* /audios /audios/* /ingestion/* /search /chat /chat/* /chat/*/* /chat/*/*/* /chat/*/*/*/* /chat/*/*/*/*/* /calendar /calendar/* /tasks /tasks/* /tasks/*/* /notifications /notifications/* /notifications/*/* /readyz
 	handle @api {
 		# J2.10: JSON bodies are small; this is an abuse guard, not a contract limit.
 		request_body {
