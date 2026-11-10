@@ -20,10 +20,10 @@ Messages are fixed and never echo a quote or transcript text: both are untrusted
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from sqlalchemy import and_, delete, select
+from sqlalchemy import and_, delete, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Audio, Segment, Task, TaskEvidence, TaskSource, Transcript
@@ -144,19 +144,67 @@ async def persist_task_spans(
     return tuple(sources)
 
 
-async def load_task_evidence(
-    db: AsyncSession, *, user_id: uuid.UUID, task_id: uuid.UUID, task_version: int
-) -> tuple[StoredTaskEvidence, ...]:
-    """Rebuild the active version's evidence from PostgreSQL.
+def _reconstruct_evidence(
+    stored: TaskEvidence,
+    source: TaskSource,
+    segment: Segment,
+    transcript: Transcript,
+    *,
+    task_version: int,
+) -> StoredTaskEvidence:
+    """Validate one persisted row and rebuild its textual evidence."""
+    if stored.task_version != task_version:
+        raise ProvenanceInvalid("the stored evidence version is inconsistent")
+    if stored.quote != segment.text[stored.char_start : stored.char_end]:
+        raise ProvenanceInvalid("the stored quote does not match the segment")
+    if len(stored.quote) != stored.char_end - stored.char_start:
+        raise ProvenanceInvalid("the stored quote length does not match the span")
+    if stored.char_start < 0 or stored.char_end > len(segment.text):
+        raise ProvenanceInvalid("the stored span is outside the segment")
+    t_start, t_end = reliable_times(
+        timestamp_precision=transcript.timestamp_precision,
+        t_start=segment.t_start,
+        t_end=segment.t_end,
+    )
+    return StoredTaskEvidence(
+        evidence=TextualEvidence(
+            segment_id=segment.id,
+            ordinal=segment.ordinal,
+            char_start=segment.char_start + stored.char_start,
+            char_end=segment.char_start + stored.char_end,
+            inicio_char=stored.char_start,
+            fin_char=stored.char_end,
+            quote=stored.quote,
+            t_start=t_start,
+            t_end=t_end,
+        ),
+        task_version=stored.task_version,
+        audio_id=source.audio_id,
+        transcript_id=source.transcript_id,
+        transcript_version=source.transcript_version,
+    )
 
-    The join starts at the evidence row and follows the source, the exact transcript
-    version, the segment and the live class, so a tombstoned class yields nothing. A
-    missing task version is an empty tuple; a row that no longer matches its segment is
-    corruption and raises instead of producing a wrong citation.
+
+async def load_task_evidence_batch(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    task_versions: Mapping[uuid.UUID, int],
+) -> dict[uuid.UUID, tuple[StoredTaskEvidence, ...]]:
+    """Rebuild the active evidence of several tasks in one query.
+
+    The row-value filter keeps every task bound to its own active version, so a page
+    cannot mix the evidence of an older version of one task with the current version of
+    another. The join starts at the evidence row and follows the source, the exact
+    transcript version, the segment and the live class, so a tombstoned class yields
+    nothing.
 
     :raises ProvenanceInvalid: a persisted row no longer matches the segment text or its
         own span checks.
     """
+    if not task_versions:
+        return {}
+    pairs = list(task_versions.items())
     rows = (
         await db.execute(
             select(TaskEvidence, TaskSource, Segment, Transcript)
@@ -196,48 +244,40 @@ async def load_task_evidence(
             )
             .where(
                 TaskEvidence.user_id == user_id,
-                TaskEvidence.task_id == task_id,
-                TaskEvidence.task_version == task_version,
+                tuple_(TaskEvidence.task_id, TaskEvidence.task_version).in_(pairs),
             )
-            .order_by(Segment.ordinal, TaskEvidence.char_start)
+            .order_by(TaskEvidence.task_id, Segment.ordinal, TaskEvidence.char_start)
         )
     ).all()
 
-    evidence: list[StoredTaskEvidence] = []
+    grouped: dict[uuid.UUID, list[StoredTaskEvidence]] = {}
     for stored, source, segment, transcript in rows:
-        if stored.task_version != task_version:
-            raise ProvenanceInvalid("the stored evidence version is inconsistent")
-        if stored.quote != segment.text[stored.char_start : stored.char_end]:
-            raise ProvenanceInvalid("the stored quote does not match the segment")
-        if len(stored.quote) != stored.char_end - stored.char_start:
-            raise ProvenanceInvalid("the stored quote length does not match the span")
-        if stored.char_start < 0 or stored.char_end > len(segment.text):
-            raise ProvenanceInvalid("the stored span is outside the segment")
-        t_start, t_end = reliable_times(
-            timestamp_precision=transcript.timestamp_precision,
-            t_start=segment.t_start,
-            t_end=segment.t_end,
-        )
-        evidence.append(
-            StoredTaskEvidence(
-                evidence=TextualEvidence(
-                    segment_id=segment.id,
-                    ordinal=segment.ordinal,
-                    char_start=segment.char_start + stored.char_start,
-                    char_end=segment.char_start + stored.char_end,
-                    inicio_char=stored.char_start,
-                    fin_char=stored.char_end,
-                    quote=stored.quote,
-                    t_start=t_start,
-                    t_end=t_end,
-                ),
-                task_version=stored.task_version,
-                audio_id=source.audio_id,
-                transcript_id=source.transcript_id,
-                transcript_version=source.transcript_version,
+        expected_version = task_versions.get(stored.task_id)
+        if expected_version is None:  # pragma: no cover - the row-value filter excludes it
+            continue
+        grouped.setdefault(stored.task_id, []).append(
+            _reconstruct_evidence(
+                stored, source, segment, transcript, task_version=expected_version
             )
         )
-    return tuple(evidence)
+    return {task_id: tuple(items) for task_id, items in grouped.items()}
+
+
+async def load_task_evidence(
+    db: AsyncSession, *, user_id: uuid.UUID, task_id: uuid.UUID, task_version: int
+) -> tuple[StoredTaskEvidence, ...]:
+    """Rebuild the active version's evidence from PostgreSQL.
+
+    A missing task version is an empty tuple; a row that no longer matches its segment is
+    corruption and raises instead of producing a wrong citation.
+
+    :raises ProvenanceInvalid: a persisted row no longer matches the segment text or its
+        own span checks.
+    """
+    batch = await load_task_evidence_batch(
+        db, user_id=user_id, task_versions={task_id: task_version}
+    )
+    return batch.get(task_id, ())
 
 
 async def _load_segments(

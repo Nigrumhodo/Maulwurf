@@ -531,12 +531,18 @@ dates, recommendations) with traceability to the source.
   identified as such and is not presented as an extracted activity.
 - Editing a `confirmed` task creates
   `task_revision(status=pending_confirmation, base_task_version, proposed_fields)` without
-  altering the active fields. Confirming receives `revision_id` and `expected_version`; in
-  one transaction it promotes the revision, increments `tasks.version`, and creates the
-  outbox. A stale revision → `409 version_conflict`. Re-analysis uses the same mechanism and
-  never activates partial results. Completing or dismissing also increments `tasks.version`
-  (a Calendar job queued for the previous version is discarded) and keeps the linked event
-  with a notice.
+  altering the active fields. At most one revision per task stays `pending_confirmation`
+  (partial unique index `task_revisions_one_pending`): a new `PATCH` or reanalysis discards
+  the previous pending proposal first, and confirming discards any sibling. Confirming
+  receives `revision_id` and `expected_version`; in one transaction it promotes the
+  revision, increments `tasks.version`, and creates the outbox. A revision whose
+  `base_task_version` is older than the active task → `409 version_conflict`. Re-analysis
+  uses the same mechanism and never activates partial results. Completing or dismissing
+  also increments `tasks.version` (a Calendar job queued for the previous version is
+  discarded) and keeps the linked event with a notice.
+- A task with persisted evidence (an extraction source, a `task_sources` row, or a stored
+  quote) cannot change `subject_id`: the subject is pinned by the class/segment the evidence
+  came from. The same check runs when a legacy revision proposes another subject.
 
 **Endpoints:** `GET /tasks?status=&subject_id=&due_from=&due_to=`; `GET /tasks/{id}`;
 `PATCH /tasks/{id}` with `version`; `POST /tasks/{id}/confirm` with
@@ -1042,12 +1048,14 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
   `task_revisions` stores `base_task_version`, proposed fields, state
   `pending_confirmation|activated|discarded`, and a tenant-aware relation to the run that
   produced it. Its unique key `(task_id, base_task_version, revision_type, run_id)` is
-  intentionally NULL-distinct: `run_id` is NULL for `edit_of_confirmed`, so several pending
-  edits of the same base version are legitimate proposals until one is confirmed; a repeated
-  reanalysis of the same run is still rejected. Only the explicit confirm promotes one
-  revision and bumps `tasks.version`, so the rest answer `409 version_conflict`. Enforcing
-  one edit per base version would require `NULLS NOT DISTINCT` (PostgreSQL 15+) and a new
-  revision of this contract.
+  intentionally NULL-distinct so a repeated reanalysis of the same run cannot duplicate its
+  revision; the stronger contract is the partial unique index
+  `task_revisions_one_pending` on `(user_id, task_id) WHERE status='pending_confirmation'`:
+  at most one proposal per task is pending, PATCH/reanalysis discard the previous one before
+  inserting a replacement, and confirm discards any legacy sibling. A revision whose
+  `base_task_version` is older than the active task answers `409 version_conflict`.
+  `tasks_by_user_created (user_id, created_at, id)` serves the newest-first keyset page of
+  the review inbox.
 - Date CHECK: resolved all-day → only `due_date`; resolved with time → only `due_at`;
   ambiguous/no date → both null. Persist `date_text` as a canonical English rendering of the
   resolved due fields, plus the review reason, due version and timezone snapshot; `date_text`
