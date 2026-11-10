@@ -399,9 +399,10 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     revision = ScriptDirectory.from_config(cfg).get_revision(_head(empty_schema))
     assert revision is not None
     parent = revision.down_revision
-    assert parent == "0019"  # this chain is linear
+    assert parent == "0020"  # this chain is linear
     command.upgrade(cfg, "head")
 
+    # `0021` only adds the A3.3 task/revision indexes (no table or column change);
     # `0020` adds A3.2's `task_evidence`; `0019` only adds the J4.8 budget-aggregate
     # indexes (no table/column/policy change);
     # `0018` only adds `notifications.claimed_by_fence` (no table/column removal);
@@ -417,6 +418,9 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     # `settings`; `0005` only changes roles, policies and RLS flags; `0003` only backfills
     # `chunks.tsv` (data, not schema) and `0004` only adds the run fencing token, so the
     # steps back stay on the previous schemas and only remove those additions.
+    command.downgrade(cfg, "-1")
+    assert _state(empty_schema) == (J42_TABLES, ["0020"])
+
     command.downgrade(cfg, "-1")
     assert _state(empty_schema) == (PRE_A32_TABLES, ["0019"])
 

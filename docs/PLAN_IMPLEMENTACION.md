@@ -228,7 +228,8 @@ a test gRPC server.
 - [ ] Separate the due date from the Calendar interval, all-day from instants, `task_sources`,
   pending revision of changes, and the sync status from the task lifecycle. A confirmed edit
   does not mutate active fields; confirming promotes `revision_id` with version control and
-  an atomic outbox.
+  an atomic outbox. Only one proposal per task stays pending: PATCH/reanalysis discard the
+  previous one, and a task with persisted evidence cannot change its subject independently.
 - [ ] Validate real scopes and secondary calendar creation; coordinated reconnect/refresh.
   Test scope rejection without breaking library/chat.
 - [ ] Deterministic event ID, reconciled timeout/409, stale jobs discarded, and ETag for

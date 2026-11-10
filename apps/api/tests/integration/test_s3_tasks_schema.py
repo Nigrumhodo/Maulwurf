@@ -612,11 +612,13 @@ async def test_promotion_time_is_coherent_with_the_revision_state(
     await db_session.flush()
     assert row.status == status
 
+    # A second task isolates the activated_at CHECK from the one-pending index.
+    other = await make_task(db_session, actor)
     await _expect_integrity_error(
         db_session,
         _revision(
             actor,
-            task,
+            other,
             status=status,
             activated_at=None if status == "activated" else NOW,
         ),
@@ -642,12 +644,20 @@ async def test_a_repeated_reanalysis_run_cannot_duplicate_the_revision(
     await db_session.flush()
     await _expect_integrity_error(db_session, _revision(actor, task, run_id=run.id))
 
-    # `edit_of_confirmed` has no run: two successive edits at the same base version are
-    # legitimate pending proposals (the documented NULL-distinct contract, ESPECIFICACION
-    # §M4). Only one can win at confirm time; the stale one answers `409 version_conflict`.
-    db_session.add(_revision(actor, task, revision_type="edit_of_confirmed"))
+    # `edit_of_confirmed` has no run, but `task_revisions_one_pending` allows only one
+    # pending proposal per task (ESPECIFICACION §M4): a second one is rejected until the
+    # first is discarded, which is what PATCH and reanalysis do before proposing again.
+    edit_task = await make_task(db_session, actor)
+    first_edit = _revision(actor, edit_task, revision_type="edit_of_confirmed")
+    db_session.add(first_edit)
     await db_session.flush()
-    db_session.add(_revision(actor, task, revision_type="edit_of_confirmed"))
+    await _expect_integrity_error(
+        db_session, _revision(actor, edit_task, revision_type="edit_of_confirmed")
+    )
+
+    first_edit.status = "discarded"
+    await db_session.flush()
+    db_session.add(_revision(actor, edit_task, revision_type="edit_of_confirmed"))
     await db_session.flush()
 
 
@@ -685,6 +695,33 @@ async def test_the_inbox_indexes_are_partial_over_one_due_representation_each(
     )
     for definition in definitions.values():
         assert "COALESCE" not in definition
+
+
+async def test_the_keyset_and_one_pending_indexes_match_the_contract(
+    db_session: AsyncSession,
+) -> None:
+    rows = (
+        await db_session.execute(
+            text(
+                "SELECT indexname, indexdef FROM pg_indexes "
+                "WHERE schemaname = 'public' "
+                "AND indexname IN ('tasks_by_user_created', 'task_revisions_one_pending')"
+            )
+        )
+    ).all()
+    definitions = {str(name): str(definition) for name, definition in rows}
+
+    assert definitions["tasks_by_user_created"] == (
+        "CREATE INDEX tasks_by_user_created ON public.tasks USING btree "
+        "(user_id, created_at, id)"
+    )
+    assert definitions["task_revisions_one_pending"].startswith(
+        "CREATE UNIQUE INDEX task_revisions_one_pending ON public.task_revisions "
+        "USING btree (user_id, task_id) WHERE "
+    )
+    assert "(status = 'pending_confirmation'::text)" in definitions[
+        "task_revisions_one_pending"
+    ]
 
 
 async def test_the_calendar_etag_column_is_nullable(db_session: AsyncSession) -> None:

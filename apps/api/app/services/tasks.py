@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError, not_found, validation_failed
@@ -70,6 +70,7 @@ from app.services.date_resolution import render_due_text
 from app.services.task_evidence import (
     ProvenanceInvalid,
     load_task_evidence,
+    load_task_evidence_batch,
     persist_task_spans,
     validate_provenance,
 )
@@ -82,6 +83,8 @@ _MAX_LIMIT = 200
 _MAX_CURSOR_LENGTH = 512
 _CURSOR_INVALID = "cursor inválido o malformado"
 CALENDAR_SYNC_BLOCKED_NOTICE = "calendar_sync_blocked"
+PENDING_REVISION_STATUS = "pending_confirmation"
+DISCARDED_REVISION_STATUS = "discarded"
 
 _DATE_KEYS = frozenset({"due_date", "event_start_date", "event_end_date_exclusive"})
 _DATETIME_KEYS = frozenset({"due_at", "event_start_at", "event_end_at"})
@@ -298,11 +301,14 @@ async def _assemble(db: AsyncSession, user_id: uuid.UUID, tasks: list[Task]) -> 
     for revision in revisions:
         pending_by_task.setdefault(revision.task_id, revision)
 
+    stored_by_task = await load_task_evidence_batch(
+        db,
+        user_id=user_id,
+        task_versions={task.id: task.version for task in tasks},
+    )
     out: list[TaskOut] = []
     for task in tasks:
-        stored = await load_task_evidence(
-            db, user_id=user_id, task_id=task.id, task_version=task.version
-        )
+        stored = stored_by_task.get(task.id, ())
         evidence = [
             TaskEvidenceOut(
                 segment_id=str(item.evidence.segment_id),
@@ -844,6 +850,72 @@ async def create_task(db: AsyncSession, user_id: uuid.UUID, body: TaskCreate) ->
     return (await _assemble(db, user_id, [task]))[0]
 
 
+async def _discard_pending_revisions(
+    db: AsyncSession, user_id: uuid.UUID, task_id: uuid.UUID
+) -> None:
+    """Keep at most one pending proposal per task.
+
+    The partial unique index is the database guard; this update retires the previous
+    proposal before a replacement is inserted and any legacy sibling after a revision is
+    promoted.
+    """
+    await db.execute(
+        update(TaskRevision)
+        .where(
+            TaskRevision.user_id == user_id,
+            TaskRevision.task_id == task_id,
+            TaskRevision.status == PENDING_REVISION_STATUS,
+        )
+        .values(status=DISCARDED_REVISION_STATUS)
+        .execution_options(synchronize_session="fetch")
+    )
+
+
+async def _has_persisted_provenance(
+    db: AsyncSession, user_id: uuid.UUID, task_id: uuid.UUID
+) -> bool:
+    """Whether a source or a quote pins the task to a class/subject."""
+    return bool(
+        await db.scalar(
+            select(
+                or_(
+                    exists().where(
+                        TaskSource.user_id == user_id,
+                        TaskSource.task_id == task_id,
+                    ),
+                    exists().where(
+                        TaskEvidence.user_id == user_id,
+                        TaskEvidence.task_id == task_id,
+                    ),
+                )
+            )
+        )
+    )
+
+
+async def _ensure_subject_change_allowed(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    task: Task,
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> None:
+    """A sourced task cannot be detached from the subject of its evidence."""
+    if after["subject_id"] == before["subject_id"]:
+        return
+    if task.source == "extraction" or await _has_persisted_provenance(
+        db, user_id, task.id
+    ):
+        raise validation_failed(
+            {
+                "subject_id": (
+                    "La materia de una tarea con evidencia no puede modificarse "
+                    "de forma independiente"
+                )
+            }
+        )
+
+
 async def patch_task(
     db: AsyncSession, user_id: uuid.UUID, task_id: uuid.UUID, body: TaskPatch
 ) -> TaskOut:
@@ -854,6 +926,7 @@ async def patch_task(
 
     before = _current_fields(task)
     after = _merge_patch(before, body)
+    await _ensure_subject_change_allowed(db, user_id, task, before, after)
     await _validate_subject(db, user_id, after["subject_id"])
     _validate_fields(after)
     after["date_text"] = _render_date_text(after)
@@ -861,6 +934,7 @@ async def patch_task(
         return (await _assemble(db, user_id, [task]))[0]
 
     if task.status == "confirmed":
+        await _discard_pending_revisions(db, user_id, task.id)
         revision = TaskRevision(
             user_id=user_id,
             task_id=task.id,
@@ -983,6 +1057,7 @@ async def confirm_task(
         proposed = _coerce_revision(dict(revision.proposed_fields))
         after = dict(before)
         after.update(proposed)
+        await _ensure_subject_change_allowed(db, user_id, task, before, after)
         await _validate_subject(db, user_id, after["subject_id"])
         _validate_fields(after)
         after["date_text"] = _render_date_text(after)
@@ -1009,6 +1084,7 @@ async def confirm_task(
         revision.status = "activated"
         revision.activated_at = now
     await db.flush()
+    await _discard_pending_revisions(db, user_id, task.id)
     await _copy_evidence_version(
         db,
         user_id=user_id,

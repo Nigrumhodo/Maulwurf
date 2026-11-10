@@ -139,6 +139,8 @@ class Task(TenantOwned, Base):
         # referencing side). The inbox indexes are partial and cannot serve them.
         Index("tasks_by_audio", "user_id", "audio_id"),
         Index("tasks_by_subject", "user_id", "subject_id"),
+        # Keyset listing reads one user's rows newest-first, with `id` as the tiebreaker.
+        Index("tasks_by_user_created", "user_id", "created_at", "id"),
         # One index per due representation: `date` and `timestamptz` are never mixed in an
         # expression, whose meaning would depend on the session timezone.
         Index(
@@ -337,13 +339,12 @@ class TaskRevision(TenantOwned, Base):
     that bumps `tasks.version` (A3.4). `base_task_version` is the task version the proposal
     was computed from, so a stale revision is rejected instead of silently winning.
 
-    The unique key includes `run_id`; it is NULL for `edit_of_confirmed`, and PostgreSQL's
-    default NULL-distinct semantics deliberately let a user keep several pending edits of
-    the same base version while a repeated reanalysis of the same run cannot duplicate the
-    revision. This is the contract recorded in ESPECIFICACION §M4: only an explicit confirm
-    promotes one revision and bumps `tasks.version`, so the stale ones answer
-    `409 version_conflict`. A future "one edit per base version" rule would require
-    `NULLS NOT DISTINCT` (PG 15+) and a spec revision, not a silent constraint change here.
+    The unique key includes `run_id`; it is NULL for `edit_of_confirmed`, so a repeated
+    reanalysis of the same run cannot duplicate its revision. The partial unique index
+    `task_revisions_one_pending` is the stronger contract: at most one pending proposal per
+    task. PATCH retires the previous pending edit before inserting its replacement, and
+    confirm discards any legacy sibling after promoting the chosen revision. A revision
+    whose `base_task_version` is older than the active task answers `409 version_conflict`.
     """
 
     __tablename__ = "task_revisions"
@@ -370,6 +371,13 @@ class TaskRevision(TenantOwned, Base):
         ),
         Index("task_revisions_by_task", "user_id", "task_id"),
         Index("task_revisions_by_run", "user_id", "run_id"),
+        Index(
+            "task_revisions_one_pending",
+            "user_id",
+            "task_id",
+            unique=True,
+            postgresql_where=text("status = 'pending_confirmation'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()

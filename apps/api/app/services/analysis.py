@@ -64,6 +64,7 @@ from app.services.date_resolution import (
 from app.services.llm import ChatMessage, LLMProvider
 from app.services.summary import SummaryRejected, parse_summary_payload
 from app.services.task_evidence import persist_task_spans
+from app.services.tasks import _discard_pending_revisions
 from prompts.registry import (
     load_extraction_prompts,
     load_summary_prompts,
@@ -893,6 +894,14 @@ async def _revise_task(
     base_version: int,
     proposal: AggregatedProposal[PreparedProposal],
 ) -> None:
+    # Serialize with PATCH/confirm on the same task, then supersede any proposal still
+    # pending: the partial unique index `task_revisions_one_pending` allows exactly one.
+    await db.execute(
+        select(Task.id)
+        .where(Task.user_id == user_id, Task.id == task_id)
+        .with_for_update()
+    )
+    await _discard_pending_revisions(db, user_id, task_id)
     db.add(
         TaskRevision(
             user_id=user_id,

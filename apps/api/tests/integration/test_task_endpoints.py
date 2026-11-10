@@ -515,6 +515,49 @@ async def test_patch_in_place_bumps_version_and_copies_evidence(
     assert len(copied) == 1
 
 
+async def test_patch_cannot_change_the_subject_of_a_task_with_evidence(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    _, _, segment = await _class(db_session, actor)
+    # The handler commits and expires ORM attributes; create the subject and copy its id.
+    other_subject = await actors.make_subject(db_session, actor)
+    other_subject_id = other_subject.id
+    created = await _create_extraction(client, actor, segment)
+
+    response = await client.patch(
+        f"/tasks/{created['id']}",
+        json={"version": 1, "subject_id": str(other_subject_id)},
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+    assert response.status_code == 422
+    error = response.json()["error"]
+    assert error["code"] == "validation_failed"
+    assert error["details"]["fields"]["subject_id"] == (
+        "La materia de una tarea con evidencia no puede modificarse de forma independiente"
+    )
+
+
+async def test_patch_can_change_the_subject_of_a_manual_task(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    first_subject = await actors.make_subject(db_session, actor)
+    second_subject = await actors.make_subject(db_session, actor)
+    task = await _task(db_session, actor, subject_id=first_subject.id)
+    second_subject_id = second_subject.id
+
+    response = await client.patch(
+        f"/tasks/{task.id}",
+        json={"version": 1, "subject_id": str(second_subject_id)},
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["subject"]["id"] == str(second_subject_id)
+
+
 async def test_a_noop_patch_does_not_bump_or_create_a_revision(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
@@ -599,6 +642,83 @@ async def test_editing_a_confirmed_task_creates_a_revision_without_touching_it(
     assert stored.activated_at is not None
 
 
+async def test_two_patches_keep_only_the_latest_pending_revision(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    task = await _task(
+        db_session,
+        actor,
+        status="confirmed",
+        date_status="resolved",
+        all_day=True,
+        due_date=DUE_DAY,
+        event_start_date=DUE_DAY,
+        event_end_date_exclusive=DUE_DAY + timedelta(days=1),
+    )
+    task_id = task.id
+
+    first = await client.patch(
+        f"/tasks/{task_id}",
+        json={"version": 1, "titulo": "Primera propuesta"},
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+    assert first.status_code == 200
+    first_revision_id = first.json()["pending_revision"]["id"]
+
+    second = await client.patch(
+        f"/tasks/{task_id}",
+        json={"version": 1, "titulo": "Segunda propuesta"},
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+    assert second.status_code == 200
+    second_revision_id = second.json()["pending_revision"]["id"]
+    assert second_revision_id != first_revision_id
+
+    db_session.expire_all()
+    first_stored = await db_session.get(TaskRevision, uuid.UUID(first_revision_id))
+    second_stored = await db_session.get(TaskRevision, uuid.UUID(second_revision_id))
+    assert first_stored is not None
+    assert first_stored.status == "discarded"
+    assert second_stored is not None
+    assert second_stored.status == "pending_confirmation"
+
+    promoted = await client.post(
+        f"/tasks/{task_id}/confirm",
+        json={"expected_version": 1, "revision_id": second_revision_id},
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+    assert promoted.status_code == 202
+    assert promoted.json()["task"]["version"] == 2
+    assert promoted.json()["task"]["titulo"] == "Segunda propuesta"
+
+    detail = await client.get(f"/tasks/{task_id}", cookies=actor.cookies)
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["version"] == 2
+    assert body["pending_revision"] is None
+
+    db_session.expire_all()
+    first_stored = await db_session.get(TaskRevision, uuid.UUID(first_revision_id))
+    second_stored = await db_session.get(TaskRevision, uuid.UUID(second_revision_id))
+    assert first_stored is not None
+    assert first_stored.status == "discarded"
+    assert second_stored is not None
+    assert second_stored.status == "activated"
+    pending = (
+        await db_session.scalars(
+            select(TaskRevision).where(
+                TaskRevision.task_id == task_id,
+                TaskRevision.status == "pending_confirmation",
+            )
+        )
+    ).all()
+    assert pending == []
+
+
 async def test_a_stale_revision_is_a_409(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
@@ -620,18 +740,10 @@ async def test_a_stale_revision_is_a_409(
         revision_type="edit_of_confirmed",
         proposed_fields={"titulo": "Primera"},
     )
-    second = TaskRevision(
-        user_id=actor.user_id,
-        task_id=task.id,
-        base_task_version=1,
-        revision_type="edit_of_confirmed",
-        proposed_fields={"titulo": "Segunda"},
-    )
-    db_session.add_all([first, second])
+    db_session.add(first)
     await db_session.flush()
     task_id = task.id
     first_id = first.id
-    second_id = second.id
 
     promoted = await client.post(
         f"/tasks/{task_id}/confirm",
@@ -640,10 +752,24 @@ async def test_a_stale_revision_is_a_409(
         headers=actor.headers,
     )
     assert promoted.status_code == 202
+    assert promoted.json()["task"]["version"] == 2
+
+    # A revision computed before the promotion is still pending, but its base version is
+    # stale. It must fail even when the client sends the current task version.
+    stale_revision = TaskRevision(
+        user_id=actor.user_id,
+        task_id=task_id,
+        base_task_version=1,
+        revision_type="edit_of_confirmed",
+        proposed_fields={"titulo": "Obsoleta"},
+    )
+    db_session.add(stale_revision)
+    await db_session.flush()
+    stale_id = stale_revision.id
 
     stale = await client.post(
         f"/tasks/{task_id}/confirm",
-        json={"expected_version": 1, "revision_id": str(second_id)},
+        json={"expected_version": 2, "revision_id": str(stale_id)},
         cookies=actor.cookies,
         headers=actor.headers,
     )
