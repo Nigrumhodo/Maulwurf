@@ -1,10 +1,12 @@
-"""M4 task endpoints (A3.3, DISENO §3.7).
+"""M4 task endpoints (A3.3/A3.4, DISENO §3.7).
 
 All routes are tenant-scoped by the authenticated session. Reads rebuild evidence from the
 persisted provenance and the immutable segment text; writes validate the source kind and
 the optimistic-locking token. `confirm` returns the task with `calendar_sync_status`
-separate from `status`; A3.3 does not create the Calendar outbox, so a successful
-confirmation is `blocked` with a closed notice until A3.4 lands.
+separate from `status`: with a ready Calendar integration the task and its one
+`sync_task_event` outbox row are committed together and the status is `pending`; without
+one the task is still `confirmed` and stays `blocked` with the closed
+`calendar_sync_blocked` notice.
 """
 
 import uuid
@@ -116,7 +118,12 @@ async def patch_task(
     "/tasks/{task_id}/confirm",
     status_code=202,
     responses={
-        202: {"description": "Confirmed; Calendar sync is blocked until A3.4 creates the outbox"},
+        202: {
+            "description": (
+                "Confirmed; Calendar sync pending, or blocked with "
+                "`calendar_sync_blocked` when no integration is ready"
+            )
+        },
         401: {"description": "Sin sesión (auth_required)"},
         403: {"description": "csrf_invalid"},
         404: {"description": "not_found: tarea o revisión inexistente"},

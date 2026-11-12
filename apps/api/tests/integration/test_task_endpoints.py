@@ -1,8 +1,9 @@
-"""A3.3 against PostgreSQL: task reads, proposals, edits, confirmation and lifecycle.
+"""A3.3/A3.4 against PostgreSQL: task reads, proposals, edits, confirmation and lifecycle.
 
 The suite exercises the real routes and tables, including A3.2's persisted evidence. No
-provider, Google call, audio or secret is involved: the Calendar side of a confirmation is
-deliberately `blocked` until A3.4 creates the outbox.
+provider, Google call, audio or secret is involved: the Calendar integration is seeded
+directly, and I-S3-AN-03 proves that the task and its single `sync_task_event` row are
+written in the same transaction (or that a blocked confirmation writes no event).
 """
 
 import uuid
@@ -13,6 +14,8 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -20,7 +23,9 @@ from app.core.db import get_session
 from app.main import app
 from app.models import (
     Audio,
+    CalendarSettings,
     Notification,
+    OutboxEvent,
     Segment,
     Task,
     TaskEvidence,
@@ -28,7 +33,10 @@ from app.models import (
     TaskSource,
     Transcript,
 )
+from app.services import tasks as task_service
 from app.services.notifications import dedupe_key
+from app.services.oauth_google import CALENDAR_SCOPES
+from app.services.outbox import SYNC_TASK_EVENT, decide
 from tests.integration import actors
 
 pytestmark = pytest.mark.integration
@@ -38,6 +46,7 @@ SECOND = "bring the lab report on Friday"
 TRANSCRIPT = f"{FIRST} {SECOND}"
 DUE_DAY = date(2026, 11, 9)
 DUE_AT = datetime(2026, 11, 9, 15, 0, tzinfo=UTC)
+CALENDAR_ID = "maulwurf@group.calendar.example"
 
 
 @pytest.fixture
@@ -139,6 +148,79 @@ async def _create_extraction(
     )
     assert response.status_code == 201, response.text
     return dict(response.json())
+
+
+async def _confirmable_task(
+    db: AsyncSession, actor: actors.Actor, **overrides: Any
+) -> Task:
+    values: dict[str, Any] = {
+        "date_status": "resolved",
+        "all_day": True,
+        "due_date": DUE_DAY,
+        "event_start_date": DUE_DAY,
+        "event_end_date_exclusive": DUE_DAY + timedelta(days=1),
+    }
+    values.update(overrides)
+    return await _task(db, actor, **values)
+
+
+async def _connect_calendar(
+    db: AsyncSession,
+    actor: actors.Actor,
+    *,
+    status: str = "connected",
+    scopes: list[str] | None = None,
+    target: str | None = CALENDAR_ID,
+) -> None:
+    """Seed the stored grant and target without any Google call or real credential."""
+    # A previous request committed through the shared session and expired the actor's
+    # attributes; refresh inside the async context before the helper reads `actor.user.id`.
+    await db.refresh(actor.user)
+    if target is not None:
+        db.add(
+            CalendarSettings(user_id=actor.user_id, calendar_write_calendar_id=target)
+        )
+    credential = await actors.make_google_credential(db, actor)
+    credential.status = status
+    credential.scopes = list(CALENDAR_SCOPES) if scopes is None else scopes
+    await db.flush()
+
+
+async def _sync_events(
+    db: AsyncSession, actor: actors.Actor, task_id: uuid.UUID
+) -> list[OutboxEvent]:
+    return list(
+        (
+            await db.scalars(
+                select(OutboxEvent)
+                .where(
+                    OutboxEvent.user_id == actor.user_id,
+                    OutboxEvent.type == SYNC_TASK_EVENT,
+                    OutboxEvent.resource_id == task_id,
+                )
+                .order_by(OutboxEvent.created_at, OutboxEvent.id)
+            )
+        ).all()
+    )
+
+
+async def _confirm(
+    client: AsyncClient,
+    actor: actors.Actor,
+    task_id: uuid.UUID | str,
+    *,
+    expected_version: int,
+    revision_id: uuid.UUID | str | None = None,
+) -> Any:
+    body: dict[str, Any] = {"expected_version": expected_version}
+    if revision_id is not None:
+        body["revision_id"] = str(revision_id)
+    return await client.post(
+        f"/tasks/{task_id}/confirm",
+        json=body,
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
 
 
 async def _notification(
@@ -885,6 +967,405 @@ async def test_confirm_marks_the_task_blocked_without_an_outbox(
     stored = await db_session.get(Task, uuid.UUID(created["id"]))
     assert stored is not None
     assert stored.confirmed_at is not None
+    assert stored.calendar_id is None
+    assert await _sync_events(db_session, actor, uuid.UUID(created["id"])) == []
+
+
+async def test_confirm_with_a_ready_calendar_creates_pending_and_one_outbox(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    await _connect_calendar(db_session, actor)
+    _, _, segment = await _class(db_session, actor)
+    created = await _create_extraction(client, actor, segment)
+    patched = await client.patch(
+        f"/tasks/{created['id']}",
+        json={
+            "version": 1,
+            "event_block": {
+                "start_date": "2026-09-21",
+                "end_date_exclusive": "2026-09-22",
+            },
+        },
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+    assert patched.status_code == 200
+
+    response = await _confirm(
+        client, actor, created["id"], expected_version=patched.json()["version"]
+    )
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["notice"] is None
+    assert body["task"]["status"] == "confirmed"
+    assert body["task"]["calendar_sync_status"] == "pending"
+    assert body["task"]["version"] == patched.json()["version"] + 1
+    assert body["task"]["evidence"][0]["quote"] == FIRST
+
+    db_session.expire_all()
+    stored = await db_session.get(Task, uuid.UUID(created["id"]))
+    assert stored is not None
+    assert stored.calendar_id == CALENDAR_ID
+
+    events = await _sync_events(db_session, actor, uuid.UUID(created["id"]))
+    assert len(events) == 1
+    event = events[0]
+    assert event.resource_type == "task"
+    assert event.resource_version == 3
+    assert event.enabled is True
+    assert event.blocked_reason is None
+    assert event.status == "pending"
+    assert event.payload == {}
+    assert event.dedupe_key == "confirm:3:1:0"
+    publication = decide(
+        event.type,
+        enabled=event.enabled,
+        blocked_reason=event.blocked_reason,
+        cleanup_status=None,
+    )
+    assert publication.job == "sync_task_event"
+
+
+async def test_repeating_confirm_with_the_current_version_reuses_the_single_outbox(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    await _connect_calendar(db_session, actor)
+    _, _, segment = await _class(db_session, actor)
+    created = await _create_extraction(client, actor, segment)
+    patched = await client.patch(
+        f"/tasks/{created['id']}",
+        json={
+            "version": 1,
+            "event_block": {
+                "start_date": "2026-09-21",
+                "end_date_exclusive": "2026-09-22",
+            },
+        },
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+    assert patched.status_code == 200
+
+    first = await _confirm(
+        client, actor, created["id"], expected_version=patched.json()["version"]
+    )
+    assert first.status_code == 202
+    assert first.json()["task"]["version"] == 3
+    events = await _sync_events(db_session, actor, uuid.UUID(created["id"]))
+    assert len(events) == 1
+    event_id = events[0].id
+
+    repeat = await _confirm(client, actor, created["id"], expected_version=3)
+    assert repeat.status_code == 202
+    assert repeat.json()["task"]["version"] == 3
+    assert repeat.json()["task"]["calendar_sync_status"] == "pending"
+    assert repeat.json()["notice"] is None
+    events = await _sync_events(db_session, actor, uuid.UUID(created["id"]))
+    assert [event.id for event in events] == [event_id]
+
+    stale = await _confirm(client, actor, created["id"], expected_version=2)
+    assert stale.status_code == 409
+    error = stale.json()["error"]
+    assert error["code"] == "version_conflict"
+    assert error["details"] == {"current_version": 3, "current_status": "confirmed"}
+    events = await _sync_events(db_session, actor, uuid.UUID(created["id"]))
+    assert [event.id for event in events] == [event_id]
+
+
+async def test_confirm_promotes_a_revision_and_keeps_the_calendar_link(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    await _connect_calendar(db_session, actor)
+    task = await _confirmable_task(
+        db_session,
+        actor,
+        status="confirmed",
+        calendar_sync_status="synced",
+        calendar_id=CALENDAR_ID,
+        calendar_event_id="evt-existing",
+        calendar_etag="etag-1",
+    )
+    task_id = task.id
+
+    revision = await client.patch(
+        f"/tasks/{task_id}",
+        json={"version": 1, "titulo": "Título propuesto"},
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+    assert revision.status_code == 200
+    revision_id = revision.json()["pending_revision"]["id"]
+
+    promoted = await _confirm(
+        client,
+        actor,
+        task_id,
+        expected_version=1,
+        revision_id=revision_id,
+    )
+    assert promoted.status_code == 202, promoted.text
+    body = promoted.json()
+    assert body["notice"] is None
+    assert body["task"]["version"] == 2
+    assert body["task"]["titulo"] == "Título propuesto"
+    assert body["task"]["calendar_sync_status"] == "pending"
+    assert body["task"]["pending_revision"] is None
+
+    db_session.expire_all()
+    stored = await db_session.get(Task, task_id)
+    assert stored is not None
+    assert stored.calendar_id == CALENDAR_ID
+    assert stored.calendar_event_id == "evt-existing"
+    assert stored.calendar_etag == "etag-1"
+    activated = await db_session.get(TaskRevision, uuid.UUID(revision_id))
+    assert activated is not None
+    assert activated.status == "activated"
+    events = await _sync_events(db_session, actor, task_id)
+    assert len(events) == 1
+    assert events[0].resource_version == 2
+    event_id = events[0].id
+
+    repeat = await _confirm(client, actor, task_id, expected_version=2)
+    assert repeat.status_code == 202
+    assert repeat.json()["task"]["version"] == 2
+    events = await _sync_events(db_session, actor, task_id)
+    assert [event.id for event in events] == [event_id]
+
+
+async def test_confirm_without_a_write_calendar_stays_blocked(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    await _connect_calendar(db_session, actor, target=None)
+    task = await _confirmable_task(db_session, actor)
+    task_id = task.id
+
+    response = await _confirm(client, actor, task_id, expected_version=1)
+    assert response.status_code == 202
+    assert response.json()["task"]["status"] == "confirmed"
+    assert response.json()["task"]["calendar_sync_status"] == "blocked"
+    assert response.json()["notice"] == "calendar_sync_blocked"
+    assert await _sync_events(db_session, actor, task_id) == []
+    db_session.expire_all()
+    stored = await db_session.get(Task, task_id)
+    assert stored is not None
+    assert stored.calendar_id is None
+
+
+async def test_confirm_with_a_disconnected_credential_keeps_the_target_calendar(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    await _connect_calendar(db_session, actor, status="disconnected")
+    task = await _confirmable_task(db_session, actor)
+    task_id = task.id
+
+    response = await _confirm(client, actor, task_id, expected_version=1)
+    assert response.status_code == 202
+    assert response.json()["task"]["calendar_sync_status"] == "blocked"
+    assert response.json()["notice"] == "calendar_sync_blocked"
+    assert await _sync_events(db_session, actor, task_id) == []
+    db_session.expire_all()
+    stored = await db_session.get(Task, task_id)
+    assert stored is not None
+    assert stored.calendar_id == CALENDAR_ID
+
+
+async def test_confirm_without_calendar_scopes_stays_blocked(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    await _connect_calendar(db_session, actor, scopes=["openid"])
+    task = await _confirmable_task(db_session, actor)
+    task_id = task.id
+
+    response = await _confirm(client, actor, task_id, expected_version=1)
+    assert response.status_code == 202
+    assert response.json()["task"]["calendar_sync_status"] == "blocked"
+    assert response.json()["notice"] == "calendar_sync_blocked"
+    assert await _sync_events(db_session, actor, task_id) == []
+
+
+async def test_confirm_with_a_foreign_revision_is_a_404(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    other_actor = await actors.make_actor(db_session)
+    task = await _confirmable_task(db_session, actor, status="confirmed")
+    task_id = task.id
+    same_user_task = await _confirmable_task(db_session, actor)
+    foreign_task = await _confirmable_task(db_session, other_actor)
+
+    same_user_revision = TaskRevision(
+        user_id=actor.user_id,
+        task_id=same_user_task.id,
+        base_task_version=1,
+        revision_type="edit_of_confirmed",
+        proposed_fields={"titulo": "De otra tarea"},
+    )
+    foreign_revision = TaskRevision(
+        user_id=other_actor.user_id,
+        task_id=foreign_task.id,
+        base_task_version=1,
+        revision_type="edit_of_confirmed",
+        proposed_fields={"titulo": "De otro usuario"},
+    )
+    db_session.add_all([same_user_revision, foreign_revision])
+    await db_session.flush()
+
+    for revision in (same_user_revision, foreign_revision):
+        response = await _confirm(
+            client,
+            actor,
+            task_id,
+            expected_version=1,
+            revision_id=revision.id,
+        )
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "not_found"
+
+    db_session.expire_all()
+    stored = await db_session.get(Task, task_id)
+    assert stored is not None
+    assert stored.status == "confirmed"
+    assert stored.version == 1
+    assert await _sync_events(db_session, actor, task_id) == []
+
+
+async def test_a_stale_revision_creates_no_outbox_and_keeps_the_task(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    await _connect_calendar(db_session, actor)
+    task = await _confirmable_task(db_session, actor, status="confirmed")
+    task_id = task.id
+    first = TaskRevision(
+        user_id=actor.user_id,
+        task_id=task_id,
+        base_task_version=1,
+        revision_type="edit_of_confirmed",
+        proposed_fields={"titulo": "Primera"},
+    )
+    db_session.add(first)
+    await db_session.flush()
+
+    promoted = await _confirm(
+        client, actor, task_id, expected_version=1, revision_id=first.id
+    )
+    assert promoted.status_code == 202
+    assert promoted.json()["task"]["version"] == 2
+    events = await _sync_events(db_session, actor, task_id)
+    assert len(events) == 1
+
+    stale_revision = TaskRevision(
+        user_id=actor.user_id,
+        task_id=task_id,
+        base_task_version=1,
+        revision_type="edit_of_confirmed",
+        proposed_fields={"titulo": "Obsoleta"},
+    )
+    db_session.add(stale_revision)
+    await db_session.flush()
+
+    stale = await _confirm(
+        client,
+        actor,
+        task_id,
+        expected_version=2,
+        revision_id=stale_revision.id,
+    )
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "version_conflict"
+
+    db_session.expire_all()
+    stored = await db_session.get(Task, task_id)
+    assert stored is not None
+    assert stored.version == 2
+    assert stored.titulo == "Primera"
+    events = await _sync_events(db_session, actor, task_id)
+    assert len(events) == 1
+
+
+async def test_confirm_rolls_back_the_task_when_the_outbox_insert_fails(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    actor = await actors.make_actor(db_session)
+    await _connect_calendar(db_session, actor)
+    task = await _confirmable_task(db_session, actor)
+    task_id = task.id
+
+    async def _broken_outbox(
+        db: AsyncSession, *, user_id: uuid.UUID, task: Task
+    ) -> None:
+        # `type` is NOT NULL: the failure happens after the task revision/version flush.
+        await db.execute(
+            pg_insert(OutboxEvent).values(
+                user_id=user_id,
+                resource_type="task",
+                resource_id=task.id,
+                resource_version=task.version,
+                payload={},
+                enabled=True,
+                blocked_reason=None,
+                dedupe_key="confirm:broken",
+            )
+        )
+        raise AssertionError("the invalid outbox insert must fail")
+
+    monkeypatch.setattr(task_service, "_ensure_confirmation_outbox", _broken_outbox)
+    with pytest.raises(IntegrityError):
+        async with db_session.begin_nested():
+            await task_service.confirm_task(
+                db_session, actor.user_id, task_id, expected_version=1
+            )
+
+    db_session.expire_all()
+    stored = await db_session.get(Task, task_id)
+    assert stored is not None
+    assert stored.status == "needs_review"
+    assert stored.version == 1
+    assert stored.calendar_sync_status == "not_requested"
+    assert stored.confirmed_at is None
+    assert stored.calendar_id is None
+    assert await _sync_events(db_session, actor, task_id) == []
+
+
+async def test_repeating_a_blocked_confirm_after_calendar_becomes_ready_enqueues_it(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    task = await _confirmable_task(db_session, actor)
+    task_id = task.id
+
+    blocked = await _confirm(client, actor, task_id, expected_version=1)
+    assert blocked.status_code == 202
+    assert blocked.json()["task"]["version"] == 2
+    assert blocked.json()["task"]["calendar_sync_status"] == "blocked"
+    assert blocked.json()["notice"] == "calendar_sync_blocked"
+    assert await _sync_events(db_session, actor, task_id) == []
+
+    await _connect_calendar(db_session, actor)
+    resumed = await _confirm(client, actor, task_id, expected_version=2)
+    assert resumed.status_code == 202, resumed.text
+    assert resumed.json()["task"]["version"] == 2
+    assert resumed.json()["task"]["calendar_sync_status"] == "pending"
+    assert resumed.json()["notice"] is None
+    db_session.expire_all()
+    stored = await db_session.get(Task, task_id)
+    assert stored is not None
+    assert stored.calendar_id == CALENDAR_ID
+    events = await _sync_events(db_session, actor, task_id)
+    assert len(events) == 1
+    assert events[0].resource_version == 2
+
+    repeat = await _confirm(client, actor, task_id, expected_version=2)
+    assert repeat.status_code == 202
+    assert repeat.json()["task"]["version"] == 2
+    events = await _sync_events(db_session, actor, task_id)
+    assert len(events) == 1
 
 
 # --- Lifecycle -------------------------------------------------------------------------
