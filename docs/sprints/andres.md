@@ -159,6 +159,6 @@
   failures** (missing `pg_dump`/`pg_restore`/`gpg`, pgvector 0.6 without
   `hnsw.iterative_scan`, and the migration subprocess reading the checkout `.env`);
   `ruff check .` and `mypy .` clean (340 source files); `check_refs.py` OK (1079 paths)
-  with the untracked `docs/context/` notes moved aside (the raw run lists only pre-existing
-  paths from those ignored files). No Google/provider call, secret, audio or `apps/web`
+  with the ignored local context notes moved aside (the raw run lists only pre-existing
+  paths from that ignored directory). No Google/provider call, secret, audio or `apps/web`
   change.
