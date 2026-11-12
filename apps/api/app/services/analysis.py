@@ -11,7 +11,8 @@ Dates come from `resolve_due`. The model's `due_date`, `due_at`, `all_day` and
 nothing else. Quotes still have to be the segment slice (`validate_analysis`); a miss
 drops the item. The surviving items are deduped by evidence and then turned into
 inserts, in-place updates, or pending revisions. A confirmed or edited task is never
-overwritten, and a revision is never activated here.
+overwritten, a terminal task never gains a revision, an unchanged proposal is a no-op,
+and a revision is never activated here.
 """
 
 from __future__ import annotations
@@ -62,9 +63,9 @@ from app.services.date_resolution import (
     resolve_due,
 )
 from app.services.llm import ChatMessage, LLMProvider
+from app.services.revisions import TERMINAL_TASK_STATUSES, record_pending_revision
 from app.services.summary import SummaryRejected, parse_summary_payload
 from app.services.task_evidence import persist_task_spans
-from app.services.tasks import _discard_pending_revisions
 from prompts.registry import (
     load_extraction_prompts,
     load_summary_prompts,
@@ -574,23 +575,25 @@ async def apply_task_writes(
                 transcript_version=transcript_version,
             )
             if updated == "revise":
-                await _revise_task(
+                await record_pending_revision(
                     db,
                     user_id=user_id,
                     task_id=write.task_id,
+                    proposed_fields=proposed_fields_payload(write.proposal),
+                    revision_type="reanalysis",
                     run_id=run_id,
-                    base_version=write.base_version,
-                    proposal=write.proposal,
+                    evidence_validated=True,
                 )
             continue
-        if write.kind is WriteKind.REVISE and write.base_version is not None:
-            await _revise_task(
+        if write.kind is WriteKind.REVISE:
+            await record_pending_revision(
                 db,
                 user_id=user_id,
                 task_id=write.task_id,
+                proposed_fields=proposed_fields_payload(write.proposal),
+                revision_type="reanalysis",
                 run_id=run_id,
-                base_version=write.base_version,
-                proposal=write.proposal,
+                evidence_validated=True,
             )
 
 
@@ -653,11 +656,15 @@ def _write_for(
         task_id = None if current is None else current.task_id
         version = None if current is None else current.version
         return TaskWrite(proposal, WriteKind.SKIP, task_id, version)
-    protected = current.status in _PROTECTED_STATUSES or current.version > 1
+    if current.status in TERMINAL_TASK_STATUSES:
+        # `confirm` rejects completed/dismissed tasks, so a revision would be dead work.
+        return TaskWrite(proposal, WriteKind.SKIP, current.task_id, current.version)
+    if current.fields.same_as(proposal_fields(proposal)):
+        # Nothing new to compare: keep the active task and any pending manual edit.
+        return TaskWrite(proposal, WriteKind.SKIP, current.task_id, current.version)
+    protected = current.status == "confirmed" or current.version > 1
     if protected:
         return TaskWrite(proposal, WriteKind.REVISE, current.task_id, current.version)
-    if current.fields.same_as(proposal_fields(proposal)):
-        return TaskWrite(proposal, WriteKind.SKIP, current.task_id, current.version)
     return TaskWrite(proposal, WriteKind.UPDATE, current.task_id, current.version)
 
 
@@ -883,34 +890,3 @@ async def _update_task(
         replace=True,
     )
     return "updated"
-
-
-async def _revise_task(
-    db: AsyncSession,
-    *,
-    user_id: UUID,
-    task_id: UUID,
-    run_id: UUID,
-    base_version: int,
-    proposal: AggregatedProposal[PreparedProposal],
-) -> None:
-    # Serialize with PATCH/confirm on the same task, then supersede any proposal still
-    # pending: the partial unique index `task_revisions_one_pending` allows exactly one.
-    await db.execute(
-        select(Task.id)
-        .where(Task.user_id == user_id, Task.id == task_id)
-        .with_for_update()
-    )
-    await _discard_pending_revisions(db, user_id, task_id)
-    db.add(
-        TaskRevision(
-            user_id=user_id,
-            task_id=task_id,
-            run_id=run_id,
-            base_task_version=base_version,
-            revision_type="reanalysis",
-            proposed_fields=proposed_fields_payload(proposal),
-            evidence_validated=True,
-            status="pending_confirmation",
-        )
-    )

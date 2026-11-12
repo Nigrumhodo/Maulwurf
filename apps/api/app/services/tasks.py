@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import and_, exists, func, or_, select, update
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -74,6 +74,10 @@ from app.services.analysis_windows import EvidenceSpan
 from app.services.date_resolution import render_due_text
 from app.services.oauth_google import missing_calendar_scopes
 from app.services.outbox import SYNC_TASK_EVENT
+from app.services.revisions import (
+    discard_pending_revisions,
+    record_pending_revision,
+)
 from app.services.task_evidence import (
     ProvenanceInvalid,
     load_task_evidence,
@@ -90,8 +94,6 @@ _MAX_LIMIT = 200
 _MAX_CURSOR_LENGTH = 512
 _CURSOR_INVALID = "cursor inválido o malformado"
 CALENDAR_SYNC_BLOCKED_NOTICE = "calendar_sync_blocked"
-PENDING_REVISION_STATUS = "pending_confirmation"
-DISCARDED_REVISION_STATUS = "discarded"
 
 _DATE_KEYS = frozenset({"due_date", "event_start_date", "event_end_date_exclusive"})
 _DATETIME_KEYS = frozenset({"due_at", "event_start_at", "event_end_at"})
@@ -857,27 +859,6 @@ async def create_task(db: AsyncSession, user_id: uuid.UUID, body: TaskCreate) ->
     return (await _assemble(db, user_id, [task]))[0]
 
 
-async def _discard_pending_revisions(
-    db: AsyncSession, user_id: uuid.UUID, task_id: uuid.UUID
-) -> None:
-    """Keep at most one pending proposal per task.
-
-    The partial unique index is the database guard; this update retires the previous
-    proposal before a replacement is inserted and any legacy sibling after a revision is
-    promoted.
-    """
-    await db.execute(
-        update(TaskRevision)
-        .where(
-            TaskRevision.user_id == user_id,
-            TaskRevision.task_id == task_id,
-            TaskRevision.status == PENDING_REVISION_STATUS,
-        )
-        .values(status=DISCARDED_REVISION_STATUS)
-        .execution_options(synchronize_session="fetch")
-    )
-
-
 async def _has_persisted_provenance(
     db: AsyncSession, user_id: uuid.UUID, task_id: uuid.UUID
 ) -> bool:
@@ -941,18 +922,16 @@ async def patch_task(
         return (await _assemble(db, user_id, [task]))[0]
 
     if task.status == "confirmed":
-        await _discard_pending_revisions(db, user_id, task.id)
-        revision = TaskRevision(
+        # The revision service locks the same row and bases the proposal on its current
+        # version, so a concurrent PATCH/confirm cannot leave an unconfirmable revision.
+        await record_pending_revision(
+            db,
             user_id=user_id,
             task_id=task.id,
-            base_task_version=task.version,
-            revision_type="edit_of_confirmed",
             proposed_fields=_revision_payload(after),
+            revision_type="edit_of_confirmed",
             evidence_validated=True,
-            status="pending_confirmation",
         )
-        db.add(revision)
-        await db.flush()
         return (await _assemble(db, user_id, [task]))[0]
 
     due_changed = _due_changed(before, after)
@@ -1237,7 +1216,7 @@ async def confirm_task(
         revision.status = "activated"
         revision.activated_at = now
     await db.flush()
-    await _discard_pending_revisions(db, user_id, task.id)
+    await discard_pending_revisions(db, user_id, task.id)
     await _copy_evidence_version(
         db,
         user_id=user_id,
