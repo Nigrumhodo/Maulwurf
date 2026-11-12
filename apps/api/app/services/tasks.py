@@ -1,4 +1,4 @@
-"""M4 task endpoints: reads, proposals, edits, confirmation and lifecycle (A3.3).
+"""M4 task endpoints: reads, proposals, edits, confirmation and lifecycle (A3.3/A3.4).
 
 The active `tasks` row is the only source of truth. Reads reconstruct evidence from
 `task_sources` + `task_evidence` + the immutable segment text (A3.2), never from a quote
@@ -12,9 +12,10 @@ token:
   task into a `pending_confirmation` revision, without touching the active columns or
   Google. `completed`/`dismissed` are terminal.
 - `confirm` validates the resolved date, the Calendar block and the evidence, promotes at
-  most one revision and bumps `version`. A3.3 does not create the Calendar outbox: the
-  task is confirmed with `calendar_sync_status='blocked'` and a closed notice; A3.4 owns
-  the atomic task+outbox transaction.
+  most one revision and bumps `version` in the same transaction that creates or reuses one
+  `sync_task_event` outbox row. Without a ready Calendar integration the task is still
+  confirmed but stays `calendar_sync_status='blocked'` and no event is written; a later
+  reconnect (J3.3) or a repeat confirmation resumes it.
 - `dismiss`/`complete` reuse the J3.6 lifecycle adapter, cancel unsent reminders and keep
   the linked Calendar event with a notice.
 
@@ -35,12 +36,16 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import and_, exists, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError, not_found, validation_failed
 from app.core.validation import is_iana_timezone
 from app.models import (
     Audio,
+    CalendarSettings,
+    GoogleCredential,
+    OutboxEvent,
     Segment,
     Subject,
     Task,
@@ -67,6 +72,8 @@ from app.schemas.tasks import (
 )
 from app.services.analysis_windows import EvidenceSpan
 from app.services.date_resolution import render_due_text
+from app.services.oauth_google import missing_calendar_scopes
+from app.services.outbox import SYNC_TASK_EVENT
 from app.services.task_evidence import (
     ProvenanceInvalid,
     load_task_evidence,
@@ -1032,6 +1039,133 @@ async def _validate_confirmable(
             raise _evidence_invalid()
 
 
+def _calendar_target(value: str | None) -> str | None:
+    """The stored write calendar, trimmed; blank means no target."""
+    if value is None:
+        return None
+    return value.strip() or None
+
+
+def _calendar_ready(
+    credential: GoogleCredential | None, target_calendar_id: str | None
+) -> bool:
+    """Whether a confirmation may enqueue a Calendar write right now.
+
+    A partial scope grant counts as "without Google": enqueuing would only produce a job
+    that fails at the provider. The stored grant is not a live probe; a scope revoked at
+    Google still fails in the worker (D3.7 owns that recovery).
+    """
+    if credential is None or credential.status != "connected":
+        return False
+    if _calendar_target(target_calendar_id) is None:
+        return False
+    return not missing_calendar_scopes(credential.scopes or [])
+
+
+async def _calendar_state(
+    db: AsyncSession, user_id: uuid.UUID
+) -> tuple[str | None, bool]:
+    """The target calendar to snapshot and whether a write can be enqueued now."""
+    target = _calendar_target(
+        await db.scalar(
+            select(CalendarSettings.calendar_write_calendar_id).where(
+                CalendarSettings.user_id == user_id
+            )
+        )
+    )
+    if target is None:
+        return None, False
+    credential = await db.scalar(
+        select(GoogleCredential).where(GoogleCredential.user_id == user_id)
+    )
+    return target, _calendar_ready(credential, target)
+
+
+def _confirmation_dedupe_key(*, version: int, due_version: int, cycle: int) -> str:
+    """Deterministic per-cycle key; the unique constraint closes the double-click race."""
+    return f"confirm:{version}:{due_version}:{cycle}"
+
+
+async def _active_sync_event(
+    db: AsyncSession, *, user_id: uuid.UUID, task_id: uuid.UUID, version: int
+) -> uuid.UUID | None:
+    found: uuid.UUID | None = await db.scalar(
+        select(OutboxEvent.id)
+        .where(
+            OutboxEvent.user_id == user_id,
+            OutboxEvent.type == SYNC_TASK_EVENT,
+            OutboxEvent.resource_id == task_id,
+            OutboxEvent.resource_version == version,
+            OutboxEvent.status.in_(("pending", "dispatched")),
+        )
+        .order_by(OutboxEvent.created_at.desc(), OutboxEvent.id.desc())
+        .limit(1)
+    )
+    return found
+
+
+async def _sync_event_cycle(
+    db: AsyncSession, *, user_id: uuid.UUID, task_id: uuid.UUID
+) -> int:
+    count = await db.scalar(
+        select(func.count())
+        .select_from(OutboxEvent)
+        .where(
+            OutboxEvent.user_id == user_id,
+            OutboxEvent.type == SYNC_TASK_EVENT,
+            OutboxEvent.resource_id == task_id,
+        )
+    )
+    return int(count or 0)
+
+
+async def _ensure_confirmation_outbox(
+    db: AsyncSession, *, user_id: uuid.UUID, task: Task
+) -> uuid.UUID:
+    """Reuse the live event for this task version, or insert the next cycle.
+
+    Runs in the request transaction: the router's single commit publishes the task, its
+    revision/evidence copy and this row together. `ON CONFLICT` plus the unique constraint
+    closes the race between two confirmations that passed the same read.
+    """
+    existing = await _active_sync_event(
+        db, user_id=user_id, task_id=task.id, version=task.version
+    )
+    if existing is not None:
+        return existing
+    cycle = await _sync_event_cycle(db, user_id=user_id, task_id=task.id)
+    inserted = await db.execute(
+        pg_insert(OutboxEvent)
+        .values(
+            user_id=user_id,
+            type=SYNC_TASK_EVENT,
+            resource_type="task",
+            resource_id=task.id,
+            resource_version=task.version,
+            payload={},
+            # Not cleanup-gated: the CHECK requires enabled events without a blocked reason.
+            enabled=True,
+            blocked_reason=None,
+            dedupe_key=_confirmation_dedupe_key(
+                version=task.version, due_version=task.due_version, cycle=cycle
+            ),
+        )
+        .on_conflict_do_nothing(
+            index_elements=["type", "resource_id", "resource_version", "dedupe_key"]
+        )
+        .returning(OutboxEvent.id)
+    )
+    event_id = inserted.scalar_one_or_none()
+    if event_id is not None:
+        return event_id
+    existing = await _active_sync_event(
+        db, user_id=user_id, task_id=task.id, version=task.version
+    )
+    if existing is not None:
+        return existing
+    raise RuntimeError("sync_task_event could not be created or reused")
+
+
 async def confirm_task(
     db: AsyncSession,
     user_id: uuid.UUID,
@@ -1064,8 +1198,25 @@ async def confirm_task(
     else:
         after = before
 
+    target_calendar_id, calendar_ready = await _calendar_state(db, user_id)
+
+    # A repeat without a revision is a safe double click. It never bumps the version; it
+    # may still resume a blocked confirmation once the integration is ready (first connect
+    # or a reconnect that has not run J3.3 yet).
     if revision is None and task.status == "confirmed":
-        return (await _assemble(db, user_id, [task]))[0], None
+        if task.calendar_sync_status == "blocked" and calendar_ready:
+            task.calendar_sync_status = "pending"
+            if target_calendar_id is not None:
+                task.calendar_id = target_calendar_id
+            await db.flush()
+            await _ensure_confirmation_outbox(db, user_id=user_id, task=task)
+            return (await _assemble(db, user_id, [task]))[0], None
+        notice = (
+            CALENDAR_SYNC_BLOCKED_NOTICE
+            if task.calendar_sync_status == "blocked"
+            else None
+        )
+        return (await _assemble(db, user_id, [task]))[0], notice
 
     await _validate_confirmable(db, user_id, task, after)
 
@@ -1077,9 +1228,11 @@ async def confirm_task(
         task.due_version += 1
     task.status = "confirmed"
     task.confirmed_at = task.confirmed_at or now
-    # A3.3 deliberately does not create the Calendar outbox yet; A3.4 replaces this with
-    # the atomic task+outbox transaction and `pending`.
-    task.calendar_sync_status = "blocked"
+    # Keep the target even while blocked: J3.4 blocks with `calendar_missing` without it,
+    # and J3.3 needs the ID to resume the sync after a reconnect. Never clear an old link.
+    if target_calendar_id is not None:
+        task.calendar_id = target_calendar_id
+    task.calendar_sync_status = "pending" if calendar_ready else "blocked"
     if revision is not None:
         revision.status = "activated"
         revision.activated_at = now
@@ -1092,7 +1245,10 @@ async def confirm_task(
         from_version=old_version,
         to_version=task.version,
     )
-    return (await _assemble(db, user_id, [task]))[0], CALENDAR_SYNC_BLOCKED_NOTICE
+    if calendar_ready:
+        await _ensure_confirmation_outbox(db, user_id=user_id, task=task)
+    notice = None if calendar_ready else CALENDAR_SYNC_BLOCKED_NOTICE
+    return (await _assemble(db, user_id, [task]))[0], notice
 
 
 @asynccontextmanager

@@ -42,10 +42,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import OutboxEvent
+from app.services.outbox import SYNC_TASK_EVENT
 
 logger = logging.getLogger(__name__)
 
-SYNC_TASK_EVENT = "sync_task_event"
 # Only a confirmed task owes a Calendar event; completed/dismissed rows are tombstones.
 _RESUMABLE_TASKS = text(
     """
