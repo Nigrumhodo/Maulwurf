@@ -180,7 +180,7 @@
   **48 passed**; full API integration **911 passed, 3 environment-only failures** (two
   backup/restore cases need `pg_dump`/`pg_restore`/`gpg`, and the migration subprocess
   reads the checkout `.env` with a non-schema embedding dimension), none in A3.5 paths;
-  `ruff check .` clean; `mypy .` clean (342 files). PR #167; Quality CI run `43165105932`
+  `ruff check .` clean; `mypy .` clean (342 files). PR #167; Quality CI run `43345816045`
   is 17/17 green. No provider call, secret, audio or `apps/web` change.
 - 2026-11-12 · A3.5 QA fix: `record_pending_revision` now selects the locked `Task` with
   `populate_existing=True`. A planner that loaded the task before a concurrent `PATCH`
