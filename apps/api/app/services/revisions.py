@@ -79,6 +79,9 @@ async def record_pending_revision(
             select(Task)
             .where(Task.user_id == user_id, Task.id == task_id)
             .with_for_update()
+            # The caller may have loaded the task before a concurrent PATCH committed;
+            # the lock must refresh the identity map, not just acquire the row lock.
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
     if task is None or task.status in TERMINAL_TASK_STATUSES:

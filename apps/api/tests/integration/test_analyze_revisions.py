@@ -10,8 +10,9 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, date, datetime
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.models import (
     Audio,
@@ -36,6 +37,7 @@ from app.services.analysis import (
     proposal_fields,
 )
 from app.services.analysis_windows import AggregatedProposal, EvidenceSpan
+from app.services.revisions import record_pending_revision
 from app.services.tasks import confirm_task, patch_task
 from app.workers.jobs.analyze import run_analyze
 from prompts.registry import load_summary_prompts
@@ -707,3 +709,87 @@ async def test_a_version_bump_between_the_plan_and_the_write_is_the_revision_bas
     assert revision is not None
     assert revision.base_task_version == 2
     assert revision.proposed_fields["titulo"] == "Replacement"
+
+
+async def test_record_pending_revision_refreshes_a_stale_task_under_the_lock(
+    migrated_database_url: str,
+) -> None:
+    """A planner-loaded Task must not hide a concurrent PATCH behind the identity map.
+
+    `load_existing_proposals` reads the task before the write. Without
+    `populate_existing`, the later `SELECT ... FOR UPDATE` keeps the old version, so the
+    revision would be stored with a base the user can no longer confirm.
+    """
+    engine = create_async_engine(migrated_database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    user_id: uuid.UUID | None = None
+
+    try:
+        async with factory() as db:
+            actor = await actors.make_actor(db)
+            user_id = actor.user_id
+            audio = await actors.make_audio(db, actor)
+            run = ProcessingRun(
+                user_id=actor.user_id,
+                audio_id=audio.id,
+                stage="analyze",
+                transcript_version=1,
+                config_version="test-config",
+                prompt_version="v1",
+                status="running",
+            )
+            task = Task(
+                user_id=actor.user_id,
+                audio_id=audio.id,
+                subject_id=audio.subject_id,
+                source="extraction",
+                tipo="examen",
+                titulo="Original title",
+                timezone=audio.class_timezone,
+                all_day=False,
+                date_status="missing",
+                status="needs_review",
+            )
+            db.add(run)
+            db.add(task)
+            await db.flush()
+            task_id = task.id
+            run_id = run.id
+            await db.commit()
+
+        async with factory() as planner:
+            stale = (
+                await planner.execute(select(Task).where(Task.id == task_id))
+            ).scalar_one()
+            assert stale.version == 1
+
+            async with factory() as editor:
+                edited = (
+                    await editor.execute(select(Task).where(Task.id == task_id))
+                ).scalar_one()
+                edited.titulo = "Edited title"
+                edited.version = 2
+                await editor.commit()
+
+            revision = await record_pending_revision(
+                planner,
+                user_id=user_id,
+                task_id=task_id,
+                proposed_fields={"titulo": "Replacement title"},
+                revision_type="reanalysis",
+                run_id=run_id,
+            )
+            await planner.flush()
+            assert revision is not None
+            assert revision.base_task_version == 2
+            assert stale.version == 2
+            assert stale.titulo == "Edited title"
+            await planner.rollback()
+    finally:
+        if user_id is not None:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text("DELETE FROM users WHERE id = :user_id"),
+                    {"user_id": user_id},
+                )
+        await engine.dispose()
