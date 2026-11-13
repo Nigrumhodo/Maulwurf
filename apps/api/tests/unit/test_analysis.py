@@ -300,7 +300,7 @@ async def test_a_summary_that_is_too_short_fails_the_batch() -> None:
 
 def test_a_confirmed_task_becomes_a_pending_revision() -> None:
     proposal = _proposal()
-    current = _existing(proposal, status="confirmed")
+    current = _existing(proposal, status="confirmed", titulo="Confirmed title")
     writes = plan_task_writes(RUN, (proposal,), (current,), set())
     assert [(write.kind, write.task_id, write.base_version) for write in writes] == [
         (WriteKind.REVISE, current.task_id, 1)
@@ -309,15 +309,32 @@ def test_a_confirmed_task_becomes_a_pending_revision() -> None:
 
 def test_an_edited_task_is_not_overwritten() -> None:
     proposal = _proposal()
-    current = _existing(proposal, status="needs_review", version=2)
+    current = _existing(
+        proposal, status="needs_review", version=2, titulo="Edited title"
+    )
     writes = plan_task_writes(RUN, (proposal,), (current,), set())
     assert writes[0].kind is WriteKind.REVISE
     assert writes[0].task_id == current.task_id
 
 
-def test_the_same_run_does_not_publish_twice() -> None:
+def test_a_dismissed_or_completed_task_is_not_revised() -> None:
+    proposal = _proposal()
+    for status in ("dismissed", "completed"):
+        current = _existing(proposal, status=status, titulo="Closed title")
+        writes = plan_task_writes(RUN, (proposal,), (current,), set())
+        assert writes[0].kind is WriteKind.SKIP
+
+
+def test_an_unchanged_proposal_does_not_create_a_revision() -> None:
     proposal = _proposal()
     current = _existing(proposal, status="confirmed")
+    writes = plan_task_writes(RUN, (proposal,), (current,), set())
+    assert writes[0].kind is WriteKind.SKIP
+
+
+def test_the_same_run_does_not_publish_twice() -> None:
+    proposal = _proposal()
+    current = _existing(proposal, status="confirmed", titulo="Confirmed title")
     first = plan_task_writes(RUN, (proposal,), (current,), set())
     assert first[0].kind is WriteKind.REVISE
     second = plan_task_writes(RUN, (proposal,), (current,), {current.task_id})

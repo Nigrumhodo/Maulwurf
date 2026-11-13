@@ -724,6 +724,47 @@ async def test_editing_a_confirmed_task_creates_a_revision_without_touching_it(
     assert stored.activated_at is not None
 
 
+async def test_editing_a_confirmed_task_does_not_touch_its_calendar_event_or_outbox(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    task = await _confirmable_task(
+        db_session,
+        actor,
+        status="confirmed",
+        calendar_sync_status="synced",
+        calendar_id=CALENDAR_ID,
+        calendar_event_id="evt-existing",
+        calendar_etag="etag-1",
+    )
+    task_id = task.id
+    original_title = task.titulo
+
+    response = await client.patch(
+        f"/tasks/{task_id}",
+        json={"version": 1, "titulo": "Título propuesto"},
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["titulo"] == original_title
+    assert body["version"] == 1
+    assert body["calendar_sync_status"] == "synced"
+    assert body["event_block"]["start_date"] == DUE_DAY.isoformat()
+    assert body["pending_revision"]["base_task_version"] == 1
+    assert body["pending_revision"]["proposed_fields"]["titulo"] == "Título propuesto"
+
+    db_session.expire_all()
+    stored = await db_session.get(Task, task_id)
+    assert stored is not None
+    assert stored.calendar_id == CALENDAR_ID
+    assert stored.calendar_event_id == "evt-existing"
+    assert stored.calendar_etag == "etag-1"
+    assert stored.calendar_sync_status == "synced"
+    assert await _sync_events(db_session, actor, task_id) == []
+
+
 async def test_two_patches_keep_only_the_latest_pending_revision(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

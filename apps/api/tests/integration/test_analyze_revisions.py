@@ -4,13 +4,15 @@ The PATCH half (an edit creates ``pending_confirmation``) stays with A3.5. This 
 drives ``analyze(audio_id)`` against PostgreSQL with a scripted model: no provider call.
 """
 
+import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.models import (
     Audio,
@@ -23,6 +25,7 @@ from app.models import (
     TaskSource,
     Transcript,
 )
+from app.schemas.tasks import TaskEventBlockIn, TaskOut, TaskPatch
 from app.services.analysis import (
     ExistingProposal,
     ExtractionModel,
@@ -34,6 +37,8 @@ from app.services.analysis import (
     proposal_fields,
 )
 from app.services.analysis_windows import AggregatedProposal, EvidenceSpan
+from app.services.revisions import record_pending_revision
+from app.services.tasks import confirm_task, patch_task
 from app.workers.jobs.analyze import run_analyze
 from prompts.registry import load_summary_prompts
 from tests.integration import actors
@@ -42,6 +47,8 @@ pytestmark = pytest.mark.integration
 
 QUOTE = "the midterm exam will be on Monday, September 21"
 NOW = datetime(2026, 9, 16, 15, tzinfo=UTC)
+DUE_DAY = date(2026, 9, 28)
+DUE_END = date(2026, 9, 29)
 
 
 def _document(title: str) -> str:
@@ -120,6 +127,65 @@ async def _class(db: AsyncSession) -> tuple[actors.Actor, Audio]:
     await db.flush()
     _Model.segment_id = str(segment.id)
     return actor, audio
+
+
+async def _task(db: AsyncSession, user_id: uuid.UUID) -> Task:
+    return (await db.execute(select(Task).where(Task.user_id == user_id))).scalar_one()
+
+
+async def _latest_revision(
+    db: AsyncSession, task_id: uuid.UUID, *, status: str | None = None
+) -> TaskRevision | None:
+    stmt = select(TaskRevision).where(TaskRevision.task_id == task_id)
+    if status is not None:
+        stmt = stmt.where(TaskRevision.status == status)
+    stmt = stmt.order_by(TaskRevision.created_at.desc(), TaskRevision.id.desc())
+    return (await db.scalars(stmt)).first()
+
+
+async def _force_new_run(db: AsyncSession, audio_id: uuid.UUID) -> None:
+    run = (
+        await db.execute(select(ProcessingRun).where(ProcessingRun.audio_id == audio_id))
+    ).scalar_one()
+    run.status = "failed"
+    run.finished_at = None
+    await db.flush()
+
+
+async def _add_event_block(
+    db: AsyncSession, user_id: uuid.UUID, task_id: uuid.UUID, version: int
+) -> None:
+    await patch_task(
+        db,
+        user_id,
+        task_id,
+        TaskPatch(
+            version=version,
+            event_block=TaskEventBlockIn(
+                start_date=DUE_DAY, end_date_exclusive=DUE_END
+            ),
+        ),
+    )
+    await db.flush()
+
+
+async def _confirm(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    task_id: uuid.UUID,
+    version: int,
+    *,
+    revision_id: uuid.UUID | None = None,
+) -> TaskOut:
+    out, _notice = await confirm_task(
+        db,
+        user_id,
+        task_id,
+        expected_version=version,
+        revision_id=revision_id,
+    )
+    await db.flush()
+    return out
 
 
 async def test_reanalysis_revises_a_confirmed_task_without_changing_it(
@@ -338,3 +404,392 @@ async def test_confirming_between_the_plan_and_the_write_keeps_the_title(
     ).scalar_one()
     assert revision.status == "pending_confirmation"
     assert revision.proposed_fields["titulo"] == "Replacement"
+
+
+async def test_reanalysis_revises_an_edited_task_without_touching_it(
+    db_session: AsyncSession,
+) -> None:
+    actor, audio = await _class(db_session)
+    model = _Model("First title")
+
+    def models() -> ExtractionModel:
+        return model
+
+    await run_analyze(_factory(db_session), models, audio.id, job_try=1, now=NOW)
+    task = await _task(db_session, actor.user_id)
+    task_id = task.id
+    audio_id = audio.id
+    await patch_task(
+        db_session,
+        actor.user_id,
+        task_id,
+        TaskPatch(
+            version=1,
+            titulo="Edited title",
+            event_block=TaskEventBlockIn(
+                start_date=DUE_DAY, end_date_exclusive=DUE_END
+            ),
+        ),
+    )
+    await db_session.flush()
+    db_session.expire_all()
+    edited = await db_session.get(Task, task_id)
+    assert edited is not None
+    assert edited.titulo == "Edited title"
+    assert edited.version == 2
+
+    await _force_new_run(db_session, audio_id)
+    model.title = "Second title"
+    await run_analyze(_factory(db_session), models, audio_id, job_try=1, now=NOW)
+    await db_session.flush()
+    db_session.expire_all()
+
+    active = await db_session.get(Task, task_id)
+    assert active is not None
+    assert active.titulo == "Edited title"
+    assert active.version == 2
+    revision = await _latest_revision(db_session, task_id)
+    assert revision is not None
+    assert revision.revision_type == "reanalysis"
+    assert revision.status == "pending_confirmation"
+    assert revision.base_task_version == 2
+    assert revision.proposed_fields["titulo"] == "Second title"
+
+    promoted = await _confirm(
+        db_session, actor.user_id, task_id, 2, revision_id=revision.id
+    )
+    assert promoted.titulo == "Second title"
+    assert promoted.version == 3
+
+
+async def test_reanalysis_leaves_an_activated_revision_untouched(
+    db_session: AsyncSession,
+) -> None:
+    actor, audio = await _class(db_session)
+    model = _Model("First title")
+
+    def models() -> ExtractionModel:
+        return model
+
+    await run_analyze(_factory(db_session), models, audio.id, job_try=1, now=NOW)
+    task = await _task(db_session, actor.user_id)
+    task_id = task.id
+    await _add_event_block(db_session, actor.user_id, task_id, 1)
+    await _confirm(db_session, actor.user_id, task_id, 2)
+
+    activated = TaskRevision(
+        user_id=actor.user_id,
+        task_id=task_id,
+        base_task_version=3,
+        revision_type="edit_of_confirmed",
+        proposed_fields={"titulo": "Already activated"},
+        evidence_validated=True,
+        status="activated",
+        activated_at=NOW,
+    )
+    db_session.add(activated)
+    await db_session.flush()
+    activated_id = activated.id
+    activated_payload = dict(activated.proposed_fields)
+
+    await _force_new_run(db_session, audio.id)
+    model.title = "Second title"
+    await run_analyze(_factory(db_session), models, audio.id, job_try=1, now=NOW)
+    await db_session.flush()
+    db_session.expire_all()
+
+    stored = await db_session.get(TaskRevision, activated_id)
+    assert stored is not None
+    assert stored.status == "activated"
+    assert stored.activated_at == NOW
+    assert stored.proposed_fields == activated_payload
+
+    pending = await _latest_revision(db_session, task_id, status="pending_confirmation")
+    assert pending is not None
+    assert pending.revision_type == "reanalysis"
+    assert pending.base_task_version == 3
+    assert pending.proposed_fields["titulo"] == "Second title"
+
+    active = await db_session.get(Task, task_id)
+    assert active is not None
+    assert active.titulo == "First title"
+    assert active.version == 3
+
+
+async def test_reanalysis_supersedes_a_pending_edit_without_mutating_the_task(
+    db_session: AsyncSession,
+) -> None:
+    actor, audio = await _class(db_session)
+    model = _Model("First title")
+
+    def models() -> ExtractionModel:
+        return model
+
+    await run_analyze(_factory(db_session), models, audio.id, job_try=1, now=NOW)
+    task = await _task(db_session, actor.user_id)
+    task_id = task.id
+    await _add_event_block(db_session, actor.user_id, task_id, 1)
+    await _confirm(db_session, actor.user_id, task_id, 2)
+    await patch_task(
+        db_session,
+        actor.user_id,
+        task_id,
+        TaskPatch(version=3, titulo="Manual edit"),
+    )
+    await db_session.flush()
+    manual = await _latest_revision(db_session, task_id)
+    assert manual is not None
+    manual_id = manual.id
+
+    await _force_new_run(db_session, audio.id)
+    model.title = "Second title"
+    await run_analyze(_factory(db_session), models, audio.id, job_try=1, now=NOW)
+    await db_session.flush()
+    db_session.expire_all()
+
+    discarded = await db_session.get(TaskRevision, manual_id)
+    assert discarded is not None
+    assert discarded.status == "discarded"
+    pending = await _latest_revision(db_session, task_id, status="pending_confirmation")
+    assert pending is not None
+    assert pending.revision_type == "reanalysis"
+    assert pending.base_task_version == 3
+    active = await db_session.get(Task, task_id)
+    assert active is not None
+    assert active.titulo == "First title"
+    assert active.version == 3
+
+
+@pytest.mark.parametrize("status", ["dismissed", "completed"])
+async def test_reanalysis_skips_terminal_tasks(
+    db_session: AsyncSession, status: str
+) -> None:
+    actor, audio = await _class(db_session)
+    model = _Model("First title")
+
+    def models() -> ExtractionModel:
+        return model
+
+    await run_analyze(_factory(db_session), models, audio.id, job_try=1, now=NOW)
+    task = await _task(db_session, actor.user_id)
+    task.status = status
+    await db_session.flush()
+    task_id = task.id
+
+    await _force_new_run(db_session, audio.id)
+    model.title = "Ignored"
+    await run_analyze(_factory(db_session), models, audio.id, job_try=1, now=NOW)
+    await db_session.flush()
+    db_session.expire_all()
+
+    active = await db_session.get(Task, task_id)
+    assert active is not None
+    assert active.status == status
+    assert active.titulo == "First title"
+    assert await _latest_revision(db_session, task_id) is None
+
+
+async def test_reanalysis_with_an_unchanged_proposal_creates_no_revision(
+    db_session: AsyncSession,
+) -> None:
+    actor, audio = await _class(db_session)
+    model = _Model("First title")
+
+    def models() -> ExtractionModel:
+        return model
+
+    await run_analyze(_factory(db_session), models, audio.id, job_try=1, now=NOW)
+    task = await _task(db_session, actor.user_id)
+    task_id = task.id
+    await _add_event_block(db_session, actor.user_id, task_id, 1)
+    await _confirm(db_session, actor.user_id, task_id, 2)
+    assert await _latest_revision(db_session, task_id) is None
+
+    await _force_new_run(db_session, audio.id)
+    await run_analyze(_factory(db_session), models, audio.id, job_try=1, now=NOW)
+    await db_session.flush()
+    db_session.expire_all()
+
+    active = await db_session.get(Task, task_id)
+    assert active is not None
+    assert active.titulo == "First title"
+    assert active.version == 3
+    assert await _latest_revision(db_session, task_id) is None
+
+
+async def test_a_version_bump_between_the_plan_and_the_write_is_the_revision_base(
+    db_session: AsyncSession,
+) -> None:
+    actor, audio = await _class(db_session)
+    segment = (
+        await db_session.execute(select(Segment).where(Segment.user_id == actor.user_id))
+    ).scalar_one()
+    run = ProcessingRun(
+        user_id=actor.user_id,
+        audio_id=audio.id,
+        stage="analyze",
+        transcript_version=1,
+        config_version="test-config",
+        prompt_version="v1",
+        status="running",
+    )
+    task = Task(
+        user_id=actor.user_id,
+        audio_id=audio.id,
+        subject_id=audio.subject_id,
+        source="extraction",
+        tipo="examen",
+        titulo="Original",
+        timezone=audio.class_timezone,
+        all_day=False,
+        date_status="missing",
+        status="needs_review",
+    )
+    db_session.add(run)
+    db_session.add(task)
+    await db_session.flush()
+    parsed = parse_extraction_payload(
+        _document("Replacement") % str(segment.id),
+        class_date=audio.class_date,
+        class_timezone=audio.class_timezone,
+        now=NOW,
+    )
+    proposal = AggregatedProposal(
+        value=PreparedProposal(
+            item=parsed.result.items[0], date_reason=parsed.reasons[0]
+        ),
+        evidence=(
+            EvidenceSpan(
+                segment_id=segment.id,
+                char_start=0,
+                char_end=len(QUOTE),
+                quote=QUOTE,
+            ),
+        ),
+    )
+    fields = proposal_fields(proposal)
+    existing = ExistingProposal(
+        task_id=task.id,
+        identity=proposal.identity,
+        status="needs_review",
+        version=1,
+        fields=type(fields)(
+            tipo=fields.tipo,
+            titulo="Original",
+            detalle=fields.detalle,
+            due_date=fields.due_date,
+            due_at=fields.due_at,
+            timezone=fields.timezone,
+            all_day=fields.all_day,
+            date_status=fields.date_status,
+            confidence_score=fields.confidence_score,
+            date_reason=fields.date_reason,
+        ),
+    )
+    writes = plan_task_writes(run.id, (proposal,), (existing,), set())
+    assert writes[0].kind is WriteKind.UPDATE
+
+    task.titulo = "Edited title"
+    task.version = 2
+    await db_session.flush()
+    await apply_task_writes(
+        db_session,
+        user_id=actor.user_id,
+        audio_id=audio.id,
+        subject_id=audio.subject_id,
+        transcript_id=segment.transcript_id,
+        transcript_version=1,
+        run_id=run.id,
+        writes=writes,
+    )
+    await db_session.refresh(task)
+    assert task.titulo == "Edited title"
+    assert task.version == 2
+    revision = await _latest_revision(db_session, task.id)
+    assert revision is not None
+    assert revision.base_task_version == 2
+    assert revision.proposed_fields["titulo"] == "Replacement"
+
+
+async def test_record_pending_revision_refreshes_a_stale_task_under_the_lock(
+    migrated_database_url: str,
+) -> None:
+    """A planner-loaded Task must not hide a concurrent PATCH behind the identity map.
+
+    `load_existing_proposals` reads the task before the write. Without
+    `populate_existing`, the later `SELECT ... FOR UPDATE` keeps the old version, so the
+    revision would be stored with a base the user can no longer confirm.
+    """
+    engine = create_async_engine(migrated_database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    user_id: uuid.UUID | None = None
+
+    try:
+        async with factory() as db:
+            actor = await actors.make_actor(db)
+            user_id = actor.user_id
+            audio = await actors.make_audio(db, actor)
+            run = ProcessingRun(
+                user_id=actor.user_id,
+                audio_id=audio.id,
+                stage="analyze",
+                transcript_version=1,
+                config_version="test-config",
+                prompt_version="v1",
+                status="running",
+            )
+            task = Task(
+                user_id=actor.user_id,
+                audio_id=audio.id,
+                subject_id=audio.subject_id,
+                source="extraction",
+                tipo="examen",
+                titulo="Original title",
+                timezone=audio.class_timezone,
+                all_day=False,
+                date_status="missing",
+                status="needs_review",
+            )
+            db.add(run)
+            db.add(task)
+            await db.flush()
+            task_id = task.id
+            run_id = run.id
+            await db.commit()
+
+        async with factory() as planner:
+            stale = (
+                await planner.execute(select(Task).where(Task.id == task_id))
+            ).scalar_one()
+            assert stale.version == 1
+
+            async with factory() as editor:
+                edited = (
+                    await editor.execute(select(Task).where(Task.id == task_id))
+                ).scalar_one()
+                edited.titulo = "Edited title"
+                edited.version = 2
+                await editor.commit()
+
+            revision = await record_pending_revision(
+                planner,
+                user_id=user_id,
+                task_id=task_id,
+                proposed_fields={"titulo": "Replacement title"},
+                revision_type="reanalysis",
+                run_id=run_id,
+            )
+            await planner.flush()
+            assert revision is not None
+            assert revision.base_task_version == 2
+            assert stale.version == 2
+            assert stale.titulo == "Edited title"
+            await planner.rollback()
+    finally:
+        if user_id is not None:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text("DELETE FROM users WHERE id = :user_id"),
+                    {"user_id": user_id},
+                )
+        await engine.dispose()
