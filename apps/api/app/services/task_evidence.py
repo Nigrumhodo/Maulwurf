@@ -1,4 +1,4 @@
-"""Persisted task evidence and provenance (A3.2, ESPECIFICACION §M4).
+"""Persisted task evidence and provenance (A3.2/A3.6, ESPECIFICACION §M4).
 
 A proposal is reconstructible from PostgreSQL alone:
 
@@ -11,8 +11,10 @@ A proposal is reconstructible from PostgreSQL alone:
 
 The provenance rule is enforced here, before a row is written: a manual task has no
 sources, an extraction task needs at least one, and a chat proposal may be a general
-suggestion with none. Every span and quote is checked against the persisted segment text
-on write and again on read; the database can enforce the shape, not the words.
+suggestion with none. On write, `evidence_reconstruction` loads the L3.3 class view from
+PostgreSQL and rebuilds every quote from the segment text; the persisted quote is that
+slice, never a caller copy. The same check runs on read. The database can enforce the
+shape, not the words.
 
 Messages are fixed and never echo a quote or transcript text: both are untrusted data.
 """
@@ -27,8 +29,10 @@ from sqlalchemy import and_, delete, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Audio, Segment, Task, TaskEvidence, TaskSource, Transcript
+from app.services.analysis_validation import AnalysisValidationError
 from app.services.analysis_windows import EvidenceSpan
 from app.services.evidence import TextualEvidence, reliable_times
+from app.services.evidence_reconstruction import reconstruct_spans
 
 ORIGINS = frozenset({"extraction", "chat", "manual"})
 MANUAL = "manual"
@@ -61,12 +65,6 @@ def validate_provenance(source: str, spans: Sequence[EvidenceSpan]) -> None:
 
 
 @dataclass(frozen=True)
-class _SegmentView:
-    text: str
-    version: int
-
-
-@dataclass(frozen=True)
 class StoredTaskEvidence:
     """One reconstructed quote plus the provenance needed to read its class."""
 
@@ -89,6 +87,10 @@ async def persist_task_spans(
 ) -> tuple[TaskSource, ...]:
     """Validate and persist the spans (and their quotes) of one task.
 
+    The text is reconstructed from the L3.3 class view in PostgreSQL; a span of another
+    class, tenant, transcript or version, an out-of-range span or a quote that is not the
+    exact slice is rejected before anything is written.
+
     `replace=True` is the in-place reanalysis path: the task's previous evidence and
     sources are removed in the same transaction before the new validated set is written.
     Nothing is deleted until every new span has passed validation.
@@ -101,14 +103,36 @@ async def persist_task_spans(
     if transcript_version < 1:
         raise ProvenanceInvalid("the transcript version is not valid")
 
-    views = await _load_segments(
-        db,
-        user_id=task.user_id,
-        transcript_id=transcript_id,
-        transcript_version=transcript_version,
-        spans=spans,
-    )
-    validated = _validate_spans(spans, views)
+    try:
+        rebuilt = await reconstruct_spans(
+            db,
+            user_id=task.user_id,
+            audio_id=audio_id,
+            transcript_version=transcript_version,
+            transcript_id=transcript_id,
+            spans=spans,
+        )
+    except AnalysisValidationError as exc:
+        raise ProvenanceInvalid(str(exc)) from exc
+
+    validated: list[EvidenceSpan] = []
+    seen: set[tuple[uuid.UUID, int, int]] = set()
+    for item in rebuilt:
+        if not item.quote.strip():
+            raise ProvenanceInvalid("the quote is blank")
+        key = (item.segment_id, item.inicio_char, item.fin_char)
+        if key in seen:
+            raise ProvenanceInvalid("the span is duplicated")
+        seen.add(key)
+        validated.append(
+            EvidenceSpan(
+                segment_id=item.segment_id,
+                char_start=item.inicio_char,
+                char_end=item.fin_char,
+                quote=item.quote,
+            )
+        )
+
     if replace:
         await _delete_provenance(db, user_id=task.user_id, task_id=task.id)
 
@@ -278,67 +302,6 @@ async def load_task_evidence(
         db, user_id=user_id, task_versions={task_id: task_version}
     )
     return batch.get(task_id, ())
-
-
-async def _load_segments(
-    db: AsyncSession,
-    *,
-    user_id: uuid.UUID,
-    transcript_id: uuid.UUID,
-    transcript_version: int,
-    spans: Sequence[EvidenceSpan],
-) -> dict[uuid.UUID, _SegmentView]:
-    if not spans:
-        return {}
-    rows = (
-        await db.execute(
-            select(Segment.id, Segment.text, Transcript.version)
-            .join(
-                Transcript,
-                and_(
-                    Transcript.user_id == Segment.user_id,
-                    Transcript.id == Segment.transcript_id,
-                ),
-            )
-            .where(
-                Segment.user_id == user_id,
-                Segment.transcript_id == transcript_id,
-                Segment.id.in_({span.segment_id for span in spans}),
-            )
-        )
-    ).all()
-    views = {
-        segment_id: _SegmentView(text=text, version=version)
-        for segment_id, text, version in rows
-    }
-    if any(view.version != transcript_version for view in views.values()):
-        raise ProvenanceInvalid("the segment does not belong to the transcript version")
-    return views
-
-
-def _validate_spans(
-    spans: Sequence[EvidenceSpan], views: dict[uuid.UUID, _SegmentView]
-) -> list[EvidenceSpan]:
-    seen: set[tuple[uuid.UUID, int, int]] = set()
-    for span in spans:
-        view = views.get(span.segment_id)
-        if view is None:
-            raise ProvenanceInvalid("the span references a segment outside the transcript")
-        if span.char_start < 0 or span.char_end <= span.char_start:
-            raise ProvenanceInvalid("the span is empty or inverted")
-        if span.char_end > len(view.text):
-            raise ProvenanceInvalid("the span exceeds the persisted segment text")
-        if len(span.quote) != span.char_end - span.char_start:
-            raise ProvenanceInvalid("the quote length does not match the span")
-        if not span.quote.strip():
-            raise ProvenanceInvalid("the quote is blank")
-        if view.text[span.char_start : span.char_end] != span.quote:
-            raise ProvenanceInvalid("the quote does not match the persisted segment text")
-        key = (span.segment_id, span.char_start, span.char_end)
-        if key in seen:
-            raise ProvenanceInvalid("the span is duplicated")
-        seen.add(key)
-    return list(spans)
 
 
 async def _delete_provenance(

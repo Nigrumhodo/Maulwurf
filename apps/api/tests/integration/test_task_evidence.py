@@ -5,7 +5,8 @@ The suite exercises the real tables and the service layer, not a mock:
 - every producer persists the normalized source rows and the literal quote;
 - the origin rule is enforced before a row is written (manual 0, extraction >= 1,
   chat 0 or more);
-- invalid membership or a mismatching quote writes nothing;
+- L3.3 validation is fed by a DB-loaded class view (A3.6), so a foreign class, tenant,
+  transcript or version, an out-of-range span or a mismatching quote is rejected;
 - an in-place reanalysis replaces the active provenance and bumps `due_version` only
   when the due representation changes;
 - a protected task only gains a pending revision;
@@ -31,6 +32,7 @@ from app.models import (
     TaskSource,
     Transcript,
 )
+from app.schemas.analysis import AnalysisResult
 from app.services.analysis import (
     PreparedProposal,
     WriteKind,
@@ -39,7 +41,9 @@ from app.services.analysis import (
     parse_extraction_payload,
     plan_task_writes,
 )
+from app.services.analysis_validation import AnalysisValidationError
 from app.services.analysis_windows import AggregatedProposal, EvidenceSpan
+from app.services.evidence_reconstruction import reconstruct_spans, validate_analysis_from_db
 from app.services.task_evidence import (
     ProvenanceInvalid,
     load_task_evidence,
@@ -52,16 +56,20 @@ pytestmark = pytest.mark.integration
 
 FIRST = "the midterm exam will be on Monday, September 21"
 SECOND = "bring the lab report on Friday"
-TRANSCRIPT = f"{FIRST} {SECOND}"
 NOW = datetime(2026, 9, 16, 15, tzinfo=UTC)
 APP_ROLE = "maulwurf_app"
 
 
 async def _class(
-    db: AsyncSession, actor: actors.Actor
+    db: AsyncSession,
+    actor: actors.Actor,
+    *,
+    first_text: str = FIRST,
+    second_text: str = SECOND,
 ) -> tuple[Audio, Segment, Segment]:
     """Two ordered segments; only the first carries a reliable measured time."""
     audio = await actors.make_audio(db, actor)
+    transcript_text = f"{first_text} {second_text}"
     transcript = Transcript(
         user_id=actor.user_id,
         audio_id=audio.id,
@@ -70,8 +78,8 @@ async def _class(
         model="test-model",
         model_config={},
         timestamp_precision="segment",
-        text=TRANSCRIPT,
-        char_count=len(TRANSCRIPT),
+        text=transcript_text,
+        char_count=len(transcript_text),
         fts_config="spanish",
     )
     db.add(transcript)
@@ -80,20 +88,20 @@ async def _class(
         user_id=actor.user_id,
         transcript_id=transcript.id,
         ordinal=0,
-        text=FIRST,
+        text=first_text,
         char_start=0,
-        char_end=len(FIRST),
+        char_end=len(first_text),
         t_start=0.0,
         t_end=5.0,
     )
-    second_start = len(FIRST) + 1
+    second_start = len(first_text) + 1
     second = Segment(
         user_id=actor.user_id,
         transcript_id=transcript.id,
         ordinal=1,
-        text=SECOND,
+        text=second_text,
         char_start=second_start,
-        char_end=second_start + len(SECOND),
+        char_end=second_start + len(second_text),
     )
     db.add_all([first, second])
     audio.active_transcript_version = 1
@@ -144,6 +152,38 @@ def _document(title: str, mention: str, *, segment_id: uuid.UUID, quote: str) ->
             ],
             "resumen_clase": "A task was announced for the next week. Students should review it.",
             "temas": ["homework"],
+        }
+    )
+
+
+def _analysis_result(*spans: tuple[uuid.UUID, int, int, str]) -> AnalysisResult:
+    return AnalysisResult.model_validate(
+        {
+            "items": [
+                {
+                    "tipo": "tarea",
+                    "titulo": "Reconstructed evidence",
+                    "detalle": None,
+                    "due_date": None,
+                    "due_at": None,
+                    "timezone": "America/Bogota",
+                    "all_day": False,
+                    "date_status": "missing",
+                    "fuente": {
+                        "spans": [
+                            {
+                                "segment_id": str(segment_id),
+                                "inicio_char": start,
+                                "fin_char": end,
+                                "cita_textual": quote,
+                            }
+                            for segment_id, start, end, quote in spans
+                        ]
+                    },
+                }
+            ],
+            "resumen_clase": "A class used to verify DB reconstruction.",
+            "temas": ["evidence"],
         }
     )
 
@@ -404,6 +444,217 @@ async def test_invalid_span_is_rejected_without_writing(db_session: AsyncSession
             )
         assert await _source_count(db_session, task.id) == 0
         assert await _evidence_count(db_session, task.id) == 0
+
+
+async def test_l3_3_analysis_is_validated_and_reconstructed_from_the_db(
+    db_session: AsyncSession,
+) -> None:
+    actor = await actors.make_actor(db_session)
+    unicode_first = "la clase de mañana cubre integración por partes 🙂"
+    unicode_second = "traigan el informe del laboratorio el viernes"
+    audio, first, second = await _class(
+        db_session, actor, first_text=unicode_first, second_text=unicode_second
+    )
+    emoji = unicode_first.index("🙂")
+    first_quote = unicode_first[: emoji + 1]
+    second_start = unicode_second.index("informe")
+    second_quote = unicode_second[second_start : second_start + len("informe")]
+    result = _analysis_result(
+        (first.id, 0, len(first_quote), first_quote),
+        (second.id, second_start, second_start + len(second_quote), second_quote),
+    )
+
+    view = await validate_analysis_from_db(
+        db_session,
+        result,
+        user_id=actor.user_id,
+        audio_id=audio.id,
+        transcript_version=1,
+    )
+    assert view.transcript_id == first.transcript_id
+    assert view.transcript_version == 1
+    assert view.segments[first.id] == unicode_first
+
+    rebuilt = await reconstruct_spans(
+        db_session,
+        user_id=actor.user_id,
+        audio_id=audio.id,
+        transcript_version=1,
+        transcript_id=first.transcript_id,
+        spans=(
+            EvidenceSpan(first.id, 0, len(first_quote), first_quote),
+            EvidenceSpan(
+                second.id,
+                second_start,
+                second_start + len(second_quote),
+                second_quote,
+            ),
+        ),
+    )
+    assert [item.quote for item in rebuilt] == [first_quote, second_quote]
+    assert rebuilt[0].transcript_id == first.transcript_id
+    assert rebuilt[0].transcript_version == 1
+    assert (rebuilt[0].inicio_char, rebuilt[0].fin_char) == (0, len(first_quote))
+    assert rebuilt[0].quote == unicode_first[: emoji + 1]
+    # The emoji is one Python code point but two UTF-16 units; a JavaScript offset would
+    # not match this slice.
+    assert len(first_quote.encode("utf-16-le")) // 2 > len(first_quote)
+    assert (rebuilt[1].inicio_char, rebuilt[1].fin_char) == (
+        second_start,
+        second_start + len(second_quote),
+    )
+
+
+@pytest.mark.parametrize(
+    ("case", "code"),
+    (
+        ("foreign_class", "segment_not_in_class"),
+        ("foreign_tenant", "segment_not_in_class"),
+        ("wrong_version", "transcript_not_in_class"),
+        ("tombstoned", "transcript_not_in_class"),
+        ("out_of_range", "span_out_of_range"),
+        ("quote_mismatch", "quote_mismatch"),
+    ),
+)
+async def test_l3_3_reconstruction_rejects_invalid_membership(
+    db_session: AsyncSession, case: str, code: str
+) -> None:
+    actor = await actors.make_actor(db_session)
+    audio, first, _second = await _class(db_session, actor)
+    _other_audio, other_first, _ = await _class(db_session, actor)
+    foreign = await actors.make_actor(db_session)
+    _foreign_audio, foreign_first, _ = await _class(db_session, foreign)
+
+    transcript_version = 1
+    if case == "foreign_class":
+        span = EvidenceSpan(other_first.id, 0, len(FIRST), FIRST)
+    elif case == "foreign_tenant":
+        span = EvidenceSpan(foreign_first.id, 0, len(FIRST), FIRST)
+    elif case == "wrong_version":
+        span = EvidenceSpan(first.id, 0, len(FIRST), FIRST)
+        transcript_version = 2
+    elif case == "tombstoned":
+        audio.deleted_at = NOW
+        await db_session.flush()
+        span = EvidenceSpan(first.id, 0, len(FIRST), FIRST)
+    elif case == "out_of_range":
+        span = EvidenceSpan(first.id, 0, len(FIRST) + 1, "x" * (len(FIRST) + 1))
+    else:
+        span = EvidenceSpan(first.id, 0, len(FIRST), "x" * len(FIRST))
+
+    with pytest.raises(AnalysisValidationError) as excinfo:
+        await reconstruct_spans(
+            db_session,
+            user_id=actor.user_id,
+            audio_id=audio.id,
+            transcript_version=transcript_version,
+            spans=(span,),
+        )
+    assert excinfo.value.code == code
+    message = str(excinfo.value)
+    assert FIRST not in message
+    assert "x" * len(FIRST) not in message
+
+
+async def test_persist_rejects_a_stale_version_or_foreign_transcript_without_writing(
+    db_session: AsyncSession,
+) -> None:
+    actor = await actors.make_actor(db_session)
+    audio, first, _second = await _class(db_session, actor)
+    _other_audio, other_first, _ = await _class(db_session, actor)
+    task = _task(actor, "extraction", audio=audio)
+    db_session.add(task)
+    await db_session.flush()
+    task_id = task.id
+
+    span = EvidenceSpan(first.id, 0, len(FIRST), FIRST)
+    for transcript_id, transcript_version in (
+        # Only version 1 exists for this class.
+        (first.transcript_id, 2),
+        # A real segment of the same tenant but a different transcript.
+        (other_first.transcript_id, 1),
+    ):
+        with pytest.raises(ProvenanceInvalid):
+            await persist_task_spans(
+                db_session,
+                task=task,
+                audio_id=audio.id,
+                transcript_id=transcript_id,
+                transcript_version=transcript_version,
+                spans=(span,),
+            )
+        assert await _source_count(db_session, task_id) == 0
+        assert await _evidence_count(db_session, task_id) == 0
+
+    audio.deleted_at = NOW
+    await db_session.flush()
+    with pytest.raises(ProvenanceInvalid):
+        await persist_task_spans(
+            db_session,
+            task=task,
+            audio_id=audio.id,
+            transcript_id=first.transcript_id,
+            transcript_version=1,
+            spans=(span,),
+        )
+    assert await _source_count(db_session, task_id) == 0
+    assert await _evidence_count(db_session, task_id) == 0
+
+
+async def test_persist_rejects_a_quote_that_is_not_the_current_db_slice(
+    db_session: AsyncSession,
+) -> None:
+    actor = await actors.make_actor(db_session)
+    audio, first, _second = await _class(db_session, actor)
+    task = _task(actor, "extraction", audio=audio)
+    db_session.add(task)
+    await db_session.flush()
+    task_id = task.id
+    segment_id = first.id
+    transcript_id = first.transcript_id
+    await persist_task_spans(
+        db_session,
+        task=task,
+        audio_id=audio.id,
+        transcript_id=transcript_id,
+        transcript_version=1,
+        spans=(EvidenceSpan(segment_id, 0, len(FIRST), FIRST),),
+    )
+    original = (
+        await db_session.execute(select(TaskEvidence).where(TaskEvidence.task_id == task_id))
+    ).scalar_one()
+    original_id = original.id
+
+    # Simulate a segment whose persisted text no longer matches the caller's copy while the
+    # span still has the same length, so only the literal check can catch it.
+    await db_session.execute(
+        update(Segment)
+        .where(Segment.id == segment_id)
+        .values(text=FIRST.replace("Monday", "Sunday"))
+        .execution_options(synchronize_session=False)
+    )
+    await db_session.flush()
+    db_session.expire(first)
+
+    with pytest.raises(ProvenanceInvalid, match="verbatim quote"):
+        await persist_task_spans(
+            db_session,
+            task=task,
+            audio_id=audio.id,
+            transcript_id=transcript_id,
+            transcript_version=1,
+            spans=(EvidenceSpan(segment_id, 0, len(FIRST), FIRST),),
+            replace=True,
+        )
+
+    # `replace=True` validates before deleting: the old source and quote are still there.
+    assert await _source_count(db_session, task_id) == 1
+    assert await _evidence_count(db_session, task_id) == 1
+    stored = (
+        await db_session.execute(select(TaskEvidence).where(TaskEvidence.task_id == task_id))
+    ).scalar_one()
+    assert stored.id == original_id
+    assert stored.quote == FIRST
 
 
 async def test_in_place_reanalysis_replaces_evidence_and_bumps_due_version_only_once(
