@@ -26,6 +26,7 @@ from app.schemas.tasks import (
     TaskPatch,
     TaskVersionBody,
 )
+from app.services import task_reads
 from app.services import tasks as task_service
 
 router = APIRouter(tags=["tasks"])
@@ -51,7 +52,7 @@ async def list_tasks(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     cursor: Annotated[str | None, Query(max_length=512)] = None,
 ) -> TaskListOut:
-    return await task_service.list_tasks(
+    return await task_reads.list_tasks(
         db,
         session.user_id,
         status=status,
@@ -74,7 +75,7 @@ async def list_tasks(
 async def get_task(
     task_id: uuid.UUID, session: CurrentSession, db: DbSession
 ) -> TaskOut:
-    return await task_service.get_task(db, session.user_id, task_id)
+    return await task_reads.get_task(db, session.user_id, task_id)
 
 
 @router.post(
@@ -167,7 +168,7 @@ async def dismiss_task(
     result = await task_service.dismiss_task(
         db, session.user_id, task_id, expected_version=body.expected_version
     )
-    out = await task_service.get_task(db, session.user_id, task_id)
+    out = await task_reads.get_task(db, session.user_id, task_id)
     await db.commit()
     return TaskLifecycleOut(
         task=out,
@@ -196,7 +197,7 @@ async def complete_task(
     result = await task_service.complete_task(
         db, session.user_id, task_id, expected_version=body.expected_version
     )
-    out = await task_service.get_task(db, session.user_id, task_id)
+    out = await task_reads.get_task(db, session.user_id, task_id)
     await db.commit()
     return TaskLifecycleOut(
         task=out,
