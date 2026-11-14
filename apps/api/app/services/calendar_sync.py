@@ -940,10 +940,8 @@ async def _renew_access_token(
 ) -> str:
     """Short locked transaction: validate the grant and renew the token when needed.
 
-    The lock only covers the token decision and the token request; the Calendar reads happen
-    after this commits and releases the row. The only provider I/O held under the lock is
-    that request, bounded by `google_tokens.HTTP_TIMEOUT_SECONDS` (10 s); the acquisition
-    wait is the 2 s `lock_timeout`. Calendar pagination never runs under this lock.
+    The token POST runs after this read transaction ends. `fresh_access_token` stores the
+    new blobs in its own short lock. Calendar pagination never shares that transaction.
     """
     try:
         await _begin_lock_window(db)

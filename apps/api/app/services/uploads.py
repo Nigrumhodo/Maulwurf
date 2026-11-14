@@ -372,6 +372,24 @@ async def _reject_if_concurrent_variant(
     raise error
 
 
+async def _commit_keeping_instances(db: AsyncSession) -> None:
+    """Commit without expiring instances the caller still holds.
+
+    The flag lives on the sync session. Unit doubles have no sync session; they only count
+    the commit, and their objects are plain instances that never expire.
+    """
+    sync = getattr(db, "sync_session", None)
+    previous = True
+    if sync is not None:
+        previous = sync.expire_on_commit
+        sync.expire_on_commit = False
+    try:
+        await db.commit()
+    finally:
+        if sync is not None:
+            sync.expire_on_commit = previous
+
+
 async def receive_content(
     db: AsyncSession,
     request: Request,
@@ -390,15 +408,21 @@ async def receive_content(
     """
     audio_id = audio.id
     attempt_id = attempt.id
+    fencing_token = attempt.fencing_token
     identity = dedupe.identity_of(audio)
     limit = effective_upload_limit()
+    # End the claim re-read before the ingest hop. Attributes were already loaded, so this
+    # does not lazy-load. `commit` keeps the claim; it only closes the read transaction.
+    # Keep those instances populated: the write phase and the caller still hold them, and a
+    # session that expires on commit would lazy-load them synchronously after this point.
+    await _commit_keeping_instances(db)
 
     try:
         await sink.begin(
             user_id=user_id,
             audio_id=audio_id,
             attempt_id=attempt_id,
-            fencing_token=attempt.fencing_token,
+            fencing_token=fencing_token,
             declared_bytes=content_length,
         )
     except SinkError as exc:

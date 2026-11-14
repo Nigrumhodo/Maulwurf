@@ -432,29 +432,35 @@ async def _embed_generation(
     fence: FenceHook | None,
 ) -> tuple[int, int]:
     pending = await _chunks_without_embeddings(db, user_id=user_id, version=version)
+    # Plain copies: the load transaction ends before the first provider call, including
+    # its retries, so a slow embed never holds a pooled connection.
+    rows = [(chunk.user_id, chunk.id, chunk.content) for chunk in pending]
+    model = generation.model
+    dimension = generation.dimension
+    await db.commit()
     created = 0
     batches = 0
-    for start in range(0, len(pending), provider.batch_size):
-        batch = pending[start : start + provider.batch_size]
-        vectors = await provider.embed([chunk.content for chunk in batch], input_type="passage")
+    for start in range(0, len(rows), provider.batch_size):
+        batch = rows[start : start + provider.batch_size]
+        vectors = await provider.embed([content for _, _, content in batch], input_type="passage")
         if len(vectors) != len(batch):
             raise EmbeddingProviderError(
                 "El proveedor devolvió un número de vectores distinto del lote.",
                 details={"expected": len(batch), "observed": len(vectors)},
             )
-        for chunk, vector in zip(batch, vectors, strict=True):
+        for (chunk_user_id, chunk_id, _), vector in zip(batch, vectors, strict=True):
             db.add(
                 Embedding(
-                    user_id=chunk.user_id,
-                    chunk_id=chunk.id,
+                    user_id=chunk_user_id,
+                    chunk_id=chunk_id,
                     index_version=version,
-                    model=generation.model,
-                    dimension=generation.dimension,
+                    model=model,
+                    dimension=dimension,
                     vector=vector,
                 )
             )
-        # The provider call above may be slow; the shared run lock is taken only for the
-        # commit window so the reconciler can still close an actually expired lease.
+        # The shared run lock is taken only for the commit window so the reconciler can
+        # still close an actually expired lease.
         await _apply_fence(db, fence)
         await db.commit()
         batches += 1

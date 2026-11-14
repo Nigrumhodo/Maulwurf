@@ -14,10 +14,10 @@ Contract (ESPECIFICACION M5, DISENO §3.3/§3.8):
   or write into a foreign calendar. Identity therefore requires `accessRole='owner'` and
   `primary` not true, and the stored ID is revalidated through its `CalendarListEntry`
   (the plain `Calendar` resource does not carry `accessRole`).
-- **One binding per user, serialized.** A transaction-scoped advisory lock keyed by the user
-  serializes `connect_calendar`, so two concurrent callbacks cannot both list an empty
-  calendar list and both `POST /calendars`. Without it the `ON CONFLICT` upsert merely makes
-  the stored ID converge; the second remote calendar would still exist.
+- **One stored binding per user, serialized.** Calendar list/get/create run with no
+  database transaction open. A transaction-scoped advisory lock then covers only the
+  settings upsert. Two callbacks can both create a remote calendar; the upsert keeps a
+  single stored ID, and an ambiguous create re-lists before it is treated as a failure.
 - **Reconciliation before retrying.** A create whose response was lost may still have
   created the calendar. A create failure whose outcome is ambiguous (`transient`,
   unparseable response or `409`) re-lists the calendar list by identity (summary +
@@ -177,35 +177,24 @@ async def _lock_calendar_binding(db: AsyncSession, user_id: uuid.UUID) -> None:
     )
 
 
-async def connect_calendar(
-    db: AsyncSession,
-    *,
-    user: User,
-    access_token: str,
-    on_invalid_grant: DisconnectCallback,
+async def persist_calendar_binding(
+    db: AsyncSession, *, user_id: uuid.UUID, binding: CalendarBinding
 ) -> CalendarBinding:
-    """Reconcile the calendar and persist its ID in the user's `settings` row.
+    """Store one reconciled calendar id under the per-user advisory lock."""
+    await _lock_calendar_binding(db, user_id)
+    await _upsert_calendar_binding(db, user_id=user_id, binding=binding)
+    return binding
 
-    The caller owns the transaction: tokens, settings and the reconnect resumption commit
-    together, so a Calendar failure never leaves a half-connected integration behind. The
-    advisory lock makes concurrent callbacks for the same user take turns, so the invariant
-    "exactly one Maulwurf calendar" holds across concurrent connects, not just across
-    sequential retries.
-    """
-    await _lock_calendar_binding(db, user.id)
-    service = calendar_service(access_token, on_invalid_grant)
-    row = await db.get(CalendarSettings, user.id)
-    binding = await binding_from_google(
-        service,
-        stored_calendar_id=row.calendar_write_calendar_id if row is not None else None,
-        timezone=user.timezone,
-    )
+
+async def _upsert_calendar_binding(
+    db: AsyncSession, *, user_id: uuid.UUID, binding: CalendarBinding
+) -> None:
     # Upsert: two concurrent callbacks for the same user must converge on the last
     # reconciled ID instead of racing the primary key. `updated_at` is set explicitly
     # because the raw statement bypasses the ORM's onupdate.
     await db.execute(
         pg_insert(CalendarSettings)
-        .values(user_id=user.id, calendar_write_calendar_id=binding.calendar_id)
+        .values(user_id=user_id, calendar_write_calendar_id=binding.calendar_id)
         .on_conflict_do_update(
             index_elements=["user_id"],
             set_={
@@ -215,7 +204,30 @@ async def connect_calendar(
         )
     )
     await db.flush()
-    return binding
+
+
+async def connect_calendar(
+    db: AsyncSession,
+    *,
+    user: User,
+    access_token: str,
+    on_invalid_grant: DisconnectCallback,
+) -> CalendarBinding:
+    """Resolve the calendar with no transaction open, then persist its id under the lock.
+
+    The read of the stored id ends before any Calendar call. The caller commits the
+    upsert together with the token grant and, on reconnect, the resumed tasks.
+    """
+    user_id = user.id
+    timezone = user.timezone
+    row = await db.get(CalendarSettings, user_id)
+    stored = row.calendar_write_calendar_id if row is not None else None
+    await db.rollback()
+    service = calendar_service(access_token, on_invalid_grant)
+    binding = await binding_from_google(
+        service, stored_calendar_id=stored, timezone=timezone
+    )
+    return await persist_calendar_binding(db, user_id=user_id, binding=binding)
 
 
 def requested_scopes(granted: list[str] | tuple[str, ...], *, reconnect: bool) -> list[str]:

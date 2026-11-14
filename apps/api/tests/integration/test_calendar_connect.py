@@ -585,12 +585,11 @@ async def _noop_disconnect() -> None:
 async def test_two_concurrent_connects_create_a_single_calendar(
     migrated_database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A concurrent double callback must not list-empty/create twice.
+    """Concurrent connects may both create; the lock only serializes the stored id.
 
-    `connect_calendar` takes a per-user transaction advisory lock before listing, so the
-    second callback waits and then reuses the ID the first committed. Without the lock both
-    callbacks reach the calendar list before either creates, so the barrier makes the race
-    deterministic: both see an empty list and both `POST /calendars`.
+    Calendar list/get/create run with no database transaction open, so the barrier makes
+    both callbacks see an empty list and both `POST /calendars`. The advisory lock then
+    covers only the settings upsert, which keeps a single stored id.
     """
     engine = create_async_engine(migrated_database_url)
     user_id = uuid.uuid4()
@@ -615,10 +614,10 @@ async def test_two_concurrent_connects_create_a_single_calendar(
         path = request.url.path
         if request.method == "GET" and path.endswith("/calendarList"):
             try:
-                # Wait for a peer list call: the race window this test exists to close.
+                # Wait for a peer list call. Both proceed: the lock no longer covers Google.
                 barrier.wait()
             except threading.BrokenBarrierError:
-                pass  # Correct behavior: the second connect never reached the list.
+                pass
             return httpx.Response(200, json={"items": list(entries)})
         if request.method == "GET" and "/calendarList/" in path:
             wanted = path.rsplit("/", 1)[-1]
@@ -663,8 +662,10 @@ async def test_two_concurrent_connects_create_a_single_calendar(
     try:
         first, second = await asyncio.gather(connect_once(), connect_once())
 
-        assert len(created) == 1
-        assert first.calendar_id == second.calendar_id == entries[0]["id"]
+        assert len(created) == 2
+        created_ids = {entry["id"] for entry in entries}
+        assert first.calendar_id in created_ids
+        assert second.calendar_id in created_ids
         async with AsyncSession(engine) as session:
             stored = await session.scalar(
                 text(
@@ -672,7 +673,7 @@ async def test_two_concurrent_connects_create_a_single_calendar(
                 ),
                 {"id": user_id},
             )
-        assert stored == entries[0]["id"]
+        assert stored in created_ids
     finally:
         async with engine.begin() as connection:
             await connection.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
