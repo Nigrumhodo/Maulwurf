@@ -65,7 +65,8 @@ from app.services.llm import ChatMessage, LLMProvider
 from app.services.revisions import TERMINAL_TASK_STATUSES, record_pending_revision
 from app.services.summary import SummaryRejected, parse_summary_payload
 from app.services.task_evidence import persist_task_spans
-from app.services.task_snapshot import ProposalFields, needs_review_task
+from app.services.task_snapshot import ProposalFields as ProposalFields
+from app.services.task_snapshot import needs_review_task
 from prompts.registry import (
     load_extraction_prompts,
     load_summary_prompts,
