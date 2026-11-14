@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import settings
 from app.core.db import get_session
-from app.core.deps import chat_session_factory, progress_session_factory
+from app.core.deps import chat_session_factory, progress_session_factory, search_session_factory
 from app.core.errors import calendar_sync_cooldown
 from app.core.redis import get_redis
 from app.main import app
@@ -43,6 +43,7 @@ from app.services.rate_limiter import acquire_stream
 from app.services.runs import INDEX_CONFIG_VERSION
 from tests.integration import actors
 from tests.integration.actors import Actor
+from tests.integration.conftest import reuse_session
 
 pytestmark = pytest.mark.integration
 
@@ -71,6 +72,7 @@ async def client(
         yield redis
 
     app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[search_session_factory] = lambda: reuse_session(db_session)
     app.dependency_overrides[get_redis] = override_redis
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url=settings.allowed_origin

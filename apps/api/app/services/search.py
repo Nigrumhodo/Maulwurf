@@ -33,12 +33,13 @@ What this module guarantees (S2.md §1.3 and §L2.3, ESPECIFICACION §M6/DISENO 
 - **No content in logs.** Only counts, version and error codes; never `content`, the query
   text, vectors or the API key.
 
-L2.4/A2.11 adds the reusable public `SearchService` (chat calls `retrieve`, the endpoint
-calls `page`), hydration, plain-text snippets, honest segment times and an opaque keyset
-cursor over the bounded RRF window. L2.6 adds `rehydrate_chunk_ids`/`rehydrate_source` so a
-citation is reread with the same filters immediately before it is emitted. What it still
-does NOT do (later tickets): the G4 metrics (L2.7) and the latency harness (L2.8). It never
-writes: read-only retrieval.
+L2.4/A2.11 adds the reusable public `SearchService` (chat calls `retrieve_with_vector`,
+the endpoint calls `page`), hydration, plain-text snippets, honest segment times and an
+opaque keyset cursor over the bounded RRF window. `page` embeds the query only while no
+database session is open. L2.6 adds `rehydrate_chunk_ids`/`rehydrate_source` so a citation
+is reread with the same filters immediately before it is emitted. What it still does NOT
+do (later tickets): the G4 metrics (L2.7) and the latency harness (L2.8). It never writes:
+read-only retrieval.
 """
 
 import base64
@@ -49,6 +50,7 @@ import math
 import re
 import uuid
 from collections.abc import Callable, Hashable, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import date
 from time import perf_counter
@@ -216,18 +218,9 @@ class SearchPage:
     next_cursor: str | None
 
 
-@dataclass(frozen=True)
-class QueryVectorTarget:
-    """Metadata needed to embed a query without holding a database transaction.
-
-    `prepare_query` reads only this generation metadata; the caller closes the session,
-    calls the embedding provider, and then opens a new session for `retrieve_with_vector`.
-    The target deliberately carries no page, chunk or transcript data.
-    """
-
-    query_text: str
-    model: str
-    dimension: int
+# Opens a short session and closes it. `async_sessionmaker` satisfies this; tests can
+# pass a callable that yields an already-open transaction without closing it.
+SessionOpener = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
 
 ContentKey = Callable[[uuid.UUID], Hashable]
@@ -550,7 +543,7 @@ async def hybrid_search(
     user_id: uuid.UUID,
     query_text: str,
     query_vector: Sequence[float] | None,
-    version: str | None = None,
+    version: str,
     top_k: int = DEFAULT_TOP_K,
     candidates_per_branch: int = CANDIDATES_PER_BRANCH,
     subject_id: uuid.UUID | None = None,
@@ -560,10 +553,9 @@ async def hybrid_search(
 ) -> list[FusedHit]:
     """Run both filtered branches in one transaction and return the fused top-k.
 
-    `version` is the active index generation; when omitted it is resolved with
-    `indexing.active_generation`, the single source of truth, and a missing generation is
-    `search_not_configured` (the caller has nothing to search). The question embedding is the
-    caller's responsibility (L2.4/L2.5); this function never calls the provider.
+    `version` is the index generation to search. The caller resolves the active generation
+    and embeds the question; this function never calls the provider and never opens a
+    second transaction to look the generation up.
     """
     text_query = query_text.strip()
     if not text_query:
@@ -575,30 +567,11 @@ async def hybrid_search(
             "La búsqueda híbrida necesita el vector de la consulta.",
             details={"reason": "missing_query_vector"},
         )
-    resolved = version
-    if resolved is None:
-        generation = await active_generation(db, user_id)
-        if generation is None:
-            raise SearchNotConfigured(
-                "No hay un índice activo para este usuario.",
-                details={"reason": "no_active_generation"},
-            )
-        resolved = generation.version
-        if len(query_vector) != generation.dimension:
-            raise SearchInvalidQuery(
-                "Dimensión de vector inválida.",
-                details={
-                    "reason": "bad_dim",
-                    "expected": generation.dimension,
-                    "got": len(query_vector),
-                },
-            )
-
     lexical = await _candidates(
         db,
         lexical_candidates_statement(
             user_id=user_id,
-            version=resolved,
+            version=version,
             query_text=text_query,
             limit=candidates_per_branch,
             subject_id=subject_id,
@@ -614,7 +587,7 @@ async def hybrid_search(
         db,
         vector_candidates_statement(
             user_id=user_id,
-            version=resolved,
+            version=version,
             query_vector=query_vector,
             limit=candidates_per_branch,
             subject_id=subject_id,
@@ -635,7 +608,7 @@ async def hybrid_search(
     )
     logger.debug(
         "search.hybrid version=%s lexical=%d vector=%d hits=%d",
-        resolved,
+        version,
         len(lexical),
         len(vector),
         len(hits),
@@ -964,73 +937,54 @@ async def _hydrate(
     return hydrated
 
 
+def _checked_provider(
+    provider: EmbeddingProvider | None, *, model: str, dimension: int
+) -> EmbeddingProvider:
+    """Fail closed when the configured provider does not match the active generation."""
+    if provider is None:
+        raise EmbeddingNotConfigured(
+            "Falta configurar el proveedor de embeddings (MAULWURF_EMBEDDING_*)."
+        )
+    if provider.model != model:
+        raise SearchProviderMismatch(
+            "El modelo del proveedor no coincide con la generación activa.",
+            details={"reason": "model_mismatch"},
+        )
+    if provider.dimension != dimension:
+        raise SearchProviderMismatch(
+            "La dimensión del proveedor no coincide con la generación activa.",
+            details={"reason": "dimension_mismatch"},
+        )
+    return provider
+
+
+def _reject_stale_cursor(cursor_state: SearchCursor | None, version: str) -> None:
+    if cursor_state is not None and cursor_state.index_version != version:
+        raise SearchInvalidCursor(
+            _CURSOR_STALE,
+            details={
+                "reason": "stale_generation",
+                "fields": {"cursor": _CURSOR_STALE},
+            },
+        )
+
+
+def _empty_search_page(started: float) -> SearchPage:
+    took_ms = _elapsed_ms(started)
+    logger.info("search.page version=- results=0 took_ms=%d", took_ms)
+    return SearchPage(results=[], took_ms=took_ms, next_cursor=None)
+
+
 class SearchService:
-    """Reusable retrieval service: chat calls `retrieve`, `/search` calls `page`."""
+    """Reusable retrieval service.
+
+    Chat calls `retrieve_with_vector` with a vector it embedded before opening a session.
+    `GET /search` calls `page`, which does the same split itself.
+    """
 
     def __init__(self, db: AsyncSession, *, provider: EmbeddingProvider | None) -> None:
         self._db = db
         self._provider = provider
-
-    async def retrieve(
-        self,
-        *,
-        user_id: uuid.UUID,
-        query: str,
-        subject_id: uuid.UUID | None = None,
-        audio_id: uuid.UUID | None = None,
-        date_from: date | None = None,
-        date_to: date | None = None,
-        top_k: int = DEFAULT_TOP_K,
-        max_query_chars: int = QUERY_MAX_CHARS,
-    ) -> list[RetrievedChunk]:
-        """Return hydrated hits for chat; no active generation is an empty result.
-
-        `audio_id` is chat's `class` mode filter; it is applied inside both retrieval branches
-        before their LIMIT, never as a post-filter over the top-k. `max_query_chars` lets chat
-        accept its own question limit while `/search` keeps the frozen 500-character contract.
-        """
-        query_text = _validated_query(query, max_chars=max_query_chars)
-        _validated_range(date_from, date_to)
-        _validated_top_k(top_k)
-        generation = await active_generation(self._db, user_id)
-        if generation is None:
-            return []
-        results = await self._retrieve_for_generation(
-            generation,
-            user_id=user_id,
-            query_text=query_text,
-            subject_id=subject_id,
-            audio_id=audio_id,
-            date_from=date_from,
-            date_to=date_to,
-            top_k=top_k,
-        )
-        logger.debug("search.retrieve version=%s hits=%d", generation.version, len(results))
-        return results
-
-    async def prepare_query(
-        self,
-        *,
-        user_id: uuid.UUID,
-        query: str,
-        max_query_chars: int = QUERY_MAX_CHARS,
-    ) -> QueryVectorTarget | None:
-        """Validate a query and return the generation metadata needed to embed it.
-
-        This method performs no network call. The caller must close the database session
-        before invoking the embedding provider; the returned target is valid for
-        `retrieve_with_vector`, which re-reads the active generation in its own session.
-        """
-        query_text = _validated_query(query, max_chars=max_query_chars)
-        generation = await active_generation(self._db, user_id)
-        if generation is None:
-            return None
-        self._require_provider(generation)
-        return QueryVectorTarget(
-            query_text=query_text,
-            model=generation.model,
-            dimension=generation.dimension,
-        )
 
     async def retrieve_with_vector(
         self,
@@ -1130,9 +1084,11 @@ class SearchService:
             score_rrf=source.score_rrf,
         )
 
+    @staticmethod
     async def page(
-        self,
+        sessions: SessionOpener,
         *,
+        provider: EmbeddingProvider | None,
         user_id: uuid.UUID,
         query: str,
         subject_id: uuid.UUID | None = None,
@@ -1141,7 +1097,12 @@ class SearchService:
         limit: int = DEFAULT_PAGE_SIZE,
         cursor: str | None = None,
     ) -> SearchPage:
-        """Paginated `/search` window: keyset over the bounded RRF window."""
+        """Paginated `/search` window: keyset over the bounded RRF window.
+
+        The active generation is read on a short session that is closed before
+        `embed_query`. Retrieval then runs on a new session via `retrieve_with_vector`,
+        so the embedding HTTP call never holds a pooled connection.
+        """
         started = perf_counter()
         query_text = _validated_query(query)
         _validated_range(date_from, date_to)
@@ -1151,28 +1112,32 @@ class SearchService:
                 details={"fields": {"limit": "limit fuera de rango"}},
             )
         cursor_state = decode_cursor(cursor) if cursor is not None else None
-        generation = await active_generation(self._db, user_id)
-        if generation is None:
-            took_ms = _elapsed_ms(started)
-            logger.info("search.page version=- results=0 took_ms=%d", took_ms)
-            return SearchPage(results=[], took_ms=took_ms, next_cursor=None)
-        if cursor_state is not None and cursor_state.index_version != generation.version:
-            raise SearchInvalidCursor(
-                _CURSOR_STALE,
-                details={
-                    "reason": "stale_generation",
-                    "fields": {"cursor": _CURSOR_STALE},
-                },
+        async with sessions() as db:
+            generation = await active_generation(db, user_id)
+            if generation is None:
+                return _empty_search_page(started)
+            _reject_stale_cursor(cursor_state, generation.version)
+            # Copy the match inputs before the session closes and expires the row.
+            model = generation.model
+            dimension = generation.dimension
+        checked = _checked_provider(provider, model=model, dimension=dimension)
+        vector = await embed_query(checked, query_text)
+
+        async with sessions() as db:
+            generation = await active_generation(db, user_id)
+            if generation is None:
+                return _empty_search_page(started)
+            _reject_stale_cursor(cursor_state, generation.version)
+            version = generation.version
+            results = await SearchService(db, provider=checked).retrieve_with_vector(
+                user_id=user_id,
+                query_text=query_text,
+                query_vector=vector,
+                subject_id=subject_id,
+                date_from=date_from,
+                date_to=date_to,
+                top_k=MAX_RESULTS_WINDOW,
             )
-        results = await self._retrieve_for_generation(
-            generation,
-            user_id=user_id,
-            query_text=query_text,
-            subject_id=subject_id,
-            date_from=date_from,
-            date_to=date_to,
-            top_k=MAX_RESULTS_WINDOW,
-        )
         if cursor_state is not None:
             results = [hit for hit in results if after_cursor(hit, cursor_state)]
         page_results = results[:limit]
@@ -1181,7 +1146,7 @@ class SearchService:
             last = page_results[-1]
             next_cursor = encode_cursor(
                 SearchCursor(
-                    index_version=generation.version,
+                    index_version=version,
                     score_rrf=last.score_rrf,
                     chunk_id=last.chunk_id,
                 )
@@ -1189,7 +1154,7 @@ class SearchService:
         took_ms = _elapsed_ms(started)
         logger.info(
             "search.page version=%s results=%d took_ms=%d",
-            generation.version,
+            version,
             len(page_results),
             took_ms,
         )
@@ -1197,59 +1162,6 @@ class SearchService:
 
     def _require_provider(self, generation: IndexGeneration) -> EmbeddingProvider:
         """Validate the configured provider against the active generation, fail closed."""
-        provider = self._provider
-        if provider is None:
-            raise EmbeddingNotConfigured(
-                "Falta configurar el proveedor de embeddings (MAULWURF_EMBEDDING_*)."
-            )
-        if provider.model != generation.model:
-            raise SearchProviderMismatch(
-                "El modelo del proveedor no coincide con la generación activa.",
-                details={"reason": "model_mismatch"},
-            )
-        if provider.dimension != generation.dimension:
-            raise SearchProviderMismatch(
-                "La dimensión del proveedor no coincide con la generación activa.",
-                details={"reason": "dimension_mismatch"},
-            )
-        return provider
-
-    async def _retrieve_for_generation(
-        self,
-        generation: IndexGeneration,
-        *,
-        user_id: uuid.UUID,
-        query_text: str,
-        subject_id: uuid.UUID | None,
-        date_from: date | None,
-        date_to: date | None,
-        top_k: int,
-        audio_id: uuid.UUID | None = None,
-    ) -> list[RetrievedChunk]:
-        provider = self._require_provider(generation)
-        vector = await embed_query(provider, query_text)
-        if len(vector) != generation.dimension:
-            raise EmbeddingDimensionMismatch(
-                "El proveedor devolvió un vector de otra dimensión.",
-                details={"expected": generation.dimension, "observed": len(vector)},
-            )
-        hits = await hybrid_search(
-            self._db,
-            user_id=user_id,
-            query_text=query_text,
-            query_vector=vector,
-            version=generation.version,
-            top_k=top_k,
-            candidates_per_branch=CANDIDATES_PER_BRANCH,
-            subject_id=subject_id,
-            audio_id=audio_id,
-            date_from=date_from,
-            date_to=date_to,
-        )
-        return await _hydrate(
-            self._db,
-            user_id=user_id,
-            query=query_text,
-            version=generation.version,
-            hits=hits,
+        return _checked_provider(
+            self._provider, model=generation.model, dimension=generation.dimension
         )

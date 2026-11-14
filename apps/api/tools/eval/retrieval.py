@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.db import bind_user
 from app.models import Chunk, ChunkSegment, Segment
-from app.services.embeddings import EmbeddingProvider
+from app.services.embeddings import EmbeddingProvider, embed_query
 from app.services.search import SearchService
 from tests.fixtures.g4.schema import G4Item
 from tools.eval.corpus import LanguageIndex
@@ -75,31 +75,32 @@ async def run_retrieval(
     bind_user(index.user_id)
     outcomes: list[RetrievalOutcome] = []
     skipped = set(skip_item_ids)
-    async with session_factory() as db:
-        service = SearchService(db, provider=provider)
-        for item in dataset.partition_items(language, partition):
-            if item.id in skipped:
-                continue
-            started = time.perf_counter()
-            hits = await service.retrieve(
+    for item in dataset.partition_items(language, partition):
+        if item.id in skipped:
+            continue
+        started = time.perf_counter()
+        vector = await embed_query(provider, item.question)
+        async with session_factory() as db:
+            hits = await SearchService(db, provider=provider).retrieve_with_vector(
                 user_id=index.user_id,
-                query=item.question,
+                query_text=item.question,
+                query_vector=vector,
                 top_k=TOP_K,
             )
-            took_ms = (time.perf_counter() - started) * 1000.0
             links = await _load_links(db, index.user_id, [hit.chunk_id for hit in hits])
-            matched = _match_evidence(item, index, links)
-            outcomes.append(
-                RetrievalOutcome(
-                    item_id=item.id,
-                    language=language,
-                    answerable=item.answerable,
-                    expected=len(item.expected_evidence),
-                    matched=matched,
-                    took_ms=took_ms,
-                    top_chunk_ids=tuple(str(hit.chunk_id) for hit in hits),
-                )
+        took_ms = (time.perf_counter() - started) * 1000.0
+        matched = _match_evidence(item, index, links)
+        outcomes.append(
+            RetrievalOutcome(
+                item_id=item.id,
+                language=language,
+                answerable=item.answerable,
+                expected=len(item.expected_evidence),
+                matched=matched,
+                took_ms=took_ms,
+                top_chunk_ids=tuple(str(hit.chunk_id) for hit in hits),
             )
+        )
     return tuple(outcomes)
 
 

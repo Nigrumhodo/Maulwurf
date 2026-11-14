@@ -8,13 +8,16 @@ boundaries and the bounded page window. They do not replace the integration suit
 import base64
 import json
 import uuid
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from datetime import date
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services import search
+from app.services.embeddings import EmbeddingDimensionMismatch
 from app.services.search import (
     _CURSOR_INVALID,
     _CURSOR_STALE,
@@ -174,54 +177,77 @@ class _Generation:
     dimension = 1536
 
 
-class _PageService(SearchService):
+class _Provider:
+    """Matches `_Generation` so the provider check passes and `embed` is countable."""
+
+    model = "test-model"
+    dimension = 1536
+    batch_size = 1
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def embed(
+        self, texts: Sequence[str], *, input_type: str | None = None
+    ) -> list[list[float]]:
+        self.calls += 1
+        return [[0.0] * self.dimension for _ in texts]
+
+
+def _sessions() -> Any:
+    @asynccontextmanager
+    async def open_session() -> AsyncIterator[AsyncSession]:
+        yield cast_session()
+
+    return open_session()
+
+
+def cast_session() -> AsyncSession:
+    return AsyncSession()
+
+
+class _PageDouble:
     def __init__(self, hits: list[RetrievedChunk]) -> None:
-        super().__init__(cast(AsyncSession, object()), provider=None)
         self.hits = hits
         self.seen_top_k: int | None = None
+        self.provider = _Provider()
 
-    async def _retrieve_for_generation(
-        self,
-        generation: Any,
-        *,
-        user_id: uuid.UUID,
-        query_text: str,
-        subject_id: uuid.UUID | None,
-        date_from: date | None,
-        date_to: date | None,
-        top_k: int,
-        audio_id: uuid.UUID | None = None,
-    ) -> list[RetrievedChunk]:
-        self.seen_top_k = top_k
-        return list(self.hits)
+    def install(self, monkeypatch: pytest.MonkeyPatch, generation: _Generation | None) -> None:
+        async def active(_: AsyncSession, __: uuid.UUID) -> _Generation | None:
+            return generation
+
+        async def retrieve(service: SearchService, **kwargs: Any) -> list[RetrievedChunk]:
+            del service
+            self.seen_top_k = kwargs["top_k"]
+            return list(self.hits)
+
+        monkeypatch.setattr(search, "active_generation", active)
+        monkeypatch.setattr(SearchService, "retrieve_with_vector", retrieve)
+
+    async def page(self, **kwargs: Any) -> Any:
+        return await SearchService.page(
+            _sessions, provider=self.provider, user_id=USER_ID, **kwargs
+        )
 
 
 async def test_page_uses_full_window_and_sets_next_cursor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    generation = _Generation()
-
-    async def active(_: AsyncSession, __: uuid.UUID) -> _Generation:
-        return generation
-
-    monkeypatch.setattr(search, "active_generation", active)
     hits = [_retrieved(1 / (61 + rank), rank) for rank in range(1, 6)]
-    service = _PageService(hits)
+    double = _PageDouble(hits)
+    double.install(monkeypatch, _Generation())
 
-    first = await service.page(user_id=USER_ID, query="integral", limit=2)
+    first = await double.page(query="integral", limit=2)
     assert [hit.chunk_id for hit in first.results] == [hit.chunk_id for hit in hits[:2]]
     assert first.next_cursor is not None
-    assert service.seen_top_k == MAX_RESULTS_WINDOW
+    assert double.seen_top_k == MAX_RESULTS_WINDOW
+    assert double.provider.calls == 1
 
-    second = await service.page(
-        user_id=USER_ID, query="integral", limit=2, cursor=first.next_cursor
-    )
+    second = await double.page(query="integral", limit=2, cursor=first.next_cursor)
     assert [hit.chunk_id for hit in second.results] == [hit.chunk_id for hit in hits[2:4]]
     assert second.next_cursor is not None
 
-    third = await service.page(
-        user_id=USER_ID, query="integral", limit=2, cursor=second.next_cursor
-    )
+    third = await double.page(query="integral", limit=2, cursor=second.next_cursor)
     assert [hit.chunk_id for hit in third.results] == [hits[4].chunk_id]
     assert third.next_cursor is None
 
@@ -229,29 +255,22 @@ async def test_page_uses_full_window_and_sets_next_cursor(
 async def test_page_without_generation_is_empty_and_skips_retrieval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def active(_: AsyncSession, __: uuid.UUID) -> None:
-        return None
+    double = _PageDouble([_retrieved(0.5, 1)])
+    double.install(monkeypatch, None)
 
-    monkeypatch.setattr(search, "active_generation", active)
-    service = _PageService([_retrieved(0.5, 1)])
-
-    page = await service.page(user_id=USER_ID, query="integral")
+    page = await double.page(query="integral")
 
     assert page.results == []
     assert page.next_cursor is None
-    assert service.seen_top_k is None
+    assert double.seen_top_k is None
+    assert double.provider.calls == 0
 
 
 async def test_page_rejects_stale_generation_cursor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    generation = _Generation()
-
-    async def active(_: AsyncSession, __: uuid.UUID) -> _Generation:
-        return generation
-
-    monkeypatch.setattr(search, "active_generation", active)
-    service = _PageService([_retrieved(0.5, 1)])
+    double = _PageDouble([_retrieved(0.5, 1)])
+    double.install(monkeypatch, _Generation())
     stale = SearchCursor(
         index_version="idx-old",
         score_rrf=0.5,
@@ -259,34 +278,54 @@ async def test_page_rejects_stale_generation_cursor(
     )
 
     with pytest.raises(SearchInvalidCursor) as exc:
-        await service.page(user_id=USER_ID, query="integral", cursor=encode_cursor(stale))
+        await double.page(query="integral", cursor=encode_cursor(stale))
 
     assert exc.value.message == _CURSOR_STALE
     assert exc.value.details["reason"] == "stale_generation"
     assert exc.value.details["fields"]["cursor"] == _CURSOR_STALE
+    assert double.provider.calls == 0
+    assert double.seen_top_k is None
 
 
-async def test_page_rejects_out_of_range_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def active(_: AsyncSession, __: uuid.UUID) -> _Generation:
-        return _Generation()
-
-    monkeypatch.setattr(search, "active_generation", active)
-    service = _PageService([])
+async def test_page_rejects_out_of_range_limit() -> None:
+    provider = _Provider()
 
     with pytest.raises(SearchInvalidQuery):
-        await service.page(user_id=USER_ID, query="integral", limit=MAX_PAGE_SIZE + 1)
+        await SearchService.page(
+            _sessions,
+            provider=provider,
+            user_id=USER_ID,
+            query="integral",
+            limit=MAX_PAGE_SIZE + 1,
+        )
+
+    assert provider.calls == 0
 
 
 async def test_page_accepts_the_router_maximum_page_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    double = _PageDouble([])
+    double.install(monkeypatch, _Generation())
+
+    page = await double.page(query="integral", limit=MAX_PAGE_SIZE)
+
+    assert page.results == []
+    assert double.seen_top_k == MAX_RESULTS_WINDOW
+
+
+async def test_retrieve_with_vector_rejects_a_short_vector_before_sql(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def active(_: AsyncSession, __: uuid.UUID) -> _Generation:
         return _Generation()
 
     monkeypatch.setattr(search, "active_generation", active)
-    service = _PageService([])
+    service = SearchService(cast_session(), provider=_Provider())
 
-    page = await service.page(user_id=USER_ID, query="integral", limit=MAX_PAGE_SIZE)
-
-    assert page.results == []
-    assert service.seen_top_k == MAX_RESULTS_WINDOW
+    with pytest.raises(EmbeddingDimensionMismatch):
+        await service.retrieve_with_vector(
+            user_id=USER_ID,
+            query_text="integral",
+            query_vector=[0.1, 0.2],
+        )

@@ -327,7 +327,7 @@ def test_query_uses_document_fts_config() -> None:
     assert "regconfig" in sql.lower()
 
 
-# --- 11. Query/vector guards and active-generation resolution ------------------------
+# --- 11. Query and vector guards (version is required) -------------------------------
 
 
 async def test_hybrid_search_rejects_empty_query() -> None:
@@ -371,53 +371,3 @@ async def test_hybrid_search_rejects_empty_query_vector() -> None:
             version=VERSION,
         )
     assert db.executed == []
-
-
-async def test_hybrid_search_rejects_mismatched_vector_dimension() -> None:
-    generation = SimpleGeneration(VERSION, dimension=1536)
-    db = StubSession(generation=generation)
-
-    with pytest.raises(search.SearchInvalidQuery) as exc:
-        await search.hybrid_search(
-            _db(db),
-            user_id=USER_ID,
-            query_text="integral",
-            query_vector=[0.1, 0.2, 0.3],
-        )
-    assert exc.value.details["reason"] == "bad_dim"
-    assert exc.value.details["expected"] == 1536
-    assert exc.value.details["got"] == 3
-
-
-async def test_hybrid_search_resolves_active_generation() -> None:
-    generation = SimpleGeneration(VERSION, dimension=3)
-    db = StubSession(generation=generation)
-
-    await search.hybrid_search(
-        _db(db),
-        user_id=USER_ID,
-        query_text="integral",
-        query_vector=[0.1, 0.2, 0.3],
-    )
-
-    assert any("FROM index_generations" in sql for sql in db.executed)
-
-
-async def test_hybrid_search_without_active_generation_fails_closed() -> None:
-    db = StubSession(generation=None)
-
-    with pytest.raises(search.SearchNotConfigured):
-        await search.hybrid_search(
-            _db(db),
-            user_id=USER_ID,
-            query_text="integral",
-            query_vector=[0.1, 0.2, 0.3],
-        )
-
-
-class SimpleGeneration:
-    """Minimal stand-in for `IndexGeneration` (only `.version` and `.dimension` are read)."""
-
-    def __init__(self, version: str, dimension: int = 3) -> None:
-        self.version = version
-        self.dimension = dimension

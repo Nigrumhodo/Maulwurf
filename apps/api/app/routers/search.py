@@ -10,9 +10,9 @@ import uuid
 from datetime import date
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Query, Request, Response
 
-from app.core.deps import CurrentSession, DbSession
+from app.core.deps import SearchSessions, resolve_authenticated_session
 from app.core.errors import ApiError, validation_failed
 from app.core.providers import EmbeddingProviderDep
 from app.core.redis import RedisDep
@@ -52,13 +52,6 @@ def _fields(exc: Any, fallback: str, *, field: str = "q") -> dict[str, str]:
     return {str(key): str(value) for key, value in fields.items()}
 
 
-async def _search_quota(session: CurrentSession, redis: RedisDep) -> None:
-    await enforce_search_quota(redis, session.user_id)
-
-
-SearchQuota = Annotated[None, Depends(_search_quota)]
-
-
 def _provider_unavailable() -> ApiError:
     return ApiError(
         503,
@@ -90,12 +83,12 @@ def _provider_unavailable() -> ApiError:
     },
 )
 async def search(
+    request: Request,
     q: Annotated[str, Query(min_length=1, max_length=QUERY_MAX_CHARS)],
     response: Response,
-    session: CurrentSession,
-    db: DbSession,
+    sessions: SearchSessions,
     provider: EmbeddingProviderDep,
-    _quota: SearchQuota,
+    redis: RedisDep,
     subject_id: Annotated[uuid.UUID | None, Query()] = None,
     date_from: Annotated[date | None, Query(alias="from")] = None,
     date_to: Annotated[date | None, Query(alias="to")] = None,
@@ -104,16 +97,22 @@ async def search(
 ) -> SearchResponseOut:
     """Hybrid search over the session user's active index generation.
 
-    The per-user Redis quota runs as a dependency before this handler, so an over-quota
-    request never reaches the embeddings provider. A foreign or unknown `subject_id` is an
-    empty result, never a `404` (ADR-0006). Without an active generation the answer is `200`
-    with no results and the provider is not called.
+    Authentication uses a short session that is closed before the quota check and before
+    any embedding call. `SearchService.page` then reads the generation, closes that
+    session, embeds, and opens a new session for retrieval. A foreign or unknown
+    `subject_id` is an empty result, never a `404` (ADR-0006). Without an active
+    generation the answer is `200` with no results and the provider is not called.
     """
+    async with sessions() as db:
+        session = await resolve_authenticated_session(db, request)
+        user_id = session.user_id
+    await enforce_search_quota(redis, user_id)
     response.headers["Cache-Control"] = "no-store"
-    service = SearchService(db, provider=provider)
     try:
-        page = await service.page(
-            user_id=session.user_id,
+        page = await SearchService.page(
+            sessions,
+            provider=provider,
+            user_id=user_id,
             query=q,
             subject_id=subject_id,
             date_from=date_from,

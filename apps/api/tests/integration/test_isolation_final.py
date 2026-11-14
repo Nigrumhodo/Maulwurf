@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import (
 
 from app.core.config import settings
 from app.core.db import get_session
-from app.core.deps import chat_session_factory, progress_session_factory
+from app.core.deps import chat_session_factory, progress_session_factory, search_session_factory
 from app.core.providers import get_embedding_provider
 from app.main import app
 from app.models import (
@@ -66,6 +66,7 @@ from app.services.search_quota import SEARCH_QUOTA_KEY_PREFIX
 from app.services.tenant import get_owned, owned_by
 from tests.integration import actors
 from tests.integration.actors import FACTORIES, Actor
+from tests.integration.conftest import reuse_session
 
 pytestmark = pytest.mark.integration
 
@@ -109,6 +110,7 @@ async def client(
         yield db_session
 
     app.dependency_overrides[get_session] = override
+    app.dependency_overrides[search_session_factory] = lambda: reuse_session(db_session)
     app.dependency_overrides[get_embedding_provider] = lambda: provider
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url=settings.allowed_origin
