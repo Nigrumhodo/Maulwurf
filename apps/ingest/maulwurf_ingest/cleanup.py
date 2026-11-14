@@ -10,15 +10,18 @@ La evidencia contiene solo booleanos y conteos, nunca rutas de ficheros ni conte
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 import shutil
 import signal
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Protocol
 
 from maulwurf_ingest import hardening, metrics
 
@@ -29,6 +32,24 @@ _ABSENCE_FLAGS = ("workdir_absent", "tmp_is_tmpfs")
 _ABSENCE_COUNTERS = (
     "live_processes", "open_descriptors", "mounts_under_workdir", "unreadable_processes",
 )
+
+
+# The only cleanup_status=verified writers are destroy evidence and this attestation.
+OPERATOR_ATTESTATION = "operator_attestation"
+
+
+def proven_cleanup(evidence: object) -> bool:
+    """True when `verified` was written by destruction evidence or a host-loss attestation."""
+    if isinstance(evidence, str):
+        try:
+            evidence = json.loads(evidence)
+        except json.JSONDecodeError:
+            return False
+    if not isinstance(evidence, Mapping):
+        return False
+    if evidence.get("source") == OPERATOR_ATTESTATION:
+        return evidence.get("verified") is True
+    return absence_verified(evidence)
 
 
 def absence_verified(evidence: Mapping[str, object]) -> bool:
@@ -228,3 +249,146 @@ def destroy_and_verify(
         ),
         unreadable_processes=unreadable,
     )
+
+
+class _Stoppable(Protocol):
+    async def stop(self) -> None: ...
+
+
+DestroyedHook = Callable[[CleanupEvidence | None, BaseException | None], Awaitable[None]]
+
+
+class AttemptDir:
+    """The only owner of an attempt directory.
+
+    `__aenter__` is the only `mkdtemp`. `__aexit__` is the only `destroy_and_verify`,
+    and it finishes that check even when cancellation arrives again. A `handoff`
+    lets reception keep the directory alive across requests; the later `async with`
+    on the same object is the one that destroys it.
+    """
+
+    def __init__(
+        self, attempt_id: str, tmp_dir: str | None = None, *, path: Path | None = None,
+    ) -> None:
+        self.attempt_id = attempt_id
+        self._tmp_dir = tmp_dir
+        self.path = path
+        self.pgid: int | None = None
+        self.starttime: int | None = None
+        self.evidence: CleanupEvidence | None = None
+        self.destroy_error: BaseException | None = None
+        self.on_destroyed: DestroyedHook | None = None
+        self.keeper: _Stoppable | None = None
+        self._handoff = False
+        self._closed = False
+
+    @classmethod
+    def adopt(cls, path: Path) -> AttemptDir:
+        """Own a directory this class already created. Entering it does not `mkdtemp`."""
+        return cls(path.name, path=path)
+
+    @classmethod
+    async def destroy_one(cls, path: Path) -> CleanupEvidence:
+        """Verified destruction of one leftover directory. No process group is known."""
+        audio = cls.adopt(path)
+        async with audio:
+            pass
+        if audio.destroy_error is not None:
+            raise audio.destroy_error
+        if audio.evidence is None:
+            raise RuntimeError("cleanup_missing")
+        return audio.evidence
+
+    async def __aenter__(self) -> AttemptDir:
+        if self._closed:
+            raise RuntimeError("attempt_dir_closed")
+        if self.path is None:
+            # mkdtemp is local and fast. Keeping it on the event loop means a test
+            # double of `asyncio.to_thread` (the probe) cannot skip directory creation.
+            self.path = create_workdir(self.attempt_id, self._tmp_dir)
+        return self
+
+    def handoff(self) -> None:
+        """The `async with` that is exiting must leave the directory in place."""
+        self._handoff = True
+
+    async def aclose(self) -> None:
+        """Destroy the directory if a later `async with` never ran."""
+        if self._closed:
+            return
+        self._handoff = False
+        await self.__aexit__(None, None, None)
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object,
+    ) -> bool:
+        if self._handoff:
+            self._handoff = False
+            return False
+        saw_cancel = exc_type is asyncio.CancelledError
+        saw_cancel = await self._finish(saw_cancel)
+        if saw_cancel:
+            raise asyncio.CancelledError
+        return False
+
+    async def _finish(self, saw_cancel: bool) -> bool:
+        if self._closed:
+            return saw_cancel
+        self._closed = True
+        if self.path is None:
+            return saw_cancel
+        task = asyncio.create_task(asyncio.to_thread(
+            destroy_and_verify, self.path, self.pgid, starttime=self.starttime,
+        ))
+        while not task.done():
+            try:
+                self.evidence = await asyncio.shield(task)
+            except asyncio.CancelledError:
+                saw_cancel = True
+            except Exception as exc:
+                self.destroy_error = exc
+                break
+        if (
+            self.evidence is None
+            and self.destroy_error is None
+            and task.done()
+            and not task.cancelled()
+        ):
+            error = task.exception()
+            if error is not None:
+                self.destroy_error = error
+            else:
+                self.evidence = task.result()
+        callback_error: BaseException | None = None
+        try:
+            if self.on_destroyed is not None:
+                hook = self.on_destroyed
+
+                async def _record() -> None:
+                    await hook(self.evidence, self.destroy_error)
+
+                record = asyncio.create_task(_record())
+                while not record.done():
+                    try:
+                        await asyncio.shield(record)
+                    except asyncio.CancelledError:
+                        saw_cancel = True
+                    except Exception as exc:
+                        callback_error = exc
+                        break
+                if callback_error is None and record.done() and not record.cancelled():
+                    failed = record.exception()
+                    if failed is not None:
+                        callback_error = failed
+        finally:
+            keeper = self.keeper
+            if keeper is not None:
+                await keeper.stop()
+        if saw_cancel:
+            return True
+        if callback_error is not None:
+            raise callback_error
+        return False

@@ -21,7 +21,7 @@ from enum import StrEnum
 
 import asyncpg
 
-from maulwurf_ingest import rls
+from maulwurf_ingest import cleanup, rls
 from maulwurf_ingest.audio.reconcile import parse_confidence
 from maulwurf_ingest.lease import Lease
 
@@ -344,12 +344,25 @@ async def enable_text_outbox(
     """Enable index/analyze for this version and mark the attempt ``succeeded``.
 
     Both writes are one transaction. The attempt update requires a live lease,
-    the fencing token, and ``cleanup_status=verified``. Any other outbox type
-    is left as it was. A miss rolls the enablement back.
+    the fencing token, and ``cleanup_status=verified`` written by destruction
+    evidence or a host-loss attestation. Any other outbox type is left as it was.
+    A miss rolls the enablement back.
     """
     try:
         async with pool.acquire() as conn, conn.transaction():
             await rls.bind_transaction(conn, lease.user_id)
+            evidence = await conn.fetchval(
+                """
+                SELECT cleanup_evidence
+                  FROM ingestion_attempts
+                 WHERE id = $1 AND user_id = $2 AND fencing_token = $3
+                   AND status = 'transcript_committed_cleanup_pending'
+                   AND cleanup_status = 'verified' AND lease_expires_at > now()
+                """,
+                lease.attempt_id, lease.user_id, lease.fencing_token,
+            )
+            if not cleanup.proven_cleanup(evidence):
+                raise _Rollback
             await conn.execute(
                 """
                 UPDATE outbox_events

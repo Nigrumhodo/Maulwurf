@@ -144,7 +144,7 @@ async def sweep_once(
     committed = await reconcile_committed(
         pool, instance=instance, tmp_dir=tmp_dir, lease_ttl=lease_ttl,
     )
-    stranded = await sweep_stranded(pool)
+    stranded = await sweep_stranded(pool, tmp_dir=tmp_dir)
     return SweepResult(committed=committed, stranded=stranded)
 
 
@@ -501,6 +501,57 @@ async def _note_cancelled_cleanup(
     result.outcome = Outcome.CANCELLED
 
 
+class _AttemptClose:
+    """Mutable cleanup record filled in during the attempt and written on directory exit."""
+
+    def __init__(self, pool: asyncpg.Pool, lease: leases.Lease, result: RunResult) -> None:
+        self.pool = pool
+        self.lease = lease
+        self.result = result
+        self.owned_audio = False
+        self.committed = False
+        self.audio_id: uuid.UUID | None = None
+        self.version: int | None = None
+
+    async def __call__(
+        self, evidence: cleanup.CleanupEvidence | None, error: BaseException | None,
+    ) -> None:
+        await commit_cleanup(
+            self.pool, self.lease, self.lease.attempt_id,
+            evidence=evidence, error=error, owned_audio=self.owned_audio,
+            committed=self.committed, result=self.result,
+            audio_id=self.audio_id, version=self.version,
+        )
+
+
+async def commit_cleanup(
+    pool: asyncpg.Pool, lease: leases.Lease, attempt_id: uuid.UUID, *,
+    evidence: cleanup.CleanupEvidence | None, error: BaseException | None,
+    owned_audio: bool, committed: bool, result: RunResult,
+    audio_id: uuid.UUID | None, version: int | None,
+) -> None:
+    """Persist destroy evidence. ``verified`` is taken from the evidence, never from the caller."""
+    cleanup_error = error if isinstance(error, Exception) else None
+    if owned_audio and await cancel.is_cancelled(pool, lease):
+        await _note_cancelled_cleanup(
+            pool, lease, attempt_id, evidence=evidence, exc=cleanup_error, result=result,
+        )
+        return
+    if cleanup_error is not None or (error is not None and cleanup_error is None):
+        recorded_error = cleanup_error or RuntimeError(type(error).__name__)
+        await _note_cleanup_failure(
+            pool, lease, attempt_id, owned_audio=owned_audio, exc=recorded_error,
+            result=result,
+        )
+        return
+    if evidence is None:
+        return
+    await _note_cleanup_evidence(
+        pool, lease, attempt_id, evidence, owned_audio=owned_audio,
+        committed=committed, result=result, audio_id=audio_id, version=version,
+    )
+
+
 async def run_attempt(
     pool: asyncpg.Pool, *, user_id: uuid.UUID, attempt_id: uuid.UUID,
     audio: AsyncIterator[bytes],
@@ -514,84 +565,91 @@ async def run_attempt(
         return RunResult(Outcome.NOT_ACQUIRED)
 
     result = RunResult(Outcome.LEASE_LOST, fencing_token=lease.fencing_token)
-    # El workdir se crea ANTES del keeper: si mkdtemp falla (tmpfs lleno) no debe quedar
-    # una tarea de heartbeat renovando para siempre el lease de un run que ya no existe.
-    workdir = cleanup.create_workdir(str(attempt_id), config.tmp_dir)
-    keeper = _LeaseKeeper(pool, lease, config.heartbeat_interval_s)
-    job = _Job()
-    committed = False
-    published_audio_id: uuid.UUID | None = None
-    published_version: int | None = None
-    owned_audio = False  # solo el run que escribió el audio puede acreditar su limpieza
-    try:
-        if not await leases.transition(
-            pool, lease, from_status="awaiting_upload", to_status="receiving"
-        ):
-            return result
-        # El tope es el provisional de recepción, no un máximo aprobado. El hash sale
-        # de los bytes escritos; ffprobe, no un Content-Length, decide duración y formato.
-        # owned_audio antes de leer: un corte a media recepción ya escribió bytes.
-        owned_audio = True
+    # The directory is created before the keeper: a failed mkdtemp must not leave a
+    # heartbeat renewing the lease of a run that never started.
+    close = _AttemptClose(pool, lease, result)
+    async with cleanup.AttemptDir(str(attempt_id), config.tmp_dir) as attempt_dir:
+        workdir = attempt_dir.path
+        if workdir is None:
+            raise RuntimeError("attempt_dir")
+        keeper = _LeaseKeeper(pool, lease, config.heartbeat_interval_s)
+        attempt_dir.keeper = keeper
+        attempt_dir.on_destroyed = close
+        job = _Job()
+        committed = False
+        published_audio_id: uuid.UUID | None = None
+        published_version: int | None = None
+        owned_audio = False  # solo el run que escribió el audio puede acreditar su limpieza
         try:
-            received = await receive(
-                audio, workdir / ORIGINAL, max_bytes=settings.max_upload_bytes
-            )
-        except PayloadTooLarge:
-            result.outcome = Outcome.REJECTED
             if not await leases.transition(
-                pool, lease, from_status="receiving", to_status="rejected",
-                error_code="payload_too_large",
+                pool, lease, from_status="awaiting_upload", to_status="receiving"
             ):
-                result.outcome = Outcome.LEASE_LOST
-            return result
-        except cancel.ReceptionInterrupted:
-            result.outcome = Outcome.CANCELLED
-            if not await cancel.invalidate_reception(pool, lease):
-                result.outcome = Outcome.LEASE_LOST
-            return result
-        result.sha256 = received.sha256
-        decision = await asyncio.to_thread(probe_file, workdir / ORIGINAL)
-        if decision.decision == "reject":
-            code = decision.reason if decision.reason in CATALOG else "supervisor_error"
-            spec = CATALOG[code]
-            result.outcome = (
-                Outcome.REJECTED if spec.status == "rejected" else Outcome.SUPERVISOR_ERROR
-            )
+                return result
+            # El tope es el provisional de recepción, no un máximo aprobado. El hash sale
+            # de los bytes escritos; ffprobe, no un Content-Length, decide duración y formato.
+            # owned_audio antes de leer: un corte a media recepción ya escribió bytes.
+            owned_audio = True
+            try:
+                received = await receive(
+                    audio, workdir / ORIGINAL, max_bytes=settings.max_upload_bytes
+                )
+            except PayloadTooLarge:
+                result.outcome = Outcome.REJECTED
+                if not await leases.transition(
+                    pool, lease, from_status="receiving", to_status="rejected",
+                    error_code="payload_too_large",
+                ):
+                    result.outcome = Outcome.LEASE_LOST
+                return result
+            except cancel.ReceptionInterrupted:
+                result.outcome = Outcome.CANCELLED
+                if not await cancel.invalidate_reception(pool, lease):
+                    result.outcome = Outcome.LEASE_LOST
+                return result
+            result.sha256 = received.sha256
+            decision = await asyncio.to_thread(probe_file, workdir / ORIGINAL)
+            if decision.decision == "reject":
+                code = decision.reason if decision.reason in CATALOG else "supervisor_error"
+                spec = CATALOG[code]
+                result.outcome = (
+                    Outcome.REJECTED if spec.status == "rejected" else Outcome.SUPERVISOR_ERROR
+                )
+                if not await leases.transition(
+                    pool, lease, from_status="receiving", to_status=spec.status, error_code=code,
+                ):
+                    result.outcome = Outcome.LEASE_LOST
+                return result
+            result.duration_s = decision.duration_s
             if not await leases.transition(
-                pool, lease, from_status="receiving", to_status=spec.status, error_code=code,
+                pool, lease, from_status="receiving", to_status="transcribing"
             ):
-                result.outcome = Outcome.LEASE_LOST
-            return result
-        result.duration_s = decision.duration_s
-        if not await leases.transition(
-            pool, lease, from_status="receiving", to_status="transcribing"
-        ):
-            return result
+                return result
 
-        committed, published_audio_id, published_version = await _after_transcribing(
-            pool, lease, workdir, config, keeper, on_child, job, result,
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        # Fallo imprevisto (BD caída, tmpfs lleno, JSON malformado): si el lease sigue
-        # vigente, dejar el intento en requires_reupload en vez de depender solo de la
-        # reconciliación de B4/B6. transition() ya exige token y lease vigente.
-        logger.exception("supervisor.unexpected_error attempt_id=%s", attempt_id)
-        result.outcome = Outcome.SUPERVISOR_ERROR
-        for prev in ("awaiting_upload", "receiving", "transcribing"):
-            if await leases.transition(
-                pool, lease, from_status=prev, to_status="requires_reupload",
-                error_code=Outcome.SUPERVISOR_ERROR.value,
-            ):
-                break
-        return result
-    finally:
-        await _close_attempt(
-            pool, lease, attempt_id, workdir, job, keeper, result,
-            owned_audio=owned_audio, committed=committed,
-            audio_id=published_audio_id, version=published_version,
-        )
+            committed, published_audio_id, published_version = await _after_transcribing(
+                pool, lease, workdir, config, keeper, on_child, job, result,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Fallo imprevisto (BD caída, tmpfs lleno, JSON malformado): si el lease sigue
+            # vigente, dejar el intento en requires_reupload en vez de depender solo de la
+            # reconciliación de B4/B6. transition() ya exige token y lease vigente.
+            logger.exception("supervisor.unexpected_error attempt_id=%s", attempt_id)
+            result.outcome = Outcome.SUPERVISOR_ERROR
+            for prev in ("awaiting_upload", "receiving", "transcribing"):
+                if await leases.transition(
+                    pool, lease, from_status=prev, to_status="requires_reupload",
+                    error_code=Outcome.SUPERVISOR_ERROR.value,
+                ):
+                    break
+            return result
+        finally:
+            attempt_dir.pgid = job.pgid
+            attempt_dir.starttime = job.starttime
+            close.owned_audio = owned_audio
+            close.committed = committed
+            close.audio_id = published_audio_id
+            close.version = published_version
     return result
 
 
@@ -679,85 +737,46 @@ async def _after_transcribing(
     return False, None, None
 
 
-async def _close_attempt(
-    pool: asyncpg.Pool, lease: leases.Lease, attempt_id: uuid.UUID, workdir: Path, job: _Job,
-    keeper: _LeaseKeeper, result: RunResult, *, owned_audio: bool, committed: bool,
-    audio_id: uuid.UUID | None, version: int | None,
-) -> None:
-    # `to_thread` solo encola el borrado. En CPython 3.12 una sola
-    # cancelación no relanza dentro del finally; una segunda puede cortar
-    # el await antes de que el hilo arranque y dejar el audio en tmpfs.
-    # Una tarea propia con shield termina destroy_and_verify aunque
-    # cancelen otra vez. Cualquier otra excepción deja cleanup_status=failed:
-    # si no, el heartbeat seguiría renovando el lease.
-    cleanup_task = asyncio.create_task(
-        asyncio.to_thread(
-            cleanup.destroy_and_verify, workdir, job.pgid, starttime=job.starttime
-        )
-    )
-    evidence: cleanup.CleanupEvidence | None = None
-    cleanup_error: Exception | None = None
-    cancelled = False
-    try:
-        evidence = await asyncio.shield(cleanup_task)
-    except asyncio.CancelledError:
-        cancelled = True
-        try:
-            evidence = await cleanup_task
-        except asyncio.CancelledError:
-            evidence = None
-        except Exception as exc:
-            cleanup_error = exc
-    except Exception as exc:
-        cleanup_error = exc
-    try:
-        if owned_audio and await cancel.is_cancelled(pool, lease):
-            await _note_cancelled_cleanup(
-                pool, lease, attempt_id, evidence=evidence, exc=cleanup_error, result=result,
-            )
-        elif cleanup_error is not None:
-            await _note_cleanup_failure(
-                pool, lease, attempt_id, owned_audio=owned_audio, exc=cleanup_error,
-                result=result,
-            )
-        elif evidence is not None:
-            await _note_cleanup_evidence(
-                pool, lease, attempt_id, evidence, owned_audio=owned_audio,
-                committed=committed, result=result, audio_id=audio_id, version=version,
-            )
-    finally:
-        await keeper.stop()
-    if cancelled:
-        raise asyncio.CancelledError
-
-
 async def finish_transcription(
-    pool: asyncpg.Pool, *, lease: leases.Lease, workdir: Path, config: SupervisorConfig,
-    keeper: _LeaseKeeper, on_child: ChildHook | None = None,
+    pool: asyncpg.Pool, *, lease: leases.Lease, audio: cleanup.AttemptDir,
+    config: SupervisorConfig, keeper: _LeaseKeeper, on_child: ChildHook | None = None,
 ) -> RunResult:
-    """Transcribe a held upload. The attempt is already ``transcribing``."""
+    """Transcribe a held upload. The attempt is already ``transcribing``.
+
+    ``audio`` was created by reception and handed off. This ``async with`` is the
+    one that verifies destruction and records it.
+    """
     result = RunResult(Outcome.LEASE_LOST, fencing_token=lease.fencing_token)
+    workdir = audio.path
+    if workdir is None:
+        raise RuntimeError("attempt_dir")
     job = _Job()
+    close = _AttemptClose(pool, lease, result)
+    close.owned_audio = True
+    audio.keeper = keeper
+    audio.on_destroyed = close
     committed = False
     audio_id: uuid.UUID | None = None
     version: int | None = None
-    try:
-        committed, audio_id, version = await _after_transcribing(
-            pool, lease, workdir, config, keeper, on_child, job, result,
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception("supervisor.unexpected_error attempt_id=%s", lease.attempt_id)
-        result.outcome = Outcome.SUPERVISOR_ERROR
-        await leases.transition(
-            pool, lease, from_status="transcribing", to_status="requires_reupload",
-            error_code=Outcome.SUPERVISOR_ERROR.value,
-        )
-    finally:
-        await _close_attempt(
-            pool, lease, lease.attempt_id, workdir, job, keeper, result,
-            owned_audio=True, committed=committed, audio_id=audio_id, version=version,
-        )
+    async with audio:
+        try:
+            committed, audio_id, version = await _after_transcribing(
+                pool, lease, workdir, config, keeper, on_child, job, result,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("supervisor.unexpected_error attempt_id=%s", lease.attempt_id)
+            result.outcome = Outcome.SUPERVISOR_ERROR
+            await leases.transition(
+                pool, lease, from_status="transcribing", to_status="requires_reupload",
+                error_code=Outcome.SUPERVISOR_ERROR.value,
+            )
+        finally:
+            audio.pgid = job.pgid
+            audio.starttime = job.starttime
+            close.committed = committed
+            close.audio_id = audio_id
+            close.version = version
     return result
 

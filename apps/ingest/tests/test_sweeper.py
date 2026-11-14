@@ -334,7 +334,9 @@ async def test_sweep_once_reconciles_then_ends_stranded_attempts(
         order.append(f"reconcile:{instance}:{tmp_dir}")
         return ()
 
-    async def fake_stranded(_pool: asyncpg.Pool) -> tuple[object, ...]:
+    async def fake_stranded(
+        _pool: asyncpg.Pool, *, tmp_dir: str | None = None,
+    ) -> tuple[object, ...]:
         order.append("stranded")
         return ()
 
