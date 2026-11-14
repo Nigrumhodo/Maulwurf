@@ -46,7 +46,12 @@ from app.services.google_calendar import (
     GoogleCalendarService,
     GoogleCalendarTransientError,
 )
-from app.services.oauth_google import CALENDAR_SCOPES, missing_calendar_scopes, scope_granted
+from app.services.oauth_google import (
+    CALENDAR_SCOPES,
+    GoogleTokenResponse,
+    granted_scopes,
+    missing_calendar_scopes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -245,13 +250,9 @@ def requested_scopes(granted: list[str] | tuple[str, ...], *, reconnect: bool) -
     return missing or list(CALENDAR_SCOPES)
 
 
-def grant_covers_calendar(tokens: dict[str, object]) -> bool:
+def grant_covers_calendar(tokens: GoogleTokenResponse) -> bool:
     """Whether the token response proves every Calendar capability was granted."""
-    raw = tokens.get("scope")
-    if not isinstance(raw, str):
-        return False
-    granted = raw.split()
-    return all(scope_granted(granted, scope) for scope in CALENDAR_SCOPES)
+    return not missing_calendar_scopes(granted_scopes(tokens))
 
 
 __all__ = [

@@ -31,7 +31,7 @@ from app.services.notifications import dedupe_key
 from app.services.task_event_store import TASKS, SqlTaskEventStore
 from app.services.task_event_sync import (
     CalendarGateway,
-    TaskSnapshot,
+    SyncTask,
     build_event_body,
     deterministic_event_id,
 )
@@ -172,8 +172,8 @@ def _session_factory(db: AsyncSession) -> Callable[[], Any]:
 
 def _gateway_factory(
     fake: FakeGoogle,
-) -> Callable[[TaskSnapshot], Awaitable[CalendarGateway]]:
-    async def factory(_snapshot: TaskSnapshot) -> CalendarGateway:
+) -> Callable[[SyncTask], Awaitable[CalendarGateway]]:
+    async def factory(_snapshot: SyncTask) -> CalendarGateway:
         service = GoogleCalendarService(
             access_token="test-access-token",  # noqa: S106 - fixture, not a credential
             base_url="https://calendar.example/v3",
@@ -219,13 +219,13 @@ async def _insert_task(
     return values
 
 
-async def _snapshot(db: AsyncSession, task_id: uuid.UUID) -> TaskSnapshot:
+async def _snapshot(db: AsyncSession, task_id: uuid.UUID) -> SyncTask:
     snapshot = await SqlTaskEventStore(_session_factory(db)).load(task_id)
     assert snapshot is not None
     return snapshot
 
 
-def _synced_event(task: TaskSnapshot, **changes: Any) -> dict[str, Any]:
+def _synced_event(task: SyncTask, **changes: Any) -> dict[str, Any]:
     body = {"id": deterministic_event_id(task.task_id), **build_event_body(task)}
     body.update(changes)
     return body

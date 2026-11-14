@@ -19,7 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from maulwurf_ingest.audio.reconcile import LocalWord, parse_confidence
+from maulwurf_ingest.audio.reconcile import Word, parse_confidence
 from maulwurf_ingest.logs import RedactionFilter
 
 MAX_ATTEMPTS = 3
@@ -65,7 +65,7 @@ class TransportError(Exception):
 @dataclass(frozen=True)
 class Transcript:
     text: str
-    words: tuple[LocalWord, ...]
+    words: tuple[Word, ...]
     precision: str
 
 
@@ -318,7 +318,7 @@ def _status_name(exc: BaseException) -> str:
 
 def _transcript_from(response: object) -> Transcript:
     text_parts: list[str] = []
-    words: list[LocalWord] = []
+    words: list[Word] = []
     results = getattr(response, "results", None) or []
     for result in results:
         alternatives = getattr(result, "alternatives", None) or []
@@ -336,7 +336,7 @@ def _transcript_from(response: object) -> Transcript:
     return Transcript(text, tuple(words), "word")
 
 
-def _word_from(word: object) -> LocalWord | None:
+def _word_from(word: object) -> Word | None:
     text = str(getattr(word, "word", "") or "").strip()
     start = getattr(word, "start_time", None)
     end = getattr(word, "end_time", None)
@@ -351,4 +351,4 @@ def _word_from(word: object) -> LocalWord | None:
     raw_confidence = getattr(word, "confidence", None)
     # parse_confidence maps the protobuf default 0.0 to unknown on this path too.
     confidence = parse_confidence(raw_confidence)
-    return LocalWord(text, start_s, end_s, confidence)
+    return Word(text, start_s, end_s, confidence)

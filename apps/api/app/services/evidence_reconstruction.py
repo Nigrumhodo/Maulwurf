@@ -35,8 +35,8 @@ class ReconstructedEvidence:
     segment_id: uuid.UUID
     transcript_id: uuid.UUID
     transcript_version: int
-    inicio_char: int
-    fin_char: int
+    char_start: int
+    char_end: int
     quote: str
 
 
@@ -66,8 +66,8 @@ def reconstruct_from_view(
                 segment_id=span.segment_id,
                 transcript_id=view.transcript_id,
                 transcript_version=view.transcript_version,
-                inicio_char=span.char_start,
-                fin_char=span.char_end,
+                char_start=span.char_start,
+                char_end=span.char_end,
                 quote=quote,
             )
         )

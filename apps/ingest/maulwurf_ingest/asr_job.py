@@ -39,7 +39,7 @@ from maulwurf_ingest.asr.riva_client import (
 )
 from maulwurf_ingest.asr.scripted import load_scripted
 from maulwurf_ingest.audio.ffmpeg import DEFAULT_LIMITS, FfmpegLimits
-from maulwurf_ingest.audio.reconcile import ReconciledTranscript, parse_confidence
+from maulwurf_ingest.audio.reconcile import ReconciledTranscript, Word
 from maulwurf_ingest.config import settings
 from maulwurf_ingest.pipeline import FIRST_FRAGMENT, FragmentWords, process
 
@@ -57,25 +57,10 @@ _STDERR_CODES = frozenset({
 })
 
 
-class JobWord(TypedDict):
-    text: str
-    start_s: float
-    end_s: float
-    confidence: float | None
-
-
-class JobTranscript(TypedDict):
-    text: str
-    precision: str
-    words: list[JobWord]
-    model: str | None
-    client_version: str | None
-
-
 class JobResult(TypedDict):
     fragments: int
     seconds: float
-    transcript: JobTranscript
+    transcript: dict[str, object]
 
 
 class _JobError(RuntimeError):
@@ -215,25 +200,17 @@ def _wav_seconds(path: Path) -> float:
         return reader.getnframes() / rate
 
 
-def _from_service(reconciled: ReconciledTranscript) -> JobTranscript:
+def _from_service(reconciled: ReconciledTranscript) -> dict[str, object]:
     return {
         "text": reconciled.text,
         "precision": reconciled.precision,
-        "words": [
-            {
-                "text": word.text,
-                "start_s": word.start_s,
-                "end_s": word.end_s,
-                "confidence": word.confidence,
-            }
-            for word in reconciled.words
-        ],
+        "words": [word.as_json() for word in reconciled.words],
         "model": MODEL_NAME,
         "client_version": CLIENT_VERSION,
     }
 
 
-def _read_stub(workdir: Path) -> JobTranscript:
+def _read_stub(workdir: Path) -> dict[str, object]:
     """Publish the fixture as-is. Feeding it through every fragment would duplicate the text."""
     try:
         loaded: object = json.loads((workdir / STUB_TRANSCRIPT_NAME).read_text(encoding="utf-8"))
@@ -254,25 +231,12 @@ def _read_stub(workdir: Path) -> JobTranscript:
         raise RuntimeError("stub_transcript")
     if not isinstance(words_raw, list):
         raise RuntimeError("stub_transcript")
-    words: list[JobWord] = []
+    words: list[dict[str, object]] = []
     for item in words_raw:
-        if not isinstance(item, dict):
+        word = Word.from_json(item)
+        if word is None:
             raise RuntimeError("stub_transcript")
-        word_text = item.get("text")
-        start = item.get("start_s")
-        end = item.get("end_s")
-        if not isinstance(word_text, str) or isinstance(start, bool) or isinstance(end, bool):
-            raise RuntimeError("stub_transcript")
-        if not isinstance(start, int | float) or not isinstance(end, int | float):
-            raise RuntimeError("stub_transcript")
-        words.append(
-            {
-                "text": word_text,
-                "start_s": float(start),
-                "end_s": float(end),
-                "confidence": parse_confidence(item.get("confidence")),
-            }
-        )
+        words.append(word.as_json())
     return {
         "text": text,
         "precision": precision,

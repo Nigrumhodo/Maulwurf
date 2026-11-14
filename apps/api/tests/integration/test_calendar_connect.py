@@ -145,7 +145,7 @@ def _fake_google(
     access_token: str = "ya29.test-calendar",  # noqa: S107 - fixture, not a credential
     refresh_token: str | None = "1//test-refresh",  # noqa: S107 - fixture, not a credential
 ) -> None:
-    async def fake_exchange(code: str, code_verifier: str) -> dict[str, Any]:
+    async def fake_exchange(code: str, code_verifier: str) -> oauth_google.GoogleTokenResponse:
         assert code and code_verifier
         tokens: dict[str, Any] = {
             "access_token": access_token,
@@ -155,16 +155,18 @@ def _fake_google(
         }
         if refresh_token is not None:
             tokens["refresh_token"] = refresh_token
-        return tokens
+        return oauth_google.GoogleTokenResponse.model_validate(tokens)
 
-    async def fake_verify_id_token(id_token: str, expected_nonce: str) -> dict[str, Any]:
+    async def fake_verify_id_token(
+        id_token: str, expected_nonce: str
+    ) -> oauth_google.GoogleIdClaims:
         assert id_token == "fake-id-token"
-        return {
-            "sub": sub,
-            "email": "student@example.test",
-            "email_verified": True,
-            "nonce": expected_nonce,
-        }
+        return oauth_google.GoogleIdClaims(
+            sub=sub,
+            email="student@example.test",
+            email_verified=True,
+            nonce=expected_nonce,
+        )
 
     monkeypatch.setattr(oauth_google, "exchange_code", fake_exchange)
     monkeypatch.setattr(oauth_google, "verify_id_token", fake_verify_id_token)

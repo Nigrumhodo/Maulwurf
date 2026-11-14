@@ -71,7 +71,7 @@ def _segments(
 
 
 def _span(segment_id: uuid.UUID, inicio: int, fin: int) -> EvidenceSpan:
-    return EvidenceSpan(segment_id=segment_id, inicio_char=inicio, fin_char=fin)
+    return EvidenceSpan(segment_id=segment_id, char_start=inicio, char_end=fin)
 
 
 def test_no_offsets_still_yield_textual_evidence() -> None:
@@ -112,10 +112,10 @@ def test_unicode_span_uses_code_points_and_absolute_transcript_offsets() -> None
 
     item = evidence[0]
     assert item.quote == "🎓"
-    assert item.inicio_char == inicio
-    assert item.fin_char == fin
-    assert item.char_start == segment_offset + inicio
-    assert item.char_end == segment_offset + fin
+    assert item.char_start == inicio
+    assert item.char_end == fin
+    assert item.absolute_char_start == segment_offset + inicio
+    assert item.absolute_char_end == segment_offset + fin
 
 
 def test_stored_times_are_withheld_when_precision_says_none() -> None:

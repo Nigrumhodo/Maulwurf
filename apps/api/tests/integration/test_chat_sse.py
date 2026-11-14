@@ -1174,7 +1174,7 @@ async def test_chat_sources_contain_all_delivered_and_reject_invented_indices(
         assert [citation["index"] for citation in assistant.citas] == [1]
 
 
-async def test_chat_message_sources_include_inherited_history_sources(
+async def test_chat_message_sources_do_not_copy_history(
     chat_sse: Harness,
 ) -> None:
     actor, conversation, current_audios, _ = await _setup_corpus(chat_sse.factory)
@@ -1241,7 +1241,10 @@ async def test_chat_message_sources_include_inherited_history_sources(
             .scalars()
             .all()
         )
-        assert {row.audio_id for row in rows} == {old_audio.id, current_audios[0].id}
+        stored_ids = {row.audio_id for row in rows}
+        assert old_audio.id not in stored_ids
+        assert stored_ids
+        assert stored_ids <= {audio.id for audio in current_audios}
 
 
 async def test_chat_cancellation_mid_stream_leaves_partial_cancelled(

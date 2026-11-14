@@ -42,6 +42,7 @@ from app.schemas.chat import (
     MessageOut,
     SendMessageIn,
 )
+from app.schemas.citations import parse_citations
 from app.services import conversations
 from app.services.conversations import DEFAULT_PAGE_SIZE, MAX_CURSOR_LENGTH, MAX_PAGE_SIZE
 from app.services.rag import (
@@ -241,7 +242,7 @@ async def list_messages(
                 content=row.content,
                 status=row.status,
                 client_message_id=row.client_message_id,
-                citas=list(row.citas or []),
+                citas=list(parse_citations(row.citas)),
                 created_at=row.created_at,
             )
             for row in rows

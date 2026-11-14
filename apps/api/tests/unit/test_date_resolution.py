@@ -50,8 +50,8 @@ def _propose(resolved: ResolvedDue) -> ProposedItem:
             spans=[
                 SourceSpan(
                     segment_id=SEGMENT,
-                    inicio_char=0,
-                    fin_char=len(QUOTE),
+                    char_start=0,
+                    char_end=len(QUOTE),
                     cita_textual=QUOTE,
                 )
             ]

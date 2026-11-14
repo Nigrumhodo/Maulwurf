@@ -67,7 +67,7 @@ def _token(
 async def test_both_google_issuers_are_accepted(key: rsa.RSAPrivateKey, issuer: str) -> None:
     claims = await oauth_google.verify_id_token(_token(key, iss=issuer), "n-1")
 
-    assert claims["sub"] == "sub-1"
+    assert claims.sub == "sub-1"
 
 
 @pytest.mark.parametrize(

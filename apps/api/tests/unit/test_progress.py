@@ -25,22 +25,23 @@ def _snapshot(**overrides: object) -> progress.ProgressSnapshot:
 
 def test_snapshot_reports_measured_bytes_and_fragments() -> None:
     payload = _snapshot().snapshot_payload()
-    assert payload["attempt"]["received_bytes"] == 104_857_600
-    assert payload["attempt"]["fragments_done"] == 4
-    assert payload["attempt"]["fragments_total"] is None
-    assert payload["stages"] == {"index": "pending", "analyze": "not_requested"}
-    assert payload["aggregate"] == "processing"
+    assert payload.attempt.received_bytes == 104_857_600
+    assert payload.attempt.fragments_done == 4
+    assert payload.attempt.fragments_total is None
+    assert payload.stages == {"index": "pending", "analyze": "not_requested"}
+    assert payload.aggregate == "processing"
 
 
 def test_no_payload_invents_a_percentage_or_eta() -> None:
     snapshot = _snapshot()
     for payload in (snapshot.snapshot_payload(), snapshot.progress_payload()):
-        assert "percent" not in str(payload).lower()
-        assert "eta" not in {key.lower() for key in payload}
+        dumped = payload.model_dump()
+        assert "percent" not in str(dumped).lower()
+        assert "eta" not in {key.lower() for key in dumped}
 
 
 def test_progress_payload_only_reports_measured_values() -> None:
-    payload = _snapshot().progress_payload()
+    payload = _snapshot().progress_payload().model_dump()
     assert set(payload) == {"received_bytes", "fragments_done", "fragments_total"}
 
 

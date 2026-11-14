@@ -576,8 +576,8 @@ def _accepted(
             citations.append(
                 WindowCitation(
                     segment_id=span.segment_id,
-                    char_start=part.segment_char_start + span.inicio_char,
-                    char_end=part.segment_char_start + span.fin_char,
+                    char_start=part.segment_char_start + span.char_start,
+                    char_end=part.segment_char_start + span.char_end,
                 )
             )
         if outside or not citations:

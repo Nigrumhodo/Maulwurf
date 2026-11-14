@@ -18,11 +18,11 @@ import urllib.parse
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import httpx
 import jwt
 from jwt import PyJWKSet
+from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -173,7 +173,32 @@ def missing_calendar_scopes(granted: Sequence[str]) -> list[str]:
     return [scope for scope in CALENDAR_SCOPES if not scope_granted(granted, scope)]
 
 
-async def exchange_code(code: str, code_verifier: str) -> dict[str, Any]:
+class GoogleTokenResponse(BaseModel):
+    """Token endpoint JSON. Unknown fields are ignored; a missing access token is incomplete."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    access_token: str
+    expires_in: int | None = None
+    refresh_token: str | None = None
+    scope: str | None = None
+    id_token: str | None = None
+    token_type: str | None = None
+
+
+class GoogleIdClaims(BaseModel):
+    """Verified ID-token claims the login path reads. The signature check happens first."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    sub: str
+    email: str | None = None
+    email_verified: bool | None = None
+    name: str | None = None
+    nonce: str | None = None
+
+
+async def exchange_code(code: str, code_verifier: str) -> GoogleTokenResponse:
     """Intercambia el código por tokens. `OAuthError` si Google lo rechaza."""
     client_id, client_secret = _client_credentials()
     try:
@@ -196,7 +221,10 @@ async def exchange_code(code: str, code_verifier: str) -> dict[str, Any]:
         raise OAuthError("token_exchange_failed")
     if not isinstance(payload, dict):
         raise OAuthError("token_exchange_invalid")
-    return payload
+    try:
+        return GoogleTokenResponse.model_validate(payload)
+    except ValidationError as exc:
+        raise OAuthError("token_exchange_incomplete") from exc
 
 
 _jwks_cache: tuple[float, PyJWKSet] | None = None
@@ -232,7 +260,7 @@ async def _google_keys(*, refresh: bool = False) -> PyJWKSet:
         return _jwks_cache[1]
 
 
-async def verify_id_token(id_token: str, expected_nonce: str) -> dict[str, Any]:
+async def verify_id_token(id_token: str, expected_nonce: str) -> GoogleIdClaims:
     """Verifica firma (JWKS) y reclama `nonce`/`iss`/`aud`/`exp` del ID token."""
     client_id, _ = _client_credentials()
     key_set = await _google_keys()
@@ -258,19 +286,21 @@ async def verify_id_token(id_token: str, expected_nonce: str) -> dict[str, Any]:
         raise OAuthError("id_token_invalid") from exc
     if claims.get("nonce") != expected_nonce:
         raise OAuthError("nonce_mismatch")
-    return claims
+    try:
+        return GoogleIdClaims.model_validate(claims)
+    except ValidationError as exc:
+        raise OAuthError("id_token_invalid") from exc
 
 
-def _access_expiry(tokens: dict[str, Any]) -> datetime | None:
-    expires_in = tokens.get("expires_in")
-    if not isinstance(expires_in, int) or expires_in <= 0:
+def _access_expiry(tokens: GoogleTokenResponse) -> datetime | None:
+    if tokens.expires_in is None or tokens.expires_in <= 0:
         return None
-    return datetime.now(UTC) + timedelta(seconds=expires_in)
+    return datetime.now(UTC) + timedelta(seconds=tokens.expires_in)
 
 
-def granted_scopes(tokens: dict[str, Any]) -> list[str]:
+def granted_scopes(tokens: GoogleTokenResponse) -> list[str]:
     """Scopes Google reports for the newly issued token, in its order, deduplicated."""
-    raw = tokens.get("scope")
+    raw = tokens.scope
     if not isinstance(raw, str):
         return []
     seen: dict[str, None] = {}
@@ -291,7 +321,7 @@ def merge_scopes(*groups: Sequence[str]) -> list[str]:
 def _store_tokens(
     db: AsyncSession,
     user: User,
-    tokens: dict[str, Any],
+    tokens: GoogleTokenResponse,
     scopes: Sequence[str],
     credential: GoogleCredential | None = None,
 ) -> GoogleCredential:
@@ -300,8 +330,8 @@ def _store_tokens(
     A token response without `refresh_token` keeps the previous one: Google only returns it
     on the first consent (or when `prompt=consent` forces a new one).
     """
-    access_token = tokens.get("access_token")
-    if not isinstance(access_token, str) or not access_token:
+    access_token = tokens.access_token
+    if not access_token:
         raise OAuthError("token_exchange_incomplete")
     access_blob, key_version = encrypt(
         access_token, user_id=user.id, field="google_credentials.access_token"
@@ -310,7 +340,7 @@ def _store_tokens(
         credential = GoogleCredential(user_id=user.id)
         db.add(credential)
     credential.access_token_enc = access_blob
-    refresh_token = tokens.get("refresh_token")
+    refresh_token = tokens.refresh_token
     if isinstance(refresh_token, str) and refresh_token:
         credential.refresh_token_enc, _ = encrypt(
             refresh_token, user_id=user.id, field="google_credentials.refresh_token"
@@ -325,7 +355,7 @@ def _store_tokens(
 async def apply_incremental_grant(
     db: AsyncSession,
     user: User,
-    tokens: dict[str, Any],
+    tokens: GoogleTokenResponse,
     *,
     requested_scopes: Sequence[str],
 ) -> GoogleCredential:
@@ -348,17 +378,17 @@ async def apply_incremental_grant(
 
 
 async def upsert_google_identity(
-    db: AsyncSession, claims: dict[str, Any], tokens: dict[str, Any]
+    db: AsyncSession, claims: GoogleIdClaims, tokens: GoogleTokenResponse
 ) -> User:
     """Crea/actualiza `User` por `sub` y persiste los tokens cifrados en `GoogleCredential`."""
-    sub = claims.get("sub")
-    email = claims.get("email")
-    access_token = tokens.get("access_token")
-    if not isinstance(sub, str) or not isinstance(email, str) or not isinstance(access_token, str):
+    sub = claims.sub
+    email = claims.email
+    access_token = tokens.access_token
+    if not isinstance(email, str) or not access_token:
         raise OAuthError("token_exchange_incomplete")
     # Identity is the `sub`, but the email feeds notifications (S4): an address Google has not
     # verified is never stored nor trusted, so the login fails closed.
-    if claims.get("email_verified") is not True:
+    if claims.email_verified is not True:
         raise OAuthError("email_unverified")
 
     # The bootstrap policy on `users` exposes exactly the row whose Google `sub` was
@@ -381,7 +411,7 @@ async def upsert_google_identity(
     await set_current_user(db, user.id)
     user.email = email
     user.email_verified = True
-    name = claims.get("name")
+    name = claims.name
     if isinstance(name, str) and name:
         user.display_name = name
 
@@ -393,7 +423,7 @@ async def upsert_google_identity(
         credential = GoogleCredential(user_id=user.id)
         db.add(credential)
     credential.access_token_enc = access_blob
-    refresh_token = tokens.get("refresh_token")
+    refresh_token = tokens.refresh_token
     if isinstance(refresh_token, str) and refresh_token:
         credential.refresh_token_enc, _ = encrypt(
             refresh_token, user_id=user.id, field="google_credentials.refresh_token"

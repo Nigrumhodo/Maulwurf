@@ -53,11 +53,11 @@ class SegmentText:
 
 @dataclass(frozen=True)
 class EvidenceSpan:
-    """`[inicio_char, fin_char)` inside the immutable text of one segment."""
+    """`[char_start, char_end)` inside the immutable text of one segment."""
 
     segment_id: uuid.UUID
-    inicio_char: int
-    fin_char: int
+    char_start: int
+    char_end: int
 
 
 def has_reliable_offsets(t_start: float | None, t_end: float | None) -> bool:
@@ -152,11 +152,11 @@ class TextualEvidence:
 
     segment_id: uuid.UUID
     ordinal: int
-    # Absolute transcript offsets (segment.char_start + local span) and the local span.
+    # Local span in the segment text. Absolute offsets are the transcript position.
     char_start: int
     char_end: int
-    inicio_char: int
-    fin_char: int
+    absolute_char_start: int
+    absolute_char_end: int
     quote: str
     t_start: float | None
     t_end: float | None
@@ -179,8 +179,8 @@ class TextualEvidence:
             "ordinal": self.ordinal,
             "char_start": self.char_start,
             "char_end": self.char_end,
-            "inicio_char": self.inicio_char,
-            "fin_char": self.fin_char,
+            "absolute_char_start": self.absolute_char_start,
+            "absolute_char_end": self.absolute_char_end,
             "quote": self.quote,
             "t_start": self.t_start,
             "t_end": self.t_end,
@@ -213,11 +213,11 @@ def resolve_textual_evidence(
         segment = by_id.get(span.segment_id)
         if segment is None:
             raise EvidenceInvalid("span references a segment outside the transcript")
-        if span.inicio_char < 0 or span.fin_char <= span.inicio_char:
+        if span.char_start < 0 or span.char_end <= span.char_start:
             raise EvidenceInvalid("span is empty or inverted")
-        if span.fin_char > len(segment.text):
+        if span.char_end > len(segment.text):
             raise EvidenceInvalid("span exceeds the persisted segment text")
-        key = (span.segment_id, span.inicio_char, span.fin_char)
+        key = (span.segment_id, span.char_start, span.char_end)
         if key in seen:
             raise EvidenceInvalid("duplicate span")
         seen.add(key)
@@ -231,11 +231,11 @@ def resolve_textual_evidence(
             TextualEvidence(
                 segment_id=segment.segment_id,
                 ordinal=segment.ordinal,
-                char_start=segment.char_start + span.inicio_char,
-                char_end=segment.char_start + span.fin_char,
-                inicio_char=span.inicio_char,
-                fin_char=span.fin_char,
-                quote=segment.text[span.inicio_char : span.fin_char],
+                char_start=span.char_start,
+                char_end=span.char_end,
+                absolute_char_start=segment.char_start + span.char_start,
+                absolute_char_end=segment.char_start + span.char_end,
+                quote=segment.text[span.char_start : span.char_end],
                 t_start=t_start,
                 t_end=t_end,
             )

@@ -15,7 +15,6 @@ from app.services.rag import (
     HistoryMessage,
     HistoryTurn,
     RAGService,
-    StoredSource,
     build_chat_prompt,
     group_history,
     load_system_prompt,
@@ -244,16 +243,6 @@ def test_prompt_includes_system_history_and_numbered_evidence() -> None:
     turn = HistoryTurn(
         user=_history_message("user", "anterior", base),
         assistant=_history_message("assistant", "respuesta", base + timedelta(seconds=1)),
-        sources=(
-            StoredSource(
-                kind="transcript",
-                audio_id=uuid.uuid4(),
-                transcript_id=uuid.uuid4(),
-                transcript_version=1,
-                chunk_id=uuid.uuid4(),
-                segment_id=None,
-            ),
-        ),
     )
     plan = build_chat_prompt(
         system="eres un asistente",

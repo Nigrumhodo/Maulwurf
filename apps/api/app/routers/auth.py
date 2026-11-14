@@ -181,7 +181,7 @@ async def _calendar_callback(
 
     try:
         tokens = await oauth_google.exchange_code(code, code_verifier)
-        id_token = tokens.get("id_token")
+        id_token = tokens.id_token
         if not isinstance(id_token, str):
             raise OAuthError("token_exchange_incomplete")
         claims = await oauth_google.verify_id_token(id_token, nonce)
@@ -202,15 +202,15 @@ async def _calendar_callback(
         settings_row.calendar_write_calendar_id if settings_row is not None else None
     )
     await db.commit()
-    if claims.get("sub") != google_sub:
+    if claims.sub != google_sub:
         # Incremental consent for another Google account must not be linked to this user.
         return _calendar_result("error", reason="wrong_account")
     if not calendar_connection.grant_covers_calendar(tokens):
         # The user declined (or Google withheld) part of the Calendar scopes: reject cleanly
         # and persist nothing. Library, upload and chat keep working without Calendar.
         return _calendar_result("error", reason="scope_required")
-    access_token = tokens.get("access_token")
-    if not isinstance(access_token, str) or not access_token:
+    access_token = tokens.access_token
+    if not access_token:
         return _calendar_result("error", reason="oauth_failed")
 
     requested = calendar_connection.requested_scopes(
@@ -300,7 +300,7 @@ async def google_callback(
 
     try:
         tokens = await oauth_google.exchange_code(code, code_verifier)
-        id_token = tokens.get("id_token")
+        id_token = tokens.id_token
         if not isinstance(id_token, str):
             raise OAuthError("token_exchange_incomplete")
         claims = await oauth_google.verify_id_token(id_token, nonce)

@@ -70,15 +70,15 @@ def test_citation_event_and_record_keep_only_server_identifiers() -> None:
     event = citation_event(ref)
     record = citation_record(ref)
 
-    assert event["index"] == 1
-    assert event["audio_id"] == str(chunk.audio_id)
-    assert event["transcript_version"] == 2
-    assert event["segment_id"] == str(chunk.segment_id)
-    assert event["t_start"] == 65.0
-    assert event["label"] == "[Cálculo · 2026-09-21 · 01:05]"
-    assert record["index"] == 1
-    assert record["offset"] == 12
-    assert record["quote"] is None
+    assert event.index == 1
+    assert event.audio_id == chunk.audio_id
+    assert event.transcript_version == 2
+    assert event.segment_id == chunk.segment_id
+    assert event.t_start == 65.0
+    assert event.label == "[Cálculo · 2026-09-21 · 01:05]"
+    assert record.index == 1
+    assert record.offset == 12
+    assert record.quote is None
 
 
 def test_markers_are_removed_and_indices_are_returned_in_order() -> None:

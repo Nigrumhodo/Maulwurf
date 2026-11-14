@@ -25,15 +25,21 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.db import bind_user
 from app.models.chat import Conversation, Message, MessageSource
-from app.models.chunk import Chunk
+from app.schemas.citations import (
+    Citation,
+    CitedSource,
+    cited_sources,
+    dump_citations,
+    parse_citations,
+)
 from app.services.chat_order import ASSISTANT_CREATED_AT_OFFSET, message_role_rank
 from app.services.chunking import count_tokens_default, tokenizer_is_exact
 from app.services.citations import (
@@ -168,20 +174,9 @@ class HistoryMessage:
 
 
 @dataclass(frozen=True)
-class StoredSource:
-    kind: str
-    audio_id: uuid.UUID | None
-    transcript_id: uuid.UUID | None
-    transcript_version: int | None
-    chunk_id: uuid.UUID | None
-    segment_id: uuid.UUID | None
-
-
-@dataclass(frozen=True)
 class HistoryTurn:
     user: HistoryMessage
     assistant: HistoryMessage
-    sources: tuple[StoredSource, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -197,8 +192,7 @@ class ReplayState:
     message_id: uuid.UUID
     content: str
     status: str
-    citations: tuple[dict[str, object], ...]
-    sources: tuple[dict[str, str], ...]
+    citations: tuple[Citation, ...]
     created_at: datetime
 
 
@@ -209,7 +203,6 @@ class PreparedStream:
     assistant_message_id: uuid.UUID
     messages: tuple[ChatMessage, ...] = ()
     sources: tuple[SourceItem, ...] = ()
-    sources_payload: tuple[dict[str, str], ...] = ()
     input_tokens: int = 0
     model: str | None = None
     prompt_version: str = PROMPT_VERSION
@@ -222,7 +215,7 @@ class PreparedStream:
 class MessageSnapshot:
     content: str
     status: str
-    citations: tuple[dict[str, object], ...]
+    citations: tuple[Citation, ...]
 
 
 @dataclass(frozen=True)
@@ -452,17 +445,6 @@ def signal_cancel(message_id: uuid.UUID) -> None:
         event.set()
 
 
-def _source_key(source: StoredSource) -> tuple[object, ...]:
-    return (
-        source.kind,
-        source.audio_id,
-        source.transcript_id,
-        source.transcript_version,
-        source.chunk_id,
-        source.segment_id,
-    )
-
-
 class RAGService:
     """Prepare and stream one chat answer; providers are injected for deterministic tests."""
 
@@ -525,15 +507,9 @@ class RAGService:
             return None
 
     async def _replay_citation_ref(
-        self, user_id: uuid.UUID, record: dict[str, object]
+        self, user_id: uuid.UUID, record: Citation
     ) -> CitationRef | None:
         """Revalidate a persisted citation before replaying it."""
-        index = record.get("index")
-        if isinstance(index, bool) or not isinstance(index, int) or index <= 0:
-            return None
-        offset = _record_offset(record)
-        if offset is None:
-            return None
         try:
             async with self._session_factory() as db:
                 current = await validate_citation_record(
@@ -546,7 +522,7 @@ class RAGService:
             return None
         if current is None:
             return None
-        return CitationRef(index=index, chunk=current, offset=offset)
+        return CitationRef(index=record.index, chunk=current, offset=record.offset)
 
     async def prepare(
         self,
@@ -696,7 +672,6 @@ class RAGService:
                     user_id=user_id,
                     conversation_id=conversation_id,
                     assistant_message_id=assistant_id,
-                    sources_payload=(),
                     model=model,
                     abstention_text=ABSTENTION_TEXT,
                 )
@@ -738,7 +713,6 @@ class RAGService:
                     user_id=user_id,
                     message_id=assistant_id,
                     current=plan.sources,
-                    history=plan.history,
                 )
                 await db.execute(
                     update(Message)
@@ -750,9 +724,6 @@ class RAGService:
                     )
                 )
                 await db.commit()
-                sources_payload = await self._message_sources_payload(
-                    db, user_id=user_id, message_id=assistant_id
-                )
             except ChatContextExceeded as exc:
                 await db.rollback()
                 await self._fail_message(db, user_id=user_id, message_id=assistant_id)
@@ -784,7 +755,6 @@ class RAGService:
                 assistant_message_id=assistant_id,
                 messages=plan.messages,
                 sources=plan.sources,
-                sources_payload=sources_payload,
                 input_tokens=plan.input_tokens,
                 model=self._llm.model,
             )
@@ -844,7 +814,7 @@ class RAGService:
         _CANCEL_EVENTS[prepared.assistant_message_id] = cancel_event
         buffer = CitationBuffer(len(prepared.sources))
         content = ""
-        citations: list[dict[str, object]] = []
+        citations: list[Citation] = []
         # A model may repeat the same marker. Validation is a DB round-trip, so reuse the
         # first result for the lifetime of this stream.
         validated_sources: dict[uuid.UUID, RetrievedChunk | None] = {}
@@ -938,7 +908,7 @@ class RAGService:
                         yield encode_event(
                             name="citation",
                             id=len(content),
-                            data=cast(dict[str, Any], citation_event(ref)),
+                            data=citation_event(ref),
                         )
                     now = loop.time()
                     if (
@@ -965,20 +935,35 @@ class RAGService:
             if cancelled:
                 actual = await self._finalize(prepared, "cancelled", content, citations)
                 terminal = True
-                yield self._done_event(prepared, status=actual, event_id=len(content) + 1)
+                yield self._done_event(
+                    prepared,
+                    status=actual,
+                    event_id=len(content) + 1,
+                    sources=cited_sources(citations),
+                )
                 return
             if producer_error is not None:
                 error = _map_llm_error(producer_error)
                 actual = await self._finalize(prepared, "failed", content, citations)
                 terminal = True
                 if actual == "cancelled":
-                    yield self._done_event(prepared, status="cancelled", event_id=len(content) + 1)
+                    yield self._done_event(
+                        prepared,
+                        status="cancelled",
+                        event_id=len(content) + 1,
+                        sources=cited_sources(citations),
+                    )
                 else:
                     yield self._error_event(error, len(content) + 1)
                 return
             actual = await self._finalize(prepared, "completed", content, citations)
             terminal = True
-            yield self._done_event(prepared, status=actual, event_id=len(content) + 1)
+            yield self._done_event(
+                prepared,
+                status=actual,
+                event_id=len(content) + 1,
+                sources=cited_sources(citations),
+            )
         finally:
             await self._stop_producer(producer)
             _CANCEL_EVENTS.pop(prepared.assistant_message_id, None)
@@ -1038,11 +1023,8 @@ class RAGService:
         yield self._snapshot_event(state.message_id, offset, state.status)
         sent = offset
         emitted_citations = len(state.citations)
-        for record in sorted(state.citations, key=_record_sort_offset):
-            citation_offset = _record_offset(record)
-            if citation_offset is None:
-                continue
-            citation_offset = min(citation_offset, len(state.content))
+        for record in sorted(state.citations, key=lambda item: item.offset):
+            citation_offset = min(record.offset, len(state.content))
             if citation_offset < offset:
                 continue
             if citation_offset > sent:
@@ -1054,13 +1036,15 @@ class RAGService:
             yield encode_event(
                 name="citation",
                 id=citation_offset,
-                data=cast(dict[str, Any], citation_event(ref)),
+                data=citation_event(ref),
             )
         if len(state.content) > sent:
             yield self._delta_event(state.content[sent:], len(state.content))
             sent = len(state.content)
         if state.status != "streaming":
-            yield self._terminal_from_status(prepared, state.status, sent)
+            yield self._terminal_from_status(
+                prepared, state.status, sent, cited_sources(state.citations)
+            )
             return
 
         started = asyncio.get_running_loop().time()
@@ -1071,7 +1055,12 @@ class RAGService:
             if asyncio.get_running_loop().time() - started >= self._stream_max_seconds:
                 actual = await self._finalize(prepared, "failed", latest_content, latest_citations)
                 if actual == "cancelled":
-                    yield self._done_event(prepared, status="cancelled", event_id=sent + 1)
+                    yield self._done_event(
+                        prepared,
+                        status="cancelled",
+                        event_id=sent + 1,
+                        sources=cited_sources(latest_citations),
+                    )
                 else:
                     yield self._error_event(
                         ChatStreamError(
@@ -1091,11 +1080,8 @@ class RAGService:
                 return
             new_citations = snapshot.citations[emitted_citations:]
             emitted_citations = len(snapshot.citations)
-            for record in sorted(new_citations, key=_record_sort_offset):
-                citation_offset = _record_offset(record)
-                if citation_offset is None:
-                    continue
-                citation_offset = min(citation_offset, len(snapshot.content))
+            for record in sorted(new_citations, key=lambda item: item.offset):
+                citation_offset = min(record.offset, len(snapshot.content))
                 if citation_offset > sent:
                     yield self._delta_event(snapshot.content[sent:citation_offset], citation_offset)
                     sent = citation_offset
@@ -1107,7 +1093,7 @@ class RAGService:
                 yield encode_event(
                     name="citation",
                     id=max(citation_offset, sent),
-                    data=cast(dict[str, Any], citation_event(ref)),
+                    data=citation_event(ref),
                 )
             if len(snapshot.content) > sent:
                 yield self._delta_event(snapshot.content[sent:], len(snapshot.content))
@@ -1119,7 +1105,9 @@ class RAGService:
                 last_heartbeat = now
                 yield heartbeat()
             if snapshot.status != "streaming":
-                yield self._terminal_from_status(prepared, snapshot.status, sent)
+                yield self._terminal_from_status(
+                    prepared, snapshot.status, sent, cited_sources(snapshot.citations)
+                )
                 return
 
     async def _owned_conversation(
@@ -1160,18 +1148,12 @@ class RAGService:
         return row
 
     async def _replay_prepared(self, db: AsyncSession, message: Message) -> PreparedStream:
-        raw_citations = message.citas or []
-        citations = tuple(
-            cast(dict[str, object], item) for item in raw_citations if isinstance(item, dict)
-        )
-        sources = await self._message_sources_payload(
-            db, user_id=message.user_id, message_id=message.id
-        )
+        del db
+        citations = parse_citations(message.citas)
         return PreparedStream(
             user_id=message.user_id,
             conversation_id=message.conversation_id,
             assistant_message_id=message.id,
-            sources_payload=sources,
             input_tokens=message.input_tokens or 0,
             model=message.model,
             prompt_version=message.prompt_version or PROMPT_VERSION,
@@ -1180,7 +1162,6 @@ class RAGService:
                 content=message.content,
                 status=message.status,
                 citations=citations,
-                sources=sources,
                 created_at=message.created_at,
             ),
         )
@@ -1226,51 +1207,7 @@ class RAGService:
             )
             for row in rows
         ]
-        turns = group_history(history)
-        if not turns:
-            return ()
-        assistant_ids = [turn.assistant.id for turn in turns]
-        source_rows = (
-            (
-                await db.execute(
-                    select(MessageSource)
-                    .join(
-                        Chunk,
-                        and_(
-                            Chunk.user_id == MessageSource.user_id,
-                            Chunk.id == MessageSource.chunk_id,
-                        ),
-                    )
-                    .where(
-                        MessageSource.user_id == user_id,
-                        MessageSource.message_id.in_(assistant_ids),
-                    )
-                    .order_by(MessageSource.delivered_at, MessageSource.id)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        by_message: dict[uuid.UUID, list[StoredSource]] = {}
-        for row in source_rows:
-            by_message.setdefault(row.message_id, []).append(
-                StoredSource(
-                    kind=row.kind,
-                    audio_id=row.audio_id,
-                    transcript_id=row.transcript_id,
-                    transcript_version=row.transcript_version,
-                    chunk_id=row.chunk_id,
-                    segment_id=row.segment_id,
-                )
-            )
-        return tuple(
-            HistoryTurn(
-                user=turn.user,
-                assistant=turn.assistant,
-                sources=tuple(by_message.get(turn.assistant.id, ())),
-            )
-            for turn in turns
-        )
+        return tuple(group_history(history))
 
     async def _insert_sources(
         self,
@@ -1279,7 +1216,6 @@ class RAGService:
         user_id: uuid.UUID,
         message_id: uuid.UUID,
         current: Sequence[SourceItem],
-        history: Sequence[HistoryTurn],
     ) -> None:
         rows: list[MessageSource] = []
         seen: set[tuple[object, ...]] = set()
@@ -1310,64 +1246,9 @@ class RAGService:
                     segment_id=chunk.segment_id,
                 )
             )
-        for turn in history:
-            for stored in turn.sources:
-                stored_key = _source_key(stored)
-                if stored_key in seen:
-                    continue
-                if stored.kind == "transcript" and (
-                    stored.audio_id is None
-                    or stored.transcript_id is None
-                    or stored.transcript_version is None
-                    or stored.chunk_id is None
-                ):
-                    continue
-                seen.add(stored_key)
-                rows.append(
-                    MessageSource(
-                        user_id=user_id,
-                        message_id=message_id,
-                        kind=stored.kind,
-                        audio_id=stored.audio_id,
-                        transcript_id=stored.transcript_id,
-                        transcript_version=stored.transcript_version,
-                        chunk_id=stored.chunk_id,
-                        segment_id=stored.segment_id,
-                    )
-                )
         if rows:
             db.add_all(rows)
             await db.flush()
-
-    async def _message_sources_payload(
-        self, db: AsyncSession, *, user_id: uuid.UUID, message_id: uuid.UUID
-    ) -> tuple[dict[str, str], ...]:
-        rows = (
-            (
-                await db.execute(
-                    select(MessageSource)
-                    .where(
-                        MessageSource.user_id == user_id,
-                        MessageSource.message_id == message_id,
-                    )
-                    .order_by(MessageSource.delivered_at, MessageSource.id)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        seen: set[tuple[str, uuid.UUID | None]] = set()
-        payload: list[dict[str, str]] = []
-        for row in rows:
-            key = (row.kind, row.audio_id)
-            if key in seen:
-                continue
-            seen.add(key)
-            item = {"kind": row.kind}
-            if row.audio_id is not None:
-                item["audio_id"] = str(row.audio_id)
-            payload.append(item)
-        return tuple(payload)
 
     async def _fail_message(
         self, db: AsyncSession, *, user_id: uuid.UUID, message_id: uuid.UUID
@@ -1424,16 +1305,15 @@ class RAGService:
             ).one_or_none()
         if row is None:
             return None
-        citations = tuple(
-            cast(dict[str, object], item) for item in (row.citas or ()) if isinstance(item, dict)
+        return MessageSnapshot(
+            content=row.content, status=row.status, citations=parse_citations(row.citas)
         )
-        return MessageSnapshot(content=row.content, status=row.status, citations=citations)
 
     async def _checkpoint(
         self,
         prepared: PreparedStream,
         content: str,
-        citations: Sequence[dict[str, object]],
+        citations: Sequence[Citation],
     ) -> bool:
         async with self._session_factory() as db:
             result = await db.execute(
@@ -1445,7 +1325,7 @@ class RAGService:
                 )
                 .values(
                     content=content,
-                    citas=list(citations),
+                    citas=dump_citations(citations),
                     output_tokens=self._count_tokens(content),
                 )
             )
@@ -1457,11 +1337,11 @@ class RAGService:
         prepared: PreparedStream,
         status: str,
         content: str,
-        citations: Sequence[dict[str, object]],
+        citations: Sequence[Citation],
     ) -> str:
         values = {
             "content": content,
-            "citas": list(citations),
+            "citas": dump_citations(citations),
             "output_tokens": self._count_tokens(content),
         }
         async with self._session_factory() as db:
@@ -1534,7 +1414,14 @@ class RAGService:
             data={"code": error.code, "message": error.message},
         )
 
-    def _done_event(self, prepared: PreparedStream, *, status: str, event_id: int) -> str:
+    def _done_event(
+        self,
+        prepared: PreparedStream,
+        *,
+        status: str,
+        event_id: int,
+        sources: Sequence[CitedSource] = (),
+    ) -> str:
         return encode_event(
             name="done",
             id=event_id,
@@ -1542,15 +1429,25 @@ class RAGService:
                 "message_id": str(prepared.assistant_message_id),
                 "conversation_id": str(prepared.conversation_id),
                 "status": status,
-                "sources": list(prepared.sources_payload),
+                "sources": [item.model_dump(mode="json") for item in sources],
             },
         )
 
-    def _terminal_from_status(self, prepared: PreparedStream, status: str, event_id: int) -> str:
+    def _terminal_from_status(
+        self,
+        prepared: PreparedStream,
+        status: str,
+        event_id: int,
+        sources: Sequence[CitedSource] = (),
+    ) -> str:
         if status == "completed":
-            return self._done_event(prepared, status="completed", event_id=event_id + 1)
+            return self._done_event(
+                prepared, status="completed", event_id=event_id + 1, sources=sources
+            )
         if status == "cancelled":
-            return self._done_event(prepared, status="cancelled", event_id=event_id + 1)
+            return self._done_event(
+                prepared, status="cancelled", event_id=event_id + 1, sources=sources
+            )
         return self._error_event(
             ChatStreamError(
                 code="internal_error",
@@ -1676,16 +1573,3 @@ def _map_llm_error(exc: LLMError) -> ChatStreamError:
         message="No se pudo generar la respuesta.",
     )
 
-
-def _record_offset(record: dict[str, object]) -> int | None:
-    """Persisted offset: a non-negative int; bools, floats and negatives are malformed."""
-    raw = record.get("offset")
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
-        return None
-    return raw
-
-
-def _record_sort_offset(record: dict[str, object]) -> int:
-    """Malformed offsets sort first and are dropped before any event is emitted."""
-    offset = _record_offset(record)
-    return 0 if offset is None else offset

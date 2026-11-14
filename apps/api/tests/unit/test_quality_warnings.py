@@ -6,7 +6,7 @@ fail closed on rows that do not have the expected shape.
 
 import pytest
 
-from app.services.quality import normalize_quality_warnings
+from app.services.quality import QualityWarning, normalize_quality_warnings
 
 
 def test_known_warnings_keep_code_and_counts() -> None:
@@ -17,9 +17,9 @@ def test_known_warnings_keep_code_and_counts() -> None:
     ]
 
     assert normalize_quality_warnings(raw) == (
-        {"code": "repetition", "count": 3},
-        {"code": "low_confidence", "count": 4, "total": 10},
-        {"code": "empty_segments", "count": 1},
+        QualityWarning(code="repetition", count=3),
+        QualityWarning(code="low_confidence", count=4, total=10),
+        QualityWarning(code="empty_segments", count=1),
     )
 
 
@@ -28,7 +28,7 @@ def test_unknown_fields_never_leak_transcript_text() -> None:
 
     normalized = normalize_quality_warnings(raw)
 
-    assert normalized == ({"code": "repetition", "count": 3},)
+    assert normalized == (QualityWarning(code="repetition", count=3),)
     assert "derivada" not in str(normalized)
 
 
@@ -58,10 +58,10 @@ def test_counts_must_be_non_negative_integers() -> None:
     ]
 
     assert normalize_quality_warnings(raw) == (
-        {"code": "repetition"},
-        {"code": "empty_segments"},
-        {"code": "low_confidence", "total": 2},
-        {"code": "low_confidence", "count": 2},
+        QualityWarning(code="repetition"),
+        QualityWarning(code="empty_segments"),
+        QualityWarning(code="low_confidence", total=2),
+        QualityWarning(code="low_confidence", count=2),
     )
 
 
@@ -71,7 +71,7 @@ def test_warning_list_is_bounded() -> None:
     normalized = normalize_quality_warnings(raw)
 
     assert len(normalized) == 20
-    assert normalized[0] == {"code": "repetition", "count": 0}
+    assert normalized[0] == QualityWarning(code="repetition", count=0)
 
 
 @pytest.mark.parametrize(
@@ -96,6 +96,6 @@ def test_known_codes_survive_next_to_unknown_codes() -> None:
     ]
 
     assert normalize_quality_warnings(raw) == (
-        {"code": "repetition", "count": 3},
-        {"code": "empty_segments", "count": 1},
+        QualityWarning(code="repetition", count=3),
+        QualityWarning(code="empty_segments", count=1),
     )
