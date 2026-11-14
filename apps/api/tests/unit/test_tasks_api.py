@@ -19,16 +19,9 @@ from app.schemas.tasks import (
     TaskSourceIn,
     TaskVersionBody,
 )
-from app.services.tasks import (
-    TaskCursor,
-    _coerce_revision,
-    _current_fields,
-    _decode_cursor,
-    _encode_cursor,
-    _merge_patch,
-    _revision_payload,
-    ensure_version,
-)
+from app.services.task_reads import TaskCursor, _decode_cursor, _encode_cursor
+from app.services.task_snapshot import TaskSnapshot
+from app.services.tasks import ensure_version
 
 DUE_DAY = date(2026, 11, 9)
 DUE_AT = datetime(2026, 11, 9, 15, 0, tzinfo=UTC)
@@ -62,36 +55,32 @@ def test_the_current_patch_version_passes() -> None:
 
 
 def test_a_partial_due_date_becomes_a_resolved_all_day_task() -> None:
-    task = _task()
-    merged = _merge_patch(_current_fields(task), TaskPatch(version=1, due_date=DUE_DAY))
+    merged = TaskSnapshot.from_task(_task()).merge(TaskPatch(version=1, due_date=DUE_DAY))
 
-    assert merged["date_status"] == "resolved"
-    assert merged["all_day"] is True
-    assert merged["due_date"] == DUE_DAY
-    assert merged["due_at"] is None
-    assert merged["date_text"] == "Monday, November 9"
+    assert merged.proposal.date_status == "resolved"
+    assert merged.proposal.all_day is True
+    assert merged.proposal.due_date == DUE_DAY
+    assert merged.proposal.due_at is None
+    assert merged.date_text == "Monday, November 9"
 
 
 def test_a_partial_instant_becomes_a_resolved_timed_task() -> None:
-    task = _task()
-    merged = _merge_patch(_current_fields(task), TaskPatch(version=1, due_at=DUE_AT))
+    merged = TaskSnapshot.from_task(_task()).merge(TaskPatch(version=1, due_at=DUE_AT))
 
-    assert merged["date_status"] == "resolved"
-    assert merged["all_day"] is False
-    assert merged["due_at"] == DUE_AT
-    assert merged["date_text"] == "Monday, November 9 at 10:00"
+    assert merged.proposal.date_status == "resolved"
+    assert merged.proposal.all_day is False
+    assert merged.proposal.due_at == DUE_AT
+    assert merged.date_text == "Monday, November 9 at 10:00"
 
 
 def test_clearing_both_due_fields_returns_to_missing() -> None:
     task = _task(date_status="resolved", all_day=True, due_date=DUE_DAY, date_text="old")
-    merged = _merge_patch(
-        _current_fields(task), TaskPatch(version=1, due_date=None, due_at=None)
-    )
+    merged = TaskSnapshot.from_task(task).merge(TaskPatch(version=1, due_date=None, due_at=None))
 
-    assert merged["date_status"] == "missing"
-    assert merged["all_day"] is False
-    assert merged["due_date"] is None
-    assert merged["date_text"] is None
+    assert merged.proposal.date_status == "missing"
+    assert merged.proposal.all_day is False
+    assert merged.proposal.due_date is None
+    assert merged.date_text is None
 
 
 def test_an_explicit_null_non_nullable_field_is_rejected() -> None:
@@ -105,26 +94,66 @@ def test_a_patch_requires_a_version() -> None:
 
 
 def test_the_revision_payload_is_json_serializable_and_round_trips() -> None:
-    fields = {
-        **_current_fields(_task()),
-        "due_date": DUE_DAY,
-        "due_at": None,
-        "timezone": "America/Bogota",
-        "all_day": True,
-        "date_status": "resolved",
-        "subject_id": uuid.uuid4(),
-        "event_start_date": DUE_DAY,
-        "event_end_date_exclusive": date(2026, 11, 10),
-    }
-    payload = _revision_payload(fields)
+    subject_id = uuid.uuid4()
+    snapshot = TaskSnapshot.from_task(
+        _task(
+            due_date=DUE_DAY,
+            due_at=None,
+            timezone="America/Bogota",
+            all_day=True,
+            date_status="resolved",
+            subject_id=subject_id,
+            event_start_date=DUE_DAY,
+            event_end_date_exclusive=date(2026, 11, 10),
+        )
+    )
+    payload = snapshot.to_payload()
+    restored = snapshot.overlay(payload)
 
     assert payload["due_date"] == "2026-11-09"
     assert payload["due_at"] is None
     assert payload["event_start_date"] == "2026-11-09"
-    assert isinstance(payload["subject_id"], str)
-    assert _coerce_revision(payload)["due_date"] == DUE_DAY
-    assert _coerce_revision(payload)["event_end_date_exclusive"] == date(2026, 11, 10)
-    assert _coerce_revision(payload)["subject_id"] == uuid.UUID(payload["subject_id"])
+    assert payload["subject_id"] == str(subject_id)
+    assert restored.proposal.due_date == DUE_DAY
+    assert restored.event_end_date_exclusive == date(2026, 11, 10)
+    assert restored.subject_id == subject_id
+
+
+def test_an_analysis_revision_keeps_the_subject_and_the_calendar_block() -> None:
+    subject_id = uuid.uuid4()
+    snapshot = TaskSnapshot.from_task(
+        _task(
+            subject_id=subject_id,
+            due_date=DUE_DAY,
+            all_day=True,
+            date_status="resolved",
+            event_start_date=DUE_DAY,
+            event_end_date_exclusive=date(2026, 11, 10),
+        )
+    )
+    payload = snapshot.proposal.to_payload()
+    restored = snapshot.overlay(payload)
+
+    assert "subject_id" not in payload
+    assert "event_start_date" not in payload
+    assert restored.subject_id == subject_id
+    assert restored.event_start_date == DUE_DAY
+    assert restored.event_end_date_exclusive == date(2026, 11, 10)
+
+
+def test_an_explicit_null_subject_in_a_revision_clears_it() -> None:
+    snapshot = TaskSnapshot.from_task(_task(subject_id=uuid.uuid4()))
+    payload = snapshot.to_payload()
+    payload["subject_id"] = None
+
+    assert snapshot.overlay(payload).subject_id is None
+
+
+def test_a_revision_with_a_bad_date_is_rejected() -> None:
+    snapshot = TaskSnapshot.from_task(_task())
+
+    with pytest.raises(ValueError):
+        snapshot.overlay({"due_date": "not-a-date"})
 
 
 def test_the_task_cursor_round_trips_and_rejects_garbage() -> None:

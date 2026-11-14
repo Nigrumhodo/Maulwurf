@@ -40,10 +40,10 @@ from app.services.calendar_sync import CalendarService, CalendarWindowInvalid
 from app.services.date_resolution import (
     DateResolutionError,
     MentionKind,
-    render_due_text,
     resolve_due,
 )
 from app.services.task_evidence import ProvenanceInvalid, persist_task_spans
+from app.services.task_snapshot import ProposalFields, needs_review_task
 
 MAX_TOOL_ROUNDS = 4
 TOOL_BUDGET_SECONDS = 15.0
@@ -331,30 +331,23 @@ class ToolOrchestrator:
                 "evidence_rejected", "the cited evidence does not match the class"
             ) from exc
         item = extracted.result.items[0]
-        task = Task(
+        task = needs_review_task(
             user_id=user_id,
             audio_id=audio_id,
             subject_id=audio.subject_id,
             source="chat",
-            tipo=item.tipo,
-            titulo=item.titulo,
-            detalle=item.detalle,
-            due_date=item.due_date,
-            due_at=item.due_at,
-            timezone=item.timezone,
-            all_day=item.all_day,
-            date_status=item.date_status.value,
-            date_text=render_due_text(
+            fields=ProposalFields(
+                tipo=item.tipo,
+                titulo=item.titulo,
+                detalle=item.detalle,
                 due_date=item.due_date,
                 due_at=item.due_at,
                 timezone=item.timezone,
                 all_day=item.all_day,
                 date_status=item.date_status.value,
+                confidence_score=item.confidence_score,
+                date_reason=extracted.reasons[0],
             ),
-            date_reason=extracted.reasons[0],
-            confidence_score=item.confidence_score,
-            status="needs_review",
-            calendar_sync_status="not_requested",
         )
         try:
             # The savepoint keeps a late provenance rejection from committing the task
@@ -405,27 +398,23 @@ class ToolOrchestrator:
             )
         except DateResolutionError as exc:
             raise ToolError("mention_invalid", "the date mention is not usable") from exc
-        task = Task(
+        task = needs_review_task(
             user_id=user_id,
             source="chat",
-            tipo=parsed.tipo,
-            titulo=parsed.titulo,
-            detalle=parsed.detalle,
-            due_date=resolved.due_date,
-            due_at=resolved.due_at,
-            timezone=resolved.timezone,
-            all_day=resolved.all_day if resolved.date_status.value == "resolved" else False,
-            date_status=resolved.date_status.value,
-            date_text=render_due_text(
+            fields=ProposalFields(
+                tipo=parsed.tipo,
+                titulo=parsed.titulo,
+                detalle=parsed.detalle,
                 due_date=resolved.due_date,
                 due_at=resolved.due_at,
                 timezone=resolved.timezone,
-                all_day=resolved.all_day,
+                all_day=(
+                    resolved.all_day if resolved.date_status.value == "resolved" else False
+                ),
                 date_status=resolved.date_status.value,
+                confidence_score=None,
+                date_reason=resolved.reason,
             ),
-            date_reason=resolved.reason,
-            status="needs_review",
-            calendar_sync_status="not_requested",
         )
         self._db.add(task)
         await self._db.flush()
