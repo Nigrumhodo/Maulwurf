@@ -14,8 +14,8 @@ token:
 - `confirm` validates the resolved date, the Calendar block and the evidence, promotes at
   most one revision and bumps `version` in the same transaction that creates or reuses one
   `sync_task_event` outbox row. Without a ready Calendar integration the task is still
-  confirmed but stays `calendar_sync_status='blocked'` and no event is written; a later
-  reconnect (J3.3) or a repeat confirmation resumes it.
+  confirmed but stays `calendar_sync_status='blocked'` and no event is written; only a
+  later reconnect (J3.3) resumes the same version, never a repeated confirmation.
 - `dismiss`/`complete` reuse the J3.6 lifecycle adapter, cancel unsent reminders and keep
   the linked Calendar event with a notice.
 
@@ -87,6 +87,19 @@ from app.services.task_evidence import (
 )
 from app.services.task_lifecycle import TaskLifecycle, TaskLifecycleResult
 from app.services.task_lifecycle_store import SqlTaskLifecycleStore
+from app.services.task_state import (
+    ConfirmationProblem,
+    RevisionCommand,
+    SyncCommand,
+    TaskCommand,
+    confirmation_date_problem,
+    confirmation_problem,
+    ensure_revision_command,
+    ensure_sync_command,
+    ensure_task_command,
+    evidence_required,
+    revision_transition,
+)
 
 TASK_CURSOR_VERSION = 1
 _DEFAULT_LIMIT = 50
@@ -422,15 +435,6 @@ def ensure_version(current_version: int, current_status: str, expected_version: 
             "La tarea cambió desde que la cargaste; recarga antes de continuar.",
             {"current_version": current_version, "current_status": current_status},
         )
-
-
-def _invalid_transition(task: Task, target: str) -> ApiError:
-    return ApiError(
-        409,
-        "invalid_transition",
-        "La operación no es válida para el estado actual de esta tarea.",
-        {"current_status": task.status, "attempted_status": target},
-    )
 
 
 def _evidence_invalid() -> ApiError:
@@ -909,8 +913,8 @@ async def patch_task(
 ) -> TaskOut:
     task = await _load_task(db, user_id, task_id, for_update=True)
     ensure_version(task.version, task.status, body.version)
-    if task.status in {"completed", "dismissed"}:
-        raise _invalid_transition(task, "edited")
+    # Terminal tasks have no `edit` row; a confirmed edit is a pending revision.
+    ensure_task_command(task.status, TaskCommand.EDIT)
 
     before = _current_fields(task)
     after = _merge_patch(before, body)
@@ -967,7 +971,7 @@ async def _load_pending_revision(
     ).scalar_one_or_none()
     if revision is None:
         raise not_found()
-    if revision.status != "pending_confirmation":
+    if revision_transition(revision.status, RevisionCommand.ACTIVATE) is None:
         raise ApiError(
             409,
             "version_conflict",
@@ -980,42 +984,47 @@ async def _load_pending_revision(
 async def _validate_confirmable(
     db: AsyncSession, user_id: uuid.UUID, task: Task, fields: dict[str, Any]
 ) -> None:
-    if fields["date_status"] != DateStatus.RESOLVED.value:
-        raise _date_unresolved("date_status")
-    if all(
-        fields[key] is None
-        for key in (
-            "event_start_at",
-            "event_end_at",
-            "event_start_date",
-            "event_end_date_exclusive",
-        )
-    ):
-        raise _date_unresolved("event_block")
-    try:
-        validate_event_block(
-            start_at=fields["event_start_at"],
-            end_at=fields["event_end_at"],
-            start_date=fields["event_start_date"],
-            end_date_exclusive=fields["event_end_date_exclusive"],
-        )
-    except ValueError as exc:
-        raise _date_unresolved("event_block") from exc
-
-    source_count = await db.scalar(
-        select(func.count())
-        .select_from(TaskSource)
-        .where(TaskSource.user_id == user_id, TaskSource.task_id == task.id)
+    # Date and block answer before evidence, matching the documented 422 order.
+    problem = confirmation_date_problem(
+        date_status=fields["date_status"],
+        event_start_at=fields["event_start_at"],
+        event_end_at=fields["event_end_at"],
+        event_start_date=fields["event_start_date"],
+        event_end_date_exclusive=fields["event_end_date_exclusive"],
     )
-    if task.source == "extraction" or (task.source == "chat" and source_count):
+    if problem is not None:
+        raise _date_unresolved(problem.value)
+
+    source_count = int(
+        await db.scalar(
+            select(func.count())
+            .select_from(TaskSource)
+            .where(TaskSource.user_id == user_id, TaskSource.task_id == task.id)
+        )
+        or 0
+    )
+    has_evidence = False
+    if evidence_required(task.source, source_count):
         try:
             evidence = await load_task_evidence(
                 db, user_id=user_id, task_id=task.id, task_version=task.version
             )
         except ProvenanceInvalid as exc:
             raise _evidence_invalid() from exc
-        if not evidence:
-            raise _evidence_invalid()
+        has_evidence = bool(evidence)
+
+    problem = confirmation_problem(
+        date_status=fields["date_status"],
+        event_start_at=fields["event_start_at"],
+        event_end_at=fields["event_end_at"],
+        event_start_date=fields["event_start_date"],
+        event_end_date_exclusive=fields["event_end_date_exclusive"],
+        source=task.source,
+        source_count=source_count,
+        has_evidence=has_evidence,
+    )
+    if problem is ConfirmationProblem.EVIDENCE:
+        raise _evidence_invalid()
 
 
 def _calendar_target(value: str | None) -> str | None:
@@ -1155,8 +1164,8 @@ async def confirm_task(
 ) -> tuple[TaskOut, str | None]:
     task = await _load_task(db, user_id, task_id, for_update=True)
     ensure_version(task.version, task.status, expected_version)
-    if task.status in {"completed", "dismissed"}:
-        raise _invalid_transition(task, "confirmed")
+    # `confirm` is a self-row on confirmed (a safe repeat) and forbidden on terminal tasks.
+    ensure_task_command(task.status, TaskCommand.CONFIRM)
 
     now = datetime.now(UTC)
     revision = (
@@ -1179,17 +1188,10 @@ async def confirm_task(
 
     target_calendar_id, calendar_ready = await _calendar_state(db, user_id)
 
-    # A repeat without a revision is a safe double click. It never bumps the version; it
-    # may still resume a blocked confirmation once the integration is ready (first connect
-    # or a reconnect that has not run J3.3 yet).
+    # A repeat without a revision is a safe double click. It never bumps the version and
+    # never resumes a blocked delivery: for the same version, only a Calendar reconnect may
+    # move `blocked` back to `pending` (A3.7).
     if revision is None and task.status == "confirmed":
-        if task.calendar_sync_status == "blocked" and calendar_ready:
-            task.calendar_sync_status = "pending"
-            if target_calendar_id is not None:
-                task.calendar_id = target_calendar_id
-            await db.flush()
-            await _ensure_confirmation_outbox(db, user_id=user_id, task=task)
-            return (await _assemble(db, user_id, [task]))[0], None
         notice = (
             CALENDAR_SYNC_BLOCKED_NOTICE
             if task.calendar_sync_status == "blocked"
@@ -1211,9 +1213,16 @@ async def confirm_task(
     # and J3.3 needs the ID to resume the sync after a reconnect. Never clear an old link.
     if target_calendar_id is not None:
         task.calendar_id = target_calendar_id
-    task.calendar_sync_status = "pending" if calendar_ready else "blocked"
+    # A new version starts a fresh obligation; `request`/`block_new` are not a resume of an
+    # older delivery, which stays a reconnect-only command.
+    sync_command = SyncCommand.REQUEST if calendar_ready else SyncCommand.BLOCK_NEW
+    task.calendar_sync_status = ensure_sync_command(
+        task.calendar_sync_status, sync_command
+    )
     if revision is not None:
-        revision.status = "activated"
+        revision.status = ensure_revision_command(
+            revision.status, RevisionCommand.ACTIVATE
+        )
         revision.activated_at = now
     await db.flush()
     await discard_pending_revisions(db, user_id, task.id)

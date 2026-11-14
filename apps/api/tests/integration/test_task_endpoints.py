@@ -33,6 +33,7 @@ from app.models import (
     TaskSource,
     Transcript,
 )
+from app.services import calendar_resume
 from app.services import tasks as task_service
 from app.services.notifications import dedupe_key
 from app.services.oauth_google import CALENDAR_SCOPES
@@ -808,6 +809,20 @@ async def test_two_patches_keep_only_the_latest_pending_revision(
     assert second_stored is not None
     assert second_stored.status == "pending_confirmation"
 
+    # A discarded revision has no `activate` row; the current task version does not make
+    # it confirmable again.
+    discarded = await client.post(
+        f"/tasks/{task_id}/confirm",
+        json={"expected_version": 1, "revision_id": first_revision_id},
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+    assert discarded.status_code == 409
+    assert _error(discarded) == "version_conflict"
+    unchanged = await client.get(f"/tasks/{task_id}", cookies=actor.cookies)
+    assert unchanged.json()["version"] == 1
+    assert unchanged.json()["pending_revision"]["id"] == second_revision_id
+
     promoted = await client.post(
         f"/tasks/{task_id}/confirm",
         json={"expected_version": 1, "revision_id": second_revision_id},
@@ -1374,7 +1389,7 @@ async def test_confirm_rolls_back_the_task_when_the_outbox_insert_fails(
     assert await _sync_events(db_session, actor, task_id) == []
 
 
-async def test_repeating_a_blocked_confirm_after_calendar_becomes_ready_enqueues_it(
+async def test_a_blocked_confirm_is_resumed_only_by_reconnect(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:
     actor = await actors.make_actor(db_session)
@@ -1389,15 +1404,31 @@ async def test_repeating_a_blocked_confirm_after_calendar_becomes_ready_enqueues
     assert await _sync_events(db_session, actor, task_id) == []
 
     await _connect_calendar(db_session, actor)
-    resumed = await _confirm(client, actor, task_id, expected_version=2)
-    assert resumed.status_code == 202, resumed.text
-    assert resumed.json()["task"]["version"] == 2
-    assert resumed.json()["task"]["calendar_sync_status"] == "pending"
-    assert resumed.json()["notice"] is None
+    # A repeat confirmation is a safe no-op, never a same-version resume (A3.7).
+    repeated = await _confirm(client, actor, task_id, expected_version=2)
+    assert repeated.status_code == 202
+    assert repeated.json()["task"]["version"] == 2
+    assert repeated.json()["task"]["calendar_sync_status"] == "blocked"
+    assert repeated.json()["notice"] == "calendar_sync_blocked"
     db_session.expire_all()
     stored = await db_session.get(Task, task_id)
     assert stored is not None
-    assert stored.calendar_id == CALENDAR_ID
+    assert stored.calendar_sync_status == "blocked"
+    assert await _sync_events(db_session, actor, task_id) == []
+
+    report = await calendar_resume.resume_blocked_tasks(
+        db_session, user_id=actor.user_id
+    )
+    assert report.available is True
+    assert [(item.task_id, item.version) for item in report.tasks] == [(task_id, 2)]
+    assert report.tasks[0].outbox_created is True
+    db_session.expire_all()
+    stored = await db_session.get(Task, task_id)
+    assert stored is not None
+    assert stored.calendar_sync_status == "pending"
+    # Resume never guesses a target: none existed when the confirmation was blocked.
+    assert stored.calendar_id is None
+    assert stored.version == 2
     events = await _sync_events(db_session, actor, task_id)
     assert len(events) == 1
     assert events[0].resource_version == 2
@@ -1405,6 +1436,7 @@ async def test_repeating_a_blocked_confirm_after_calendar_becomes_ready_enqueues
     repeat = await _confirm(client, actor, task_id, expected_version=2)
     assert repeat.status_code == 202
     assert repeat.json()["task"]["version"] == 2
+    assert repeat.json()["task"]["calendar_sync_status"] == "pending"
     events = await _sync_events(db_session, actor, task_id)
     assert len(events) == 1
 
@@ -1477,6 +1509,197 @@ async def test_dismiss_and_complete_are_tenant_scoped(
     )
     assert response.status_code == 404
     assert _error(response) == "not_found"
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_status", "expected_version"),
+    [
+        ("pending", "confirmed", 2),
+        ("needs_review", "confirmed", 2),
+        ("confirmed", "confirmed", 1),
+    ],
+)
+async def test_confirm_command_rows(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    status: str,
+    expected_status: str,
+    expected_version: int,
+) -> None:
+    actor = await actors.make_actor(db_session)
+    task = await _confirmable_task(db_session, actor, status=status)
+
+    response = await _confirm(client, actor, task.id, expected_version=1)
+
+    assert response.status_code == 202, response.text
+    assert response.json()["task"]["status"] == expected_status
+    assert response.json()["task"]["version"] == expected_version
+
+
+@pytest.mark.parametrize("status", ["dismissed", "completed"])
+async def test_terminal_tasks_cannot_be_confirmed(
+    client: AsyncClient, db_session: AsyncSession, status: str
+) -> None:
+    actor = await actors.make_actor(db_session)
+    task = await _confirmable_task(db_session, actor, status=status)
+    task_id = task.id
+
+    response = await _confirm(client, actor, task_id, expected_version=1)
+
+    assert response.status_code == 409
+    assert _error(response) == "invalid_transition"
+    db_session.expire_all()
+    stored = await db_session.get(Task, task_id)
+    assert stored is not None
+    assert stored.status == status
+    assert stored.version == 1
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_version"),
+    [
+        ("pending", 2),
+        ("needs_review", 2),
+        ("confirmed", 2),
+        ("dismissed", 1),
+    ],
+)
+async def test_dismiss_command_rows(
+    client: AsyncClient, db_session: AsyncSession, status: str, expected_version: int
+) -> None:
+    actor = await actors.make_actor(db_session)
+    task = await _task(db_session, actor, status=status)
+
+    response = await client.post(
+        f"/tasks/{task.id}/dismiss",
+        json={"expected_version": 1},
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["task"]["status"] == "dismissed"
+    assert response.json()["task"]["version"] == expected_version
+
+
+@pytest.mark.parametrize("status", ["pending", "needs_review", "dismissed"])
+async def test_complete_rejects_non_confirmed_tasks(
+    client: AsyncClient, db_session: AsyncSession, status: str
+) -> None:
+    actor = await actors.make_actor(db_session)
+    task = await _task(db_session, actor, status=status)
+    task_id = task.id
+
+    response = await client.post(
+        f"/tasks/{task_id}/complete",
+        json={"expected_version": 1},
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+
+    assert response.status_code == 409
+    assert _error(response) == "invalid_transition"
+    db_session.expire_all()
+    stored = await db_session.get(Task, task_id)
+    assert stored is not None
+    assert stored.status == status
+    assert stored.version == 1
+
+
+async def test_complete_is_idempotent_on_an_already_completed_task(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    task = await _task(db_session, actor, status="completed")
+
+    response = await client.post(
+        f"/tasks/{task.id}/complete",
+        json={"expected_version": 1},
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["task"]["status"] == "completed"
+    assert response.json()["task"]["version"] == 1
+
+
+async def test_a_failed_sync_starts_a_fresh_obligation_on_the_next_version(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    await _connect_calendar(db_session, actor)
+    task = await _confirmable_task(
+        db_session,
+        actor,
+        status="confirmed",
+        calendar_sync_status="failed",
+        calendar_id=CALENDAR_ID,
+    )
+    task_id = task.id
+    revision = await client.patch(
+        f"/tasks/{task_id}",
+        json={"version": 1, "titulo": "Reintento"},
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+    revision_id = revision.json()["pending_revision"]["id"]
+
+    promoted = await _confirm(
+        client, actor, task_id, expected_version=1, revision_id=revision_id
+    )
+
+    assert promoted.status_code == 202, promoted.text
+    assert promoted.json()["task"]["version"] == 2
+    assert promoted.json()["task"]["calendar_sync_status"] == "pending"
+    events = await _sync_events(db_session, actor, task_id)
+    assert len(events) == 1
+    assert events[0].resource_version == 2
+
+
+async def test_reconnect_resumes_only_the_active_version_and_keeps_revisions_pending(
+    db_session: AsyncSession,
+) -> None:
+    actor = await actors.make_actor(db_session)
+    task = await _confirmable_task(
+        db_session,
+        actor,
+        status="confirmed",
+        calendar_sync_status="blocked",
+        calendar_id=CALENDAR_ID,
+        version=3,
+    )
+    task_id = task.id
+    original_title = task.titulo
+    revision = TaskRevision(
+        user_id=actor.user_id,
+        task_id=task_id,
+        base_task_version=2,
+        revision_type="edit_of_confirmed",
+        proposed_fields={"titulo": "Propuesta sobre la versión 2"},
+    )
+    db_session.add(revision)
+    await db_session.flush()
+    revision_id = revision.id
+
+    report = await calendar_resume.resume_blocked_tasks(
+        db_session, user_id=actor.user_id
+    )
+
+    assert report.available is True
+    assert [(item.task_id, item.version) for item in report.tasks] == [(task_id, 3)]
+    db_session.expire_all()
+    stored = await db_session.get(Task, task_id)
+    assert stored is not None
+    assert stored.calendar_sync_status == "pending"
+    assert stored.version == 3
+    assert stored.titulo == original_title
+    kept = await db_session.get(TaskRevision, revision_id)
+    assert kept is not None
+    assert kept.status == "pending_confirmation"
+    events = await _sync_events(db_session, actor, task_id)
+    assert len(events) == 1
+    assert events[0].resource_version == 3
 
 
 async def test_evidence_survives_a_lifecycle_version_bump(

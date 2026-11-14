@@ -33,8 +33,13 @@ from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.task_event_sync import TaskSnapshot
+from app.services.task_state import SyncCommand, sync_origins
 
 SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
+
+_SYNC_ORIGINS = sync_origins(SyncCommand.SYNC)
+_FAIL_ORIGINS = sync_origins(SyncCommand.FAIL)
+_BLOCK_ORIGINS = sync_origins(SyncCommand.BLOCK_WORKER)
 
 TASKS = Table(
     "tasks",
@@ -119,7 +124,11 @@ class SqlTaskEventStore:
         async with self._sessions() as db:
             result = await db.execute(
                 update(TASKS)
-                .where(TASKS.c.id == task_id, TASKS.c.version == version)
+                .where(
+                    TASKS.c.id == task_id,
+                    TASKS.c.version == version,
+                    TASKS.c.calendar_sync_status.in_(sorted(_SYNC_ORIGINS)),
+                )
                 .values(**values)
                 .returning(TASKS.c.id)
             )
@@ -156,16 +165,22 @@ class SqlTaskEventStore:
             return result.first() is not None
 
     async def mark_failed(self, task_id: uuid.UUID, version: int) -> bool:
-        return await self._set_status(task_id, version, "failed")
+        return await self._set_status(
+            task_id, version, "failed", origins=_FAIL_ORIGINS
+        )
 
     async def mark_blocked(self, task_id: uuid.UUID, version: int) -> bool:
-        return await self._set_status(task_id, version, "blocked")
+        return await self._set_status(
+            task_id, version, "blocked", origins=_BLOCK_ORIGINS
+        )
 
     async def _set_status(
         self,
         task_id: uuid.UUID,
         version: int,
         status: str,
+        *,
+        origins: frozenset[str],
     ) -> bool:
         values: dict[str, Any] = {
             "calendar_sync_status": status,
@@ -174,7 +189,11 @@ class SqlTaskEventStore:
         async with self._sessions() as db:
             result = await db.execute(
                 update(TASKS)
-                .where(TASKS.c.id == task_id, TASKS.c.version == version)
+                .where(
+                    TASKS.c.id == task_id,
+                    TASKS.c.version == version,
+                    TASKS.c.calendar_sync_status.in_(sorted(origins)),
+                )
                 .values(**values)
                 .returning(TASKS.c.id)
             )

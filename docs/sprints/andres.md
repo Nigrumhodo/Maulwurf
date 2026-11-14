@@ -188,3 +188,25 @@
   a stale `base_task_version` and could not be confirmed. The new
   `test_record_pending_revision_refreshes_a_stale_task_under_the_lock` reproduces the
   two-connection race and was red (`assert 1 == 2`) before the fix; it passes now.
+- 2026-11-13 · A3.7: the three families are separate closed vocabularies and now share one
+  pure authority, `app/services/task_state.py`. Before it, complete/dismiss lived in
+  `task_lifecycle` while confirm/PATCH re-checked terminal states inline, so a new command
+  could widen the machine without a test noticing.
+- 2026-11-13 · A3.7: same-version `blocked → pending` is reconnect-only. A repeated
+  confirmation of the current version is a no-op that keeps `calendar_sync_blocked`; only
+  `calendar_resume.resume_blocked_tasks` (J3.3) moves the active version back to `pending`
+  with one outbox. A *new* version confirmation uses `request`/`block_new` and is a fresh
+  obligation, not a resume. The A3.4 repeat-confirm shortcut was removed on purpose.
+- 2026-11-13 · A3.7: the worker store now compares `calendar_sync_status` origins in
+  addition to `version`, so a current-version job that lost its `pending` state (for example
+  after a reconnect or a newer confirmation) cannot write `synced`.
+- 2026-11-13 · A3.7 evidence (WSL, Python 3.12, disposable PostgreSQL 16/pgvector on
+  `127.0.0.1:55432`, Redis on `127.0.0.1:6379`): `tests/unit/test_task_state.py` **72 passed**;
+  `tests/integration/test_task_endpoints.py` **52 passed**; `test_calendar_sync_job.py` +
+  `test_calendar_connect.py` + `test_task_evidence.py` + `test_calendar_revision_patch.py` +
+  `test_s3_tasks_schema.py` **125 passed**; full API unit **1965 passed**; full API
+  integration **937 passed, 2 environment-only failures** (`test_backup_restore.py` needs
+  `pg_dump`/`pg_restore` on PATH); `ruff check .` clean and `mypy .` clean (345 files).
+  The checkout `.env` sets a non-schema `MAULWURF_EMBEDDING_DIMENSION`, so the suites ran
+  from a checkout copy without that file; no environment file was edited. No provider,
+  Google call, audio, credential or secret.

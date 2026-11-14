@@ -273,7 +273,7 @@ approval per language, not by global average.
 |---|---|---|---|
 | U-S3-AN-01 | U | `tasks` CHECKs: exclusive due constraint; the Calendar block uses exactly one instant or all-day pair, with end after start; `scheduled` is **not** a status and `calendar_sync_status` is kept separate | M4/M5/§6 |
 | U-S3-AN-02 | U | Optimistic locking: PATCH with the wrong version → 409 | M4 |
-| I-S3-AN-03 | I | Atomic confirmation promotes `revision_id` with `expected_version`, increments the version and creates one outbox; double confirmation does not duplicate; without the integration it stays confirmed + `blocked` | M4/G5-F2/G7-CAL |
+| I-S3-AN-03 | I | Atomic confirmation promotes `revision_id` with `expected_version`, increments the version and creates one outbox; double confirmation does not duplicate; without the integration it stays confirmed + `blocked`; task/revision/sync transitions follow their origin/command/destination tables and same-version `blocked → pending` happens only on reconnect | M4/M5/G5-F2/G7-CAL |
 | I-S3-AN-04 | I | Editing a confirmed task creates `task_revision(pending_confirmation)` without mutating active fields/event; stale base version → 409; reanalysis does not touch activated revisions nor edited/confirmed tasks | M4/G5-F2 |
 | I-S3-AN-05 | I | Tenant-aware `task_sources` allows zero sources only for a manual task and one or several validated sources for extraction/chat; invalid membership or span is rejected and the evidence is reconstructible | M4/G6 |
 | I-S3-AN-06 | I | Double analysis does not duplicate tasks/revisions by evidence; double confirmation returns 202 with a single outbox and `calendar_sync_status=pending` | M4/G5-F2 |
