@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -46,7 +45,11 @@ INGEST_ENV_ALLOWLIST = frozenset(
     }
 )
 INGEST_RIVA_NAMES = ("NVIDIA_API_KEY", "RIVA_SERVER", "RIVA_FUNCTION_ID", "RIVA_USE_SSL")
-INGEST_LIMIT_NAMES = ("INGEST_MAX_UPLOAD_BYTES", "INGEST_FRAGMENT_OVERLAP_S", "INGEST_FRAGMENT_SECONDS")
+INGEST_LIMIT_NAMES = (
+    "INGEST_MAX_UPLOAD_BYTES",
+    "INGEST_FRAGMENT_OVERLAP_S",
+    "INGEST_FRAGMENT_SECONDS",
+)
 API_SECRET_NAMES = (
     "MAULWURF_SECRET_KEY",
     "MAULWURF_ENCRYPTION_KEY",
@@ -57,7 +60,7 @@ API_SECRET_NAMES = (
     "MAULWURF_LLM_API_KEY",
     "POSTGRES_PASSWORD",
 )
-INGEST_SECRET_NAME = "MAULWURF_INGEST_CREDENTIAL_SECRET"
+INGEST_SECRET_NAME = "MAULWURF_INGEST_CREDENTIAL_SECRET"  # noqa: S105
 INGEST_URL_NAME = "MAULWURF_INGEST_URL"
 INGEST_ORIGIN_DEFAULT = "https://localhost:443"
 INGEST_USER = "10001:10001"
@@ -125,7 +128,7 @@ def render(
         for destination in copied:
             command.extend(["-f", str(destination)])
         command.extend(["--env-file", str(env_file), "config", "--format", "json"])
-        result = subprocess.run(
+        result = subprocess.run(  # noqa: S603
             command,
             env=_clean_process_env(),
             capture_output=True,
@@ -214,123 +217,59 @@ def check_api_ingest_pair(report: Report, model: Mapping, *, expect_set: bool) -
         )
 
 
-_BYTE_UNITS = {
-    "": 1,
-    "b": 1,
-    "k": 1024,
-    "kb": 1000,
-    "ki": 1024,
-    "kib": 1024,
-    "m": 1024**2,
-    "mb": 1000**2,
-    "mi": 1024**2,
-    "mib": 1024**2,
-    "g": 1024**3,
-    "gb": 1000**3,
-    "gi": 1024**3,
-    "gib": 1024**3,
-}
-
-
-def _as_bytes(value: object) -> int | None:
-    """Compose renders sizes as ints or as `1g` / `268435456` strings."""
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
+def _byte_count(value: object) -> int | None:
+    """`UnitBytes` JSON is a decimal string (`"1073741824"`), never `1g` or a number."""
+    if isinstance(value, str) and value.isdigit():
         return int(value)
-    if not isinstance(value, str):
-        return None
-    match = re.fullmatch(r"(\d+(?:\.\d+)?)([a-z]*)", value.strip().lower())
-    if match is None:
-        return None
-    number, unit = match.groups()
-    multiplier = _BYTE_UNITS.get(unit)
-    if multiplier is None:
-        return None
-    return int(float(number) * multiplier)
-
-
-def _memory_limit(service: Mapping[str, Any]) -> object:
-    if service.get("mem_limit") is not None:
-        return service.get("mem_limit")
-    deploy = service.get("deploy")
-    if not isinstance(deploy, dict):
-        return None
-    resources = deploy.get("resources")
-    if not isinstance(resources, dict):
-        return None
-    limits = resources.get("limits")
-    if not isinstance(limits, dict):
-        return None
-    return limits.get("memory")
-
-
-def _core_limits(service: Mapping[str, Any]) -> tuple[int, int] | None:
-    ulimits = service.get("ulimits")
-    if not isinstance(ulimits, dict):
-        return None
-    core = ulimits.get("core")
-    if isinstance(core, int):
-        return (core, core)
-    if isinstance(core, dict):
-        soft = core.get("soft", core.get("Soft"))
-        hard = core.get("hard", core.get("Hard"))
-        if isinstance(soft, int) and isinstance(hard, int):
-            return (soft, hard)
     return None
 
 
-def _tmpfs_mount(service: Mapping[str, Any]) -> tuple[set[str], int | None] | None:
-    """Options and size of the `/work/tmp` tmpfs, or None when that mount is absent."""
+def _tmpfs_mount(service: Mapping[str, Any]) -> tuple[set[str], int] | None:
+    """The one short-syntax string compose-go keeps in `tmpfs`.
+
+    Anything else — a second mount, an object, a unit suffix — is a different
+    shape and fails closed.
+    """
     raw = service.get("tmpfs")
-    items: list[object] = raw if isinstance(raw, list) else [raw]
-    for item in items:
-        if isinstance(item, str):
-            target, _, option_text = item.partition(":")
-            if target != TMP_MOUNT:
-                continue
-            options = {part for part in option_text.split(",") if part}
-            size = next(
-                (_as_bytes(part.split("=", 1)[1]) for part in options if part.startswith("size=")),
-                None,
-            )
-            return options, size
-        if isinstance(item, dict) and item.get("target") == TMP_MOUNT:
-            nested = item.get("tmpfs") if isinstance(item.get("tmpfs"), dict) else {}
-            option_text = item.get("options")
-            if not isinstance(option_text, str):
-                option_text = nested.get("options") if isinstance(nested, dict) else ""
-            options = {part for part in str(option_text or "").split(",") if part}
-            size_value: object = nested.get("size") if isinstance(nested, dict) else None
-            if size_value is None:
-                size_value = next(
-                    (part.split("=", 1)[1] for part in options if part.startswith("size=")),
-                    None,
-                )
-            return options, _as_bytes(size_value)
-    return None
+    if not isinstance(raw, list) or len(raw) != 1 or not isinstance(raw[0], str):
+        return None
+    target, separator, option_text = raw[0].partition(":")
+    if separator != ":" or target != TMP_MOUNT:
+        return None
+    options = {part for part in option_text.split(",") if part}
+    sizes = [part.removeprefix("size=") for part in options if part.startswith("size=")]
+    if len(sizes) != 1 or not sizes[0].isdigit():
+        return None
+    return options, int(sizes[0])
 
 
-def _writable_volumes(service: Mapping[str, Any]) -> list[str]:
-    raw = service.get("volumes") or []
+def _writable_targets(service: Mapping[str, Any]) -> list[str] | None:
+    """Targets of volumes that are not read-only objects.
+
+    compose-go omits `read_only: false`, so a missing flag is writable. `None`
+    means the value is not the object list `config` emits (no volumes is `[]`
+    after a missing key).
+    """
+    raw = service.get("volumes")
+    if raw is None:
+        return []
     if not isinstance(raw, list):
-        return [str(raw)]
+        return None
     writable: list[str] = []
     for volume in raw:
-        if isinstance(volume, str):
-            if not volume.endswith(":ro"):
-                writable.append(volume)
-            continue
-        if isinstance(volume, dict):
-            if volume.get("read_only") is True:
-                continue
-            target = volume.get("target") or volume.get("destination") or volume
-            writable.append(str(target))
-            continue
-        writable.append(str(volume))
+        if not isinstance(volume, dict) or not isinstance(volume.get("target"), str):
+            return None
+        if volume.get("read_only") is not True:
+            writable.append(volume["target"])
     return writable
+
+
+def _core_is_zero(service: Mapping[str, Any]) -> bool:
+    """YAML `core: 0` marshals as `{}`: compose-go omits zero ulimit fields."""
+    ulimits = service.get("ulimits")
+    if not isinstance(ulimits, dict):
+        return False
+    return ulimits.get("core") == {}
 
 
 def check_mount_contract(report: Report, model: Mapping[str, Any], label: str) -> None:
@@ -341,39 +280,44 @@ def check_mount_contract(report: Report, model: Mapping[str, Any], label: str) -
     without this check failing.
     """
     service = model["services"]["ingest"]
+    if not isinstance(service, dict):
+        report.check(False, f"{label}: ingest service is an object")
+        return
     env = service_env(model, "ingest")
     report.check(service.get("read_only") is True, f"{label}: ingest root is read-only")
-    report.check(
-        env.get("TMPDIR") == TMP_MOUNT,
-        f"{label}: TMPDIR is {TMP_MOUNT}",
-    )
+    report.check(env.get("TMPDIR") == TMP_MOUNT, f"{label}: TMPDIR is {TMP_MOUNT}")
     mount = _tmpfs_mount(service)
     if mount is None:
-        report.check(False, f"{label}: tmpfs mounted at {TMP_MOUNT}")
-        return
-    options, size = mount
+        report.check(False, f"{label}: tmpfs is one {TMP_MOUNT} string")
+        report.check(False, f"{label}: tmpfs size exceeds the upload limit")
+    else:
+        options, size = mount
+        report.check(
+            TMP_FLAGS <= options,
+            f"{label}: tmpfs has noexec,nosuid,nodev (options: {sorted(options)})",
+        )
+        upload_text = env.get("INGEST_MAX_UPLOAD_BYTES")
+        upload = (
+            int(upload_text)
+            if isinstance(upload_text, str) and upload_text.isdigit()
+            else None
+        )
+        report.check(
+            upload is not None and size > upload,
+            f"{label}: tmpfs size ({size}) exceeds the upload limit ({upload})",
+        )
+    writable = _writable_targets(service)
     report.check(
-        TMP_FLAGS <= options,
-        f"{label}: tmpfs has noexec,nosuid,nodev (options: {sorted(options)})",
+        writable == [],
+        f"{label}: ingest has no writable volume ({writable})",
     )
-    upload_text = env.get("INGEST_MAX_UPLOAD_BYTES")
-    upload = int(upload_text) if isinstance(upload_text, str) and upload_text.isdigit() else None
+    memory = _byte_count(service.get("mem_limit"))
+    swap = _byte_count(service.get("memswap_limit"))
     report.check(
-        size is not None and upload is not None and size > upload,
-        f"{label}: tmpfs size ({size}) exceeds the upload limit ({upload})",
-    )
-    writable = _writable_volumes(service)
-    report.check(not writable, f"{label}: ingest has no writable volume ({writable or 'none'})")
-    memory = _as_bytes(_memory_limit(service))
-    swap = _as_bytes(service.get("memswap_limit"))
-    report.check(
-        memory is not None and swap is not None and swap == memory,
+        memory is not None and memory == swap,
         f"{label}: memswap_limit equals mem_limit ({swap} vs {memory})",
     )
-    report.check(
-        _core_limits(service) == (0, 0),
-        f"{label}: core ulimit is 0",
-    )
+    report.check(_core_is_zero(service), f"{label}: core ulimit is 0")
 
 
 def check_origin(report: Report, compose_file: Path) -> None:

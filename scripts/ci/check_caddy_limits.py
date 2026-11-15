@@ -279,13 +279,18 @@ def _pattern_is_prefix_or_exact(pattern: str) -> bool:
 
 
 def _path_matches(pattern: str, path: str) -> bool:
-    """Caddy 2.8 `MatchPath` for the shapes this Caddyfile is allowed to use."""
+    """Exact path, or the prefix match Caddy 2.8 uses for one trailing `*`."""
     if "*" not in pattern:
         return pattern == path
-    if pattern.count("*") == 1 and pattern.endswith("*"):
-        return path.startswith(pattern[:-1])
-    regex = "^" + re.escape(pattern).replace(r"\*", "[^/]*") + "$"
-    return re.fullmatch(regex, path) is not None
+    return path.startswith(pattern[:-1])
+
+
+# The first argument of a route decorator. A path kept in a variable does not match,
+# and the decorator count below then fails closed.
+_ROUTE_PATH = re.compile(
+    r"@router\.(?:get|post|put|patch|delete)\(\s*[\"'](/[^\"']*)[\"']"
+)
+_ROUTE_DECORATOR = re.compile(r"@router\.(?:get|post|put|patch|delete)\(")
 
 
 def _router_paths(directory: Path) -> list[str]:
@@ -303,15 +308,10 @@ def _router_paths(directory: Path) -> list[str]:
             text,
         )
         prefix = prefix_match.group(1).rstrip("/") if prefix_match else ""
-        lines = text.splitlines()
-        for index, line in enumerate(lines):
-            if not re.search(r"@router\.(?:get|post|put|patch|delete)\(", line):
-                continue
-            window = "\n".join(lines[index : index + 6])
-            found = re.search(r"[\"'](/[^\"']*)[\"']", window)
-            if found is None:
-                _fail(f"{source.name}:{index + 1} declares a route without a path")
-            route = found.group(1).split("?", 1)[0]
+        if len(_ROUTE_DECORATOR.findall(text)) != len(_ROUTE_PATH.findall(text)):
+            _fail(f"{source.name} has a route whose first argument is not a path string")
+        for route in _ROUTE_PATH.findall(text):
+            route = route.split("?", 1)[0]
             if prefix and not route.startswith(prefix + "/") and route != prefix:
                 route = f"{prefix}{route}"
             paths.append(route)
