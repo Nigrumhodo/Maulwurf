@@ -16,7 +16,7 @@ from sqlalchemy import Select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services import search
+from app.services import retrieval as search
 
 USER_ID = uuid.uuid4()
 SUBJECT_ID = uuid.uuid4()

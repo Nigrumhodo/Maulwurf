@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services import search
 from app.services.embeddings import EmbeddingDimensionMismatch
-from app.services.search import (
+from app.services.retrieval import (
     _CURSOR_INVALID,
     _CURSOR_STALE,
     CURSOR_MAX_LENGTH,
@@ -27,9 +27,11 @@ from app.services.search import (
     SNIPPET_MAX_CHARS,
     FusedHit,
     RetrievedChunk,
-    SearchCursor,
     SearchInvalidCursor,
     SearchInvalidQuery,
+)
+from app.services.search import (
+    SearchCursor,
     SearchService,
     after_cursor,
     decode_cursor,

@@ -13,7 +13,7 @@ from app.services.citations import (
     citation_url,
     format_timestamp,
 )
-from app.services.search import RetrievedChunk
+from app.services.retrieval import RetrievedChunk
 
 
 def _chunk(

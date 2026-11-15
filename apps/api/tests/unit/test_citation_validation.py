@@ -12,7 +12,8 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from app.schemas.citations import parse_citations
-from app.services import rag as rag_module
+from app.services import chat_stream as chat_stream_module
+from app.services.chat_prompt import PreparedStream, SourceItem
 from app.services.citations import (
     CitationBuffer,
     CitationRef,
@@ -26,12 +27,9 @@ from app.services.citations import (
     validate_citation_source,
 )
 from app.services.llm import ChatMessage
-from app.services.rag import (
-    PreparedStream,
-    RAGService,
-    SourceItem,
-)
-from app.services.search import RetrievedChunk, SearchService
+from app.services.rag import RAGService
+from app.services.retrieval import RetrievedChunk
+from app.services.search import SearchService
 
 
 def _chunk(
@@ -311,7 +309,7 @@ async def test_validation_timeout_fails_closed_without_citation(
         await asyncio.sleep(60)
         return None
 
-    monkeypatch.setattr(rag_module, "CITATION_VALIDATION_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(chat_stream_module, "CITATION_VALIDATION_TIMEOUT_SECONDS", 0.01)
     service = RAGService(
         session_factory=cast(Any, object()),
         embedding_provider=cast(Any, object()),

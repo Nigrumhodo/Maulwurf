@@ -19,7 +19,8 @@ from app.schemas.citations import Citation, CitationEvent
 from app.services.evidence import evidence_label
 from app.services.evidence import format_timestamp as format_timestamp
 from app.services.reader_links import class_reader_path
-from app.services.search import RetrievedChunk, SearchService
+from app.services.retrieval import RetrievedChunk
+from app.services.search import SearchService
 
 _MARKER = re.compile(r"\[S([1-9][0-9]*)\]")
 _MARKER_PREFIX = re.compile(r"^\[S?[0-9]*$")

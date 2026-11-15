@@ -10,11 +10,10 @@ from typing import Any
 import pytest
 
 from app.services import rag as rag_module
-from app.services.rag import (
+from app.services.chat_prompt import (
     ChatContextExceeded,
     HistoryMessage,
     HistoryTurn,
-    RAGService,
     build_chat_prompt,
     group_history,
     load_system_prompt,
@@ -22,7 +21,8 @@ from app.services.rag import (
     select_evidence,
     trim_history,
 )
-from app.services.search import RetrievedChunk
+from app.services.rag import RAGService
+from app.services.retrieval import RetrievedChunk
 
 
 def _chunk(content: str = "alpha beta gamma", *, ordinal: int = 1) -> RetrievedChunk:

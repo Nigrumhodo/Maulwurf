@@ -45,7 +45,8 @@ from app.services.analysis_validation import (
     validate_analysis,
 )
 from app.services.analysis_windows import EvidenceSpan
-from app.services.calendar_sync import CalendarService, CalendarWindowInvalid
+from app.services.calendar_read import CalendarService
+from app.services.calendar_window import CalendarWindowInvalid
 from app.services.date_resolution import (
     DateResolutionError,
     MentionKind,

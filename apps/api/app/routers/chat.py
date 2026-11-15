@@ -44,9 +44,9 @@ from app.schemas.chat import (
 )
 from app.schemas.citations import parse_citations
 from app.services import conversations
+from app.services.chat_prompt import ChatContextExceeded
 from app.services.conversations import DEFAULT_PAGE_SIZE, MAX_CURSOR_LENGTH, MAX_PAGE_SIZE
 from app.services.rag import (
-    ChatContextExceeded,
     ChatConversationNotFound,
     ChatInvalidTransition,
     ChatMessageNotFound,

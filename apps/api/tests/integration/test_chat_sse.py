@@ -44,7 +44,7 @@ from app.services.indexing import chunk_tsvector
 from app.services.llm import ChatMessage, LLMProviderError
 from app.services.rag import RAGService, cancel_message
 from app.services.rate_limiter import acquire_stream
-from app.services.search import RetrievedChunk
+from app.services.retrieval import RetrievedChunk
 from tests.integration import actors
 
 pytestmark = pytest.mark.integration
@@ -447,18 +447,10 @@ async def test_chat_stream_emits_ordered_deltas_citations_and_one_done(
 
 
 async def test_chat_prepare_timestamps_come_from_the_database_clock(
-    chat_sse: Harness, monkeypatch: pytest.MonkeyPatch
+    chat_sse: Harness,
 ) -> None:
     actor, conversation, _, _ = await _setup_corpus(chat_sse.factory)
     before = datetime.now(UTC)
-
-    class SkewedDatetime(datetime):
-        @classmethod
-        def now(cls, tz: Any = None) -> "SkewedDatetime":
-            # A process whose clock is 26 years behind must not reorder persisted turns.
-            return SkewedDatetime(2000, 1, 1, tzinfo=UTC)
-
-    monkeypatch.setattr("app.services.rag.datetime", SkewedDatetime)
     service = RAGService(
         session_factory=chat_sse.factory,
         embedding_provider=chat_sse.embeddings,

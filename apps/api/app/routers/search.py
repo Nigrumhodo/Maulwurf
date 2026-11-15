@@ -24,7 +24,7 @@ from app.services.embeddings import (
     EmbeddingProviderError,
     EmbeddingRateLimited,
 )
-from app.services.search import (
+from app.services.retrieval import (
     _CURSOR_INVALID,
     CURSOR_MAX_LENGTH,
     DEFAULT_PAGE_SIZE,
@@ -36,9 +36,9 @@ from app.services.search import (
     SearchInvalidRange,
     SearchNotConfigured,
     SearchProviderMismatch,
-    SearchService,
     SearchVectorRequired,
 )
+from app.services.search import SearchService
 from app.services.search_quota import enforce_search_quota
 
 router = APIRouter(tags=["search"])

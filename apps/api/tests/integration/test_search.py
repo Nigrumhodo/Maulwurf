@@ -34,7 +34,8 @@ from app.models import (
 )
 from app.services.embeddings import EmbeddingProviderError, EmbeddingRateLimited, embed_query
 from app.services.indexing import chunk_tsvector
-from app.services.search import _CURSOR_INVALID, _CURSOR_STALE, SearchService
+from app.services.retrieval import _CURSOR_INVALID, _CURSOR_STALE
+from app.services.search import SearchService
 from tests.integration import actors
 from tests.integration.conftest import reuse_session
 

@@ -16,7 +16,18 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.calendar_sync import (
+from app.services.calendar_mirror import PublicationResult
+from app.services.calendar_read import coverage_status
+from app.services.calendar_remote import (
+    CalendarRead,
+    GoogleCalendarEventSource,
+    RemoteCalendarEvent,
+    RemoteCancelledEvent,
+    build_list_params,
+    parse_remote_event,
+)
+from app.services.calendar_sync import CalendarSyncResult, sync_calendar_window
+from app.services.calendar_window import (
     CALENDAR_SET_CHANGED,
     NEVER_SYNCED,
     NO_READ_CALENDARS,
@@ -24,19 +35,9 @@ from app.services.calendar_sync import (
     STALE,
     CalendarEventInvalid,
     CalendarPaginationExhausted,
-    CalendarRead,
-    CalendarSyncResult,
     CalendarWindow,
     CalendarWindowInvalid,
-    GoogleCalendarEventSource,
-    PublicationResult,
-    RemoteCalendarEvent,
-    RemoteCancelledEvent,
     _resolve_window,
-    build_list_params,
-    coverage_status,
-    parse_remote_event,
-    sync_calendar_window,
 )
 from app.services.google_calendar import GoogleCalendarService
 
