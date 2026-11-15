@@ -17,8 +17,9 @@ Covered:
   `settings`; `GET /integrations/status` exposes it.
 - Only a calendar the account owns (`accessRole='owner'`, never `primary`) is adopted: a
   shared/subscribed copy that shares the marker is skipped and an owned calendar is created.
-- Two concurrent connects for the same user create exactly one remote calendar: the
-  per-user transaction advisory lock serializes the list-then-create binding.
+- Two concurrent connects for the same user may each create a remote calendar, because
+  list/create run outside the database transaction. The advisory lock covers only the
+  settings upsert, so one stored id remains.
 - The `sync_task_event` `ON CONFLICT` target is proven against the real `outbox_events`
   unique index (migration `0001`); only the `tasks` statements still await A3.1.
 - After a reconnect, only current blocked tasks move to `pending` and one
@@ -34,7 +35,6 @@ A3.1's migration.
 
 import asyncio
 import json
-import threading
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -587,11 +587,12 @@ async def _noop_disconnect() -> None:
 async def test_two_concurrent_connects_create_a_single_calendar(
     migrated_database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Concurrent connects may both create; the lock only serializes the stored id.
+    """Concurrent connects may each create; the lock only serializes the stored id.
 
-    Calendar list/get/create run with no database transaction open, so the barrier makes
-    both callbacks see an empty list and both `POST /calendars`. The advisory lock then
-    covers only the settings upsert, which keeps a single stored id.
+    Calendar list/get/create run with no database transaction open. When the two lists
+    overlap, both see an empty list and both `POST /calendars`. When one finishes first,
+    the other reuses that calendar. Either way the advisory lock covers only the settings
+    upsert, which keeps a single stored id.
     """
     engine = create_async_engine(migrated_database_url)
     user_id = uuid.uuid4()
@@ -608,18 +609,12 @@ async def test_two_concurrent_connects_create_a_single_calendar(
             },
         )
 
-    barrier = threading.Barrier(2, timeout=1.0)
     created: list[dict[str, Any]] = []
     entries: list[dict[str, Any]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if request.method == "GET" and path.endswith("/calendarList"):
-            try:
-                # Wait for a peer list call. Both proceed: the lock no longer covers Google.
-                barrier.wait()
-            except threading.BrokenBarrierError:
-                pass
             return httpx.Response(200, json={"items": list(entries)})
         if request.method == "GET" and "/calendarList/" in path:
             wanted = path.rsplit("/", 1)[-1]
@@ -664,7 +659,7 @@ async def test_two_concurrent_connects_create_a_single_calendar(
     try:
         first, second = await asyncio.gather(connect_once(), connect_once())
 
-        assert len(created) == 2
+        assert 1 <= len(created) <= 2
         created_ids = {entry["id"] for entry in entries}
         assert first.calendar_id in created_ids
         assert second.calendar_id in created_ids
