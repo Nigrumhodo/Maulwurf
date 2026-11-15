@@ -226,3 +226,11 @@
   The checkout `.env` still sets a non-schema `MAULWURF_EMBEDDING_DIMENSION`, so the suites
   ran from a checkout copy without that file; no environment file was edited. No provider,
   Google call, audio, credential or secret.
+- 2026-11-14 · A3.7 second merge: `develop@54f8cc8` (api/ingest audit refactor) renamed the
+  worker snapshot to `SyncTask` and reorganized the Calendar modules. The resolution keeps
+  the A3.7 origin/version guards in `task_event_store` and the route-level test adapted to
+  `SyncTask`; the task command and confirmation seam is unchanged. Post-merge evidence:
+  unit **1966 passed**; related task/Calendar/revision/reminder integration **262 passed**;
+  full API integration **938 passed, 2 environment-only failures** (`test_backup_restore.py`
+  needs `pg_dump`/`pg_restore` on PATH); `ruff`/`mypy` clean (357 files). No provider,
+  Google call, audio, credential or secret.
