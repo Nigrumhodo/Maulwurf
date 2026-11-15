@@ -234,3 +234,15 @@
   full API integration **938 passed, 2 environment-only failures** (`test_backup_restore.py`
   needs `pg_dump`/`pg_restore` on PATH); `ruff`/`mypy` clean (357 files). No provider,
   Google call, audio, credential or secret.
+- 2026-11-14 · A3.7 QA follow-up: `ensure_task_transition` now accepts only
+  `completed`/`dismissed`, so the compatibility helper cannot confirm without the
+  date/block/evidence preconditions (new unit case); `calendar_resume` fills a missing
+  `calendar_id` from `CalendarSettings.calendar_write_calendar_id` with `coalesce` and
+  preserves an existing target (two connect/resume cases), and a new sync-job case pins
+  that a targetless task blocks as `calendar_missing` without a Google call. Final gates:
+  unit **1968 passed**; related task/Calendar/revision/reminder integration **264 passed**;
+  full API integration **940 passed, 2 environment-only failures** (`test_backup_restore.py`
+  needs `pg_dump`/`pg_restore` on PATH); `ruff`/`mypy` clean (357 files). These final counts
+  supersede the earlier 1965/1966 intermediate figures. Per `docs/sprints/README.md`,
+  `andres.md` is the `angalindog` logbook, the A3.7 claim owner. No provider, Google call,
+  audio, credential or secret.
