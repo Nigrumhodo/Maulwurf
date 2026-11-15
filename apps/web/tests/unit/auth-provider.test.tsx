@@ -91,6 +91,33 @@ describe("interceptor 401 en el navegador", () => {
     expect(screen.getByText("login")).toBeDefined();
   });
 
+  it("un 500 no se trata como sesión ausente", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("err", { status: 503 })));
+
+    renderApp("/gestion/materias");
+
+    expect(await screen.findByText(/no se pudo comprobar la sesión/i)).toBeDefined();
+    expect(screen.getByTestId("pathname").textContent).toBe("/gestion/materias");
+    expect(screen.queryByText("login")).toBeNull();
+  });
+
+  it("un perfil ilegible termina la carga", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("no-json", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    renderApp("/gestion/materias");
+
+    expect(await screen.findByText(/no se pudo comprobar la sesión/i)).toBeDefined();
+    expect(screen.queryByText("cargando")).toBeNull();
+  });
+
   it("con sesión caducada sí redirige a /login", async () => {
     const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);

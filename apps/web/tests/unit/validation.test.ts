@@ -2,11 +2,8 @@
 // renderizados (base del formulario de materias/upload). Sin DOM: se prueban los
 // helpers puros que alimentan los inputs y el renderizado de errores.
 import { describe, expect, it } from "vitest";
-import {
-  fieldMessage,
-  isRequired,
-  parseErrorEnvelope,
-} from "@/lib/validation";
+import { fieldMessage, parseErrorEnvelope } from "@/lib/api";
+import { isRequired } from "@/lib/validation";
 
 describe("isRequired (U-S1-DA-02)", () => {
   it("rechaza valores vacíos, en blanco o no-string", () => {

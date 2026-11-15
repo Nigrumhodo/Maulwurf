@@ -47,7 +47,7 @@ describe("bootstrapCsrf (GET /me no-store)", () => {
 
     const me = await bootstrapCsrf();
 
-    expect(me).toEqual(ME);
+    expect(me).toEqual({ status: "authenticated", me: ME });
     expect(getCsrfToken()).toBe("tok-a");
     expect(fetchMock).toHaveBeenCalledWith("/me", { cache: "no-store", credentials: "include" });
   });
@@ -72,7 +72,7 @@ describe("bootstrapCsrf (GET /me no-store)", () => {
 
     const me = await bootstrapCsrf();
 
-    expect(me).toBeNull();
+    expect(me).toEqual({ status: "anonymous" });
     expect(getCsrfToken()).toBeNull();
   });
 
@@ -83,7 +83,31 @@ describe("bootstrapCsrf (GET /me no-store)", () => {
 
     const me = await bootstrapCsrf();
 
-    expect(me).toBeNull();
+    expect(me).toEqual({ status: "unavailable" });
+    expect(getCsrfToken()).toBeNull();
+  });
+
+  it("distingue un 5xx de una sesión ausente", async () => {
+    setCsrfToken("tok-a");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("err", { status: 503 })));
+
+    await expect(bootstrapCsrf()).resolves.toEqual({ status: "unavailable" });
+    expect(getCsrfToken()).toBeNull();
+  });
+
+  it("no se queda colgado si el 200 no es JSON", async () => {
+    setCsrfToken("tok-a");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("no-json", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(bootstrapCsrf()).resolves.toEqual({ status: "unavailable" });
     expect(getCsrfToken()).toBeNull();
   });
 });
@@ -201,6 +225,22 @@ describe("interceptor 429", () => {
 
     expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborta la espera de Retry-After si la señal se cancela", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(429, {}, { "retry-after": "30" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const settled = apiFetch("/subjects", { signal: controller.signal }).catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+
+    await expect(settled).resolves.toMatchObject({ name: "AbortError" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("no reintenta si no hay Retry-After", async () => {

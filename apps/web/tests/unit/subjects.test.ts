@@ -18,7 +18,7 @@ describe("validateSubject (U-S1-DA-02)", () => {
   it("valida el color como #rrggbb", () => {
     expect(validateSubject({ name: "x", color: "azul", teacher: "" }).color).toBeDefined();
     expect(validateSubject({ name: "x", color: "#fff", teacher: "" }).color).toBeDefined();
-    expect(validateSubject({ name: "x", color: "", teacher: "" }).color).toBeUndefined();
+    expect(validateSubject({ name: "x", color: "", teacher: "" }).color).toBeDefined();
   });
 });
 
