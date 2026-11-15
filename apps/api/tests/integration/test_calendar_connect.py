@@ -77,6 +77,7 @@ CREATE TABLE tasks (
     calendar_sync_status  text NOT NULL DEFAULT 'not_requested'
                               CHECK (calendar_sync_status IN
                                      ('not_requested','pending','synced','failed','blocked')),
+    calendar_id           text,
     version               integer NOT NULL DEFAULT 1,
     updated_at            timestamptz NOT NULL DEFAULT now()
 )
@@ -796,17 +797,25 @@ async def _insert_task(
     status: str,
     sync: str,
     version: int = 1,
+    calendar_id: str | None = None,
 ) -> uuid.UUID:
     task_id = uuid.uuid4()
     await db_session.execute(
         text(
             "INSERT INTO tasks (id, user_id, status, calendar_sync_status, version, "
-            " tipo, titulo, timezone, all_day, date_status) "
+            " tipo, titulo, timezone, all_day, date_status, calendar_id) "
             "VALUES (:id, :user, :status, :sync, :version, "
             "        'recordatorio', 'Recordatorio de prueba', 'America/Bogota', true, "
-            "        'missing')"
+            "        'missing', :calendar_id)"
         ),
-        {"id": task_id, "user": actor.user_id, "status": status, "sync": sync, "version": version},
+        {
+            "id": task_id,
+            "user": actor.user_id,
+            "status": status,
+            "sync": sync,
+            "version": version,
+            "calendar_id": calendar_id,
+        },
     )
     await db_session.flush()
     await db_session.commit()
@@ -820,6 +829,14 @@ async def _task_sync(db_session: AsyncSession, task_id: uuid.UUID) -> str:
     )
     assert isinstance(status, str)
     return status
+
+
+async def _task_calendar_id(db_session: AsyncSession, task_id: uuid.UUID) -> str | None:
+    await db_session.commit()
+    value = await db_session.scalar(
+        text("SELECT calendar_id FROM tasks WHERE id = :id"), {"id": task_id}
+    )
+    return value if isinstance(value, str) else None
 
 
 async def _sync_events(db_session: AsyncSession, actor: Actor) -> list[dict[str, Any]]:
@@ -867,6 +884,7 @@ async def test_reconnect_resumes_only_current_blocked_tasks(
 
     assert response.headers["location"] == "/settings?calendar=connected"
     assert await _task_sync(db_session, blocked) == "pending"
+    assert await _task_calendar_id(db_session, blocked) == MAULWURF_ID
     assert await _task_sync(db_session, dismissed) == "blocked"
     assert await _task_sync(db_session, completed) == "blocked"
     assert await _task_sync(db_session, unconfirmed) == "blocked"
@@ -879,6 +897,37 @@ async def test_reconnect_resumes_only_current_blocked_tasks(
     assert events[0]["blocked_reason"] is None
     assert events[0]["status"] == "pending"
     assert events[0]["dedupe_key"] == "reconnect:3:0"
+
+
+async def test_reconnect_preserves_an_existing_calendar_target(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    tasks_table: None,
+) -> None:
+    actor = await make_actor(db_session)
+    await _seed_credential(
+        db_session, actor, scopes=["openid", *CALENDAR_SCOPES], status="disconnected"
+    )
+    old_calendar = "old@group.calendar.google.com"
+    blocked = await _insert_task(
+        db_session,
+        actor,
+        status="confirmed",
+        sync="blocked",
+        version=2,
+        calendar_id=old_calendar,
+    )
+    _fake_google(monkeypatch, sub=actor.google_sub, scope=" ".join(CALENDAR_SCOPES))
+    _use_calendar(monkeypatch, _calendar_handler(existing=[_maulwurf_entry()]))
+
+    _, state, cookie = await _start(client, actor, RECONNECT)
+    response = await _callback(client, actor, state, cookie)
+
+    assert response.headers["location"] == "/settings?calendar=connected"
+    assert await _task_sync(db_session, blocked) == "pending"
+    # The reconnect fills only a missing target; an existing event stays on its calendar.
+    assert await _task_calendar_id(db_session, blocked) == old_calendar
 
 
 async def test_second_reconnect_reuses_the_live_outbox_and_starts_a_new_cycle_after_failure(

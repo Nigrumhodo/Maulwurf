@@ -14,6 +14,10 @@ The rules this module enforces:
   `(task, version)` is reused; otherwise a new event is inserted with a deterministic
   per-cycle dedupe key (`reconnect:<version>:<cycle>`). The `UPDATE ... RETURNING` locks
   the task rows, so two concurrent reconnects serialize instead of duplicating work.
+- **A missing target is filled once.** A task confirmed while no Calendar was connected has
+  `calendar_id=None`; the reconnect copies the write binding into it so the worker has a
+  destination. An existing `calendar_id` is never overwritten, so a reconnected task is not
+  silently moved to another calendar.
 - **Atomic with the connection.** No commit happens here: the callback commits the tokens,
   the calendar ID, the task transitions and the outbox in one transaction.
 
@@ -38,7 +42,7 @@ from sqlalchemy import func, inspect, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import OutboxEvent
+from app.models import CalendarSettings, OutboxEvent
 from app.services.outbox import SYNC_TASK_EVENT
 from app.services.task_event_store import TASKS
 from app.services.task_state import SyncCommand, sync_transition
@@ -160,6 +164,12 @@ async def resume_blocked_tasks(db: AsyncSession, *, user_id: uuid.UUID) -> Resum
     if not await tasks_table_available(db):
         logger.info("calendar.resume_skipped reason=tasks_table_missing")
         return ResumeReport(available=False, tasks=())
+    target_calendar_id = await db.scalar(
+        select(CalendarSettings.calendar_write_calendar_id).where(
+            CalendarSettings.user_id == user_id
+        )
+    )
+    target_calendar_id = target_calendar_id.strip() if target_calendar_id else None
     statement = (
         update(TASKS)
         .where(
@@ -167,7 +177,12 @@ async def resume_blocked_tasks(db: AsyncSession, *, user_id: uuid.UUID) -> Resum
             TASKS.c.calendar_sync_status == _RECONNECT_FROM,
             TASKS.c.status == "confirmed",
         )
-        .values(calendar_sync_status=_RECONNECT_TO, updated_at=func.now())
+        .values(
+            calendar_sync_status=_RECONNECT_TO,
+            # Fill a target that never existed; preserve an existing event's calendar.
+            calendar_id=func.coalesce(TASKS.c.calendar_id, target_calendar_id),
+            updated_at=func.now(),
+        )
         .returning(TASKS.c.id, TASKS.c.version)
     )
     rows = (await db.execute(statement)).all()

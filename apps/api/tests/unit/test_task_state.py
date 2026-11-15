@@ -142,9 +142,19 @@ def test_compatibility_exports_match_the_command_table() -> None:
         "completed": frozenset(),
     }
     for origin, destinations in task_lifecycle.TASK_TRANSITIONS.items():
-        for destination in destinations:
+        for destination in destinations & {"completed", "dismissed"}:
             assert ensure_task_transition(origin, destination) == destination
     assert ensure_task_transition("completed", "completed") == "completed"
+
+
+@pytest.mark.parametrize("origin", ["pending", "needs_review"])
+def test_compat_helper_refuses_confirm_without_preconditions(origin: str) -> None:
+    with pytest.raises(ApiError) as failure:
+        ensure_task_transition(origin, "confirmed")
+
+    assert failure.value.status_code == 409
+    assert failure.value.code == "invalid_transition"
+    assert ensure_task_transition(origin, "dismissed") == "dismissed"
 
 
 # --- Revisions --------------------------------------------------------------------------

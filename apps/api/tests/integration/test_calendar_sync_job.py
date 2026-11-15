@@ -407,6 +407,20 @@ async def test_missing_google_integration_blocks_the_task(
     assert (await _status(db_session, task_id)) == ("blocked", None)
 
 
+async def test_task_without_a_calendar_target_blocks_without_calling_google(
+    db_session: AsyncSession,
+) -> None:
+    """A3.7: a task with no write binding blocks instead of guessing a calendar."""
+    fake = FakeGoogle()
+    actor = await make_actor(db_session)
+    task_id, version = await _insert_task(db_session, actor, calendar_id=None)
+
+    await sync_task_event(_ctx(db_session, fake), str(task_id), version)
+
+    assert fake.insert_requests == fake.get_requests == fake.patch_requests == 0
+    assert (await _status(db_session, task_id)) == ("blocked", None)
+
+
 async def test_the_store_guards_sync_writes_by_origin_and_version(
     db_session: AsyncSession,
 ) -> None:

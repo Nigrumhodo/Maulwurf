@@ -175,6 +175,10 @@ TASK_TRANSITIONS: Final[dict[str, frozenset[str]]] = {
     for status in TASK_STATUSES
 }
 
+# `ensure_task_transition` is the legacy complete/dismiss helper. Confirmation must go
+# through `ensure_task_command` so the date, block and evidence preconditions run.
+_LIFECYCLE_TARGETS: Final = frozenset({"completed", "dismissed"})
+
 REVISION_TRANSITIONS: Final[dict[str, frozenset[str]]] = {
     status: frozenset(
         row.destination
@@ -233,9 +237,11 @@ def ensure_task_command(
 
 
 def ensure_task_transition(current: str, target: str) -> str:
-    """Compatibility helper for complete/dismiss callers; unknown states fail closed."""
+    """Compatibility helper for complete/dismiss; confirm uses `ensure_task_command`."""
     allowed = TASK_TRANSITIONS.get(current)
     if allowed is None:
+        raise invalid_transition(current, target)
+    if target not in _LIFECYCLE_TARGETS:
         raise invalid_transition(current, target)
     if target == current:
         return target
