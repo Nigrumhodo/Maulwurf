@@ -17,47 +17,39 @@ The rules this module enforces:
 - **Atomic with the connection.** No commit happens here: the callback commits the tokens,
   the calendar ID, the task transitions and the outbox in one transaction.
 
-A3.1's `tasks` and `task_revisions` tables are not in this revision of `develop`. The
-module checks for the table at runtime: before A3.1 lands it reports `available=False` and
-changes nothing, so the connection still succeeds without touching a table that does not
-exist yet. The statement follows the DISENO §2.8 shape and is exercised by I-S3-JF-06
-against that shape.
+A3.1's `tasks` table is created by migration `0011`. The module still checks for it at
+runtime: an isolated schema without the table reports `available=False` and changes
+nothing, so a connection never fails on a missing table. The statement follows the DISENO
+§2.8 shape and is exercised by I-S3-JF-06 against the real table.
 
-Validation status of the raw SQL (2026-10-31): the `ON CONFLICT` target
+Validation status of the statement (2026-11-12, A3.7): the `ON CONFLICT` target
 `(type, resource_id, resource_version, dedupe_key)` matches the real unique constraint
 `uq_outbox_events_type_resource_id_resource_version_dedupe_key` created by migration
 `0001` (`NULLS NOT DISTINCT`), and an integration case inserts twice against the real
-`outbox_events` table to prove PostgreSQL infers it. `outbox_events` exists in `develop`,
-so that half no longer needs A3.1. The `UPDATE tasks ... RETURNING` statement and the
-`tasks.version`/`calendar_sync_status` columns still have no real table: they remain
-pending until A3.1's migration lands, and no integration case may claim otherwise.
+`outbox_events` table to prove PostgreSQL infers it. `calendar_resume` now issues the
+`blocked -> pending` update through the shared sync transition table instead of raw SQL.
 """
 
 import logging
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import func, inspect, select, text
+from sqlalchemy import func, inspect, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import OutboxEvent
 from app.services.outbox import SYNC_TASK_EVENT
+from app.services.task_event_store import TASKS
+from app.services.task_state import SyncCommand, sync_transition
 
 logger = logging.getLogger(__name__)
 
 # Only a confirmed task owes a Calendar event; completed/dismissed rows are tombstones.
-_RESUMABLE_TASKS = text(
-    """
-    UPDATE tasks
-       SET calendar_sync_status = 'pending',
-           updated_at = now()
-     WHERE user_id = :user_id
-       AND calendar_sync_status = 'blocked'
-       AND status = 'confirmed'
-    RETURNING id, version
-    """
-)
+_RECONNECT_FROM = "blocked"
+_RECONNECT_TO = sync_transition(_RECONNECT_FROM, SyncCommand.RECONNECT)
+if _RECONNECT_TO is None:  # pragma: no cover - the frozen table always has this row
+    raise RuntimeError("reconnect is missing from the sync transition table")
 
 
 @dataclass(frozen=True)
@@ -168,7 +160,17 @@ async def resume_blocked_tasks(db: AsyncSession, *, user_id: uuid.UUID) -> Resum
     if not await tasks_table_available(db):
         logger.info("calendar.resume_skipped reason=tasks_table_missing")
         return ResumeReport(available=False, tasks=())
-    rows = (await db.execute(_RESUMABLE_TASKS, {"user_id": user_id})).all()
+    statement = (
+        update(TASKS)
+        .where(
+            TASKS.c.user_id == user_id,
+            TASKS.c.calendar_sync_status == _RECONNECT_FROM,
+            TASKS.c.status == "confirmed",
+        )
+        .values(calendar_sync_status=_RECONNECT_TO, updated_at=func.now())
+        .returning(TASKS.c.id, TASKS.c.version)
+    )
+    rows = (await db.execute(statement)).all()
     resumed: list[ResumedTask] = []
     for task_id, version in rows:
         event_id, created = await _ensure_outbox(

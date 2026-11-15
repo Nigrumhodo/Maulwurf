@@ -27,19 +27,27 @@ from enum import StrEnum
 from typing import Protocol
 
 from app.core.errors import ApiError
+from app.services.task_state import (
+    TASK_STATUSES as TASK_STATUSES,
+)
+from app.services.task_state import (
+    TASK_TRANSITIONS as TASK_TRANSITIONS,
+)
+from app.services.task_state import (
+    ensure_task_transition as ensure_task_transition,
+)
 
-# The frozen `tasks.status` CHECK (DISENO §2.8).
-TASK_STATUSES = ("pending", "needs_review", "confirmed", "dismissed", "completed")
-
-# Legal lifecycle transitions. `scheduled` is never a task status, and neither
-# `completed` nor `dismissed` leaves its final state.
-TASK_TRANSITIONS: dict[str, frozenset[str]] = {
-    "pending": frozenset({"dismissed"}),
-    "needs_review": frozenset({"dismissed"}),
-    "confirmed": frozenset({"completed", "dismissed"}),
-    "dismissed": frozenset(),
-    "completed": frozenset(),
-}
+__all__ = [
+    "CALENDAR_EVENT_KEPT_NOTICE",
+    "LifecycleOutcome",
+    "LifecycleTransition",
+    "TASK_STATUSES",
+    "TASK_TRANSITIONS",
+    "TaskLifecycle",
+    "TaskLifecycleResult",
+    "TaskLifecycleStore",
+    "ensure_task_transition",
+]
 
 CALENDAR_EVENT_KEPT_NOTICE = "calendar_event_kept"
 
@@ -82,26 +90,6 @@ class TaskLifecycleStore(Protocol):
         target: str,
         now: datetime,
     ) -> LifecycleTransition: ...
-
-
-def _invalid_transition(current: str, target: str) -> ApiError:
-    return ApiError(
-        409,
-        "invalid_transition",
-        "La operación no es válida para el estado actual de esta tarea.",
-        {"current_status": current, "attempted_status": target},
-    )
-
-
-def ensure_task_transition(current: str, target: str) -> str:
-    """Validate `current → target`; an unknown status fails closed instead of widening."""
-    if current not in TASK_TRANSITIONS:
-        raise _invalid_transition(current, target)
-    if target == current:
-        return target
-    if target not in TASK_TRANSITIONS[current]:
-        raise _invalid_transition(current, target)
-    return target
 
 
 class TaskLifecycle:

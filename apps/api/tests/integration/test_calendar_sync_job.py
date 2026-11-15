@@ -407,6 +407,47 @@ async def test_missing_google_integration_blocks_the_task(
     assert (await _status(db_session, task_id)) == ("blocked", None)
 
 
+async def test_the_store_guards_sync_writes_by_origin_and_version(
+    db_session: AsyncSession,
+) -> None:
+    """A3.7: a late job cannot move a status outside the sync command table."""
+    actor = await make_actor(db_session)
+    store = SqlTaskEventStore(_session_factory(db_session))
+
+    synced_id, version = await _insert_task(
+        db_session, actor, calendar_sync_status="synced"
+    )
+    assert await store.mark_blocked(synced_id, version) is False
+    assert await store.mark_failed(synced_id, version) is False
+    assert (await _status(db_session, synced_id)) == ("synced", None)
+    assert await store.mark_synced(synced_id, version, "evt-synced", "etag-1") is True
+    assert (await _status(db_session, synced_id)) == ("synced", "evt-synced")
+
+    blocked_id, version = await _insert_task(
+        db_session, actor, calendar_sync_status="blocked"
+    )
+    assert await store.mark_synced(blocked_id, version, "evt-blocked", "etag-2") is False
+    assert await store.mark_failed(blocked_id, version) is False
+    assert (await _status(db_session, blocked_id)) == ("blocked", None)
+    assert await store.mark_blocked(blocked_id, version) is True
+
+    failed_id, version = await _insert_task(
+        db_session, actor, calendar_sync_status="failed"
+    )
+    assert await store.mark_synced(failed_id, version, "evt-failed", "etag-3") is False
+    assert await store.mark_blocked(failed_id, version) is False
+    assert (await _status(db_session, failed_id)) == ("failed", None)
+    assert await store.mark_failed(failed_id, version) is True
+
+    pending_id, version = await _insert_task(
+        db_session, actor, calendar_sync_status="pending"
+    )
+    assert await store.mark_failed(pending_id, version + 1) is False
+    assert (await _status(db_session, pending_id)) == ("pending", None)
+    assert await store.mark_failed(pending_id, version) is True
+    assert (await _status(db_session, pending_id)) == ("failed", None)
+
+
 async def _snapshot(db_session: AsyncSession, task_id: uuid.UUID) -> SyncTask:
     def factory() -> Any:
         return _same_session(db_session)

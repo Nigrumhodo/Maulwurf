@@ -24,9 +24,12 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Task, TaskRevision
+from app.services.task_state import (
+    PENDING_REVISION_STATUS,
+    RevisionCommand,
+    ensure_revision_command,
+)
 
-PENDING_REVISION_STATUS = "pending_confirmation"
-DISCARDED_REVISION_STATUS = "discarded"
 TERMINAL_TASK_STATUSES = frozenset({"completed", "dismissed"})
 REANALYSIS_REVISION = "reanalysis"
 EDIT_REVISION = "edit_of_confirmed"
@@ -52,7 +55,11 @@ async def discard_pending_revisions(
             TaskRevision.task_id == task_id,
             TaskRevision.status == PENDING_REVISION_STATUS,
         )
-        .values(status=DISCARDED_REVISION_STATUS)
+        .values(
+            status=ensure_revision_command(
+                PENDING_REVISION_STATUS, RevisionCommand.DISCARD
+            )
+        )
         .execution_options(synchronize_session="fetch")
     )
     await db.flush()

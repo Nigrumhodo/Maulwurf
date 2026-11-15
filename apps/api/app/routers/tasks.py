@@ -6,7 +6,8 @@ the optimistic-locking token. `confirm` returns the task with `calendar_sync_sta
 separate from `status`: with a ready Calendar integration the task and its one
 `sync_task_event` outbox row are committed together and the status is `pending`; without
 one the task is still `confirmed` and stays `blocked` with the closed
-`calendar_sync_blocked` notice.
+`calendar_sync_blocked` notice. Repeating a confirmation never resumes a blocked delivery;
+only a Calendar reconnect does (A3.7).
 """
 
 import uuid

@@ -32,6 +32,7 @@ from app.schemas.tasks import (
     TaskSubjectOut,
 )
 from app.services.task_evidence import load_task_evidence_batch
+from app.services.task_state import PENDING_REVISION_STATUS
 
 TASK_CURSOR_VERSION = 1
 _DEFAULT_LIMIT = 50
@@ -222,7 +223,7 @@ async def _assemble(db: AsyncSession, user_id: uuid.UUID, tasks: list[Task]) -> 
             .where(
                 TaskRevision.user_id == user_id,
                 TaskRevision.task_id.in_(task_ids),
-                TaskRevision.status == "pending_confirmation",
+                TaskRevision.status == PENDING_REVISION_STATUS,
             )
             .order_by(TaskRevision.created_at.desc(), TaskRevision.id.desc())
         )
