@@ -210,3 +210,19 @@
   The checkout `.env` sets a non-schema `MAULWURF_EMBEDDING_DIMENSION`, so the suites ran
   from a checkout copy without that file; no environment file was edited. No provider,
   Google call, audio, credential or secret.
+- 2026-11-14 · A3.7 merge resolution: `develop@7aa2173` replaced the task field bag with
+  `TaskSnapshot`, moved reads to `task_reads` and made `SqlTaskLifecycleStore` use the
+  caller's session. The merge keeps that structure and re-applies A3.7 on it: PATCH and
+  confirm start from `ensure_task_command`, `_load_pending_revision` accepts only an
+  `activate` row, confirmation uses the shared date/block/evidence preconditions on
+  `TaskSnapshot`, a new version uses `request`/`block_new`, and a repeat confirmation stays
+  a no-op (only `calendar_resume` resumes a same-version blocked task). `task_reads` uses
+  `PENDING_REVISION_STATUS` instead of a new literal.
+- 2026-11-14 · A3.7 post-merge evidence (WSL, Python 3.12, disposable PostgreSQL 16/pgvector
+  on `127.0.0.1:55432`, Redis on `127.0.0.1:6379/14`): unit suite **1968 passed**; related
+  task/Calendar/revision/reminder integration suites **262 passed**; full API integration
+  **938 passed, 2 environment-only failures** (`test_backup_restore.py` needs
+  `pg_dump`/`pg_restore` on PATH); `ruff check .` clean and `mypy .` clean (347 files).
+  The checkout `.env` still sets a non-schema `MAULWURF_EMBEDDING_DIMENSION`, so the suites
+  ran from a checkout copy without that file; no environment file was edited. No provider,
+  Google call, audio, credential or secret.

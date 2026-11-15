@@ -22,7 +22,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import date, datetime, time
 from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
@@ -59,13 +59,14 @@ from app.services.date_resolution import (
     MentionKind,
     ResolvedDue,
     WeekdayQualifier,
-    render_due_text,
     resolve_due,
 )
 from app.services.llm import ChatMessage, LLMProvider
 from app.services.revisions import TERMINAL_TASK_STATUSES, record_pending_revision
 from app.services.summary import SummaryRejected, parse_summary_payload
 from app.services.task_evidence import persist_task_spans
+from app.services.task_snapshot import ProposalFields as ProposalFields
+from app.services.task_snapshot import needs_review_task
 from prompts.registry import (
     load_extraction_prompts,
     load_summary_prompts,
@@ -131,36 +132,6 @@ class AnalysisBatch:
     summary: str
     topics: tuple[str, ...]
     prompt_version: str
-
-
-@dataclass(frozen=True)
-class ProposalFields:
-    """The columns a reanalysis may propose. The Calendar block is not one of them."""
-
-    tipo: str
-    titulo: str
-    detalle: str | None
-    due_date: date | None
-    due_at: datetime | None
-    timezone: str
-    all_day: bool
-    date_status: str
-    confidence_score: float | None
-    date_reason: str | None
-
-    def same_as(self, other: ProposalFields) -> bool:
-        return (
-            self.tipo == other.tipo
-            and self.titulo == other.titulo
-            and self.detalle == other.detalle
-            and self.due_date == other.due_date
-            and _same_instant(self.due_at, other.due_at)
-            and self.timezone == other.timezone
-            and self.all_day == other.all_day
-            and self.date_status == other.date_status
-            and self.confidence_score == other.confidence_score
-            and self.date_reason == other.date_reason
-        )
 
 
 @dataclass(frozen=True)
@@ -435,26 +406,7 @@ def plan_task_writes(
 
 def proposed_fields_payload(proposal: AggregatedProposal[PreparedProposal]) -> dict[str, object]:
     """JSON object stored on a revision. Dates are ISO strings; the block is absent."""
-    fields = proposal_fields(proposal)
-    return {
-        "tipo": fields.tipo,
-        "titulo": fields.titulo,
-        "detalle": fields.detalle,
-        "due_date": None if fields.due_date is None else fields.due_date.isoformat(),
-        "due_at": None if fields.due_at is None else fields.due_at.isoformat(),
-        "timezone": fields.timezone,
-        "all_day": fields.all_day,
-        "date_status": fields.date_status,
-        "date_text": render_due_text(
-            due_date=fields.due_date,
-            due_at=fields.due_at,
-            timezone=fields.timezone,
-            all_day=fields.all_day,
-            date_status=fields.date_status,
-        ),
-        "confidence_score": fields.confidence_score,
-        "date_reason": fields.date_reason,
-    }
+    return proposal_fields(proposal).to_payload()
 
 
 async def load_existing_proposals(
@@ -505,18 +457,7 @@ async def load_existing_proposals(
                 ),
                 status=stored.status,
                 version=stored.version,
-                fields=ProposalFields(
-                    tipo=stored.tipo,
-                    titulo=stored.titulo,
-                    detalle=stored.detalle,
-                    due_date=stored.due_date,
-                    due_at=stored.due_at,
-                    timezone=stored.timezone,
-                    all_day=stored.all_day,
-                    date_status=stored.date_status,
-                    confidence_score=stored.confidence_score,
-                    date_reason=stored.date_reason,
-                ),
+                fields=ProposalFields.from_task(stored),
             )
         )
     return existing
@@ -759,12 +700,6 @@ def _payload_qualifier(payload: Mapping[str, object]) -> WeekdayQualifier | None
         ) from exc
 
 
-def _same_instant(left: datetime | None, right: datetime | None) -> bool:
-    if left is None or right is None:
-        return left is right
-    return left.astimezone(UTC) == right.astimezone(UTC)
-
-
 async def _insert_task(
     db: AsyncSession,
     *,
@@ -775,31 +710,12 @@ async def _insert_task(
     transcript_version: int,
     proposal: AggregatedProposal[PreparedProposal],
 ) -> None:
-    fields = proposal_fields(proposal)
-    task = Task(
+    task = needs_review_task(
         user_id=user_id,
         audio_id=audio_id,
         subject_id=subject_id,
         source="extraction",
-        tipo=fields.tipo,
-        titulo=fields.titulo,
-        detalle=fields.detalle,
-        due_date=fields.due_date,
-        due_at=fields.due_at,
-        timezone=fields.timezone,
-        all_day=fields.all_day,
-        date_status=fields.date_status,
-        date_text=render_due_text(
-            due_date=fields.due_date,
-            due_at=fields.due_at,
-            timezone=fields.timezone,
-            all_day=fields.all_day,
-            date_status=fields.date_status,
-        ),
-        date_reason=fields.date_reason,
-        confidence_score=fields.confidence_score,
-        status="needs_review",
-        calendar_sync_status="not_requested",
+        fields=proposal_fields(proposal),
     )
     db.add(task)
     await db.flush()
@@ -854,30 +770,8 @@ async def _update_task(
     if not update_is_safe(task.status, task.version, base_version):
         return "revise"
     fields = proposal_fields(proposal)
-    due_changed = (
-        task.due_date != fields.due_date
-        or not _same_instant(task.due_at, fields.due_at)
-        or task.timezone != fields.timezone
-        or task.all_day != fields.all_day
-        or task.date_status != fields.date_status
-    )
-    task.tipo = fields.tipo
-    task.titulo = fields.titulo
-    task.detalle = fields.detalle
-    task.due_date = fields.due_date
-    task.due_at = fields.due_at
-    task.timezone = fields.timezone
-    task.all_day = fields.all_day
-    task.date_status = fields.date_status
-    task.date_text = render_due_text(
-        due_date=fields.due_date,
-        due_at=fields.due_at,
-        timezone=fields.timezone,
-        all_day=fields.all_day,
-        date_status=fields.date_status,
-    )
-    task.date_reason = fields.date_reason
-    task.confidence_score = fields.confidence_score
+    due_changed = ProposalFields.from_task(task).due_changed(fields)
+    fields.apply(task)
     if due_changed:
         task.due_version += 1
     await persist_task_spans(

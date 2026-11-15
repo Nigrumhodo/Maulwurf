@@ -1,9 +1,7 @@
-"""M4 task endpoints: reads, proposals, edits, confirmation and lifecycle (A3.3/A3.4).
+"""M4 task writes: proposals, edits, confirmation and lifecycle (A3.3/A3.4).
 
-The active `tasks` row is the only source of truth. Reads reconstruct evidence from
-`task_sources` + `task_evidence` + the immutable segment text (A3.2), never from a quote
-sent by a client. Writes are tenant-scoped and use `version` as the optimistic-locking
-token:
+Reads live in `task_reads`. The active `tasks` row is the only source of truth. Writes
+are tenant-scoped and use `version` as the optimistic-locking token:
 
 - `POST /tasks` accepts `manual` (zero sources), `extraction` (at least one validated
   source) and `chat` (zero or more; zero is an honest general suggestion). Every span is
@@ -25,15 +23,8 @@ Every effective version bump copies the active evidence rows to the new task ver
 
 from __future__ import annotations
 
-import base64
-import binascii
-import json
 import uuid
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
-from datetime import UTC, date, datetime
-from typing import Any
+from datetime import UTC, datetime
 
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -54,24 +45,15 @@ from app.models import (
     TaskSource,
     Transcript,
 )
-from app.models.task import TASK_STATUSES
 from app.schemas.analysis import DateStatus
 from app.schemas.tasks import (
-    PendingRevisionOut,
     TaskCreate,
-    TaskEventBlockIn,
-    TaskEventBlockOut,
-    TaskEvidenceOut,
-    TaskListOut,
     TaskOut,
     TaskPatch,
-    TaskSourceOut,
-    TaskSubjectOut,
     validate_date_fields,
     validate_event_block,
 )
 from app.services.analysis_windows import EvidenceSpan
-from app.services.date_resolution import render_due_text
 from app.services.oauth_google import missing_calendar_scopes
 from app.services.outbox import SYNC_TASK_EVENT
 from app.services.revisions import (
@@ -81,12 +63,13 @@ from app.services.revisions import (
 from app.services.task_evidence import (
     ProvenanceInvalid,
     load_task_evidence,
-    load_task_evidence_batch,
     persist_task_spans,
     validate_provenance,
 )
 from app.services.task_lifecycle import TaskLifecycle, TaskLifecycleResult
 from app.services.task_lifecycle_store import SqlTaskLifecycleStore
+from app.services.task_reads import _assemble, _load_task
+from app.services.task_snapshot import TaskSnapshot, needs_review_task
 from app.services.task_state import (
     ConfirmationProblem,
     RevisionCommand,
@@ -101,329 +84,7 @@ from app.services.task_state import (
     revision_transition,
 )
 
-TASK_CURSOR_VERSION = 1
-_DEFAULT_LIMIT = 50
-_MAX_LIMIT = 200
-_MAX_CURSOR_LENGTH = 512
-_CURSOR_INVALID = "cursor inválido o malformado"
 CALENDAR_SYNC_BLOCKED_NOTICE = "calendar_sync_blocked"
-
-_DATE_KEYS = frozenset({"due_date", "event_start_date", "event_end_date_exclusive"})
-_DATETIME_KEYS = frozenset({"due_at", "event_start_at", "event_end_at"})
-_REVISION_KEYS = frozenset(
-    {
-        "tipo",
-        "titulo",
-        "detalle",
-        "due_date",
-        "due_at",
-        "timezone",
-        "all_day",
-        "date_status",
-        "date_reason",
-        "confidence_score",
-        "subject_id",
-        "event_start_at",
-        "event_end_at",
-        "event_start_date",
-        "event_end_date_exclusive",
-    }
-)
-_FIELD_KEYS = tuple(_REVISION_KEYS | {"date_text"})
-
-
-@dataclass(frozen=True)
-class TaskCursor:
-    created_at: datetime
-    task_id: uuid.UUID
-
-
-def _encode_cursor(cursor: TaskCursor) -> str:
-    payload = json.dumps(
-        {
-            "v": TASK_CURSOR_VERSION,
-            "t": cursor.created_at.astimezone(UTC).isoformat(),
-            "i": str(cursor.task_id),
-        },
-        separators=(",", ":"),
-    ).encode()
-    return base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
-
-
-def _decode_cursor(value: str) -> TaskCursor:
-    if not value or len(value) > _MAX_CURSOR_LENGTH:
-        raise validation_failed({"cursor": _CURSOR_INVALID})
-    try:
-        padded = value + "=" * (-len(value) % 4)
-        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
-        data = json.loads(raw)
-    except (ValueError, TypeError, binascii.Error, UnicodeError) as exc:
-        raise validation_failed({"cursor": _CURSOR_INVALID}) from exc
-    if not isinstance(data, dict):
-        raise validation_failed({"cursor": _CURSOR_INVALID})
-    try:
-        if data.get("v") != TASK_CURSOR_VERSION:
-            raise ValueError("unsupported cursor")
-        created_at = datetime.fromisoformat(str(data["t"]))
-        task_id = uuid.UUID(str(data["i"]))
-    except (ValueError, TypeError, KeyError) as exc:
-        raise validation_failed({"cursor": _CURSOR_INVALID}) from exc
-    if created_at.tzinfo is None:
-        raise validation_failed({"cursor": _CURSOR_INVALID})
-    return TaskCursor(created_at.astimezone(UTC), task_id)
-
-
-def _validate_status(status: str | None) -> None:
-    if status is not None and status not in TASK_STATUSES:
-        raise validation_failed({"status": f"debe ser uno de: {', '.join(TASK_STATUSES)}"})
-
-
-def _task_local_day(column: Any) -> Any:
-    """The task's local calendar day, using its persisted IANA timezone snapshot."""
-    return func.date(func.timezone(Task.timezone, column))
-
-
-def _due_conditions(stmt: Any, due_from: date | None, due_to: date | None) -> Any:
-    if due_from is not None:
-        stmt = stmt.where(
-            or_(Task.due_date >= due_from, _task_local_day(Task.due_at) >= due_from)
-        )
-    if due_to is not None:
-        stmt = stmt.where(or_(Task.due_date <= due_to, _task_local_day(Task.due_at) <= due_to))
-    return stmt
-
-
-def _event_block(task: Task) -> TaskEventBlockOut:
-    return TaskEventBlockOut(
-        start_at=task.event_start_at,
-        end_at=task.event_end_at,
-        start_date=task.event_start_date,
-        end_date_exclusive=task.event_end_date_exclusive,
-        duration_default_editable=True,
-    )
-
-
-def _pending_revision_out(revision: TaskRevision | None) -> PendingRevisionOut | None:
-    if revision is None:
-        return None
-    return PendingRevisionOut(
-        id=str(revision.id),
-        base_task_version=revision.base_task_version,
-        proposed_fields=dict(revision.proposed_fields),
-        status=revision.status,
-    )
-
-
-def _task_out(
-    task: Task,
-    *,
-    subject: Subject | None,
-    sources: list[TaskSource],
-    evidence: list[TaskEvidenceOut],
-    pending: TaskRevision | None,
-    segment_ordinals: dict[uuid.UUID, int],
-) -> TaskOut:
-    ordered_sources = sorted(
-        sources,
-        key=lambda row: (
-            segment_ordinals.get(row.segment_id, 0),
-            row.char_start,
-            row.char_end,
-        ),
-    )
-    return TaskOut(
-        id=str(task.id),
-        audio_id=str(task.audio_id) if task.audio_id is not None else None,
-        subject=(
-            TaskSubjectOut(id=str(subject.id), name=subject.name)
-            if subject is not None
-            else None
-        ),
-        source=task.source,
-        tipo=task.tipo,
-        titulo=task.titulo,
-        detalle=task.detalle,
-        due_date=task.due_date,
-        due_at=task.due_at,
-        timezone=task.timezone,
-        all_day=task.all_day,
-        date_status=task.date_status,
-        date_text=task.date_text,
-        date_reason=task.date_reason,
-        confidence_score=task.confidence_score,
-        status=task.status,
-        calendar_sync_status=task.calendar_sync_status,
-        version=task.version,
-        due_version=task.due_version,
-        event_block=_event_block(task),
-        sources=[
-            TaskSourceOut(
-                audio_id=str(row.audio_id),
-                transcript_version=row.transcript_version,
-                segment_id=str(row.segment_id),
-                char_start=row.char_start,
-                char_end=row.char_end,
-            )
-            for row in ordered_sources
-        ],
-        evidence=evidence,
-        pending_revision=_pending_revision_out(pending),
-    )
-
-
-async def _assemble(db: AsyncSession, user_id: uuid.UUID, tasks: list[Task]) -> list[TaskOut]:
-    if not tasks:
-        return []
-    task_ids = [task.id for task in tasks]
-    subject_ids = {task.subject_id for task in tasks if task.subject_id is not None}
-
-    subjects = {
-        subject.id: subject
-        for subject in (
-            await db.scalars(
-                select(Subject).where(Subject.user_id == user_id, Subject.id.in_(subject_ids))
-            )
-        ).all()
-    }
-    source_rows = (
-        await db.scalars(
-            select(TaskSource)
-            .where(TaskSource.user_id == user_id, TaskSource.task_id.in_(task_ids))
-            .order_by(TaskSource.char_start, TaskSource.char_end)
-        )
-    ).all()
-    source_by_task: dict[uuid.UUID, list[TaskSource]] = {}
-    for row in source_rows:
-        source_by_task.setdefault(row.task_id, []).append(row)
-
-    segment_ordinals = {
-        segment_id: ordinal
-        for segment_id, ordinal in (
-            await db.execute(
-                select(Segment.id, Segment.ordinal).where(
-                    Segment.user_id == user_id,
-                    Segment.id.in_({row.segment_id for row in source_rows}),
-                )
-            )
-        ).all()
-    }
-
-    revisions = (
-        await db.scalars(
-            select(TaskRevision)
-            .where(
-                TaskRevision.user_id == user_id,
-                TaskRevision.task_id.in_(task_ids),
-                TaskRevision.status == "pending_confirmation",
-            )
-            .order_by(TaskRevision.created_at.desc(), TaskRevision.id.desc())
-        )
-    ).all()
-    pending_by_task: dict[uuid.UUID, TaskRevision] = {}
-    for revision in revisions:
-        pending_by_task.setdefault(revision.task_id, revision)
-
-    stored_by_task = await load_task_evidence_batch(
-        db,
-        user_id=user_id,
-        task_versions={task.id: task.version for task in tasks},
-    )
-    out: list[TaskOut] = []
-    for task in tasks:
-        stored = stored_by_task.get(task.id, ())
-        evidence = [
-            TaskEvidenceOut(
-                segment_id=str(item.evidence.segment_id),
-                char_start=item.evidence.inicio_char,
-                char_end=item.evidence.fin_char,
-                quote=item.evidence.quote,
-                t_start=item.evidence.t_start,
-                t_end=item.evidence.t_end,
-            )
-            for item in stored
-        ]
-        out.append(
-            _task_out(
-                task,
-                subject=(
-                    subjects.get(task.subject_id) if task.subject_id is not None else None
-                ),
-                sources=source_by_task.get(task.id, []),
-                evidence=evidence,
-                pending=pending_by_task.get(task.id),
-                segment_ordinals=segment_ordinals,
-            )
-        )
-    return out
-
-
-async def list_tasks(
-    db: AsyncSession,
-    user_id: uuid.UUID,
-    *,
-    status: str | None = None,
-    subject_id: uuid.UUID | None = None,
-    due_from: date | None = None,
-    due_to: date | None = None,
-    limit: int = _DEFAULT_LIMIT,
-    cursor: str | None = None,
-) -> TaskListOut:
-    _validate_status(status)
-    if limit < 1 or limit > _MAX_LIMIT:
-        raise validation_failed({"limit": f"debe estar entre 1 y {_MAX_LIMIT}"})
-    if due_from is not None and due_to is not None and due_from > due_to:
-        raise validation_failed({"due_from": "no puede ser posterior a due_to"})
-
-    stmt = select(Task).where(Task.user_id == user_id)
-    if status is not None:
-        stmt = stmt.where(Task.status == status)
-    if subject_id is not None:
-        stmt = stmt.where(Task.subject_id == subject_id)
-    stmt = _due_conditions(stmt, due_from, due_to)
-    if cursor is not None:
-        position = _decode_cursor(cursor)
-        stmt = stmt.where(
-            or_(
-                Task.created_at < position.created_at,
-                and_(
-                    Task.created_at == position.created_at,
-                    Task.id < position.task_id,
-                ),
-            )
-        )
-    stmt = stmt.order_by(Task.created_at.desc(), Task.id.desc()).limit(limit + 1)
-    rows = list((await db.scalars(stmt)).all())
-    has_more = len(rows) > limit
-    page = rows[:limit]
-    items = await _assemble(db, user_id, page)
-    next_cursor = None
-    if has_more and page:
-        last = page[-1]
-        next_cursor = _encode_cursor(TaskCursor(last.created_at, last.id))
-    return TaskListOut(items=items, next_cursor=next_cursor)
-
-
-async def get_task(db: AsyncSession, user_id: uuid.UUID, task_id: uuid.UUID) -> TaskOut:
-    task = await _load_task(db, user_id, task_id)
-    return (await _assemble(db, user_id, [task]))[0]
-
-
-async def _load_task(
-    db: AsyncSession, user_id: uuid.UUID, task_id: uuid.UUID, *, for_update: bool = False
-) -> Task:
-    # `populate_existing` keeps a lifecycle bulk update from being hidden by an instance
-    # already in the identity map (the request session may have loaded it).
-    stmt = (
-        select(Task)
-        .where(Task.user_id == user_id, Task.id == task_id)
-        .execution_options(populate_existing=True)
-    )
-    if for_update:
-        stmt = stmt.with_for_update()
-    task = (await db.execute(stmt)).scalar_one_or_none()
-    if task is None:
-        raise not_found()
-    return task
 
 
 def ensure_version(current_version: int, current_status: str, expected_version: int) -> None:
@@ -464,100 +125,28 @@ def _date_unresolved(reason: str) -> ApiError:
     )
 
 
-def _same_instant(left: datetime | None, right: datetime | None) -> bool:
-    if left is None or right is None:
-        return left is right
-    return left.astimezone(UTC) == right.astimezone(UTC)
-
-
-def _block_values(block: TaskEventBlockIn | None) -> dict[str, Any]:
-    if block is None:
-        return {
-            "event_start_at": None,
-            "event_end_at": None,
-            "event_start_date": None,
-            "event_end_date_exclusive": None,
-        }
-    return {
-        "event_start_at": block.start_at,
-        "event_end_at": block.end_at,
-        "event_start_date": block.start_date,
-        "event_end_date_exclusive": block.end_date_exclusive,
-    }
-
-
-def _current_fields(task: Task) -> dict[str, Any]:
-    return {
-        "tipo": task.tipo,
-        "titulo": task.titulo,
-        "detalle": task.detalle,
-        "due_date": task.due_date,
-        "due_at": task.due_at,
-        "timezone": task.timezone,
-        "all_day": task.all_day,
-        "date_status": task.date_status,
-        "date_text": task.date_text,
-        "date_reason": task.date_reason,
-        "confidence_score": task.confidence_score,
-        "subject_id": task.subject_id,
-        "event_start_at": task.event_start_at,
-        "event_end_at": task.event_end_at,
-        "event_start_date": task.event_start_date,
-        "event_end_date_exclusive": task.event_end_date_exclusive,
-    }
-
-
-def _fields_equal(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    for key in _FIELD_KEYS:
-        if key in {"due_at", "event_start_at", "event_end_at"}:
-            if not _same_instant(left[key], right[key]):
-                return False
-        elif left[key] != right[key]:
-            return False
-    return True
-
-
-def _due_changed(before: dict[str, Any], after: dict[str, Any]) -> bool:
-    return (
-        before["due_date"] != after["due_date"]
-        or not _same_instant(before["due_at"], after["due_at"])
-        or before["timezone"] != after["timezone"]
-        or before["all_day"] != after["all_day"]
-        or before["date_status"] != after["date_status"]
-    )
-
-
-def _render_date_text(fields: dict[str, Any]) -> str | None:
-    return render_due_text(
-        due_date=fields["due_date"],
-        due_at=fields["due_at"],
-        timezone=fields["timezone"],
-        all_day=fields["all_day"],
-        date_status=fields["date_status"],
-    )
-
-
-def _validate_fields(fields: dict[str, Any]) -> None:
+def _validate_fields(fields: TaskSnapshot) -> None:
+    proposal = fields.proposal
     try:
         validate_date_fields(
-            due_date=fields["due_date"],
-            due_at=fields["due_at"],
-            timezone=fields["timezone"],
-            all_day=fields["all_day"],
-            date_status=DateStatus(fields["date_status"]),
+            due_date=proposal.due_date,
+            due_at=proposal.due_at,
+            timezone=proposal.timezone,
+            all_day=proposal.all_day,
+            date_status=DateStatus(proposal.date_status),
         )
     except ValueError as exc:
         raise validation_failed({"date_status": str(exc)}) from exc
     try:
         validate_event_block(
-            start_at=fields["event_start_at"],
-            end_at=fields["event_end_at"],
-            start_date=fields["event_start_date"],
-            end_date_exclusive=fields["event_end_date_exclusive"],
+            start_at=fields.event_start_at,
+            end_at=fields.event_end_at,
+            start_date=fields.event_start_date,
+            end_date_exclusive=fields.event_end_date_exclusive,
         )
     except ValueError as exc:
         raise validation_failed({"event_block": str(exc)}) from exc
-    if not is_iana_timezone(fields["timezone"]):
+    if not is_iana_timezone(proposal.timezone):
         raise validation_failed({"timezone": "zona horaria IANA no válida"})
 
 
@@ -575,100 +164,6 @@ async def _validate_subject(
     )
     if found is None:
         raise validation_failed({"subject_id": "la materia no existe o está eliminada"})
-
-
-def _apply_fields(task: Task, fields: dict[str, Any]) -> None:
-    for key in _REVISION_KEYS:
-        setattr(task, key, fields[key])
-    task.date_text = _render_date_text(fields)
-
-
-def _iso_date(value: Any) -> str | None:
-    return value.isoformat() if isinstance(value, date) else None
-
-
-def _iso_datetime(value: Any) -> str | None:
-    return value.isoformat() if isinstance(value, datetime) else None
-
-
-def _revision_payload(fields: dict[str, Any]) -> dict[str, Any]:
-    subject_id = fields["subject_id"]
-    return {
-        "tipo": fields["tipo"],
-        "titulo": fields["titulo"],
-        "detalle": fields["detalle"],
-        "due_date": _iso_date(fields["due_date"]),
-        "due_at": _iso_datetime(fields["due_at"]),
-        "timezone": fields["timezone"],
-        "all_day": fields["all_day"],
-        "date_status": fields["date_status"],
-        "date_text": _render_date_text(fields),
-        "date_reason": fields["date_reason"],
-        "confidence_score": fields["confidence_score"],
-        "subject_id": str(subject_id) if subject_id is not None else None,
-        "event_start_at": _iso_datetime(fields["event_start_at"]),
-        "event_end_at": _iso_datetime(fields["event_end_at"]),
-        "event_start_date": _iso_date(fields["event_start_date"]),
-        "event_end_date_exclusive": _iso_date(fields["event_end_date_exclusive"]),
-    }
-
-
-def _coerce_revision(payload: dict[str, Any]) -> dict[str, Any]:
-    fields: dict[str, Any] = {}
-    for key in _REVISION_KEYS:
-        if key not in payload:
-            continue
-        value = payload[key]
-        try:
-            if key in _DATE_KEYS and isinstance(value, str):
-                value = date.fromisoformat(value)
-            elif key in _DATETIME_KEYS and isinstance(value, str):
-                value = datetime.fromisoformat(value)
-            elif key == "subject_id" and isinstance(value, str):
-                value = uuid.UUID(value)
-        except ValueError as exc:
-            raise _invalid_revision() from exc
-        fields[key] = value
-    return fields
-
-
-def _merge_patch(before: dict[str, Any], body: TaskPatch) -> dict[str, Any]:
-    merged = dict(before)
-    fields_set = body.model_fields_set - {"version"}
-
-    if "event_block" in fields_set:
-        merged.update(_block_values(body.event_block))
-    for key in ("tipo", "titulo", "detalle", "date_reason", "confidence_score", "subject_id"):
-        if key in fields_set:
-            merged[key] = getattr(body, key)
-    if "due_date" in fields_set:
-        merged["due_date"] = body.due_date
-    if "due_at" in fields_set:
-        merged["due_at"] = body.due_at
-    if "timezone" in fields_set:
-        merged["timezone"] = body.timezone
-    if "all_day" in fields_set:
-        merged["all_day"] = body.all_day
-
-    if "date_status" in fields_set:
-        if body.date_status is None:  # pragma: no cover - the schema rejects this
-            raise validation_failed({"date_status": "date_status no puede ser nulo"})
-        merged["date_status"] = body.date_status.value
-    elif "due_date" in fields_set or "due_at" in fields_set:
-        # A partial date edit carries the implied resolution: one due representation means
-        # resolved, clearing both means the date is missing again.
-        if merged["due_date"] is not None and merged["due_at"] is None:
-            merged["date_status"] = DateStatus.RESOLVED.value
-            merged["all_day"] = True
-        elif merged["due_at"] is not None and merged["due_date"] is None:
-            merged["date_status"] = DateStatus.RESOLVED.value
-            merged["all_day"] = False
-        else:
-            merged["date_status"] = DateStatus.MISSING.value
-            merged["all_day"] = False
-
-    merged["date_text"] = _render_date_text(merged)
-    return merged
 
 
 async def _copy_evidence_version(
@@ -799,45 +294,13 @@ async def create_task(db: AsyncSession, user_id: uuid.UUID, body: TaskCreate) ->
     else:
         await _validate_subject(db, user_id, subject_id)
 
-    fields: dict[str, Any] = {
-        "tipo": body.tipo,
-        "titulo": body.titulo,
-        "detalle": body.detalle,
-        "due_date": body.due_date,
-        "due_at": body.due_at,
-        "timezone": body.timezone,
-        "all_day": body.all_day,
-        "date_status": body.date_status.value,
-        "date_reason": body.date_reason,
-        "confidence_score": body.confidence_score,
-        "subject_id": subject_id,
-        **_block_values(body.event_block),
-    }
-    _validate_fields(fields)
-    fields["date_text"] = _render_date_text(fields)
-
-    task = Task(
+    snapshot = TaskSnapshot.from_create(body, subject_id=subject_id)
+    _validate_fields(snapshot)
+    task = needs_review_task(
         user_id=user_id,
-        audio_id=audio_id,
-        subject_id=subject_id,
         source=body.source,
-        tipo=fields["tipo"],
-        titulo=fields["titulo"],
-        detalle=fields["detalle"],
-        due_date=fields["due_date"],
-        due_at=fields["due_at"],
-        timezone=fields["timezone"],
-        all_day=fields["all_day"],
-        date_status=fields["date_status"],
-        date_text=fields["date_text"],
-        date_reason=fields["date_reason"],
-        confidence_score=fields["confidence_score"],
-        event_start_at=fields["event_start_at"],
-        event_end_at=fields["event_end_at"],
-        event_start_date=fields["event_start_date"],
-        event_end_date_exclusive=fields["event_end_date_exclusive"],
-        status="needs_review",
-        calendar_sync_status="not_requested",
+        audio_id=audio_id,
+        fields=snapshot,
     )
     try:
         # The task is flushed before its spans so `task_sources` has a task id; the
@@ -889,11 +352,11 @@ async def _ensure_subject_change_allowed(
     db: AsyncSession,
     user_id: uuid.UUID,
     task: Task,
-    before: dict[str, Any],
-    after: dict[str, Any],
+    before: TaskSnapshot,
+    after: TaskSnapshot,
 ) -> None:
     """A sourced task cannot be detached from the subject of its evidence."""
-    if after["subject_id"] == before["subject_id"]:
+    if after.subject_id == before.subject_id:
         return
     if task.source == "extraction" or await _has_persisted_provenance(
         db, user_id, task.id
@@ -916,13 +379,12 @@ async def patch_task(
     # Terminal tasks have no `edit` row; a confirmed edit is a pending revision.
     ensure_task_command(task.status, TaskCommand.EDIT)
 
-    before = _current_fields(task)
-    after = _merge_patch(before, body)
+    before = TaskSnapshot.from_task(task)
+    after = before.merge(body)
     await _ensure_subject_change_allowed(db, user_id, task, before, after)
-    await _validate_subject(db, user_id, after["subject_id"])
+    await _validate_subject(db, user_id, after.subject_id)
     _validate_fields(after)
-    after["date_text"] = _render_date_text(after)
-    if _fields_equal(before, after):
+    if before.same_as(after):
         return (await _assemble(db, user_id, [task]))[0]
 
     if task.status == "confirmed":
@@ -932,15 +394,15 @@ async def patch_task(
             db,
             user_id=user_id,
             task_id=task.id,
-            proposed_fields=_revision_payload(after),
+            proposed_fields=after.to_payload(),
             revision_type="edit_of_confirmed",
             evidence_validated=True,
         )
         return (await _assemble(db, user_id, [task]))[0]
 
-    due_changed = _due_changed(before, after)
+    due_changed = before.due_changed(after)
     old_version = task.version
-    _apply_fields(task, after)
+    after.apply(task)
     task.version = old_version + 1
     if due_changed:
         task.due_version += 1
@@ -982,15 +444,15 @@ async def _load_pending_revision(
 
 
 async def _validate_confirmable(
-    db: AsyncSession, user_id: uuid.UUID, task: Task, fields: dict[str, Any]
+    db: AsyncSession, user_id: uuid.UUID, task: Task, fields: TaskSnapshot
 ) -> None:
     # Date and block answer before evidence, matching the documented 422 order.
     problem = confirmation_date_problem(
-        date_status=fields["date_status"],
-        event_start_at=fields["event_start_at"],
-        event_end_at=fields["event_end_at"],
-        event_start_date=fields["event_start_date"],
-        event_end_date_exclusive=fields["event_end_date_exclusive"],
+        date_status=fields.proposal.date_status,
+        event_start_at=fields.event_start_at,
+        event_end_at=fields.event_end_at,
+        event_start_date=fields.event_start_date,
+        event_end_date_exclusive=fields.event_end_date_exclusive,
     )
     if problem is not None:
         raise _date_unresolved(problem.value)
@@ -1014,17 +476,19 @@ async def _validate_confirmable(
         has_evidence = bool(evidence)
 
     problem = confirmation_problem(
-        date_status=fields["date_status"],
-        event_start_at=fields["event_start_at"],
-        event_end_at=fields["event_end_at"],
-        event_start_date=fields["event_start_date"],
-        event_end_date_exclusive=fields["event_end_date_exclusive"],
+        date_status=fields.proposal.date_status,
+        event_start_at=fields.event_start_at,
+        event_end_at=fields.event_end_at,
+        event_start_date=fields.event_start_date,
+        event_end_date_exclusive=fields.event_end_date_exclusive,
         source=task.source,
         source_count=source_count,
         has_evidence=has_evidence,
     )
     if problem is ConfirmationProblem.EVIDENCE:
         raise _evidence_invalid()
+    if problem is not None:
+        raise _date_unresolved(problem.value)
 
 
 def _calendar_target(value: str | None) -> str | None:
@@ -1173,16 +637,16 @@ async def confirm_task(
         if revision_id is not None
         else None
     )
-    before = _current_fields(task)
+    before = TaskSnapshot.from_task(task)
     if revision is not None:
         ensure_version(task.version, task.status, revision.base_task_version)
-        proposed = _coerce_revision(dict(revision.proposed_fields))
-        after = dict(before)
-        after.update(proposed)
+        try:
+            after = before.overlay(dict(revision.proposed_fields))
+        except ValueError as exc:
+            raise _invalid_revision() from exc
         await _ensure_subject_change_allowed(db, user_id, task, before, after)
-        await _validate_subject(db, user_id, after["subject_id"])
+        await _validate_subject(db, user_id, after.subject_id)
         _validate_fields(after)
-        after["date_text"] = _render_date_text(after)
     else:
         after = before
 
@@ -1201,9 +665,9 @@ async def confirm_task(
 
     await _validate_confirmable(db, user_id, task, after)
 
-    due_changed = _due_changed(before, after)
+    due_changed = before.due_changed(after)
     old_version = task.version
-    _apply_fields(task, after)
+    after.apply(task)
     task.version = old_version + 1
     if due_changed:
         task.due_version += 1
@@ -1239,17 +703,6 @@ async def confirm_task(
     return (await _assemble(db, user_id, [task]))[0], notice
 
 
-@asynccontextmanager
-async def _request_session(db: AsyncSession) -> AsyncIterator[AsyncSession]:
-    """Let the lifecycle adapter run inside the request transaction.
-
-    `SqlTaskLifecycleStore` expects a session factory; yielding the request session keeps
-    the row lock, the version bump, the reminder cancellation and the evidence copy in one
-    transaction committed by the router.
-    """
-    yield db
-
-
 async def _lifecycle(
     db: AsyncSession,
     user_id: uuid.UUID,
@@ -1258,7 +711,7 @@ async def _lifecycle(
     expected_version: int,
     target: str,
 ) -> TaskLifecycleResult:
-    lifecycle = TaskLifecycle(SqlTaskLifecycleStore(lambda: _request_session(db)))
+    lifecycle = TaskLifecycle(SqlTaskLifecycleStore(db))
     if target == "completed":
         result = await lifecycle.complete(
             user_id, task_id, expected_version=expected_version

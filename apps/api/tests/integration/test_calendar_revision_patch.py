@@ -170,25 +170,6 @@ def _session_factory(db: AsyncSession) -> Callable[[], Any]:
     return factory
 
 
-def _scoped_session_factory(db: AsyncSession) -> Callable[[], Any]:
-    """Real commit/rollback sessions on a savepoint, as the API and jobs use."""
-
-    @asynccontextmanager
-    async def factory() -> AsyncIterator[AsyncSession]:
-        assert db.bind is not None
-        nested = AsyncSession(bind=db.bind, join_transaction_mode="create_savepoint")
-        try:
-            yield nested
-            await nested.commit()
-        except BaseException:
-            await nested.rollback()
-            raise
-        finally:
-            await nested.close()
-
-    return factory
-
-
 def _gateway_factory(
     fake: FakeGoogle,
 ) -> Callable[[TaskSnapshot], Awaitable[CalendarGateway]]:
@@ -541,7 +522,7 @@ async def test_completing_cancels_pending_reminders_and_keeps_the_event(
         status="pending",
         scheduled_at=START + timedelta(hours=24),
     )
-    lifecycle = TaskLifecycle(SqlTaskLifecycleStore(_scoped_session_factory(db_session)))
+    lifecycle = TaskLifecycle(SqlTaskLifecycleStore(db_session))
 
     result = await lifecycle.complete(actor.user_id, row["id"], expected_version=row["version"])
 
@@ -593,7 +574,7 @@ async def test_dismissing_cancels_reminders_and_keeps_the_event(
         status="pending",
         scheduled_at=START + timedelta(hours=24),
     )
-    lifecycle = TaskLifecycle(SqlTaskLifecycleStore(_scoped_session_factory(db_session)))
+    lifecycle = TaskLifecycle(SqlTaskLifecycleStore(db_session))
 
     result = await lifecycle.dismiss(actor.user_id, row["id"], expected_version=row["version"])
 
@@ -627,7 +608,7 @@ async def test_a_stale_version_changes_nothing(db_session: AsyncSession) -> None
         status="pending",
         scheduled_at=START + timedelta(hours=24),
     )
-    lifecycle = TaskLifecycle(SqlTaskLifecycleStore(_scoped_session_factory(db_session)))
+    lifecycle = TaskLifecycle(SqlTaskLifecycleStore(db_session))
 
     with pytest.raises(ApiError) as failure:
         await lifecycle.complete(actor.user_id, row["id"], expected_version=2)
@@ -645,7 +626,7 @@ async def test_the_version_bumped_by_completion_rejects_the_old_token(
     """fix1: the client must use the new version; the old token is a `version_conflict`."""
     actor = await make_actor(db_session)
     row = await _insert_task(db_session, actor, version=2)
-    lifecycle = TaskLifecycle(SqlTaskLifecycleStore(_scoped_session_factory(db_session)))
+    lifecycle = TaskLifecycle(SqlTaskLifecycleStore(db_session))
 
     first = await lifecycle.complete(actor.user_id, row["id"], expected_version=2)
     assert first.version == 3
@@ -672,7 +653,7 @@ async def test_completing_a_task_invalidates_a_queued_calendar_job(
     event_id = deterministic_event_id(row["id"])
     await sync_task_event(_ctx(db_session, fake), str(row["id"]), 1)
     assert fake.insert_requests == 1
-    lifecycle = TaskLifecycle(SqlTaskLifecycleStore(_scoped_session_factory(db_session)))
+    lifecycle = TaskLifecycle(SqlTaskLifecycleStore(db_session))
 
     result = await lifecycle.complete(actor.user_id, row["id"], expected_version=1)
 
@@ -701,7 +682,7 @@ async def test_another_users_task_is_not_found_and_changes_nothing(
         status="pending",
         scheduled_at=START + timedelta(hours=24),
     )
-    lifecycle = TaskLifecycle(SqlTaskLifecycleStore(_scoped_session_factory(db_session)))
+    lifecycle = TaskLifecycle(SqlTaskLifecycleStore(db_session))
 
     with pytest.raises(ApiError) as failure:
         await lifecycle.complete(intruder.user_id, row["id"], expected_version=row["version"])
