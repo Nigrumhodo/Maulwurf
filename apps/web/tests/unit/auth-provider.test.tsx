@@ -2,9 +2,8 @@
 //
 // D1.4/D1.5 — Regresión del interceptor 401 en el navegador (U-S1-DA-01).
 //
-// El modo invitado no es una sesión: no abre rutas del API, y un 401 vuelve a
-// `/login`. Se monta el `AuthProvider` real sobre `MemoryRouter` para verificar
-// la navegación que el usuario observaría.
+// Sin sesión, `RequireAuth` vuelve a `/login`. Una marca vieja en sessionStorage
+// no cuenta como sesión. Se monta el `AuthProvider` real sobre `MemoryRouter`.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
@@ -80,7 +79,7 @@ afterEach(() => {
 });
 
 describe("interceptor 401 en el navegador", () => {
-  it("no trata el modo invitado como sesión", async () => {
+  it("una marca vieja de invitado no abre la ruta", async () => {
     window.sessionStorage.setItem("maulwurf-guest", "1");
     vi.stubGlobal("fetch", vi.fn(UNAUTHORIZED));
 

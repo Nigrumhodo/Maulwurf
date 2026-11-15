@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { GoogleButton } from "@/components/auth/GoogleButton";
@@ -18,8 +17,6 @@ export function LoginPage() {
   const [searchParams] = useSearchParams();
   const error = searchParams.get("error");
   const message = error ? (ERROR_MESSAGES[error] ?? "el login con google falló.") : null;
-
-  const [guestNotice, setGuestNotice] = useState(false);
 
   return (
     <AuthShell title="login">
@@ -44,19 +41,6 @@ export function LoginPage() {
           › crear cuenta
         </Link>
       </div>
-
-      {guestNotice && (
-        <p role="alert" className="lowercase border-2 border-lavender bg-surface px-3 py-2 text-lavender">
-          &gt; el modo invitado no tiene sesión. entra con google para subir o ver materias.
-        </p>
-      )}
-      <button
-        type="button"
-        onClick={() => setGuestNotice(true)}
-        className="lowercase font-pixel w-full border-2 border-lavender/40 px-4 py-2 text-lavender hover:border-mint hover:text-mint"
-      >
-        ingresar como invitado
-      </button>
     </AuthShell>
   );
 }

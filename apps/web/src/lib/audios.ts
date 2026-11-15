@@ -1,6 +1,7 @@
+import { apiFetch } from "./api";
+import { isRecord, readJson } from "./json";
 import { streamSse } from "./sse";
 import type { SseFrame } from "./sse";
-import { isRecord } from "./json";
 
 /** Wire types for the audio list and detail routes (`apps/api/app/routers/audios.py`). */
 
@@ -198,6 +199,52 @@ export function parseProgressFrame(frame: SseFrame): ProgressStreamEvent {
     default:
       throw new Error(`Evento SSE de progreso no reconocido (${frame.event}).`);
   }
+}
+
+function isAttempt(value: unknown): value is AttemptOut {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.attempt_id === "string" &&
+    typeof value.status === "string" &&
+    typeof value.received_bytes === "number" &&
+    isNullableNumber(value.fragments_done) &&
+    isNullableNumber(value.fragments_total) &&
+    typeof value.cleanup_status === "string"
+  );
+}
+
+function isAudioListItem(value: unknown): value is AudioListItemOut {
+  if (!isRecord(value) || !isRecord(value.subject)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.subject.id === "string" &&
+    typeof value.subject.name === "string" &&
+    typeof value.subject.color === "string" &&
+    (value.title === null || typeof value.title === "string") &&
+    typeof value.class_date === "string" &&
+    typeof value.class_timezone === "string" &&
+    typeof value.language_code === "string" &&
+    isNullableNumber(value.duration_seconds) &&
+    typeof value.created_at === "string" &&
+    (value.attempt === null || isAttempt(value.attempt)) &&
+    isStringMap(value.stages) &&
+    typeof value.aggregate_status === "string"
+  );
+}
+
+/** `GET /audios`. The list is the same source for the library and the dashboard. */
+export async function fetchAudios(): Promise<AudioListItemOut[]> {
+  const res = await apiFetch("/audios");
+  const payload = await readJson(res);
+  if (!isRecord(payload) || !Array.isArray(payload.items)) {
+    throw new Error("El listado de clases no coincide con el contrato.");
+  }
+  return payload.items.map((item) => {
+    if (!isAudioListItem(item)) {
+      throw new Error("Una clase del listado no coincide con el contrato.");
+    }
+    return item;
+  });
 }
 
 /** GET `/audios/{id}/progress`. The server polls; cancel the generator to close it. */

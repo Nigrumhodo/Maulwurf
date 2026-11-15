@@ -1,3 +1,6 @@
+import { apiFetch } from "./api";
+import { isRecord, readJson } from "./json";
+
 /** Wire types for `apps/api/app/schemas/tasks.py`. Dates and datetimes arrive as ISO strings. */
 
 export interface TaskSubjectOut {
@@ -72,4 +75,62 @@ export interface TaskOut {
 export interface TaskListOut {
   items: TaskOut[];
   next_cursor: string | null;
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isTaskSubject(value: unknown): value is TaskSubjectOut {
+  return isRecord(value) && typeof value.id === "string" && typeof value.name === "string";
+}
+
+function isTaskOut(value: unknown): value is TaskOut {
+  if (!isRecord(value) || !isRecord(value.event_block)) return false;
+  return (
+    typeof value.id === "string" &&
+    isNullableString(value.audio_id) &&
+    (value.subject === null || isTaskSubject(value.subject)) &&
+    typeof value.source === "string" &&
+    typeof value.tipo === "string" &&
+    typeof value.titulo === "string" &&
+    isNullableString(value.detalle) &&
+    isNullableString(value.due_date) &&
+    isNullableString(value.due_at) &&
+    typeof value.timezone === "string" &&
+    typeof value.all_day === "boolean" &&
+    typeof value.date_status === "string" &&
+    isNullableString(value.date_text) &&
+    isNullableString(value.date_reason) &&
+    (value.confidence_score === null || typeof value.confidence_score === "number") &&
+    typeof value.status === "string" &&
+    typeof value.calendar_sync_status === "string" &&
+    typeof value.version === "number" &&
+    typeof value.due_version === "number" &&
+    Array.isArray(value.sources) &&
+    Array.isArray(value.evidence) &&
+    (value.pending_revision === null || isRecord(value.pending_revision))
+  );
+}
+
+/** Due instant from the task itself: `due_at`, else `due_date`, else `date_status`. */
+export function taskSchedule(task: TaskOut): string {
+  if (task.due_at !== null) return task.due_at;
+  if (task.due_date !== null) return task.due_date;
+  return task.date_status;
+}
+
+/** `GET /tasks`. The dashboard and the tareas page both read this list. */
+export async function fetchTasks(): Promise<TaskOut[]> {
+  const res = await apiFetch("/tasks");
+  const payload = await readJson(res);
+  if (!isRecord(payload) || !Array.isArray(payload.items)) {
+    throw new Error("El listado de tareas no coincide con el contrato.");
+  }
+  return payload.items.map((item) => {
+    if (!isTaskOut(item)) {
+      throw new Error("Una tarea del listado no coincide con el contrato.");
+    }
+    return item;
+  });
 }

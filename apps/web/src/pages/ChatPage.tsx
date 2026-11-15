@@ -1,13 +1,17 @@
 import { Card } from "@/components/ui/Card";
+import { EmptyState } from "@/components/ui/EmptyState";
 
-// D1.2 — Chat esqueleto. La conversación RAG con citas llega en D2.6/D2.7.
+// The only conversation surface. The dashboard does not open a second chat panel.
 export function ChatPage() {
   return (
     <div className="flex flex-col gap-6">
       <h1 className="lowercase text-2xl text-mint">chat</h1>
 
       <Card title="conversación">
-        <p className="lowercase text-lavender">el chat con tus apuntes llega en d2.6.</p>
+        <EmptyState
+          title="aún no hay conversaciones"
+          description="las preguntas sobre tus apuntes se hacen en esta pantalla."
+        />
       </Card>
     </div>
   );
