@@ -221,6 +221,9 @@ async def open_service_pool(app: object) -> None:
         return
     dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
     try:
+        # Four connections for this process. Compose's budget is
+        # 3 * (pool 5 + overflow 5) for api/worker/scheduler, plus this 4,
+        # under Postgres' default max_connections of 100.
         created = await asyncpg.create_pool(dsn, min_size=1, max_size=4, timeout=2.0)
     except Exception as exc:  # noqa: BLE001 — a down database is capacity, and the message may hold the DSN
         logger.warning("reception.pool_failed error=%s", type(exc).__name__)

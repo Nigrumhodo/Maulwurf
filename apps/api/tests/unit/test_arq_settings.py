@@ -6,6 +6,7 @@ import pytest
 from arq.worker import Function
 
 from app.core.config import settings as app_settings
+from app.core.redis import REDIS_TIMEOUT_S
 from app.services.digests import DigestMaterialization
 from app.services.scheduler_lease import SchedulerReport
 from app.workers import arq_app
@@ -36,6 +37,13 @@ def test_worker_and_scheduler_use_separate_queues() -> None:
     # Si compartieran cola, el scheduler ejecutaría jobs del worker y un solo proceso vivo
     # haría pasar el healthcheck de ambos.
     assert WorkerSettings.queue_name != SchedulerSettings.queue_name
+
+
+def test_redis_timeout_uses_the_api_budget_not_arq_default() -> None:
+    # `RedisSettings.from_dsn` leaves conn_timeout at 1. Workers must share the API budget.
+    assert WorkerSettings.redis_settings.conn_timeout == REDIS_TIMEOUT_S
+    assert SchedulerSettings.redis_settings.conn_timeout == REDIS_TIMEOUT_S
+    assert REDIS_TIMEOUT_S != 1
 
 
 def test_health_key_expires_fast_enough_to_detect_a_dead_process() -> None:

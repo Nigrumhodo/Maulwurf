@@ -4,6 +4,15 @@
 # Redis no tiene volumen: la persistencia duradera es de Postgres (J1.6/ADR-0005).
 name: maulwurf
 
+# Shared by worker and scheduler. The `test` command differs (each process has
+# its own queue and health key); the timing budget does not.
+x-arq-healthcheck: &arq-healthcheck
+  interval: 15s
+  # `--check` starts an interpreter that imports the app: room for a cold start.
+  timeout: 10s
+  retries: 5
+  start_period: 30s
+
 x-api-env: &api-env
   # A2.16: required with no default in Settings; Compose is the local environment.
   MAULWURF_ENV: local
@@ -26,6 +35,10 @@ services:
       # valor por defecto es solo para desarrollo local.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-maulwurf}
       POSTGRES_DB: maulwurf
+    # Connection budget: api, worker, and scheduler each open pool_size 5 +
+    # max_overflow 5 (30). Ingest's service pool is 4. The image default
+    # max_connections (100) covers that with headroom; do not raise a pool
+    # without checking the sum.
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -51,7 +64,9 @@ services:
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 3s
+      # Same 2s budget as REDIS_TIMEOUT_S: the API client, /readyz, and ARQ
+      # `RedisSettings.conn_timeout` (ARQ's own default is 1s).
+      timeout: 2s
       retries: 20
     ports:
       # Solo loopback, para ejecutar I-S1-JF-03 desde el host (ADR-0005).
@@ -81,12 +96,14 @@ services:
       redis:
         condition: service_healthy
     expose: ["8000"]
+    # Readiness, not liveness: /readyz stays 503 until Postgres and Redis answer.
+    # urlopen treats that 503 as failure, so `up --wait` does not call the API ready early.
     healthcheck:
       test:
         - CMD
         - python
         - -c
-        - import urllib.request,sys;urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=3);sys.exit(0)
+        - import urllib.request,sys;urllib.request.urlopen('http://127.0.0.1:8000/readyz',timeout=3);sys.exit(0)
       interval: 10s
       timeout: 5s
       retries: 12
@@ -120,12 +137,8 @@ services:
       - no-new-privileges:true
     pids_limit: 128
     healthcheck:
+      <<: *arq-healthcheck
       test: ["CMD", "arq", "app.workers.arq_app.WorkerSettings", "--check"]
-      interval: 15s
-      # `--check` arranca un intérprete que importa la app: margen para arranque en frío.
-      timeout: 10s
-      retries: 5
-      start_period: 30s
     networks: [data]
     restart: unless-stopped
 
@@ -152,12 +165,8 @@ services:
       - no-new-privileges:true
     pids_limit: 128
     healthcheck:
+      <<: *arq-healthcheck
       test: ["CMD", "arq", "app.workers.arq_app.SchedulerSettings", "--check"]
-      interval: 15s
-      # `--check` arranca un intérprete que importa la app: margen para arranque en frío.
-      timeout: 10s
-      retries: 5
-      start_period: 30s
     networks: [data]
     restart: unless-stopped
 
@@ -194,6 +203,9 @@ services:
     environment:
       MAULWURF_ENV: local
       MAULWURF_DATABASE_URL: postgresql+asyncpg://maulwurf:${POSTGRES_PASSWORD:-maulwurf}@postgres:5432/maulwurf
+      # Image ENV and this mount must name the same directory. Compose config
+      # can see this value; it cannot see the Dockerfile ENV.
+      TMPDIR: /work/tmp
       INGEST_CREDENTIAL_SECRET: ${MAULWURF_INGEST_CREDENTIAL_SECRET:-}
       INGEST_CREDENTIAL_KID: ${MAULWURF_INGEST_CREDENTIAL_KID:-k1}
       # Rotation only: ingest accepts the previous pair while api mints with the new
@@ -214,6 +226,8 @@ services:
       postgres:
         condition: service_healthy
     expose: ["8000"]
+    # Liveness only. /readyz stays 503 until the ingest credential is set, so an
+    # unconfigured checkout can still become healthy. The e2e override probes /readyz.
     healthcheck:
       test:
         - CMD

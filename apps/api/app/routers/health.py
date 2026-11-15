@@ -15,11 +15,14 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.db import engine
+from app.core.redis import REDIS_TIMEOUT_S
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["health"])
 
-CHECK_TIMEOUT_S = 2.0
+# Same budget as the request-path Redis client. A probe that waits longer than
+# the client would call the process ready for a Redis the next request will not use.
+CHECK_TIMEOUT_S = REDIS_TIMEOUT_S
 
 
 async def check_postgres() -> None:
@@ -28,7 +31,11 @@ async def check_postgres() -> None:
 
 
 async def check_redis() -> None:
-    client = redis.Redis.from_url(str(settings.redis_url), socket_connect_timeout=CHECK_TIMEOUT_S)
+    client = redis.Redis.from_url(
+        str(settings.redis_url),
+        socket_connect_timeout=REDIS_TIMEOUT_S,
+        socket_timeout=REDIS_TIMEOUT_S,
+    )
     try:
         await client.ping()
     finally:

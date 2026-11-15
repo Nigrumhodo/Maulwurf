@@ -17,10 +17,14 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_COMPOSE = REPO_ROOT / "infra" / "docker-compose.yml"
+DEFAULT_E2E = REPO_ROOT / "infra" / "docker-compose.e2e.yml"
 RENDER_TIMEOUT_S = 120
+TMP_MOUNT = "/work/tmp"
+TMP_FLAGS = frozenset({"noexec", "nosuid", "nodev"})
 
 INGEST_ENV_ALLOWLIST = frozenset(
     {
@@ -37,10 +41,15 @@ INGEST_ENV_ALLOWLIST = frozenset(
         "RIVA_SERVER",
         "RIVA_FUNCTION_ID",
         "RIVA_USE_SSL",
+        "TMPDIR",
     }
 )
 INGEST_RIVA_NAMES = ("NVIDIA_API_KEY", "RIVA_SERVER", "RIVA_FUNCTION_ID", "RIVA_USE_SSL")
-INGEST_LIMIT_NAMES = ("INGEST_MAX_UPLOAD_BYTES", "INGEST_FRAGMENT_OVERLAP_S", "INGEST_FRAGMENT_SECONDS")
+INGEST_LIMIT_NAMES = (
+    "INGEST_MAX_UPLOAD_BYTES",
+    "INGEST_FRAGMENT_OVERLAP_S",
+    "INGEST_FRAGMENT_SECONDS",
+)
 API_SECRET_NAMES = (
     "MAULWURF_SECRET_KEY",
     "MAULWURF_ENCRYPTION_KEY",
@@ -51,7 +60,7 @@ API_SECRET_NAMES = (
     "MAULWURF_LLM_API_KEY",
     "POSTGRES_PASSWORD",
 )
-INGEST_SECRET_NAME = "MAULWURF_INGEST_CREDENTIAL_SECRET"
+INGEST_SECRET_NAME = "MAULWURF_INGEST_CREDENTIAL_SECRET"  # noqa: S105
 INGEST_URL_NAME = "MAULWURF_INGEST_URL"
 INGEST_ORIGIN_DEFAULT = "https://localhost:443"
 INGEST_USER = "10001:10001"
@@ -87,8 +96,15 @@ class Report:
             self.failures.append(label)
 
 
-def render(compose_file: Path, overrides: Mapping[str, str | None]) -> dict:
-    """Render the compose model with `overrides` applied; a None value removes the name."""
+def render(
+    compose_files: Path | tuple[Path, ...], overrides: Mapping[str, str | None]
+) -> dict:
+    """Render the compose model with `overrides` applied; a None value removes the name.
+
+    `compose_files` is one file or a merge (`-f` in order). The copies live in a scratch
+    directory so the developer's real `../.env` is never read.
+    """
+    files = (compose_files,) if isinstance(compose_files, Path) else compose_files
     values = {**DUMMY_ENV}
     for name, value in overrides.items():
         if value is None:
@@ -99,18 +115,21 @@ def render(compose_file: Path, overrides: Mapping[str, str | None]) -> dict:
         root = Path(scratch)
         infra = root / "infra"
         infra.mkdir()
-        shutil.copyfile(compose_file, infra / "docker-compose.yml")
+        copied: list[Path] = []
+        for compose_file in files:
+            destination = infra / compose_file.name
+            shutil.copyfile(compose_file, destination)
+            copied.append(destination)
         env_text = "".join(f"{name}={value}\n" for name, value in values.items())
         (root / ".env").write_text(env_text)
         env_file = root / "interpolation.env"
         env_file.write_text(env_text)
-        result = subprocess.run(
-            [
-                "docker", "compose",
-                "-f", str(infra / "docker-compose.yml"),
-                "--env-file", str(env_file),
-                "config", "--format", "json",
-            ],
+        command = ["docker", "compose"]
+        for destination in copied:
+            command.extend(["-f", str(destination)])
+        command.extend(["--env-file", str(env_file), "config", "--format", "json"])
+        result = subprocess.run(  # noqa: S603
+            command,
             env=_clean_process_env(),
             capture_output=True,
             text=True,
@@ -118,7 +137,10 @@ def render(compose_file: Path, overrides: Mapping[str, str | None]) -> dict:
             check=False,
         )
     if result.returncode != 0:
-        raise RuntimeError(f"docker compose config failed (exit {result.returncode})")
+        detail = (result.stderr or "").strip() or (result.stdout or "").strip()
+        raise RuntimeError(
+            f"docker compose config failed (exit {result.returncode}): {detail}"
+        )
     return json.loads(result.stdout)
 
 
@@ -195,6 +217,109 @@ def check_api_ingest_pair(report: Report, model: Mapping, *, expect_set: bool) -
         )
 
 
+def _byte_count(value: object) -> int | None:
+    """`UnitBytes` JSON is a decimal string (`"1073741824"`), never `1g` or a number."""
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _tmpfs_mount(service: Mapping[str, Any]) -> tuple[set[str], int] | None:
+    """The one short-syntax string compose-go keeps in `tmpfs`.
+
+    Anything else — a second mount, an object, a unit suffix — is a different
+    shape and fails closed.
+    """
+    raw = service.get("tmpfs")
+    if not isinstance(raw, list) or len(raw) != 1 or not isinstance(raw[0], str):
+        return None
+    target, separator, option_text = raw[0].partition(":")
+    if separator != ":" or target != TMP_MOUNT:
+        return None
+    options = {part for part in option_text.split(",") if part}
+    sizes = [part.removeprefix("size=") for part in options if part.startswith("size=")]
+    if len(sizes) != 1 or not sizes[0].isdigit():
+        return None
+    return options, int(sizes[0])
+
+
+def _writable_targets(service: Mapping[str, Any]) -> list[str] | None:
+    """Targets of volumes that are not read-only objects.
+
+    compose-go omits `read_only: false`, so a missing flag is writable. `None`
+    means the value is not the object list `config` emits (no volumes is `[]`
+    after a missing key).
+    """
+    raw = service.get("volumes")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return None
+    writable: list[str] = []
+    for volume in raw:
+        if not isinstance(volume, dict) or not isinstance(volume.get("target"), str):
+            return None
+        if volume.get("read_only") is not True:
+            writable.append(volume["target"])
+    return writable
+
+
+def _core_is_zero(service: Mapping[str, Any]) -> bool:
+    """YAML `core: 0` marshals as `{}`: compose-go omits zero ulimit fields."""
+    ulimits = service.get("ulimits")
+    if not isinstance(ulimits, dict):
+        return False
+    return ulimits.get("core") == {}
+
+
+def check_mount_contract(report: Report, model: Mapping[str, Any], label: str) -> None:
+    """Tmpfs, read-only root, no writable volume, no extra swap, no core dumps.
+
+    The tmpfs size is compared with the rendered `INGEST_MAX_UPLOAD_BYTES`. Neither
+    number is copied into this file, so the two compose defaults cannot drift apart
+    without this check failing.
+    """
+    service = model["services"]["ingest"]
+    if not isinstance(service, dict):
+        report.check(False, f"{label}: ingest service is an object")
+        return
+    env = service_env(model, "ingest")
+    report.check(service.get("read_only") is True, f"{label}: ingest root is read-only")
+    report.check(env.get("TMPDIR") == TMP_MOUNT, f"{label}: TMPDIR is {TMP_MOUNT}")
+    mount = _tmpfs_mount(service)
+    if mount is None:
+        report.check(False, f"{label}: tmpfs is one {TMP_MOUNT} string")
+        report.check(False, f"{label}: tmpfs size exceeds the upload limit")
+    else:
+        options, size = mount
+        report.check(
+            TMP_FLAGS <= options,
+            f"{label}: tmpfs has noexec,nosuid,nodev (options: {sorted(options)})",
+        )
+        upload_text = env.get("INGEST_MAX_UPLOAD_BYTES")
+        upload = (
+            int(upload_text)
+            if isinstance(upload_text, str) and upload_text.isdigit()
+            else None
+        )
+        report.check(
+            upload is not None and size > upload,
+            f"{label}: tmpfs size ({size}) exceeds the upload limit ({upload})",
+        )
+    writable = _writable_targets(service)
+    report.check(
+        writable == [],
+        f"{label}: ingest has no writable volume ({writable})",
+    )
+    memory = _byte_count(service.get("mem_limit"))
+    swap = _byte_count(service.get("memswap_limit"))
+    report.check(
+        memory is not None and memory == swap,
+        f"{label}: memswap_limit equals mem_limit ({swap} vs {memory})",
+    )
+    report.check(_core_is_zero(service), f"{label}: core ulimit is 0")
+
+
 def check_origin(report: Report, compose_file: Path) -> None:
     default_env = service_env(render(compose_file, {"MAULWURF_PUBLIC_ORIGIN": None}), "api")
     report.check(
@@ -234,6 +359,12 @@ def run_checks(compose_file: Path) -> Report:
     check_api_ingest_pair(report, without_ingest_pair, expect_set=False)
 
     check_origin(report, compose_file)
+    check_mount_contract(report, full, "base")
+    merged = render(
+        (compose_file, DEFAULT_E2E),
+        {"E2E_ALLOW_EPHEMERAL_CREDENTIALS": "1"},
+    )
+    check_mount_contract(report, merged, "e2e")
     return report
 
 

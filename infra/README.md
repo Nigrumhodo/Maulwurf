@@ -12,7 +12,7 @@ ownership is recorded in [docs/sprints/CLAIMS.md](../docs/sprints/CLAIMS.md); fu
 | File | What it is |
 |---|---|
 | `docker-compose.yml` | S1's 8 services with healthchecks; images pinned by digest |
-| `Caddyfile` | Local TLS proxy (`tls internal`), same origin for web/api/ingest, no buffering or cache, and the J2.10 body/timeout limits |
+| `Caddyfile` | Local TLS proxy (`tls internal`), same origin for web and api. Ingest stays on the `data` network (ADR-0008). No buffering or cache, and the J2.10 body/timeout limits |
 | `alerting/` | J4.8 Prometheus rules, scrape example and the budget alert contract; the local stack does not run Prometheus |
 
 | Service | Image | Notes |
@@ -37,8 +37,9 @@ ownership is recorded in [docs/sprints/CLAIMS.md](../docs/sprints/CLAIMS.md); fu
   `arq:*`/`mw:*` keys; published on loopback only for test I-S1-JF-03.
 - **Proxy (J1.3):** purely streaming uploads; the `PUT /audios/*/content` route stays on
   `api:8000`, which streams to `ingest` internally (ADR-0008); `/internal/*` is never routed
-  from the edge. The no-buffering test is `scripts/load/proxy_no_buffering.sh` (I-S1-JF-02);
-  its default is 200 MiB so it stays below the J2.10 edge ceiling.
+  from the edge. The no-buffering and edge-limit measurement is
+  `scripts/load/ingress_limits.sh` (C-S2-JF-13). `scripts/load/proxy_no_buffering.sh`
+  (I-S1-JF-02) is a wrapper around that harness.
 - **Edge limits (J2.10):** Caddy is the only HTTP ingress (ADR-0010). Uploads are capped at
   220,000,000 bytes and JSON at 10,000,000; `read_body` 20m, `read_header` 30s, `write` 0
   (SSE) and `idle` 5m. The 220 MB ceiling stays above the provisional 200 MiB API limit so the
