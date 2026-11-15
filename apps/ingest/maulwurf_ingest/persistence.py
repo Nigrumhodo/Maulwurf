@@ -21,8 +21,8 @@ from enum import StrEnum
 
 import asyncpg
 
-from maulwurf_ingest import rls
-from maulwurf_ingest.audio.reconcile import parse_confidence
+from maulwurf_ingest import cleanup, rls
+from maulwurf_ingest.audio.reconcile import Word
 from maulwurf_ingest.lease import Lease
 
 PROVIDER = "nvidia-riva"
@@ -50,18 +50,10 @@ class _Rollback(Exception):
 
 
 @dataclass(frozen=True)
-class TranscriptWord:
-    text: str
-    start_s: float
-    end_s: float
-    confidence: float | None = None
-
-
-@dataclass(frozen=True)
 class TranscriptDraft:
     text: str
     precision: str
-    words: tuple[TranscriptWord, ...]
+    words: tuple[Word, ...]
     model: str
     client_version: str | None = None
 
@@ -114,7 +106,7 @@ def repetition_warnings(text: str) -> tuple[dict[str, object], ...]:
 
 
 def quality_warnings(
-    text: str, words: Sequence[TranscriptWord] = ()
+    text: str, words: Sequence[Word] = ()
 ) -> tuple[dict[str, object], ...]:
     """Non-sensitive ASR quality signals: repetition, empty entries and low confidence.
 
@@ -344,12 +336,25 @@ async def enable_text_outbox(
     """Enable index/analyze for this version and mark the attempt ``succeeded``.
 
     Both writes are one transaction. The attempt update requires a live lease,
-    the fencing token, and ``cleanup_status=verified``. Any other outbox type
-    is left as it was. A miss rolls the enablement back.
+    the fencing token, and ``cleanup_status=verified`` written by destruction
+    evidence or a host-loss attestation. Any other outbox type is left as it was.
+    A miss rolls the enablement back.
     """
     try:
         async with pool.acquire() as conn, conn.transaction():
             await rls.bind_transaction(conn, lease.user_id)
+            evidence = await conn.fetchval(
+                """
+                SELECT cleanup_evidence
+                  FROM ingestion_attempts
+                 WHERE id = $1 AND user_id = $2 AND fencing_token = $3
+                   AND status = 'transcript_committed_cleanup_pending'
+                   AND cleanup_status = 'verified' AND lease_expires_at > now()
+                """,
+                lease.attempt_id, lease.user_id, lease.fencing_token,
+            )
+            if not cleanup.proven_cleanup(evidence):
+                raise _Rollback
             await conn.execute(
                 """
                 UPDATE outbox_events
@@ -383,7 +388,7 @@ def _no_usable_text(draft: TranscriptDraft) -> bool:
     return not draft.text.strip()
 
 
-def _valid_span(word: TranscriptWord) -> bool:
+def _valid_span(word: Word) -> bool:
     return (
         math.isfinite(word.start_s)
         and math.isfinite(word.end_s)
@@ -423,26 +428,13 @@ def _required_stages(raw: object) -> tuple[str, ...]:
     return tuple(seen)
 
 
-def _words_from_job(raw: object) -> tuple[TranscriptWord, ...] | None:
+def _words_from_job(raw: object) -> tuple[Word, ...] | None:
     if not isinstance(raw, list):
         return None
-    words: list[TranscriptWord] = []
+    words: list[Word] = []
     for item in raw:
-        if not isinstance(item, dict):
+        word = Word.from_json(item)
+        if word is None:
             return None
-        text = item.get("text")
-        start = item.get("start_s")
-        end = item.get("end_s")
-        if not isinstance(text, str) or isinstance(start, bool) or isinstance(end, bool):
-            return None
-        if not isinstance(start, int | float) or not isinstance(end, int | float):
-            return None
-        words.append(
-            TranscriptWord(
-                text,
-                float(start),
-                float(end),
-                parse_confidence(item.get("confidence")),
-            )
-        )
+        words.append(word)
     return tuple(words)

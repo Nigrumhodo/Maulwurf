@@ -9,7 +9,7 @@ is tested directly — same input gives the same output, `RRF_K` is documented, 
 import uuid
 from collections.abc import Sequence
 
-from app.services.search import (
+from app.services.retrieval import (
     CANDIDATES_PER_BRANCH,
     DEFAULT_TOP_K,
     MAX_CHUNKS_PER_AUDIO,

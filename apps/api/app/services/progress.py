@@ -8,8 +8,10 @@ fragments the ingestion actually recorded — never a percentage, never an inter
 """
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+
+from pydantic import BaseModel
 
 # Provisional poll cadence: D4 has not published operational limits, so these are bounded
 # constants (like `audios.RETRY_AFTER_SECONDS`), not a published capacity decision.
@@ -22,15 +24,45 @@ MAX_SECONDS = 900.0
 TERMINAL_AGGREGATES = ("ready", "partial", "failed")
 
 
-def encode_event(*, name: str, id: int, data: dict[str, Any]) -> str:
+def encode_event(*, name: str, id: int, data: BaseModel | Mapping[str, object]) -> str:
     """One SSE frame; `data` is JSON with only measured values."""
-    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    return f"event: {name}\nid: {id}\ndata: {payload}\n\n"
+    payload = data.model_dump(mode="json") if isinstance(data, BaseModel) else data
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return f"event: {name}\nid: {id}\ndata: {encoded}\n\n"
 
 
 def heartbeat() -> str:
     """SSE comment used as a keep-alive between events (DISENO §3.5, `: ping`)."""
     return ": ping\n\n"
+
+
+class AttemptPayload(BaseModel):
+    status: str | None
+    received_bytes: int
+    fragments_done: int | None
+    fragments_total: int | None
+
+
+class SnapshotPayload(BaseModel):
+    attempt: AttemptPayload
+    stages: dict[str, str]
+    aggregate: str
+
+
+class ProgressPayload(BaseModel):
+    received_bytes: int
+    fragments_done: int | None
+    fragments_total: int | None
+
+
+class TerminalDone(BaseModel):
+    aggregate: str
+    stages: dict[str, str]
+
+
+class TerminalError(BaseModel):
+    code: str
+    detail: str | None
 
 
 @dataclass(frozen=True)
@@ -45,27 +77,27 @@ class ProgressSnapshot:
     stages: dict[str, str]
     aggregate: str
 
-    def attempt_payload(self) -> dict[str, Any]:
-        return {
-            "status": self.attempt_status,
-            "received_bytes": self.received_bytes,
-            "fragments_done": self.fragments_done,
-            "fragments_total": self.fragments_total,
-        }
+    def attempt_payload(self) -> AttemptPayload:
+        return AttemptPayload(
+            status=self.attempt_status,
+            received_bytes=self.received_bytes,
+            fragments_done=self.fragments_done,
+            fragments_total=self.fragments_total,
+        )
 
-    def snapshot_payload(self) -> dict[str, Any]:
-        return {
-            "attempt": self.attempt_payload(),
-            "stages": dict(self.stages),
-            "aggregate": self.aggregate,
-        }
+    def snapshot_payload(self) -> SnapshotPayload:
+        return SnapshotPayload(
+            attempt=self.attempt_payload(),
+            stages=dict(self.stages),
+            aggregate=self.aggregate,
+        )
 
-    def progress_payload(self) -> dict[str, Any]:
-        return {
-            "received_bytes": self.received_bytes,
-            "fragments_done": self.fragments_done,
-            "fragments_total": self.fragments_total,
-        }
+    def progress_payload(self) -> ProgressPayload:
+        return ProgressPayload(
+            received_bytes=self.received_bytes,
+            fragments_done=self.fragments_done,
+            fragments_total=self.fragments_total,
+        )
 
     def progress_key(self) -> tuple[int, int | None, int | None, str | None]:
         """Values whose change means a new `progress` event is owed."""

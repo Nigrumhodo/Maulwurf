@@ -29,6 +29,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import RedirectResponse
 
+from app.core.db import set_current_user
 from app.core.deps import (
     COOKIE_NAME,
     OAUTH_COOKIE_NAME,
@@ -41,7 +42,7 @@ from app.core.deps import (
 )
 from app.core.redis import RedisDep
 from app.core.security import sign_state, verify_state
-from app.models import GoogleCredential, User
+from app.models import CalendarSettings, GoogleCredential, User
 from app.services import calendar_connection, calendar_resume, oauth_google, sessions
 from app.services.google_calendar import (
     GoogleCalendarError,
@@ -176,53 +177,65 @@ async def _calendar_callback(
         # The consent was started by another user/session: never attach its grant here.
         await db.rollback()
         return _calendar_result("error", reason="state_mismatch")
+    await db.commit()
 
     try:
         tokens = await oauth_google.exchange_code(code, code_verifier)
-        id_token = tokens.get("id_token")
+        id_token = tokens.id_token
         if not isinstance(id_token, str):
             raise OAuthError("token_exchange_incomplete")
         claims = await oauth_google.verify_id_token(id_token, nonce)
     except OAuthError:
-        await db.rollback()
         return _calendar_result("error", reason="oauth_failed")
 
+    await set_current_user(db, user_id)
     user = await db.get(User, user_id)
     if user is None or user.status != "active":
         await db.rollback()
         return _login_error("session_expired")
-    if claims.get("sub") != user.google_sub:
+    google_sub = user.google_sub
+    timezone = user.timezone
+    credential = await db.get(GoogleCredential, user_id)
+    granted = list(credential.scopes or []) if credential is not None else []
+    settings_row = await db.get(CalendarSettings, user_id)
+    stored_calendar_id = (
+        settings_row.calendar_write_calendar_id if settings_row is not None else None
+    )
+    await db.commit()
+    if claims.sub != google_sub:
         # Incremental consent for another Google account must not be linked to this user.
-        await db.rollback()
         return _calendar_result("error", reason="wrong_account")
     if not calendar_connection.grant_covers_calendar(tokens):
         # The user declined (or Google withheld) part of the Calendar scopes: reject cleanly
         # and persist nothing. Library, upload and chat keep working without Calendar.
-        await db.rollback()
         return _calendar_result("error", reason="scope_required")
-    access_token = tokens.get("access_token")
-    if not isinstance(access_token, str) or not access_token:
-        await db.rollback()
+    access_token = tokens.access_token
+    if not access_token:
         return _calendar_result("error", reason="oauth_failed")
 
-    credential = await db.get(GoogleCredential, user_id)
     requested = calendar_connection.requested_scopes(
-        (credential.scopes or []) if credential is not None else [],
-        reconnect=mode == CALENDAR_RECONNECT,
+        granted, reconnect=mode == CALENDAR_RECONNECT
     )
 
     async def disconnect() -> None:
         await disconnect_google_credential(db, user_id)
+        await db.commit()
 
     try:
+        service = calendar_connection.calendar_service(access_token, disconnect)
+        binding = await calendar_connection.binding_from_google(
+            service, stored_calendar_id=stored_calendar_id, timezone=timezone
+        )
+        await set_current_user(db, user_id)
+        user = await db.get(User, user_id)
+        if user is None or user.status != "active":
+            await db.rollback()
+            return _login_error("session_expired")
         await oauth_google.apply_incremental_grant(
             db, user, tokens, requested_scopes=requested
         )
-        await calendar_connection.connect_calendar(
-            db,
-            user=user,
-            access_token=access_token,
-            on_invalid_grant=disconnect,
+        await calendar_connection.persist_calendar_binding(
+            db, user_id=user_id, binding=binding
         )
         if mode == CALENDAR_RECONNECT:
             # Only a reconnect reactivates waiting work (DISENO §3.8/A3.7): current-version
@@ -287,7 +300,7 @@ async def google_callback(
 
     try:
         tokens = await oauth_google.exchange_code(code, code_verifier)
-        id_token = tokens.get("id_token")
+        id_token = tokens.id_token
         if not isinstance(id_token, str):
             raise OAuthError("token_exchange_incomplete")
         claims = await oauth_google.verify_id_token(id_token, nonce)

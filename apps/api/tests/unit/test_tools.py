@@ -51,7 +51,7 @@ async def test_the_budget_follows_the_clock_not_the_request_instant() -> None:
         now=NOW - timedelta(days=1),
     )
     assert result[0].ok is False
-    assert result[0].payload["code"] == "tool_budget_exceeded"
+    assert result[0].payload.model_dump()["code"] == "tool_budget_exceeded"
 
 
 def test_pending_tasks_handed_to_the_model_are_capped() -> None:

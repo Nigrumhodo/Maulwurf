@@ -10,9 +10,11 @@ Frozen rules:
   neither date.
 - `confidence_score` is an uncalibrated signal in [0, 1], never a certainty or a permission
   to auto-schedule.
-- Every evidence span `[inicio_char, fin_char)` is measured in Unicode code points of the
+- Every evidence span `[char_start, char_end)` is measured in Unicode code points of the
   immutable segment text (not bytes and not JavaScript UTF-16 units) and carries its own
   mandatory verbatim `cita_textual`, so each `task_evidence` row has a literal quote.
+  The frozen extraction prompt still emits `inicio_char`/`fin_char`; those names are
+  accepted as aliases of this one span and are not a second model.
 - `check_against` verifies the spans and quotes against segment texts without touching the
   database. L3.3 owns membership in the class/tenant/transcript version and the DB-backed
   check.
@@ -27,7 +29,15 @@ from enum import StrEnum
 from typing import Literal, Self
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from app.core.validation import is_iana_timezone
 
@@ -37,7 +47,7 @@ ActivityType = Literal[
 
 # Display fields may be trimmed; evidence is never trimmed because it is a literal slice.
 _STRICT = ConfigDict(extra="forbid", str_strip_whitespace=True)
-_NO_STRIP = ConfigDict(extra="forbid")
+_NO_STRIP = ConfigDict(extra="forbid", populate_by_name=True)
 
 
 class DateStatus(StrEnum):
@@ -53,7 +63,7 @@ class SourceSpan(BaseModel):
 
     Offsets are Python string indices (Unicode code points) over the immutable text of
     `segment_id`, never UTF-16 units or bytes. `cita_textual` must be exactly
-    `segment_text[inicio_char:fin_char]`: the length check rejects a quote that cannot be
+    `segment_text[char_start:char_end]`: the length check rejects a quote that cannot be
     the slice before the segment is loaded, and `check_against` confirms the content once
     it is.
     """
@@ -61,8 +71,10 @@ class SourceSpan(BaseModel):
     model_config = _NO_STRIP
 
     segment_id: UUID
-    inicio_char: int = Field(ge=0)
-    fin_char: int = Field(gt=0)
+    char_start: int = Field(
+        ge=0, validation_alias=AliasChoices("char_start", "inicio_char")
+    )
+    char_end: int = Field(gt=0, validation_alias=AliasChoices("char_end", "fin_char"))
     cita_textual: str = Field(min_length=1)
 
     @field_validator("cita_textual")
@@ -74,10 +86,10 @@ class SourceSpan(BaseModel):
 
     @model_validator(mode="after")
     def _non_empty_range(self) -> Self:
-        if self.fin_char <= self.inicio_char:
-            raise ValueError("fin_char debe ser mayor que inicio_char (rango vacío o invertido)")
-        if len(self.cita_textual) != self.fin_char - self.inicio_char:
-            raise ValueError("la cita textual debe medir fin_char - inicio_char")
+        if self.char_end <= self.char_start:
+            raise ValueError("char_end debe ser mayor que char_start (rango vacío o invertido)")
+        if len(self.cita_textual) != self.char_end - self.char_start:
+            raise ValueError("la cita textual debe medir char_end - char_start")
         return self
 
     def check_against(self, segment_text: str) -> None:
@@ -86,9 +98,9 @@ class SourceSpan(BaseModel):
         :raises ValueError: if the span exceeds the text or the quote is not the exact
             Unicode slice. The messages never include the quote or the transcript.
         """
-        if self.fin_char > len(segment_text):
-            raise ValueError("fin_char excede el texto del segmento")
-        if segment_text[self.inicio_char : self.fin_char] != self.cita_textual:
+        if self.char_end > len(segment_text):
+            raise ValueError("char_end excede el texto del segmento")
+        if segment_text[self.char_start : self.char_end] != self.cita_textual:
             raise ValueError("la cita textual no coincide con el segmento")
 
 
@@ -101,7 +113,7 @@ class Source(BaseModel):
 
     @model_validator(mode="after")
     def _distinct_spans(self) -> Self:
-        keys = [(s.segment_id, s.inicio_char, s.fin_char) for s in self.spans]
+        keys = [(s.segment_id, s.char_start, s.char_end) for s in self.spans]
         if len(set(keys)) != len(keys):
             raise ValueError("spans duplicados")
         ordered = sorted(keys)

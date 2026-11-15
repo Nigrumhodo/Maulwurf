@@ -71,11 +71,12 @@ async def test_propose_task_never_writes_the_calendar_and_stays_in_the_tenant(
         now=NOW,
     )
     assert suggestion[0].ok is True
-    assert suggestion[0].payload["evidence"] == "general_suggestion"
-    assert suggestion[0].payload["source"] == "chat"
-    assert suggestion[0].payload["calendar_sync_status"] == "not_requested"
-    assert suggestion[0].payload["status"] == "needs_review"
-    suggested = await db_session.get(Task, UUID(suggestion[0].payload["task_id"]))
+    suggestion_payload = suggestion[0].payload.model_dump()
+    assert suggestion_payload["evidence"] == "general_suggestion"
+    assert suggestion_payload["source"] == "chat"
+    assert suggestion_payload["calendar_sync_status"] == "not_requested"
+    assert suggestion_payload["status"] == "needs_review"
+    suggested = await db_session.get(Task, UUID(suggestion_payload["task_id"]))
     assert suggested is not None
     assert suggested.date_text is None
     assert suggested.date_reason == "missing"
@@ -106,8 +107,9 @@ async def test_propose_task_never_writes_the_calendar_and_stays_in_the_tenant(
         now=NOW,
     )
     assert cited[0].ok is True
-    assert cited[0].payload["evidence"] == "corpus"
-    assert cited[0].payload["source"] == "chat"
+    cited_payload = cited[0].payload.model_dump()
+    assert cited_payload["evidence"] == "corpus"
+    assert cited_payload["source"] == "chat"
     sources = (
         await db_session.execute(select(func.count()).select_from(TaskSource))
     ).scalar_one()
@@ -115,7 +117,7 @@ async def test_propose_task_never_writes_the_calendar_and_stays_in_the_tenant(
     evidence = (await db_session.execute(select(TaskEvidence))).scalar_one()
     assert evidence.quote == QUOTE
     assert evidence.task_version == 1
-    cited_task = await db_session.get(Task, UUID(cited[0].payload["task_id"]))
+    cited_task = await db_session.get(Task, UUID(cited_payload["task_id"]))
     assert cited_task is not None
     assert cited_task.date_text == "Friday, November 6"
 
@@ -144,7 +146,7 @@ async def test_propose_task_never_writes_the_calendar_and_stays_in_the_tenant(
         now=NOW,
     )
     assert rejected[0].ok is False
-    assert rejected[0].payload["code"] == "evidence_rejected"
+    assert rejected[0].payload.model_dump()["code"] == "evidence_rejected"
     assert (
         await db_session.execute(select(func.count()).select_from(Task))
     ).scalar_one() == 2
@@ -162,9 +164,10 @@ async def test_propose_task_never_writes_the_calendar_and_stays_in_the_tenant(
         user_id=other.user_id,
         now=NOW,
     )
-    assert {task["source"] for task in own[0].payload["tasks"]} == {"chat"}
-    assert len(own[0].payload["tasks"]) == 2
-    assert foreign[0].payload["tasks"] == []
+    own_tasks = own[0].payload.model_dump()["tasks"]
+    assert {task["source"] for task in own_tasks} == {"chat"}
+    assert len(own_tasks) == 2
+    assert foreign[0].payload.model_dump()["tasks"] == []
 
     calendar = await tools.execute(
         (ToolCall("get_calendar_events", {"from": "2026-12-01", "to": "2026-11-01"}),),
@@ -172,7 +175,7 @@ async def test_propose_task_never_writes_the_calendar_and_stays_in_the_tenant(
         now=NOW,
     )
     assert calendar[0].ok is False
-    assert calendar[0].payload["code"] == "window_invalid"
+    assert calendar[0].payload.model_dump()["code"] == "window_invalid"
     stored = (await db_session.execute(select(Task))).scalars().all()
     assert all(task.calendar_event_id is None for task in stored)
     assert all(task.calendar_sync_status == "not_requested" for task in stored)

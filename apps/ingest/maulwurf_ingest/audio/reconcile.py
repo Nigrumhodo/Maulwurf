@@ -36,11 +36,34 @@ def parse_confidence(raw: object) -> float | None:
 
 
 @dataclass(frozen=True)
-class LocalWord:
+class Word:
+    """One timed token. Local and global times share this shape; the caller owns the basis."""
+
     text: str
     start_s: float
     end_s: float
     confidence: float | None = None
+
+    def as_json(self) -> dict[str, object]:
+        return {
+            "text": self.text,
+            "start_s": self.start_s,
+            "end_s": self.end_s,
+            "confidence": self.confidence,
+        }
+
+    @classmethod
+    def from_json(cls, item: object) -> Word | None:
+        if not isinstance(item, dict):
+            return None
+        text = item.get("text")
+        start = item.get("start_s")
+        end = item.get("end_s")
+        if not isinstance(text, str) or isinstance(start, bool) or isinstance(end, bool):
+            return None
+        if not isinstance(start, int | float) or not isinstance(end, int | float):
+            return None
+        return cls(text, float(start), float(end), parse_confidence(item.get("confidence")))
 
 
 @dataclass(frozen=True)
@@ -48,28 +71,20 @@ class FragmentTranscript:
     start_s: float
     end_s: float
     text: str = ""
-    words: tuple[LocalWord, ...] = ()
-
-
-@dataclass(frozen=True)
-class GlobalWord:
-    text: str
-    start_s: float
-    end_s: float
-    confidence: float | None = None
+    words: tuple[Word, ...] = ()
 
 
 @dataclass(frozen=True)
 class ReconciledTranscript:
     text: str
-    words: tuple[GlobalWord, ...]
+    words: tuple[Word, ...]
     precision: str
 
 
 def reconcile(fragments: Sequence[FragmentTranscript]) -> ReconciledTranscript:
     """Une fragmentos en orden. La precisión es `word` solo si todo el texto tiene palabras."""
     pieces: list[str] = []
-    kept: list[GlobalWord] = []
+    kept: list[Word] = []
     saw_text_only = False
     previous_end: float | None = None
     for fragment in fragments:
@@ -82,7 +97,7 @@ def reconcile(fragments: Sequence[FragmentTranscript]) -> ReconciledTranscript:
                     continue
                 if _duplicate(kept, word.text, start_s, end_s, previous_end):
                     continue
-                kept.append(GlobalWord(word.text, start_s, end_s, word.confidence))
+                kept.append(Word(word.text, start_s, end_s, word.confidence))
                 pieces.append(word.text.strip())
         else:
             saw_text_only = True
@@ -98,7 +113,7 @@ def reconcile(fragments: Sequence[FragmentTranscript]) -> ReconciledTranscript:
 
 
 def _duplicate(
-    kept: Sequence[GlobalWord],
+    kept: Sequence[Word],
     text: str,
     start_s: float,
     end_s: float,

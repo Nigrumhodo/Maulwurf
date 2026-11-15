@@ -510,7 +510,7 @@ async def _execute_remote(
         await db.commit()
         return
 
-    operations: list[GoogleRemoteOperation] = []
+    pending: list[tuple[uuid.UUID, str, str, str, str]] = []
     for target in targets:
         operation = await _ensure_operation(
             db,
@@ -520,84 +520,98 @@ async def _execute_remote(
             event_id=target.event_id,
             expires_at=expires_at,
         )
-        operations.append(operation)
-    operation_ids = [operation.id for operation in operations]
+        pending.append(
+            (
+                operation.id,
+                operation.kind,
+                operation.calendar_id or "",
+                operation.event_id or "",
+                operation.status,
+            )
+        )
     # Commit the pending rows before the network: a crash after a remote delete leaves an
     # observable pending operation for the next run instead of losing the trace.
     await db.commit()
 
-    # The caller's session may expire ORM objects on commit (the test fixture does). Re-read
-    # the rows by id instead of touching expired attributes outside an await.
-    operations = list(
-        (
-            await db.scalars(
-                select(GoogleRemoteOperation).where(
-                    GoogleRemoteOperation.id.in_(operation_ids)
-                )
-            )
-        ).all()
-    )
-
     if credential_error is not None:
-        for operation in operations:
-            if operation.status == "succeeded":
+        for operation_id, _kind, _calendar_id, _event_id, status in pending:
+            if status == "succeeded":
                 continue
-            operation.status = "failed"
-            operation.error_code = credential_error
-            operation.finished_at = _now()
-        await db.commit()
+            await _finish_remote_operation(
+                db, operation_id, status="failed", error_code=credential_error
+            )
         return
 
     if access_token is None:
         # `fresh_access_token` either returns a token or raises; this is a fail-closed guard
         # for a future adapter change, never a path that calls Google without a token.
-        for operation in operations:
-            if operation.status == "succeeded":
+        for operation_id, _kind, _calendar_id, _event_id, status in pending:
+            if status == "succeeded":
                 continue
-            operation.status = "failed"
-            operation.error_code = "credential_unreadable"
-            operation.finished_at = _now()
-        await db.commit()
+            await _finish_remote_operation(
+                db, operation_id, status="failed", error_code="credential_unreadable"
+            )
         return
 
     service = GoogleCalendarService(access_token=access_token, transport=transport)
     invalid_grant = False
-    for operation in operations:
+    for operation_id, kind, calendar_id, event_id, status in pending:
         # A resumed operation must not repeat an already-acknowledged remote DELETE.
-        if operation.status == "succeeded":
+        if status == "succeeded":
             continue
         if invalid_grant:
-            operation.status = "failed"
-            operation.error_code = "google_calendar_invalid_grant"
-            operation.finished_at = _now()
+            await _finish_remote_operation(
+                db,
+                operation_id,
+                status="failed",
+                error_code="google_calendar_invalid_grant",
+            )
             continue
-        operation.attempts += 1
         try:
-            if operation.kind == "delete_event":
+            if kind == "delete_event":
                 path = (
-                    f"calendars/{quote(operation.calendar_id or '', safe='')}"
-                    f"/events/{quote(operation.event_id or '', safe='')}"
+                    f"calendars/{quote(calendar_id, safe='')}"
+                    f"/events/{quote(event_id, safe='')}"
                 )
                 await service.request("DELETE", path, params={"sendUpdates": "none"})
             else:
-                path = f"calendars/{quote(operation.calendar_id or '', safe='')}"
+                path = f"calendars/{quote(calendar_id, safe='')}"
                 await service.request("DELETE", path)
         except GoogleCalendarNotFound:
             # Already absent is the desired end state; DELETE is idempotent.
-            operation.status = "succeeded"
+            outcome, error_code = "succeeded", None
         except GoogleCalendarInvalidGrant as exc:
-            operation.status = "failed"
-            operation.error_code = exc.code
+            outcome, error_code = "failed", exc.code
             invalid_grant = True
         except GoogleCalendarError as exc:
-            operation.status = "failed"
-            operation.error_code = exc.code
+            outcome, error_code = "failed", exc.code
         except Exception:
-            operation.status = "failed"
-            operation.error_code = "google_request_failed"
+            outcome, error_code = "failed", "google_request_failed"
         else:
-            operation.status = "succeeded"
-        operation.finished_at = _now()
+            outcome, error_code = "succeeded", None
+        await _finish_remote_operation(
+            db, operation_id, status=outcome, error_code=error_code, count_attempt=True
+        )
+
+
+async def _finish_remote_operation(
+    db: AsyncSession,
+    operation_id: uuid.UUID,
+    *,
+    status: str,
+    error_code: str | None,
+    count_attempt: bool = False,
+) -> None:
+    """Record one remote DELETE after its HTTP call, in its own transaction."""
+    operation = await db.get(GoogleRemoteOperation, operation_id)
+    if operation is None or operation.status == "succeeded":
+        await db.rollback()
+        return
+    if count_attempt:
+        operation.attempts += 1
+    operation.status = status
+    operation.error_code = error_code
+    operation.finished_at = _now()
     await db.commit()
 
 

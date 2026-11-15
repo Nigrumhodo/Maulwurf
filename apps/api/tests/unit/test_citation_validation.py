@@ -11,7 +11,9 @@ from typing import Any, cast
 import pytest
 from sqlalchemy.exc import OperationalError
 
-from app.services import rag as rag_module
+from app.schemas.citations import parse_citations
+from app.services import chat_stream as chat_stream_module
+from app.services.chat_prompt import PreparedStream, SourceItem
 from app.services.citations import (
     CitationBuffer,
     CitationRef,
@@ -25,13 +27,9 @@ from app.services.citations import (
     validate_citation_source,
 )
 from app.services.llm import ChatMessage
-from app.services.rag import (
-    PreparedStream,
-    RAGService,
-    SourceItem,
-    _record_offset,
-)
-from app.services.search import RetrievedChunk, SearchService
+from app.services.rag import RAGService
+from app.services.retrieval import RetrievedChunk
+from app.services.search import SearchService
 
 
 def _chunk(
@@ -199,8 +197,8 @@ async def test_resolve_citation_uses_only_the_validated_row() -> None:
     assert ref.index == 1
     assert ref.offset == 12
     event = citation_event(ref)
-    assert event["t_start"] == 125.0
-    assert event["label"] == "[Materia · 2026-09-21 · 02:05]"
+    assert event.t_start == 125.0
+    assert event.label == "[Materia · 2026-09-21 · 02:05]"
 
 
 async def test_rejected_citation_emits_no_event_and_no_record() -> None:
@@ -311,7 +309,7 @@ async def test_validation_timeout_fails_closed_without_citation(
         await asyncio.sleep(60)
         return None
 
-    monkeypatch.setattr(rag_module, "CITATION_VALIDATION_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(chat_stream_module, "CITATION_VALIDATION_TIMEOUT_SECONDS", 0.01)
     service = RAGService(
         session_factory=cast(Any, object()),
         embedding_provider=cast(Any, object()),
@@ -336,25 +334,24 @@ async def test_validation_timeout_fails_closed_without_citation(
     ],
 )
 def test_malformed_offsets_are_rejected(record: dict[str, object]) -> None:
-    assert _record_offset(record) is None
+    assert parse_citations([record]) == ()
 
 
 @pytest.mark.parametrize("offset", [0, 1, 42])
 def test_non_negative_integer_offsets_are_accepted(offset: int) -> None:
-    assert _record_offset({"offset": offset}) == offset
+    raw = citation_record(CitationRef(index=1, chunk=_chunk(), offset=0)).model_dump(mode="json")
+    raw["offset"] = offset
+    parsed = parse_citations([raw])
+    assert len(parsed) == 1
+    assert parsed[0].offset == offset
 
 
-async def test_replay_rejects_malformed_offsets_before_validation() -> None:
-    service = RAGService(
-        session_factory=cast(Any, object()),
-        embedding_provider=cast(Any, object()),
-        llm_provider=None,
-    )
-    record = citation_record(CitationRef(index=1, chunk=_chunk(), offset=0))
-
+def test_replay_rejects_malformed_offsets_before_validation() -> None:
+    raw = citation_record(CitationRef(index=1, chunk=_chunk(), offset=0)).model_dump(mode="json")
     for malformed in (True, -1, 1.5, None):
-        record["offset"] = malformed
-        assert await service._replay_citation_ref(uuid.uuid4(), record) is None
+        broken = dict(raw)
+        broken["offset"] = malformed
+        assert parse_citations([broken]) == ()
 
 
 async def test_repeated_markers_validate_once_per_stream(
@@ -488,10 +485,10 @@ async def test_model_text_cannot_inject_ids_or_urls() -> None:
 
     assert ref is not None
     event = citation_event(ref)
-    assert event["audio_id"] == str(source.audio_id)
-    assert event["chunk_id"] == str(source.chunk_id)
-    assert event["url"] == f"/biblioteca/{source.audio_id}?segment={source.segment_id}"
-    assert "evil.example" not in str(event["url"])
+    assert event.audio_id == source.audio_id
+    assert event.chunk_id == source.chunk_id
+    assert event.url == f"/biblioteca/{source.audio_id}?segment={source.segment_id}"
+    assert "evil.example" not in event.url
     assert "00000000-0000-0000-0000-000000000000" not in str(event)
 
 
@@ -550,31 +547,12 @@ async def test_validate_record_rehydrates_the_persisted_identity(
 async def test_malformed_citation_record_fails_closed(
     monkeypatch: pytest.MonkeyPatch, change: dict[str, object]
 ) -> None:
+    del monkeypatch
     chunk = _chunk()
-    record = citation_record(CitationRef(index=1, chunk=chunk, offset=4)) | change
-    called = False
+    raw = citation_record(CitationRef(index=1, chunk=chunk, offset=4)).model_dump(mode="json")
+    raw.update(change)
 
-    async def fake_rehydrate(
-        self: SearchService,
-        *,
-        user_id: uuid.UUID,
-        chunk_id: uuid.UUID,
-        audio_id: uuid.UUID,
-        query: str = "",
-        score_rrf: float = 0.0,
-    ) -> RetrievedChunk | None:
-        nonlocal called
-        del self, user_id, chunk_id, audio_id, query, score_rrf
-        called = True
-        return chunk
-
-    monkeypatch.setattr(SearchService, "rehydrate_chunk_ids", fake_rehydrate)
-
-    assert (
-        await validate_citation_record(cast(Any, object()), user_id=uuid.uuid4(), record=record)
-        is None
-    )
-    assert called is False
+    assert parse_citations([raw]) == ()
 
 
 async def test_validate_record_rejects_a_changed_source(

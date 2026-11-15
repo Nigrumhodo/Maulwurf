@@ -46,6 +46,21 @@ class TaskSourceOut(BaseModel):
     char_end: int
 
 
+class PendingTaskItem(BaseModel):
+    """Inbox row the chat tool may show the model. The same columns as the task projection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    titulo: str
+    tipo: str
+    status: str
+    date_status: str
+    due_date: date | None
+    due_at: datetime | None
+    source: str
+
+
 class TaskEvidenceOut(BaseModel):
     segment_id: str
     char_start: int

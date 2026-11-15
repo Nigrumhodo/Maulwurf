@@ -3,9 +3,10 @@
 import re
 import uuid
 from datetime import datetime
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.schemas.citations import Citation
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 TITLE_MAX_CHARS = 200
@@ -46,7 +47,7 @@ class MessageOut(BaseModel):
     content: str
     status: str
     client_message_id: str | None
-    citas: list[dict[str, Any]]
+    citas: list[Citation]
     created_at: datetime
 
 

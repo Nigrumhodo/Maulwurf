@@ -730,7 +730,8 @@ async def test_commit_failure_after_receive_compensates(
     async def flaky(self: AsyncSession) -> None:
         nonlocal commits
         commits += 1
-        if commits == 2:  # the claim commits first; the identity write is the failing one
+        # 1: the claim. 2: closing the read before the hop. 3: the identity write.
+        if commits == 3:
             raise RuntimeError("bd caída")
         await real_commit(self)
 

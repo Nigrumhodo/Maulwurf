@@ -27,10 +27,10 @@ from app.services.task_event_sync import (
     USER_ID_PROPERTY,
     CalendarGateway,
     SyncOutcome,
+    SyncTask,
     TaskEventBlocked,
     TaskEventSync,
     TaskEventTransientError,
-    TaskSnapshot,
     build_event_body,
     deterministic_event_id,
     event_content_matches,
@@ -40,7 +40,7 @@ from app.services.task_event_sync import (
 GOOGLE_ID = re.compile(r"^[a-v0-9]{5,1024}$")
 
 
-def _task(**overrides: Any) -> TaskSnapshot:
+def _task(**overrides: Any) -> SyncTask:
     start = datetime(2026, 11, 2, 14, 0, tzinfo=UTC)
     values: dict[str, Any] = {
         "task_id": uuid.uuid4(),
@@ -59,11 +59,11 @@ def _task(**overrides: Any) -> TaskSnapshot:
         "event_end_date_exclusive": None,
     }
     values.update(overrides)
-    return TaskSnapshot(**values)
+    return SyncTask(**values)
 
 
 class Store:
-    def __init__(self, task: TaskSnapshot | None) -> None:
+    def __init__(self, task: SyncTask | None) -> None:
         self.task = task
         self.synced: list[tuple[uuid.UUID, int, str, str | None]] = []
         self.etags: list[tuple[uuid.UUID, int, str | None]] = []
@@ -71,7 +71,7 @@ class Store:
         self.blocked: list[tuple[uuid.UUID, int]] = []
         self.accept_updates = True
 
-    async def load(self, task_id: uuid.UUID) -> TaskSnapshot | None:
+    async def load(self, task_id: uuid.UUID) -> SyncTask | None:
         if self.task is None or self.task.task_id != task_id:
             return None
         return self.task
@@ -116,11 +116,11 @@ class Store:
 class SequencedStore(Store):
     """Store that answers the next loads from a script (to reproduce interleavings)."""
 
-    def __init__(self, task: TaskSnapshot | None, sequence: list[TaskSnapshot]) -> None:
+    def __init__(self, task: SyncTask | None, sequence: list[SyncTask]) -> None:
         super().__init__(task)
         self.sequence = list(sequence)
 
-    async def load(self, task_id: uuid.UUID) -> TaskSnapshot | None:
+    async def load(self, task_id: uuid.UUID) -> SyncTask | None:
         if self.sequence:
             return self.sequence.pop(0)
         return await super().load(task_id)
@@ -129,7 +129,7 @@ class SequencedStore(Store):
 class RacingStore(Store):
     """The version CAS loses because a newer row landed while the insert was in flight."""
 
-    def __init__(self, task: TaskSnapshot, newer: TaskSnapshot) -> None:
+    def __init__(self, task: SyncTask, newer: SyncTask) -> None:
         super().__init__(task)
         self.newer = newer
         self.raced = False
@@ -298,8 +298,8 @@ class Sleeper:
         self.delays.append(delay)
 
 
-def _factory(gateway: Gateway) -> Callable[[TaskSnapshot], Awaitable[CalendarGateway]]:
-    async def factory(_snapshot: TaskSnapshot) -> CalendarGateway:
+def _factory(gateway: Gateway) -> Callable[[SyncTask], Awaitable[CalendarGateway]]:
+    async def factory(_snapshot: SyncTask) -> CalendarGateway:
         return gateway
 
     return factory
@@ -311,7 +311,7 @@ def _engine(store: Store, gateway: Gateway, **overrides: Any) -> TaskEventSync:
     )
 
 
-def _existing(task: TaskSnapshot, *, task_id: uuid.UUID | None = None) -> dict[str, Any]:
+def _existing(task: SyncTask, *, task_id: uuid.UUID | None = None) -> dict[str, Any]:
     return {
         "id": deterministic_event_id(task.task_id),
         "summary": "previous body",
@@ -324,7 +324,7 @@ def _existing(task: TaskSnapshot, *, task_id: uuid.UUID | None = None) -> dict[s
     }
 
 
-def _key(task: TaskSnapshot) -> tuple[str, str]:
+def _key(task: SyncTask) -> tuple[str, str]:
     assert task.calendar_id is not None
     return (task.calendar_id, deterministic_event_id(task.task_id))
 
@@ -738,7 +738,7 @@ async def test_a_disconnected_integration_blocks_the_task() -> None:
     task = _task()
     store = Store(task)
 
-    async def unavailable(_snapshot: TaskSnapshot) -> CalendarGateway:
+    async def unavailable(_snapshot: SyncTask) -> CalendarGateway:
         raise TaskEventBlocked("google_not_connected")
 
     engine = TaskEventSync(store, unavailable, sleeper=Sleeper())
@@ -794,7 +794,7 @@ async def test_invalid_grant_marks_the_task_blocked() -> None:
     assert store.failed == []
 
 
-def _revision(first: TaskSnapshot) -> TaskSnapshot:
+def _revision(first: SyncTask) -> SyncTask:
     start = datetime(2026, 11, 2, 16, 0, tzinfo=UTC)
     return _task(
         task_id=first.task_id,

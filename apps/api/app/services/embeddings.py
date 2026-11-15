@@ -29,7 +29,6 @@ return the vectors out of order, and misassigning them would corrupt the index.
 import asyncio
 import logging
 import math
-import secrets
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, Literal, Protocol
 
@@ -37,6 +36,9 @@ import httpx
 
 from app.core.config import Settings
 from app.core.config import settings as live_settings
+from app.services.http_retry import backoff as _backoff
+from app.services.http_retry import retry_after_seconds as _retry_after_seconds
+from app.services.http_retry import unit_interval as _unit_interval
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +46,6 @@ EMBEDDINGS_PATH = "embeddings"
 EmbeddingInputType = Literal["query", "passage"]
 # Backoff base with a 2^(attempt-1) factor plus multiplicative jitter. `Retry-After` is capped
 # too: a huge header must not block the job indefinitely.
-_BACKOFF_BASE_SECONDS = 0.5
-_MAX_RETRY_AFTER_SECONDS = 60.0
 _RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 # 400 is handled separately: it can be an overlong batch (model limit) or a malformed request,
 # and that distinction changes the error code the job publishes.
@@ -113,29 +113,6 @@ async def embed_query(provider: EmbeddingProvider, text: str) -> list[float]:
             details={"expected": 1, "observed": len(vectors)},
         )
     return vectors[0]
-
-
-def _unit_interval() -> float:
-    return secrets.randbelow(1_000_000) / 1_000_000
-
-
-def _backoff(attempt: int, jitter: Callable[[], float]) -> float:
-    base = _BACKOFF_BASE_SECONDS * float(1 << (attempt - 1))
-    drawn = min(max(jitter(), 0.0), 1.0)
-    return base + (drawn * base)
-
-
-def _retry_after_seconds(response: httpx.Response) -> float | None:
-    raw = response.headers.get("Retry-After")
-    if raw is None:
-        return None
-    try:
-        seconds = float(raw.strip())
-    except ValueError:
-        return None  # HTTP date or non-numeric value: fall back to our own backoff.
-    if seconds < 0:
-        return None
-    return min(seconds, _MAX_RETRY_AFTER_SECONDS)
 
 
 def is_configured(settings: Settings = live_settings) -> bool:

@@ -26,24 +26,23 @@ Design decisions:
 
 import asyncio
 import logging
-import secrets
 import time
 import urllib.parse
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import GoogleCredential
+from app.services.http_retry import backoff as _backoff
+from app.services.http_retry import retry_after_seconds as _retry_after_seconds
+from app.services.http_retry import unit_interval as _unit_interval
 
 logger = logging.getLogger(__name__)
 
 GOOGLE_CALENDAR_API_URL = "https://www.googleapis.com/calendar/v3"
-_BACKOFF_BASE_SECONDS = 0.5
 # Bounded calendar-list pagination: the Calendar API returns at most 250 entries per page
 # and a user has no legitimate reason to exceed a few pages. The bound keeps a corrupt or
 # hostile `nextPageToken` from turning one connect into an unbounded loop (guardrail 10).
@@ -119,41 +118,6 @@ class GoogleCalendarInvalidRequest(GoogleCalendarError):
 
 class GoogleCalendarResponseError(GoogleCalendarError):
     code = "google_calendar_response_error"
-
-
-def _unit_interval() -> float:
-    return secrets.randbelow(1_000_000) / 1_000_000
-
-
-def _backoff(attempt: int, jitter: Callable[[], float]) -> float:
-    base = _BACKOFF_BASE_SECONDS * float(1 << (attempt - 1))
-    drawn = min(max(jitter(), 0.0), 1.0)
-    return base + (drawn * base)
-
-
-def _retry_after_seconds(response: httpx.Response, *, cap: float) -> float | None:
-    raw = response.headers.get("Retry-After")
-    if raw is None:
-        return None
-    value = raw.strip()
-    if not value:
-        return None
-    try:
-        seconds = float(value)
-    except ValueError:
-        try:
-            when = parsedate_to_datetime(value)
-        except (TypeError, ValueError):
-            return None  # Malformed header: fall back to our own backoff.
-        if when is None:
-            return None
-        if when.tzinfo is None:
-            when = when.replace(tzinfo=UTC)
-        seconds = (when - datetime.now(UTC)).total_seconds()
-        seconds = max(0.0, seconds)
-    if seconds < 0:
-        return None
-    return min(seconds, cap)
 
 
 def _json_object(response: httpx.Response) -> dict[str, Any]:

@@ -105,26 +105,28 @@ async def test_full_flow_creates_user_session_and_encrypts(
 ) -> None:
     state, cookie = await _start(client)
 
-    async def fake_exchange(code: str, code_verifier: str) -> dict[str, Any]:
+    async def fake_exchange(code: str, code_verifier: str) -> oauth_google.GoogleTokenResponse:
         assert code == "test-code"
         assert code_verifier  # PKCE: el verifier firma el intercambio
-        return {
-            "access_token": "fake-access",
-            "refresh_token": "fake-refresh",
-            "id_token": "fake-id-token",
-            "expires_in": 3600,
-        }
+        return oauth_google.GoogleTokenResponse(
+            access_token="fake-access",
+            refresh_token="fake-refresh",
+            id_token="fake-id-token",
+            expires_in=3600,
+        )
 
-    async def fake_verify_id_token(id_token: str, expected_nonce: str) -> dict[str, Any]:
+    async def fake_verify_id_token(
+        id_token: str, expected_nonce: str
+    ) -> oauth_google.GoogleIdClaims:
         assert id_token == "fake-id-token"
         assert expected_nonce  # el nonce viaja firmado desde /start
-        return {
-            "sub": "google-sub-1",
-            "email": "estudiante@example.test",
-            "email_verified": True,
-            "name": "Estudiante",
-            "nonce": expected_nonce,
-        }
+        return oauth_google.GoogleIdClaims(
+            sub="google-sub-1",
+            email="estudiante@example.test",
+            email_verified=True,
+            name="Estudiante",
+            nonce=expected_nonce,
+        )
 
     monkeypatch.setattr(oauth_google, "exchange_code", fake_exchange)
     monkeypatch.setattr(oauth_google, "verify_id_token", fake_verify_id_token)
@@ -164,7 +166,7 @@ def _fake_google(
     refresh_token: str | None,
     email_verified: object = True,
 ) -> None:
-    async def fake_exchange(code: str, code_verifier: str) -> dict[str, Any]:
+    async def fake_exchange(code: str, code_verifier: str) -> oauth_google.GoogleTokenResponse:
         tokens: dict[str, Any] = {
             "access_token": f"access-{code}",
             "id_token": "fake-id-token",
@@ -172,15 +174,20 @@ def _fake_google(
         }
         if refresh_token is not None:
             tokens["refresh_token"] = refresh_token
-        return tokens
+        return oauth_google.GoogleTokenResponse.model_validate(tokens)
 
-    async def fake_verify_id_token(id_token: str, expected_nonce: str) -> dict[str, Any]:
-        return {
-            "sub": sub,
-            "email": "student@example.test",
-            "email_verified": email_verified,
-            "nonce": expected_nonce,
-        }
+    async def fake_verify_id_token(
+        id_token: str, expected_nonce: str
+    ) -> oauth_google.GoogleIdClaims:
+        if email_verified is not None and not isinstance(email_verified, bool):
+            raise oauth_google.OAuthError("email_unverified")
+        verified = email_verified if isinstance(email_verified, bool) else None
+        return oauth_google.GoogleIdClaims(
+            sub=sub,
+            email="student@example.test",
+            email_verified=verified,
+            nonce=expected_nonce,
+        )
 
     monkeypatch.setattr(oauth_google, "exchange_code", fake_exchange)
     monkeypatch.setattr(oauth_google, "verify_id_token", fake_verify_id_token)
