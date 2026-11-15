@@ -1,5 +1,6 @@
 import { apiFetch } from "./api";
 import type { ApiHttpError } from "./api";
+import { isRecord, readJson } from "./json";
 
 // D1.6 — Tipos y validación del formulario de materias (U-S1-DA-02). El contrato
 // de la API es A1.6 / M2a (§3.4): `{id, name, color, teacher, class_count}`.
@@ -11,11 +12,38 @@ export interface Subject {
   class_count: number;
 }
 
+function isSubject(value: unknown): value is Subject {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.color === "string" &&
+    (value.teacher === null || typeof value.teacher === "string") &&
+    typeof value.class_count === "number"
+  );
+}
+
+async function readSubject(res: Response): Promise<Subject> {
+  const payload = await readJson(res);
+  if (!isSubject(payload)) {
+    throw new Error("La materia no coincide con el contrato.");
+  }
+  return payload;
+}
+
 /** Lista las materias del tenant; reutilizado por `MateriasPage` (D1.6) y `UploadForm` (D2.1). */
 export async function fetchSubjects(): Promise<Subject[]> {
   const res = await apiFetch("/subjects");
-  const data = (await res.json()) as { items: Subject[] };
-  return data.items;
+  const payload = await readJson(res);
+  if (!isRecord(payload) || !Array.isArray(payload.items)) {
+    throw new Error("El listado de materias no coincide con el contrato.");
+  }
+  return payload.items.map((item) => {
+    if (!isSubject(item)) {
+      throw new Error("Una materia del listado no coincide con el contrato.");
+    }
+    return item;
+  });
 }
 
 /** Valores que edita el formulario; `teacher` vacío se envía como `null`. */
@@ -32,13 +60,25 @@ const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
 export type SubjectField = "name" | "color" | "teacher";
 
-/** Validación de campos requeridos (nombre) y de formato (color). */
+export function subjectPayload(draft: SubjectDraft): {
+  name: string;
+  color: string;
+  teacher: string | null;
+} {
+  return {
+    name: draft.name,
+    color: draft.color,
+    teacher: draft.teacher.trim() === "" ? null : draft.teacher,
+  };
+}
+
+/** Validación de campos requeridos (nombre) y de formato (color `#rrggbb`). */
 export function validateSubject(draft: SubjectDraft): Partial<Record<SubjectField, string>> {
   const errors: Partial<Record<SubjectField, string>> = {};
   if (draft.name.trim().length === 0) {
     errors.name = "la materia necesita un nombre";
   }
-  if (draft.color !== "" && !COLOR_PATTERN.test(draft.color)) {
+  if (!COLOR_PATTERN.test(draft.color)) {
     errors.color = "usa un color #rrggbb (ej. #6366f1)";
   }
   return errors;
@@ -55,14 +95,32 @@ export function subjectFormError(error: ApiHttpError): SubjectFormError {
     return { field: "name", message: error.message };
   }
   if (error.code === "validation_failed") {
-    const fields = (error.details.fields ?? {}) as Record<string, string>;
-    const entry = Object.entries(fields)[0];
+    const entry = error.firstFieldMessage();
     if (entry) {
-      const [field, message] = entry;
       const known: SubjectField | "form" =
-        field === "name" || field === "color" || field === "teacher" ? field : "form";
-      return { field: known, message };
+        entry.field === "name" || entry.field === "color" || entry.field === "teacher"
+          ? entry.field
+          : "form";
+      return { field: known, message: entry.message };
     }
   }
   return { field: "form", message: error.message };
+}
+
+export async function createSubject(draft: SubjectDraft): Promise<Subject> {
+  const res = await apiFetch("/subjects", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(subjectPayload(draft)),
+  });
+  return readSubject(res);
+}
+
+export async function updateSubject(subjectId: string, draft: SubjectDraft): Promise<Subject> {
+  const res = await apiFetch(`/subjects/${subjectId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(subjectPayload(draft)),
+  });
+  return readSubject(res);
 }

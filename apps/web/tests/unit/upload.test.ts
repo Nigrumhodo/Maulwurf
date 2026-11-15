@@ -9,6 +9,7 @@ import type { IngestionCapabilities } from "@/lib/capabilities";
 import {
   buildAudioCreate,
   capabilitiesUsable,
+  createAudio,
   languageOptions,
   publishedLanguageCodes,
   uploadFormError,
@@ -27,6 +28,8 @@ const CAPABILITIES: IngestionCapabilities = {
   languages: ["es", "en"],
   language_policy: "explicit_select_required_no_multi",
   ttl: { upload_start_minutes: 10, receive_minutes: 30, asr_minutes: 60 },
+  ttl_source_report: "docs/eval/ttl-benchmark.md",
+  ttl_source_version: "2026-11-01",
   asr: { provider: "nvidia-riva", model: "whisper-large-v3", timestamp_precision: null },
   active_slots: 1,
   required_stages: ["index"],
@@ -65,7 +68,7 @@ describe("capabilitiesUsable", () => {
   it("exige límites validados y versión de aviso", () => {
     expect(capabilitiesUsable(null)).toBe(false);
     expect(capabilitiesUsable({ ...CAPABILITIES, limits_validated: false })).toBe(false);
-    expect(capabilitiesUsable({ ...CAPABILITIES, privacy_notice_version: null })).toBe(false);
+    expect(capabilitiesUsable({ ...CAPABILITIES, privacy_notice_version: "" })).toBe(false);
     expect(capabilitiesUsable(CAPABILITIES)).toBe(true);
   });
 });
@@ -146,7 +149,13 @@ describe("buildAudioCreate", () => {
       privacy_notice_version: "2026-09-v1",
       cloud_processing_accepted: true,
       third_party_voice_acknowledged: true,
+      variant_confirmation_token: null,
     });
+  });
+
+  it("incluye el token de variante cuando hay que confirmar", () => {
+    const body = buildAudioCreate(DRAFT, "2026-09-v1", "variant-tok");
+    expect(body.variant_confirmation_token).toBe("variant-tok");
   });
 
   it("recorta título y profesor no vacíos", () => {
@@ -195,6 +204,38 @@ describe("uploadFormError", () => {
     expect(mapped.message).toContain("IANA");
   });
 
+  it("duplicate_variant conserva el token de un solo uso", () => {
+    const mapped = uploadFormError(
+      new ApiHttpError(409, {
+        code: "duplicate_variant",
+        message: "Existe una clase con el mismo contenido.",
+        details: {
+          existing_audio_id: "audio-1",
+          variant_confirmation_token: "tok",
+          expires_at: "2026-11-14T00:00:00Z",
+        },
+      }),
+    );
+    expect(mapped.field).toBe("variant");
+    expect(mapped.variant).toEqual({
+      existing_audio_id: "audio-1",
+      variant_confirmation_token: "tok",
+      expires_at: "2026-11-14T00:00:00Z",
+    });
+  });
+
+  it("duplicate_variant incompleto no fabrica un token", () => {
+    const mapped = uploadFormError(
+      new ApiHttpError(409, {
+        code: "duplicate_variant",
+        message: "confirma",
+        details: { existing_audio_id: "audio-1" },
+      }),
+    );
+    expect(mapped.field).toBe("form");
+    expect(mapped.variant).toBeUndefined();
+  });
+
   it("429 y 503 añaden un consejo de reintento", () => {
     expect(
       uploadFormError(new ApiHttpError(429, { code: "rate_limited", message: "Cuota superada." })).message,
@@ -202,6 +243,34 @@ describe("uploadFormError", () => {
     expect(
       uploadFormError(new ApiHttpError(503, { code: "capacity_unavailable", message: "Sin slot." })).message,
     ).toContain("reintenta");
+  });
+});
+
+describe("createAudio", () => {
+  it("envía POST /audios y lee la reserva", async () => {
+    const created = {
+      audio_id: "a",
+      attempt_id: "t",
+      upload_url: "/audios/a/content?attempt_id=t",
+      upload_expires_at: "2026-11-14T00:10:00Z",
+      outcome: "new",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(created), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(createAudio(buildAudioCreate(DRAFT, "2026-09-v1"))).resolves.toEqual(created);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/audios");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      subject_id: "s-1",
+      variant_confirmation_token: null,
+    });
   });
 });
 

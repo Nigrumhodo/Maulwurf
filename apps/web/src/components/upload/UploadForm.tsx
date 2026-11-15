@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/Button";
@@ -7,7 +7,8 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Input } from "@/components/ui/Input";
 import { LanguageSelect } from "@/components/ui/LanguageSelect";
 import { TimezoneSelect } from "@/components/ui/TimezoneSelect";
-import { ApiHttpError, apiFetch } from "@/lib/api";
+import { ApiHttpError } from "@/lib/api";
+import type { DuplicateVariantDetails } from "@/lib/api";
 import { fetchCapabilities } from "@/lib/capabilities";
 import type { IngestionCapabilities } from "@/lib/capabilities";
 import { fetchSubjects } from "@/lib/subjects";
@@ -15,6 +16,7 @@ import type { Subject } from "@/lib/subjects";
 import {
   buildAudioCreate,
   capabilitiesUsable,
+  createAudio,
   languageOptions,
   publishedLanguageCodes,
   uploadFormError,
@@ -57,8 +59,11 @@ export function UploadForm() {
   const [busy, setBusy] = useState(false);
   const [reservation, setReservation] = useState<AudioCreated | null>(null);
   const [languageOverride, setLanguageOverride] = useState<string[] | null>(null);
+  const [pendingVariant, setPendingVariant] = useState<DuplicateVariantDetails | null>(null);
+  const loadGeneration = useRef(0);
 
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     setLoading(true);
     setLoadError(null);
     try {
@@ -66,21 +71,26 @@ export function UploadForm() {
         fetchSubjects(),
         fetchCapabilities(),
       ]);
+      if (generation !== loadGeneration.current) return;
       setSubjects(nextSubjects);
       setCapabilities(nextCapabilities);
     } catch (error) {
+      if (generation !== loadGeneration.current) return;
       setLoadError(
-        error instanceof ApiHttpError
+        error instanceof ApiHttpError || (error instanceof Error && !(error instanceof TypeError))
           ? error.message
           : "no se pudieron cargar los datos de subida; revisa tu conexión.",
       );
     } finally {
-      setLoading(false);
+      if (generation === loadGeneration.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     void load();
+    return () => {
+      loadGeneration.current += 1;
+    };
   }, [load]);
 
   const usable = capabilitiesUsable(capabilities);
@@ -103,6 +113,7 @@ export function UploadForm() {
     setErrors({ fields: {} });
     setReservation(null);
     setLanguageOverride(null);
+    setPendingVariant(null);
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -117,15 +128,20 @@ export function UploadForm() {
 
     setBusy(true);
     try {
-      const res = await apiFetch("/audios", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(buildAudioCreate(draft, noticeVersion)),
-      });
-      setReservation((await res.json()) as AudioCreated);
+      const created = await createAudio(
+        buildAudioCreate(draft, noticeVersion, pendingVariant?.variant_confirmation_token ?? null),
+      );
+      setPendingVariant(null);
+      setReservation(created);
     } catch (error) {
       if (!(error instanceof ApiHttpError)) {
-        setErrors({ fields: {}, form: "no se pudo reservar la subida; revisa tu conexión." });
+        setErrors({
+          fields: {},
+          form:
+            error instanceof Error && !(error instanceof TypeError)
+              ? error.message
+              : "no se pudo reservar la subida; revisa tu conexión.",
+        });
         return;
       }
       const mapped = uploadFormError(error);
@@ -138,6 +154,9 @@ export function UploadForm() {
       } else if (mapped.field === "language") {
         setErrors({ fields: { languageCode: mapped.message } });
         if (mapped.allowed && mapped.allowed.length > 0) setLanguageOverride(mapped.allowed);
+      } else if (mapped.field === "variant" && mapped.variant) {
+        setPendingVariant(mapped.variant);
+        setErrors({ fields: {}, form: mapped.message });
       } else {
         setErrors({ fields: {}, form: mapped.message });
       }

@@ -2,9 +2,8 @@
 //
 // D1.4/D1.5 — Regresión del interceptor 401 en el navegador (U-S1-DA-01).
 //
-// El modo invitado no es una sesión: no abre rutas del API, y un 401 vuelve a
-// `/login`. Se monta el `AuthProvider` real sobre `MemoryRouter` para verificar
-// la navegación que el usuario observaría.
+// Sin sesión, `RequireAuth` vuelve a `/login`. Una marca vieja en sessionStorage
+// no cuenta como sesión. Se monta el `AuthProvider` real sobre `MemoryRouter`.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
@@ -80,7 +79,7 @@ afterEach(() => {
 });
 
 describe("interceptor 401 en el navegador", () => {
-  it("no trata el modo invitado como sesión", async () => {
+  it("una marca vieja de invitado no abre la ruta", async () => {
     window.sessionStorage.setItem("maulwurf-guest", "1");
     vi.stubGlobal("fetch", vi.fn(UNAUTHORIZED));
 
@@ -89,6 +88,33 @@ describe("interceptor 401 en el navegador", () => {
     await waitFor(() => expect(screen.getByTestId("pathname").textContent).toBe("/login"));
     expect(screen.queryByRole("button", { name: "llamar" })).toBeNull();
     expect(screen.getByText("login")).toBeDefined();
+  });
+
+  it("un 500 no se trata como sesión ausente", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("err", { status: 503 })));
+
+    renderApp("/gestion/materias");
+
+    expect(await screen.findByText(/no se pudo comprobar la sesión/i)).toBeDefined();
+    expect(screen.getByTestId("pathname").textContent).toBe("/gestion/materias");
+    expect(screen.queryByText("login")).toBeNull();
+  });
+
+  it("un perfil ilegible termina la carga", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("no-json", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    renderApp("/gestion/materias");
+
+    expect(await screen.findByText(/no se pudo comprobar la sesión/i)).toBeDefined();
+    expect(screen.queryByText("cargando")).toBeNull();
   });
 
   it("con sesión caducada sí redirige a /login", async () => {

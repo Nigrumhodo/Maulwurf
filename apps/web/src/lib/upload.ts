@@ -1,6 +1,8 @@
-import { LANGUAGES } from "./languages";
-import type { ApiHttpError } from "./api";
+import { apiFetch } from "./api";
+import type { ApiHttpError, DuplicateVariantDetails } from "./api";
 import type { IngestionCapabilities } from "./capabilities";
+import { isRecord, readJson } from "./json";
+import { LANGUAGES } from "./languages";
 
 // D2.1 — Lógica pura del formulario de subida (U-S2-DA-01): validación, construcción
 // del body de `POST /audios` y mapeo de errores del contrato a la UI. Se mantiene sin
@@ -52,7 +54,7 @@ export function capabilitiesUsable(capabilities: IngestionCapabilities | null): 
   return (
     capabilities !== null &&
     capabilities.limits_validated &&
-    capabilities.privacy_notice_version !== null
+    capabilities.privacy_notice_version.trim() !== ""
   );
 }
 
@@ -93,7 +95,7 @@ export function validateUpload(
   return { fields };
 }
 
-/** Forma exacta de `AudioCreate` (`apps/api/app/routers/audios.py`). */
+/** Forma de `AudioCreate` (`apps/api/app/routers/audios.py`), incluido el token de variante. */
 export interface AudioCreateBody {
   subject_id: string;
   class_date: string;
@@ -104,10 +106,15 @@ export interface AudioCreateBody {
   privacy_notice_version: string;
   cloud_processing_accepted: boolean;
   third_party_voice_acknowledged: boolean;
+  variant_confirmation_token: string | null;
 }
 
 /** Construye el body que espera `POST /audios`: vacíos opcionales viajan como `null`. */
-export function buildAudioCreate(draft: UploadDraft, privacyNoticeVersion: string): AudioCreateBody {
+export function buildAudioCreate(
+  draft: UploadDraft,
+  privacyNoticeVersion: string,
+  variantConfirmationToken: string | null = null,
+): AudioCreateBody {
   const title = draft.title.trim();
   const teacher = draft.teacher.trim();
   return {
@@ -120,6 +127,7 @@ export function buildAudioCreate(draft: UploadDraft, privacyNoticeVersion: strin
     privacy_notice_version: privacyNoticeVersion,
     cloud_processing_accepted: draft.cloudAccepted,
     third_party_voice_acknowledged: draft.voiceAcknowledged,
+    variant_confirmation_token: variantConfirmationToken,
   };
 }
 
@@ -132,13 +140,40 @@ export interface AudioCreated {
   outcome: string;
 }
 
+function isAudioCreated(value: unknown): value is AudioCreated {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.audio_id === "string" &&
+    typeof value.attempt_id === "string" &&
+    typeof value.upload_url === "string" &&
+    typeof value.upload_expires_at === "string" &&
+    typeof value.outcome === "string"
+  );
+}
+
+/** Reserva la clase. El binario sigue siendo un `PUT` aparte. */
+export async function createAudio(body: AudioCreateBody): Promise<AudioCreated> {
+  const res = await apiFetch("/audios", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await readJson(res);
+  if (!isAudioCreated(payload)) {
+    throw new Error("La reserva de audio no coincide con el contrato.");
+  }
+  return payload;
+}
+
 export interface UploadFormError {
-  field: "form" | "consent" | "language";
+  field: "form" | "consent" | "language" | "variant";
   message: string;
   /** `consent_required`: el servidor rechazó el aviso; hay que volver a aceptar. */
   resetConsent?: boolean;
   /** `language_not_allowed`: idiomas que el servidor sí acepta ahora. */
   allowed?: string[];
+  /** `duplicate_variant`: token que el siguiente `POST /audios` debe devolver. */
+  variant?: DuplicateVariantDetails;
 }
 
 /** Traduce el envelope de error de `POST /audios` a un error de la UI. */
@@ -146,16 +181,20 @@ export function uploadFormError(error: ApiHttpError): UploadFormError {
   if (error.code === "consent_required") {
     return { field: "consent", message: error.message, resetConsent: true };
   }
+  if (error.code === "duplicate_variant") {
+    const variant = error.duplicateVariant();
+    if (variant) return { field: "variant", message: error.message, variant };
+  }
   if (error.code === "language_not_allowed") {
-    const allowed = Array.isArray(error.details.allowed)
-      ? (error.details.allowed as string[])
-      : [];
-    return { field: "language", message: error.message, allowed };
+    return {
+      field: "language",
+      message: error.message,
+      allowed: error.stringList("allowed") ?? [],
+    };
   }
   if (error.code === "validation_failed") {
-    const fields = (error.details.fields ?? {}) as Record<string, string>;
-    const entry = Object.entries(fields)[0];
-    if (entry) return { field: "form", message: entry[1] };
+    const entry = error.firstFieldMessage();
+    if (entry) return { field: "form", message: entry.message };
   }
   if (error.status === 429) {
     return {

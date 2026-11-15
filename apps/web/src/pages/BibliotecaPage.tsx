@@ -1,76 +1,67 @@
-import { Button } from "@/components/ui/Button";
+import { Link } from "react-router-dom";
 import { Card } from "@/components/ui/Card";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { fetchAudios } from "@/lib/audios";
+import type { AudioListItemOut } from "@/lib/audios";
+import { useServerList } from "@/lib/useServerList";
 
-// D1.7 — Borrador estático de la biblioteca (sin wiring) para validar UX temprano
-// y alimentar D2.4: listado por materia con estado agregado + estados por etapa,
-// aviso permanente «audio no conservado» y botones diferenciados («volver a
-// subir» ≠ «reintentar análisis/índice»). Los datos son de ejemplo.
-interface MockAudio {
-  id: string;
-  subject: string;
-  title: string;
-  aggregate: string;
-  attempt: string;
-  index: string;
-  analyze: string;
-  hasTranscript: boolean;
+function stageLabel(audio: AudioListItemOut, stage: string): string {
+  return audio.stages[stage] ?? "sin etapa";
 }
 
-const MOCK: MockAudio[] = [
-  {
-    id: "a1",
-    subject: "cálculo i",
-    title: "clase 03 — integrales",
-    aggregate: "ready",
-    attempt: "succeeded",
-    index: "succeeded",
-    analyze: "not_requested",
-    hasTranscript: true,
-  },
-  {
-    id: "a2",
-    subject: "física ii",
-    title: "clase 07 — termodinámica",
-    aggregate: "processing",
-    attempt: "transcribing",
-    index: "running",
-    analyze: "not_requested",
-    hasTranscript: true,
-  },
-  {
-    id: "a3",
-    subject: "química",
-    title: "clase 02 — enlaces",
-    aggregate: "partial",
-    attempt: "succeeded",
-    index: "succeeded",
-    analyze: "failed",
-    hasTranscript: true,
-  },
-  {
-    id: "a4",
-    subject: "historia",
-    title: "clase 01 — revolución industrial",
-    aggregate: "failed",
-    attempt: "requires_reupload",
-    index: "failed",
-    analyze: "not_requested",
-    hasTranscript: false,
-  },
-  {
-    id: "a5",
-    subject: "álgebra",
-    title: "clase 05 — espacios vectoriales",
-    aggregate: "processing",
-    attempt: "transcript_committed_cleanup_pending",
-    index: "not_requested",
-    analyze: "not_requested",
-    hasTranscript: true,
-  },
-];
+function AudioRow({ audio }: { audio: AudioListItemOut }) {
+  const title = audio.title ?? "clase sin título";
+  const fragments =
+    audio.attempt?.fragments_total != null
+      ? `${audio.attempt.fragments_done ?? 0}/${audio.attempt.fragments_total} fragmentos`
+      : null;
 
+  return (
+    <li className="lowercase flex flex-col gap-2 border-2 border-pure-black px-3 py-2">
+      <div className="flex items-center gap-3">
+        <span
+          aria-hidden="true"
+          className="inline-block h-4 w-4 shrink-0 border border-pure-black"
+          style={{ backgroundColor: audio.subject.color }}
+        />
+        <span className="flex-1 text-lavender">
+          {audio.subject.name} · {title}
+        </span>
+        <StatusBadge status={audio.aggregate_status} />
+      </div>
+      <p className="text-lavender/60">
+        {audio.class_date} · {audio.language_code}
+        {audio.duration_seconds !== null ? ` · ${audio.duration_seconds} s` : ""}
+      </p>
+      <div className="flex flex-wrap items-center gap-2 text-lavender/60">
+        <span>audio:</span>
+        <StatusBadge status={audio.attempt?.status ?? "sin intento"} />
+        <span>limpieza:</span>
+        <StatusBadge status={audio.attempt?.cleanup_status ?? "sin intento"} />
+        <span>index:</span>
+        <StatusBadge status={stageLabel(audio, "index")} />
+        <span>análisis:</span>
+        <StatusBadge status={stageLabel(audio, "analyze")} />
+      </div>
+      {audio.attempt !== null && (
+        <p className="text-lavender/60">
+          {audio.attempt.received_bytes} B{fragments !== null ? ` · ${fragments}` : ""}
+        </p>
+      )}
+      {audio.attempt?.status === "requires_reupload" && (
+        <Link to="/gestion/subir" className="text-mint hover:text-lavender">
+          volver a subir
+        </Link>
+      )}
+    </li>
+  );
+}
+
+// Library list from `GET /audios` (`AudioListItemOut`): subject, attempt, stages, aggregate.
 export function BibliotecaPage() {
+  const { items, loading, error } = useServerList(fetchAudios);
+
   return (
     <div className="flex flex-col gap-6">
       <h1 className="lowercase text-2xl text-mint">biblioteca</h1>
@@ -80,55 +71,31 @@ export function BibliotecaPage() {
           &gt; audio no conservado · el audio se borra tras transcribir; solo se guarda el texto.
         </p>
 
-        <p className="mt-3 lowercase text-lavender/50">
-          &gt; maqueta estática (d1.7) · datos de ejemplo
-        </p>
-
-        <ul className="mt-3 flex flex-col gap-2">
-          {MOCK.map((audio) => (
-            <li key={audio.id} className="lowercase flex flex-col gap-2 border-2 border-pure-black px-3 py-2">
-              <div className="flex items-center gap-3">
-                <span className="flex-1 text-lavender">
-                  {audio.subject} · {audio.title}
-                </span>
-                <StatusBadge status={audio.aggregate} />
-              </div>
-              <div className="flex items-center gap-2 text-lavender/60">
-                <span>audio:</span>
-                <StatusBadge status={audio.attempt} />
-                <span>index:</span>
-                <StatusBadge status={audio.index} />
-                <span>análisis:</span>
-                <StatusBadge status={audio.analyze} />
-              </div>
-              <div className="flex items-center gap-2">
-                {audio.attempt === "transcript_committed_cleanup_pending" ? (
-                  <>
-                    <Button size="sm" variant="secondary" disabled>
-                      abrir transcripción
-                    </Button>
-                    <span className="text-lavender/60">
-                      limpieza pendiente · indexación bloqueada hasta verificar el borrado
-                    </span>
-                  </>
-                ) : audio.hasTranscript ? (
-                  <>
-                    <Button size="sm" variant="secondary" disabled>
-                      abrir transcripción
-                    </Button>
-                    <Button size="sm" variant="secondary" disabled>
-                      reintentar análisis/índice
-                    </Button>
-                  </>
-                ) : (
-                  <Button size="sm" variant="secondary" disabled>
-                    volver a subir
-                  </Button>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
+        {loading ? (
+          <p className="mt-3 lowercase text-lavender/60">&gt; cargando…</p>
+        ) : error !== null ? (
+          <p role="alert" className="mt-3 lowercase text-mint">
+            &gt; {error}
+          </p>
+        ) : items.length === 0 ? (
+          <div className="mt-3">
+            <EmptyState
+              title="aún no hay clases"
+              description="reserva una clase para ver su estado aquí."
+              action={
+                <Link to="/gestion/subir" className="text-mint hover:text-lavender">
+                  subir clase
+                </Link>
+              }
+            />
+          </div>
+        ) : (
+          <ul className="mt-3 flex flex-col gap-2">
+            {items.map((audio) => (
+              <AudioRow key={audio.id} audio={audio} />
+            ))}
+          </ul>
+        )}
       </Card>
     </div>
   );
