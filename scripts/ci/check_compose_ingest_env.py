@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,10 +18,14 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_COMPOSE = REPO_ROOT / "infra" / "docker-compose.yml"
+DEFAULT_E2E = REPO_ROOT / "infra" / "docker-compose.e2e.yml"
 RENDER_TIMEOUT_S = 120
+TMP_MOUNT = "/work/tmp"
+TMP_FLAGS = frozenset({"noexec", "nosuid", "nodev"})
 
 INGEST_ENV_ALLOWLIST = frozenset(
     {
@@ -37,6 +42,7 @@ INGEST_ENV_ALLOWLIST = frozenset(
         "RIVA_SERVER",
         "RIVA_FUNCTION_ID",
         "RIVA_USE_SSL",
+        "TMPDIR",
     }
 )
 INGEST_RIVA_NAMES = ("NVIDIA_API_KEY", "RIVA_SERVER", "RIVA_FUNCTION_ID", "RIVA_USE_SSL")
@@ -87,8 +93,15 @@ class Report:
             self.failures.append(label)
 
 
-def render(compose_file: Path, overrides: Mapping[str, str | None]) -> dict:
-    """Render the compose model with `overrides` applied; a None value removes the name."""
+def render(
+    compose_files: Path | tuple[Path, ...], overrides: Mapping[str, str | None]
+) -> dict:
+    """Render the compose model with `overrides` applied; a None value removes the name.
+
+    `compose_files` is one file or a merge (`-f` in order). The copies live in a scratch
+    directory so the developer's real `../.env` is never read.
+    """
+    files = (compose_files,) if isinstance(compose_files, Path) else compose_files
     values = {**DUMMY_ENV}
     for name, value in overrides.items():
         if value is None:
@@ -99,18 +112,21 @@ def render(compose_file: Path, overrides: Mapping[str, str | None]) -> dict:
         root = Path(scratch)
         infra = root / "infra"
         infra.mkdir()
-        shutil.copyfile(compose_file, infra / "docker-compose.yml")
+        copied: list[Path] = []
+        for compose_file in files:
+            destination = infra / compose_file.name
+            shutil.copyfile(compose_file, destination)
+            copied.append(destination)
         env_text = "".join(f"{name}={value}\n" for name, value in values.items())
         (root / ".env").write_text(env_text)
         env_file = root / "interpolation.env"
         env_file.write_text(env_text)
+        command = ["docker", "compose"]
+        for destination in copied:
+            command.extend(["-f", str(destination)])
+        command.extend(["--env-file", str(env_file), "config", "--format", "json"])
         result = subprocess.run(
-            [
-                "docker", "compose",
-                "-f", str(infra / "docker-compose.yml"),
-                "--env-file", str(env_file),
-                "config", "--format", "json",
-            ],
+            command,
             env=_clean_process_env(),
             capture_output=True,
             text=True,
@@ -118,7 +134,10 @@ def render(compose_file: Path, overrides: Mapping[str, str | None]) -> dict:
             check=False,
         )
     if result.returncode != 0:
-        raise RuntimeError(f"docker compose config failed (exit {result.returncode})")
+        detail = (result.stderr or "").strip() or (result.stdout or "").strip()
+        raise RuntimeError(
+            f"docker compose config failed (exit {result.returncode}): {detail}"
+        )
     return json.loads(result.stdout)
 
 
@@ -195,6 +214,168 @@ def check_api_ingest_pair(report: Report, model: Mapping, *, expect_set: bool) -
         )
 
 
+_BYTE_UNITS = {
+    "": 1,
+    "b": 1,
+    "k": 1024,
+    "kb": 1000,
+    "ki": 1024,
+    "kib": 1024,
+    "m": 1024**2,
+    "mb": 1000**2,
+    "mi": 1024**2,
+    "mib": 1024**2,
+    "g": 1024**3,
+    "gb": 1000**3,
+    "gi": 1024**3,
+    "gib": 1024**3,
+}
+
+
+def _as_bytes(value: object) -> int | None:
+    """Compose renders sizes as ints or as `1g` / `268435456` strings."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([a-z]*)", value.strip().lower())
+    if match is None:
+        return None
+    number, unit = match.groups()
+    multiplier = _BYTE_UNITS.get(unit)
+    if multiplier is None:
+        return None
+    return int(float(number) * multiplier)
+
+
+def _memory_limit(service: Mapping[str, Any]) -> object:
+    if service.get("mem_limit") is not None:
+        return service.get("mem_limit")
+    deploy = service.get("deploy")
+    if not isinstance(deploy, dict):
+        return None
+    resources = deploy.get("resources")
+    if not isinstance(resources, dict):
+        return None
+    limits = resources.get("limits")
+    if not isinstance(limits, dict):
+        return None
+    return limits.get("memory")
+
+
+def _core_limits(service: Mapping[str, Any]) -> tuple[int, int] | None:
+    ulimits = service.get("ulimits")
+    if not isinstance(ulimits, dict):
+        return None
+    core = ulimits.get("core")
+    if isinstance(core, int):
+        return (core, core)
+    if isinstance(core, dict):
+        soft = core.get("soft", core.get("Soft"))
+        hard = core.get("hard", core.get("Hard"))
+        if isinstance(soft, int) and isinstance(hard, int):
+            return (soft, hard)
+    return None
+
+
+def _tmpfs_mount(service: Mapping[str, Any]) -> tuple[set[str], int | None] | None:
+    """Options and size of the `/work/tmp` tmpfs, or None when that mount is absent."""
+    raw = service.get("tmpfs")
+    items: list[object] = raw if isinstance(raw, list) else [raw]
+    for item in items:
+        if isinstance(item, str):
+            target, _, option_text = item.partition(":")
+            if target != TMP_MOUNT:
+                continue
+            options = {part for part in option_text.split(",") if part}
+            size = next(
+                (_as_bytes(part.split("=", 1)[1]) for part in options if part.startswith("size=")),
+                None,
+            )
+            return options, size
+        if isinstance(item, dict) and item.get("target") == TMP_MOUNT:
+            nested = item.get("tmpfs") if isinstance(item.get("tmpfs"), dict) else {}
+            option_text = item.get("options")
+            if not isinstance(option_text, str):
+                option_text = nested.get("options") if isinstance(nested, dict) else ""
+            options = {part for part in str(option_text or "").split(",") if part}
+            size_value: object = nested.get("size") if isinstance(nested, dict) else None
+            if size_value is None:
+                size_value = next(
+                    (part.split("=", 1)[1] for part in options if part.startswith("size=")),
+                    None,
+                )
+            return options, _as_bytes(size_value)
+    return None
+
+
+def _writable_volumes(service: Mapping[str, Any]) -> list[str]:
+    raw = service.get("volumes") or []
+    if not isinstance(raw, list):
+        return [str(raw)]
+    writable: list[str] = []
+    for volume in raw:
+        if isinstance(volume, str):
+            if not volume.endswith(":ro"):
+                writable.append(volume)
+            continue
+        if isinstance(volume, dict):
+            if volume.get("read_only") is True:
+                continue
+            target = volume.get("target") or volume.get("destination") or volume
+            writable.append(str(target))
+            continue
+        writable.append(str(volume))
+    return writable
+
+
+def check_mount_contract(report: Report, model: Mapping[str, Any], label: str) -> None:
+    """Tmpfs, read-only root, no writable volume, no extra swap, no core dumps.
+
+    The tmpfs size is compared with the rendered `INGEST_MAX_UPLOAD_BYTES`. Neither
+    number is copied into this file, so the two compose defaults cannot drift apart
+    without this check failing.
+    """
+    service = model["services"]["ingest"]
+    env = service_env(model, "ingest")
+    report.check(service.get("read_only") is True, f"{label}: ingest root is read-only")
+    report.check(
+        env.get("TMPDIR") == TMP_MOUNT,
+        f"{label}: TMPDIR is {TMP_MOUNT}",
+    )
+    mount = _tmpfs_mount(service)
+    if mount is None:
+        report.check(False, f"{label}: tmpfs mounted at {TMP_MOUNT}")
+        return
+    options, size = mount
+    report.check(
+        TMP_FLAGS <= options,
+        f"{label}: tmpfs has noexec,nosuid,nodev (options: {sorted(options)})",
+    )
+    upload_text = env.get("INGEST_MAX_UPLOAD_BYTES")
+    upload = int(upload_text) if isinstance(upload_text, str) and upload_text.isdigit() else None
+    report.check(
+        size is not None and upload is not None and size > upload,
+        f"{label}: tmpfs size ({size}) exceeds the upload limit ({upload})",
+    )
+    writable = _writable_volumes(service)
+    report.check(not writable, f"{label}: ingest has no writable volume ({writable or 'none'})")
+    memory = _as_bytes(_memory_limit(service))
+    swap = _as_bytes(service.get("memswap_limit"))
+    report.check(
+        memory is not None and swap is not None and swap == memory,
+        f"{label}: memswap_limit equals mem_limit ({swap} vs {memory})",
+    )
+    report.check(
+        _core_limits(service) == (0, 0),
+        f"{label}: core ulimit is 0",
+    )
+
+
 def check_origin(report: Report, compose_file: Path) -> None:
     default_env = service_env(render(compose_file, {"MAULWURF_PUBLIC_ORIGIN": None}), "api")
     report.check(
@@ -234,6 +415,12 @@ def run_checks(compose_file: Path) -> Report:
     check_api_ingest_pair(report, without_ingest_pair, expect_set=False)
 
     check_origin(report, compose_file)
+    check_mount_contract(report, full, "base")
+    merged = render(
+        (compose_file, DEFAULT_E2E),
+        {"E2E_ALLOW_EPHEMERAL_CREDENTIALS": "1"},
+    )
+    check_mount_contract(report, merged, "e2e")
     return report
 
 

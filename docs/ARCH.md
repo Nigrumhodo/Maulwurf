@@ -94,7 +94,7 @@ flowchart TB
         CD["caddy 2.8 · edge network<br/>:80 and :443, internal TLS"]:::impl
         WEB["web · edge network<br/>React SPA (Vite) :3000"]:::parcial
         API["api · edge and data networks<br/>FastAPI :8000<br/>Alembic + Uvicorn"]:::impl
-        ING["ingest · edge and data networks<br/>FastAPI :8000, only /healthz<br/>and /readyz<br/>rootfs ro, tmpfs 256 MiB, 1<br/>GiB without swap"]:::parcial
+        ING["ingest · data network only<br/>FastAPI :8000, only /healthz<br/>and /readyz<br/>rootfs ro, tmpfs 256 MiB, 1<br/>GiB without swap"]:::parcial
         PG[("postgres · data network<br/>pgvector pg16")]:::impl
         RD[("redis 7.4 · data network<br/>no RDB/AOF, noeviction")]:::impl
         SC["ARQ scheduler · data network<br/>dispatch_outbox every minute"]:::parcial
@@ -105,8 +105,7 @@ flowchart TB
     B -->|"HTTPS"| CD
     CD -->|"remaining routes"| WEB
     CD -->|"API routes and<br/>PUT"| API
-    CD -.->|"PUT (S2)"| ING
-    API -.->|"C2 port"| ING
+    API -.->|"internal stream"| ING
     API --> PG
     API -->|"PING in /readyz"| RD
     ING -->|"readiness"| PG
@@ -128,14 +127,15 @@ flowchart TB
 | `caddy` | `caddy:2.8-alpine` (pinned digest) | edge | 80 and 443 on the host (configurable) | Read-only Caddyfile, admin API disabled; upload `request_body` 220 MB and 10 MB on every other proxying route (JSON, SSE progress, web fallback); `read_body` 20m, `read_header` 30s, `write` 0 (SSE), `idle` 5m (ADR-0010); no healthcheck | Reverse proxy with internal TLS (`https://localhost`) |
 | `web` | `apps/web` → `maulwurf-web:local` | edge | 3000, internal only | `USER node` | `node dist/server/index.js` (Express serving the Vite build, ADR-0007) |
 | `api` | `apps/api` → `maulwurf-api:local` | edge, data | 8000, internal only | UID 10001 in the Dockerfile; compose adds no `read_only` nor `cap_drop` | Alembic migration and Uvicorn |
-| `ingest` | `apps/ingest`, target `runtime` | edge, data | 8000, internal only | UID 10001, `read_only` rootfs, 256 MiB tmpfs at `/work/tmp` (`noexec,nosuid,nodev`), `cap_drop: ALL`, `no-new-privileges`, 1 GiB of RAM without swap, 2 CPU, 128 PIDs | Uvicorn `maulwurf_ingest.main:app` |
+| `ingest` | `apps/ingest`, target `runtime` | data | 8000, internal only | UID 10001, `read_only` rootfs, 256 MiB tmpfs at `/work/tmp` (`noexec,nosuid,nodev`), `cap_drop: ALL`, `no-new-privileges`, 1 GiB of RAM without swap, 2 CPU, 128 PIDs | Uvicorn `maulwurf_ingest.main:app` |
 | `worker` | `api` image | data | — | `cap_drop: ALL`, `no-new-privileges`, 128 PIDs | `arq app.workers.arq_app.WorkerSettings` |
 | `scheduler` | `api` image | data | — | Same as `worker` | `arq app.workers.arq_app.SchedulerSettings` |
 | `postgres` | `pgvector/pgvector:pg16` (pinned digest) | data | None on the host | `pgdata` volume | PostgreSQL 16 with pgvector |
 | `redis` | `redis:7.4-alpine` (pinned digest) | data | `127.0.0.1:6379`, loopback only | No RDB nor AOF, `maxmemory` 256 MB by default, `noeviction` (ADR-0005) | `redis-server` |
 
-All services have a healthcheck except `caddy`, which waits for `web`, `api`, and `ingest` to be
-healthy. The eight-service compose is ticket [J1.1](plan/tickets/J1.1.md); the hardened ingestion
+All services have a healthcheck except `caddy`, which waits for `web` and `api` to be
+healthy. Ingest is not a Caddy dependency and is not on the edge network. The eight-service
+compose is ticket [J1.1](plan/tickets/J1.1.md); the hardened ingestion
 image is J1.2, Caddy J1.3, the ARQ processes J1.5, and the Redis policy J1.6.
 
 **Caddy routing** (`infra/Caddyfile`, in this order):
@@ -143,8 +143,8 @@ image is J1.2, Caddy J1.3, the ARQ processes J1.5, and the Redis policy J1.6.
 | Route | Destination | Notes |
 |---|---|---|
 | `PUT /audios/*/content` | `api:8000` | Streaming without compression or buffering. It stays on `api`, which streams to `ingest` internally ([ADR-0008](adr/ADR-0008-api-ingest-reception.md)); `/internal/*` is never routed |
-| `/audios/*/progress` | `api:8000` with `flush_interval -1` | Progress SSE: the route exists in Caddy, but not in the API routers |
-| `/auth/*`, `/me`, `/me/*`, `/subjects`, `/subjects/*`, `/integrations/*`, `/audios`, `/audios/*`, `/ingestion/*`, `/search`, `/chat/*`, `/readyz` | `api:8000` | Implemented routers; the `PUT` still answers `503` with the default ingest sink |
+| `/audios/*/progress` and `/chat/conversations/*/messages` | `api:8000` with `flush_interval -1` | SSE. A single trailing `*` elsewhere is a Caddy 2.8 prefix match, so these two handles stay more specific than `@api` |
+| `/auth/*`, `/me`, `/me/*`, `/subjects`, `/subjects/*`, `/integrations/*`, `/audios`, `/audios/*`, `/ingestion/*`, `/search`, `/chat/*`, `/calendar/*`, `/tasks`, `/tasks/*`, `/notifications`, `/notifications/*`, `/healthz`, `/readyz` | `api:8000` | One trailing-star prefix per API root, plus the bare collection paths. `/healthz` is proxied so a public probe is not the SPA |
 | Anything else | `web:3000` | Fallback |
 
 **Ingress and edge limits (J2.10).** Caddy is the only HTTP ingress

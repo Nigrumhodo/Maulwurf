@@ -278,11 +278,12 @@ jobs:
       - name: Run E-S2-JF-06
         run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml exec -T api
           python - < ../scripts/e2e/smoke_pipeline.py
-      # G1: the upload is ephemeral; verified cleanup is also asserted in the driver.
-      - name: Assert the ingest tmpfs is empty after cleanup
+      # G1: the upload is ephemeral. /readyz repeats the process hardening check
+      # (tmpfs, read-only root, no swap); an empty directory alone does not.
+      - name: Assert ingest is ready and the tmpfs is empty after cleanup
         run: >-
           docker compose -f docker-compose.yml -f docker-compose.e2e.yml exec -T ingest
-          python -c 'import os,sys; sys.exit(1 if os.listdir("/work/tmp") else 0)'
+          python -c "import os,sys,urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz',timeout=3); sys.exit(1 if os.listdir('/work/tmp') else 0)"
       - name: Diagnostics
         if: failure()
         run: |

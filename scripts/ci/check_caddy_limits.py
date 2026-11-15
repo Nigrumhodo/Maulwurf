@@ -10,7 +10,12 @@ pins three invariants:
 * every `handle` block that proxies declares `request_body.max_size`, including the
   catch-all web fallback that receives unknown routes;
 * the `/internal/*` guard is a real `handle @internal { respond 404 }` block placed
-  before the catch-all handler, not a stray matcher or comment.
+  before the catch-all handler, not a stray matcher or comment;
+* every route declared in `apps/api/app/routers` is covered by `@api`, except
+  `/internal/*`, which stays on the 404 guard;
+* `@api` patterns are exact paths or a single trailing `/*` (Caddy 2.8 prefix
+  match). A second star is the segment ladder this check exists to reject;
+* `/audios/*/progress` and `/chat/conversations/*/messages` set `flush_interval -1`.
 
 Usage:
     python3 scripts/ci/check_caddy_limits.py [--caddyfile PATH]
@@ -26,6 +31,13 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CADDYFILE = REPO_ROOT / "infra" / "Caddyfile"
+ROUTER_DIR = REPO_ROOT / "apps" / "api" / "app" / "routers"
+
+# Caddy 2.8: one trailing `*` is a prefix. A star anywhere else is one segment.
+_SSE_ROUTES = (
+    ("@progress", "/audios/*/progress"),
+    ("@chat_sse", "/chat/conversations/*/messages"),
+)
 
 # Provisional default in apps/api/app/core/config.py (S1.A8/A2.2); D4 has not approved
 # a limit, so the published `capabilities` value is still null.
@@ -250,6 +262,107 @@ def _timeouts(lines: list[str]) -> ServerTimeouts:
     )
 
 
+def _api_patterns(lines: list[str]) -> list[str]:
+    for raw in lines:
+        code = _strip_comment(raw).strip()
+        if code.startswith("@api path "):
+            return code.removeprefix("@api path ").split()
+    _fail("missing `@api path` matcher")
+    return []
+
+
+def _pattern_is_prefix_or_exact(pattern: str) -> bool:
+    """True for `/healthz` or `/chat/*`. A second star is the old segment ladder."""
+    if "*" not in pattern:
+        return True
+    return pattern.count("*") == 1 and pattern.endswith("/*")
+
+
+def _path_matches(pattern: str, path: str) -> bool:
+    """Caddy 2.8 `MatchPath` for the shapes this Caddyfile is allowed to use."""
+    if "*" not in pattern:
+        return pattern == path
+    if pattern.count("*") == 1 and pattern.endswith("*"):
+        return path.startswith(pattern[:-1])
+    regex = "^" + re.escape(pattern).replace(r"\*", "[^/]*") + "$"
+    return re.fullmatch(regex, path) is not None
+
+
+def _router_paths(directory: Path) -> list[str]:
+    """Paths from router decorators. `/internal` comes from `APIRouter(prefix=...)`."""
+    if not directory.is_dir():
+        _fail(f"router directory not found: {directory}")
+    paths: list[str] = []
+    sources = [path for path in sorted(directory.glob("*.py")) if path.name != "__init__.py"]
+    if not sources:
+        _fail(f"no routers under {directory}")
+    for source in sources:
+        text = source.read_text(encoding="utf-8")
+        prefix_match = re.search(
+            r"APIRouter\(\s*prefix\s*=\s*[\"']([^\"']+)[\"']",
+            text,
+        )
+        prefix = prefix_match.group(1).rstrip("/") if prefix_match else ""
+        lines = text.splitlines()
+        for index, line in enumerate(lines):
+            if not re.search(r"@router\.(?:get|post|put|patch|delete)\(", line):
+                continue
+            window = "\n".join(lines[index : index + 6])
+            found = re.search(r"[\"'](/[^\"']*)[\"']", window)
+            if found is None:
+                _fail(f"{source.name}:{index + 1} declares a route without a path")
+            route = found.group(1).split("?", 1)[0]
+            if prefix and not route.startswith(prefix + "/") and route != prefix:
+                route = f"{prefix}{route}"
+            paths.append(route)
+    if not paths:
+        _fail(f"no routes found under {directory}")
+    return paths
+
+
+def _cover_routers(lines: list[str]) -> None:
+    patterns = _api_patterns(lines)
+    for pattern in patterns:
+        if not _pattern_is_prefix_or_exact(pattern):
+            _fail(
+                f"`@api` pattern {pattern!r} is not an exact path or a single "
+                "trailing `/*` (Caddy 2.8 treats that star as a prefix match)"
+            )
+    uncovered: list[str] = []
+    leaked: list[str] = []
+    for path in _router_paths(ROUTER_DIR):
+        matched = any(_path_matches(pattern, path) for pattern in patterns)
+        if path == "/internal" or path.startswith("/internal/"):
+            if matched:
+                leaked.append(path)
+            continue
+        if not matched:
+            uncovered.append(path)
+    if leaked:
+        _fail(f"@api matches internal routes that must stay on the 404 guard: {leaked}")
+    if uncovered:
+        _fail(f"@api does not cover router paths: {uncovered}")
+
+
+def _sse_flush(lines: list[str], blocks: list[HandleBlock]) -> None:
+    matchers = {
+        _strip_comment(raw).strip().split()[0]: _strip_comment(raw).strip()
+        for raw in lines
+        if _strip_comment(raw).strip().startswith("@")
+    }
+    for name, path in _SSE_ROUTES:
+        if matchers.get(name) != f"{name} path {path}":
+            _fail(f"missing SSE matcher `{name} path {path}`")
+        handles = [block for block in blocks if block.opener == f"handle {name} {{"]
+        if len(handles) != 1:
+            _fail(f"missing or duplicated `handle {name}`")
+        flushed = any(
+            _strip_comment(line).strip() == "flush_interval -1" for line in handles[0].body
+        )
+        if not flushed:
+            _fail(f"`handle {name}` must set `flush_interval -1`")
+
+
 def check(caddyfile: Path) -> Report:
     lines = _lines(caddyfile)
     joined = "\n".join(_strip_comment(line) for line in lines)
@@ -261,6 +374,8 @@ def check(caddyfile: Path) -> Report:
 
     blocks = _handle_blocks(lines)
     _internal_guard(lines, blocks)
+    _cover_routers(lines)
+    _sse_flush(lines, blocks)
     proxy_limits = _proxy_limits(blocks)
 
     upload = proxy_limits.get("handle @upload {")

@@ -77,6 +77,18 @@ services:
       INGEST_CREDENTIAL_SECRET: 4d41554c575552464d41554c575552464d41554c575552464d41554c57555246
     volumes:
       - ${E2E_TLS_DIR:-../.e2e-tls}:/e2e-tls:ro
+    # The credential is set above, so readiness is meaningful. The base file stays
+    # on /healthz because an unconfigured checkout would otherwise never go healthy.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys;urllib.request.urlopen('http://127.0.0.1:8000/readyz',timeout=3);sys.exit(0)
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
     depends_on:
       # The ingest startup reconciler fail-closes admission if the schema is not there yet;
       # waiting for the API's migration + health removes that race in the smoke.

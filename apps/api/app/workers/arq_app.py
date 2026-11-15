@@ -17,6 +17,7 @@ from arq.worker import Function, func
 from app.core.config import settings
 from app.core.db import bind_cross_tenant, reset_cross_tenant, session_scope
 from app.core.logging import configure_logging
+from app.core.redis import REDIS_TIMEOUT_S
 from app.services.deletion import purge_expired_residuals
 from app.services.digests import materialize_due_digests
 from app.services.scheduler_lease import run_notification_scheduler
@@ -45,7 +46,15 @@ RETENTION_BATCHES_PER_RUN = 5
 # J4.6: materialize the next digest occurrence off the claim second; the following tick claims it.
 DIGEST_SECOND = 20
 
-_REDIS = RedisSettings.from_dsn(str(settings.redis_url))
+
+def _redis_settings() -> RedisSettings:
+    """DSN plus the shared timeout. `from_dsn` leaves `conn_timeout` at ARQ's 1s default."""
+    parsed = RedisSettings.from_dsn(str(settings.redis_url))
+    parsed.conn_timeout = REDIS_TIMEOUT_S
+    return parsed
+
+
+_REDIS = _redis_settings()
 
 
 async def dispatch_outbox(ctx: dict[str, Any]) -> None:

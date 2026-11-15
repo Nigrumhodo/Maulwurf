@@ -29,11 +29,17 @@ from sqlalchemy.ext.asyncio import (
 
 from app.core.config import settings
 
+# One process. Compose runs three of these engines (api, worker, scheduler):
+# 3 * (5 + 5) = 30, plus the ingest service pool of 4. Postgres keeps the image
+# default max_connections of 100; raise a pool only after rechecking that sum.
+POOL_SIZE = 5
+MAX_OVERFLOW = 5
+
 engine: AsyncEngine = create_async_engine(
     str(settings.database_url),
     pool_pre_ping=True,  # descarta conexiones muertas tras reinicios de Postgres
-    pool_size=5,
-    max_overflow=5,
+    pool_size=POOL_SIZE,
+    max_overflow=MAX_OVERFLOW,
 )
 
 SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
