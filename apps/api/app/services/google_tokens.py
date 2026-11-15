@@ -23,6 +23,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +31,7 @@ from app.core.config import settings
 from app.core.crypto import decrypt, encrypt
 from app.models import GoogleCredential
 from app.services.google_calendar import disconnect_google_credential
+from app.services.oauth_google import GoogleTokenResponse
 
 logger = logging.getLogger(__name__)
 
@@ -93,11 +95,10 @@ def _error_code(payload: Mapping[str, Any]) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _expires_in(payload: Mapping[str, Any]) -> float:
-    value = payload.get("expires_in")
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+def _expires_in(tokens: GoogleTokenResponse) -> float:
+    if tokens.expires_in is None or tokens.expires_in <= 0:
         return DEFAULT_EXPIRES_IN_SECONDS
-    return float(value)
+    return float(tokens.expires_in)
 
 
 async def _request_tokens(
@@ -105,7 +106,7 @@ async def _request_tokens(
     client_secret: str,
     refresh_token: str,
     transport: httpx.AsyncBaseTransport | None,
-) -> dict[str, Any]:
+) -> GoogleTokenResponse:
     data = {
         "client_id": client_id,
         "client_secret": client_secret,
@@ -125,7 +126,13 @@ async def _request_tokens(
         payload = {}
     body = payload if isinstance(payload, dict) else {}
     if response.status_code == httpx.codes.OK:
-        return body
+        try:
+            tokens = GoogleTokenResponse.model_validate(body)
+        except ValidationError as exc:
+            raise GoogleTokenTransient("token_response_without_access_token") from exc
+        if not tokens.access_token:
+            raise GoogleTokenTransient("token_response_without_access_token")
+        return tokens
     code = _error_code(body)
     if code == "invalid_grant":
         raise GoogleTokenRejected("invalid_grant")
@@ -210,9 +217,7 @@ async def fresh_access_token(
         await db.commit()
         logger.warning("google_tokens.invalid_grant user_id=%s", user_id)
         raise
-    access_token = payload.get("access_token")
-    if not isinstance(access_token, str) or not access_token:
-        raise GoogleTokenTransient("token_response_without_access_token")
+    access_token = payload.access_token
 
     current = await _lock_credential(db, user_id)
     if (
@@ -237,8 +242,7 @@ async def fresh_access_token(
     current.access_token_enc, current.key_version = encrypt(
         access_token, user_id=user_id, field="google_credentials.access_token"
     )
-    rotated = payload.get("refresh_token")
-    keep = refresh_token if not (isinstance(rotated, str) and rotated) else rotated
+    keep = payload.refresh_token if payload.refresh_token else refresh_token
     current.refresh_token_enc, _ = encrypt(
         keep, user_id=user_id, field="google_credentials.refresh_token"
     )

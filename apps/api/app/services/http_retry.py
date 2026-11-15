@@ -1,12 +1,14 @@
-"""Shared backoff for the embedding and chat HTTP adapters.
+"""Shared backoff for the embedding, chat, and Google Calendar HTTP adapters.
 
-One implementation so a `Retry-After` cap or a jitter draw cannot drift between the two
-clients. This is not an embedding wrapper: each adapter still owns its request, its status
-codes and its typed errors.
+One implementation so a `Retry-After` cap or a jitter draw cannot drift between clients.
+This is not a request wrapper: each adapter still owns its request, its status codes and
+its typed errors.
 """
 
 import secrets
 from collections.abc import Callable
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 
 import httpx
 
@@ -24,14 +26,28 @@ def backoff(attempt: int, jitter: Callable[[], float]) -> float:
     return base + (drawn * base)
 
 
-def retry_after_seconds(response: httpx.Response) -> float | None:
+def retry_after_seconds(
+    response: httpx.Response, *, cap: float = MAX_RETRY_AFTER_SECONDS
+) -> float | None:
+    """Numeric seconds or an HTTP date. A missing or malformed header means use backoff."""
     raw = response.headers.get("Retry-After")
     if raw is None:
         return None
+    value = raw.strip()
+    if not value:
+        return None
     try:
-        seconds = float(raw.strip())
+        seconds = float(value)
     except ValueError:
-        return None  # HTTP date or non-numeric value: fall back to our own backoff.
+        try:
+            when = parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return None
+        if when is None:
+            return None
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=UTC)
+        seconds = max(0.0, (when - datetime.now(UTC)).total_seconds())
     if seconds < 0:
         return None
-    return min(seconds, MAX_RETRY_AFTER_SECONDS)
+    return min(seconds, cap)
