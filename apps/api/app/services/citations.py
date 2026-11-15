@@ -15,10 +15,12 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.schemas.citations import Citation, CitationEvent
 from app.services.evidence import evidence_label
 from app.services.evidence import format_timestamp as format_timestamp
 from app.services.reader_links import class_reader_path
-from app.services.search import RetrievedChunk, SearchService
+from app.services.retrieval import RetrievedChunk
+from app.services.search import SearchService
 
 _MARKER = re.compile(r"\[S([1-9][0-9]*)\]")
 _MARKER_PREFIX = re.compile(r"^\[S?[0-9]*$")
@@ -81,61 +83,27 @@ async def validate_citation_source(
     return current
 
 
-def _record_uuid(record: dict[str, object], key: str) -> uuid.UUID | None:
-    raw = record.get(key)
-    if isinstance(raw, uuid.UUID):
-        return raw
-    if not isinstance(raw, str):
-        return None
-    try:
-        return uuid.UUID(raw)
-    except ValueError:
-        return None
-
-
-def _record_int(record: dict[str, object], key: str) -> int | None:
-    raw = record.get(key)
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
-        return None
-    return raw
-
-
 async def validate_citation_record(
-    db: AsyncSession, *, user_id: uuid.UUID, record: dict[str, object]
+    db: AsyncSession, *, user_id: uuid.UUID, record: Citation
 ) -> RetrievedChunk | None:
     """Revalidate a persisted citation before replaying it.
 
-    Records are JSONB written by this service, but a malformed or partial entry must fail
-    closed rather than emit a stale link. The fresh row is returned so the replay event uses
-    current labels and timestamps.
+    The fresh row is returned so the replay event uses current labels and timestamps.
+    A row that no longer matches the stored identity is dropped.
     """
-    audio_id = _record_uuid(record, "audio_id")
-    transcript_id = _record_uuid(record, "transcript_id")
-    chunk_id = _record_uuid(record, "chunk_id")
-    transcript_version = _record_int(record, "transcript_version")
-    raw_segment = record.get("segment_id")
-    segment_id = None if raw_segment is None else _record_uuid(record, "segment_id")
-    if (
-        audio_id is None
-        or transcript_id is None
-        or chunk_id is None
-        or transcript_version is None
-        or (raw_segment is not None and segment_id is None)
-    ):
-        return None
     current = await SearchService(db, provider=None).rehydrate_chunk_ids(
         user_id=user_id,
-        chunk_id=chunk_id,
-        audio_id=audio_id,
+        chunk_id=record.chunk_id,
+        audio_id=record.audio_id,
     )
     if current is None:
         return None
     if (
-        current.chunk_id != chunk_id
-        or current.audio_id != audio_id
-        or current.transcript_id != transcript_id
-        or current.transcript_version != transcript_version
-        or current.segment_id != segment_id
+        current.chunk_id != record.chunk_id
+        or current.audio_id != record.audio_id
+        or current.transcript_id != record.transcript_id
+        or current.transcript_version != record.transcript_version
+        or current.segment_id != record.segment_id
     ):
         return None
     return current
@@ -156,44 +124,47 @@ async def resolve_citation(
     return CitationRef(index=index, chunk=current, offset=offset)
 
 
-def citation_event(ref: CitationRef) -> dict[str, object]:
+def citation_event(ref: CitationRef) -> CitationEvent:
     """SSE `citation` data. Payload IDs are durable row keys; label/url are server-derived."""
     chunk = ref.chunk
-    return {
-        "index": ref.index,
-        "audio_id": str(chunk.audio_id),
-        "transcript_version": chunk.transcript_version,
-        "chunk_id": str(chunk.chunk_id),
-        "segment_id": str(chunk.segment_id) if chunk.segment_id is not None else None,
-        "t_start": chunk.t_start,
-        "t_end": chunk.t_end,
-        "label": citation_label(chunk),
-        "url": citation_url(chunk),
-    }
+    version = chunk.transcript_version if chunk.transcript_version is not None else 0
+    return CitationEvent(
+        index=ref.index,
+        audio_id=chunk.audio_id,
+        transcript_version=version,
+        chunk_id=chunk.chunk_id,
+        segment_id=chunk.segment_id,
+        t_start=chunk.t_start,
+        t_end=chunk.t_end,
+        label=citation_label(chunk),
+        url=citation_url(chunk),
+    )
 
 
-def citation_record(ref: CitationRef) -> dict[str, object]:
-    """Persisted JSONB citation; `quote` stays null until a later ticket populates it.
+def citation_record(ref: CitationRef) -> Citation:
+    """Persisted citation; `quote` stays null until a later ticket populates it.
 
     `label` and `url` are stored so a completed message can be replayed without trusting or
     re-reading a chunk that may have been tombstoned later. They are computed from hydrated
     database columns, not from model output.
     """
     chunk = ref.chunk
-    return {
-        "index": ref.index,
-        "offset": ref.offset,
-        "audio_id": str(chunk.audio_id),
-        "transcript_id": str(chunk.transcript_id) if chunk.transcript_id is not None else None,
-        "transcript_version": chunk.transcript_version,
-        "chunk_id": str(chunk.chunk_id),
-        "segment_id": str(chunk.segment_id) if chunk.segment_id is not None else None,
-        "t_start": chunk.t_start,
-        "t_end": chunk.t_end,
-        "label": citation_label(chunk),
-        "url": citation_url(chunk),
-        "quote": None,
-    }
+    if chunk.transcript_id is None or chunk.transcript_version is None:
+        raise ValueError("citation requires a transcript identity")
+    return Citation(
+        index=ref.index,
+        offset=ref.offset,
+        audio_id=chunk.audio_id,
+        transcript_id=chunk.transcript_id,
+        transcript_version=chunk.transcript_version,
+        chunk_id=chunk.chunk_id,
+        segment_id=chunk.segment_id,
+        t_start=chunk.t_start,
+        t_end=chunk.t_end,
+        label=citation_label(chunk),
+        url=citation_url(chunk),
+        quote=None,
+    )
 
 
 class CitationBuffer:

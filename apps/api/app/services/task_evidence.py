@@ -120,15 +120,15 @@ async def persist_task_spans(
     for item in rebuilt:
         if not item.quote.strip():
             raise ProvenanceInvalid("the quote is blank")
-        key = (item.segment_id, item.inicio_char, item.fin_char)
+        key = (item.segment_id, item.char_start, item.char_end)
         if key in seen:
             raise ProvenanceInvalid("the span is duplicated")
         seen.add(key)
         validated.append(
             EvidenceSpan(
                 segment_id=item.segment_id,
-                char_start=item.inicio_char,
-                char_end=item.fin_char,
+                char_start=item.char_start,
+                char_end=item.char_end,
                 quote=item.quote,
             )
         )
@@ -194,10 +194,10 @@ def _reconstruct_evidence(
         evidence=TextualEvidence(
             segment_id=segment.id,
             ordinal=segment.ordinal,
-            char_start=segment.char_start + stored.char_start,
-            char_end=segment.char_start + stored.char_end,
-            inicio_char=stored.char_start,
-            fin_char=stored.char_end,
+            char_start=stored.char_start,
+            char_end=stored.char_end,
+            absolute_char_start=segment.char_start + stored.char_start,
+            absolute_char_end=segment.char_start + stored.char_end,
             quote=stored.quote,
             t_start=t_start,
             t_end=t_end,

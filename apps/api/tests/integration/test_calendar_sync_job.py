@@ -35,7 +35,7 @@ from app.services.task_event_sync import (
     TASK_ID_PROPERTY,
     USER_ID_PROPERTY,
     CalendarGateway,
-    TaskSnapshot,
+    SyncTask,
     build_event_body,
     deterministic_event_id,
 )
@@ -182,8 +182,8 @@ def _scoped_session_factory(db: AsyncSession) -> Callable[[], Any]:
 
 def _gateway_factory(
     fake: FakeGoogle,
-) -> Callable[[TaskSnapshot], Awaitable[CalendarGateway]]:
-    async def factory(_snapshot: TaskSnapshot) -> CalendarGateway:
+) -> Callable[[SyncTask], Awaitable[CalendarGateway]]:
+    async def factory(_snapshot: SyncTask) -> CalendarGateway:
         service = GoogleCalendarService(
             access_token="test-access-token",  # noqa: S106 - fixture, not a credential
             base_url="https://calendar.example/v3",
@@ -448,7 +448,7 @@ async def test_the_store_guards_sync_writes_by_origin_and_version(
     assert (await _status(db_session, pending_id)) == ("failed", None)
 
 
-async def _snapshot(db_session: AsyncSession, task_id: uuid.UUID) -> TaskSnapshot:
+async def _snapshot(db_session: AsyncSession, task_id: uuid.UUID) -> SyncTask:
     def factory() -> Any:
         return _same_session(db_session)
 
@@ -581,6 +581,8 @@ async def test_an_expired_access_token_is_refreshed_before_the_call(
     request = fake.requests[0]
     assert request.headers["authorization"] == "Bearer fresh-access"
     assert (await _status(db_session, task_id))[0] == "synced"
+    # The refresh commits before returning the token, which expires this instance.
+    await db_session.refresh(credential)
     refreshed = decrypt(
         credential.access_token_enc,
         key_version=credential.key_version,
@@ -679,7 +681,7 @@ async def test_an_unexpected_failure_is_raised_for_the_arq_retry_budget(
     actor = await make_actor(db_session)
     task_id, version = await _insert_task(db_session, actor)
 
-    async def broken(_snapshot: TaskSnapshot) -> CalendarGateway:
+    async def broken(_snapshot: SyncTask) -> CalendarGateway:
         raise RuntimeError("database unavailable")
 
     ctx = {

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from maulwurf_ingest.audio.reconcile import (
     FragmentTranscript,
-    LocalWord,
+    Word,
     reconcile,
 )
 
 
-def _word(text: str, start_s: float, end_s: float) -> LocalWord:
-    return LocalWord(text, start_s, end_s)
+def _word(text: str, start_s: float, end_s: float) -> Word:
+    return Word(text, start_s, end_s)
 
 
 def test_reconcile_carries_word_confidence() -> None:
@@ -19,7 +19,7 @@ def test_reconcile_carries_word_confidence() -> None:
             FragmentTranscript(
                 0.0,
                 2.0,
-                words=(LocalWord("hoy", 0.2, 0.6, confidence=0.35),),
+                words=(Word("hoy", 0.2, 0.6, confidence=0.35),),
             ),
         )
     )

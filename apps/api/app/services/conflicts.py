@@ -39,12 +39,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.calendar_sync import (
-    CalendarEventView,
-    CalendarPage,
-    CalendarService,
-    CoverageNotice,
-)
+from app.services.calendar_read import CalendarEventView, CalendarPage, CalendarService
+from app.services.calendar_window import CoverageNotice
 
 # A deadline without a date cannot cluster; these are the frozen task types that represent
 # a real obligation. Reminders and recommendations are not deadlines (DESIGN §2.8).

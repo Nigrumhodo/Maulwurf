@@ -268,16 +268,16 @@ async def test_extraction_persists_sources_and_reconstructs_the_quote(
     )
     assert [item.evidence.quote for item in stored] == [FIRST, SECOND]
     assert [item.evidence.ordinal for item in stored] == [0, 1]
-    assert stored[0].evidence.inicio_char == 0
-    assert stored[0].evidence.fin_char == len(FIRST)
-    assert stored[0].evidence.char_start == first.char_start
-    assert stored[0].evidence.char_end == first.char_start + len(FIRST)
+    assert stored[0].evidence.char_start == 0
+    assert stored[0].evidence.char_end == len(FIRST)
+    assert stored[0].evidence.absolute_char_start == first.char_start
+    assert stored[0].evidence.absolute_char_end == first.char_start + len(FIRST)
     assert (stored[0].evidence.t_start, stored[0].evidence.t_end) == (0.0, 5.0)
     assert stored[0].evidence.reference == "00:00"
-    assert stored[1].evidence.inicio_char == 0
-    assert stored[1].evidence.fin_char == len(SECOND)
-    assert stored[1].evidence.char_start == second.char_start
-    assert stored[1].evidence.char_end == second.char_start + len(SECOND)
+    assert stored[1].evidence.char_start == 0
+    assert stored[1].evidence.char_end == len(SECOND)
+    assert stored[1].evidence.absolute_char_start == second.char_start
+    assert stored[1].evidence.absolute_char_end == second.char_start + len(SECOND)
     assert (stored[1].evidence.t_start, stored[1].evidence.t_end) == (None, None)
     assert stored[1].evidence.reference == "segment 1"
     assert stored[0].task_version == 1
@@ -494,12 +494,12 @@ async def test_l3_3_analysis_is_validated_and_reconstructed_from_the_db(
     assert [item.quote for item in rebuilt] == [first_quote, second_quote]
     assert rebuilt[0].transcript_id == first.transcript_id
     assert rebuilt[0].transcript_version == 1
-    assert (rebuilt[0].inicio_char, rebuilt[0].fin_char) == (0, len(first_quote))
+    assert (rebuilt[0].char_start, rebuilt[0].char_end) == (0, len(first_quote))
     assert rebuilt[0].quote == unicode_first[: emoji + 1]
     # The emoji is one Python code point but two UTF-16 units; a JavaScript offset would
     # not match this slice.
     assert len(first_quote.encode("utf-16-le")) // 2 > len(first_quote)
-    assert (rebuilt[1].inicio_char, rebuilt[1].fin_char) == (
+    assert (rebuilt[1].char_start, rebuilt[1].char_end) == (
         second_start,
         second_start + len(second_quote),
     )

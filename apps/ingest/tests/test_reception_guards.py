@@ -28,7 +28,7 @@ from maulwurf_ingest.receptions import (
     put_receive,
     reset_state,
 )
-from maulwurf_ingest.supervisor import RunResult, _LeaseKeeper
+from maulwurf_ingest.supervisor import _LeaseKeeper
 
 _HEX = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
 
@@ -91,8 +91,9 @@ async def test_discard_without_a_pool_keeps_the_hold(
     from maulwurf_ingest.receptions import _Hold
 
     stored = _Hold(
-        lease=lease, workdir=workdir, keeper=keeper, sha256="ab" * 32,
-        received_bytes=5, duration_s=1.0, audio_id=audio_id,
+        lease=lease, workdir=workdir, audio=cleanup.AttemptDir.adopt(workdir),
+        keeper=keeper, sha256="ab" * 32, received_bytes=5, duration_s=1.0,
+        audio_id=audio_id,
     )
     _holds[attempt_id] = stored
     assert await _gate.take(user_id)
@@ -139,8 +140,9 @@ async def test_admit_without_a_pool_keeps_the_hold(
     from maulwurf_ingest.receptions import _Hold
 
     stored = _Hold(
-        lease=lease, workdir=workdir, keeper=keeper, sha256="ab" * 32,
-        received_bytes=5, duration_s=1.0, audio_id=audio_id,
+        lease=lease, workdir=workdir, audio=cleanup.AttemptDir.adopt(workdir),
+        keeper=keeper, sha256="ab" * 32, received_bytes=5, duration_s=1.0,
+        audio_id=audio_id,
     )
     _holds[attempt_id] = stored
     assert await _gate.take(user_id)
@@ -185,19 +187,30 @@ async def test_probe_cancel_deletes_the_audio(
     async def cancel_probe(*_args: object, **_kwargs: object) -> None:
         raise asyncio.CancelledError()
 
-    async def close_attempt(
-        _pool: object, _lease: Lease, _attempt_id: uuid.UUID, workdir: Path,
-        _job: object, keeper: _LeaseKeeper, result: RunResult, **_kwargs: object,
-    ) -> None:
-        closed.append(workdir)
-        await keeper.stop()
-        workdir.joinpath("original").unlink(missing_ok=True)
-        result.evidence = {"verified": True}
+    async def exit_dir(
+        self: cleanup.AttemptDir,
+        exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _traceback: object,
+    ) -> bool:
+        if self._handoff:
+            self._handoff = False
+            return False
+        if self.path is not None:
+            closed.append(self.path)
+        if self.keeper is not None:
+            await self.keeper.stop()
+        if self.path is not None:
+            self.path.joinpath("original").unlink(missing_ok=True)
+        self._closed = True
+        if exc_type is asyncio.CancelledError:
+            raise asyncio.CancelledError
+        return False
 
     monkeypatch.setattr("maulwurf_ingest.receptions.leases.acquire_bound", take_lease)
     monkeypatch.setattr("maulwurf_ingest.supervisor.leases.heartbeat", alive)
     monkeypatch.setattr("maulwurf_ingest.receptions.asyncio.to_thread", cancel_probe)
-    monkeypatch.setattr("maulwurf_ingest.receptions._close_attempt", close_attempt)
+    monkeypatch.setattr(cleanup.AttemptDir, "__aexit__", exit_dir)
     monkeypatch.setattr(cleanup, "create_workdir", lambda _name, _tmp=None: tmp_path)
 
     async def pool_of(_request: _Request) -> object:

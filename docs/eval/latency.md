@@ -5,7 +5,7 @@ Offline harness for the measured latency objectives of `ESPECIFICACION.md` §8:
 1. **Hybrid retrieval p95 ≤ 500 ms** on the frozen reference corpus, per enabled language.
 2. **Chat first-token p95 ≤ 5 s** on the same corpus, per enabled language.
 
-The harness calls `SearchService.retrieve` and `RAGService.prepare`/`stream_events` in-process
+The harness calls `SearchService.retrieve_with_vector` and `RAGService.prepare`/`stream_events` in-process
 against a prepared G4 run. It adds no HTTP route, schema, migration, production service or web
 change, and it never stores audio.
 
@@ -36,7 +36,8 @@ gitignored `var/eval/latency/<run-id>/`.
 In scope:
 
 - reuse of the prepared `g4-v1` tenants and index from `tools.eval.cli prepare`;
-- retrieval through `SearchService.retrieve(top_k=8)`, one fresh database session per item;
+- retrieval through `embed_query` then `SearchService.retrieve_with_vector(top_k=8)`,
+  with the embedding call outside the database session and one fresh session per item;
 - chat through `RAGService.prepare` plus the SSE stream up to the first non-empty `delta`;
 - nearest-rank p50/p95/max per language, per-language gate and an overall verdict;
 - a redacted `latency.json` and `REPORT.md` publication with date and environment.
@@ -101,17 +102,21 @@ For every `test` item of each enabled language:
 
 ```text
 start = perf_counter()
+vector = await embed_query(embedding, item.question)
 async with session_factory() as db:
-    hits = await SearchService(db, provider=embedding).retrieve(
-        user_id=index.user_id, query=item.question, top_k=8
+    hits = await SearchService(db, provider=embedding).retrieve_with_vector(
+        user_id=index.user_id,
+        query_text=item.question,
+        query_vector=vector,
+        top_k=8,
     )
 took_ms = (perf_counter() - start) * 1000
 ```
 
-The timer includes session checkout, query embedding, the lexical branch, the vector branch,
-RRF fusion, dedupe/diversity and hydration. It excludes the evidence-link audit and every
-HTTP layer. An empty result on a populated reference corpus is a measurement failure, not a
-fast sample.
+The timer includes query embedding, session checkout, the lexical branch, the vector branch,
+RRF fusion, dedupe/diversity and hydration. The embedding call finishes before the session
+opens. It excludes the evidence-link audit and every HTTP layer. An empty result on a
+populated reference corpus is a measurement failure, not a fast sample.
 
 ### Chat first-token samples
 

@@ -9,7 +9,6 @@ pending and is not retranscribed. ``cleanup_status=failed`` is left alone.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import tempfile
 import uuid
@@ -69,7 +68,7 @@ async def _destroy(workdirs: list[Path]) -> CleanupEvidence:
     parts: list[CleanupEvidence] = []
     for workdir in workdirs:
         # No process group: the owner that created the directory is already gone.
-        parts.append(await asyncio.to_thread(cleanup.destroy_and_verify, workdir, None))
+        parts.append(await cleanup.AttemptDir.destroy_one(workdir))
     return _combine(parts)
 
 
@@ -229,45 +228,102 @@ STRANDED_ERROR_CODE = "technical_loss"
 SWEEP_BATCH_SIZE = 100
 SWEEP_MAX_BATCHES = 10
 
-# Bumping ``fencing_token`` in the same statement fences the dead owner: its
-# ``transition``, ``heartbeat`` and ``record_cleanup`` now match no row.
-_SWEEP_SQL = """
-WITH due AS (
-    SELECT id, user_id
-      FROM ingestion_attempts
-     WHERE status = ANY($1::text[])
-       AND lease_expires_at <= now()
-     ORDER BY lease_expires_at
-     LIMIT $2
-       FOR UPDATE SKIP LOCKED
-)
-UPDATE ingestion_attempts AS ia
+_DUE_SQL = """
+SELECT id, user_id, fencing_token
+  FROM ingestion_attempts
+ WHERE status = ANY($1::text[])
+   AND lease_expires_at <= now()
+ ORDER BY lease_expires_at
+ LIMIT $2
+"""
+
+# The token in the predicate is the one read before destruction. Bumping it fences the
+# dead owner: its transition, heartbeat and record_cleanup now match no row.
+_FENCE_SQL = """
+UPDATE ingestion_attempts
    SET status = $3, error_code = $4,
-       fencing_token = ia.fencing_token + 1, updated_at = now()
-  FROM due
- WHERE ia.id = due.id AND ia.user_id = due.user_id
-   AND ia.status = ANY($1::text[]) AND ia.lease_expires_at <= now()
-RETURNING ia.id, ia.user_id
+       fencing_token = fencing_token + 1, updated_at = now()
+ WHERE id = $1 AND user_id = $2 AND fencing_token = $5
+   AND status = ANY($6::text[]) AND lease_expires_at <= now()
 """
 
 
-async def sweep_stranded(pool: rls.Executor) -> tuple[uuid.UUID, ...]:
+async def _destroy_stranded(
+    pool: rls.Executor, attempt_id: uuid.UUID, user_id: uuid.UUID, token: int,
+    workdirs: list[Path],
+) -> None:
+    """Verified destruction while the fencing token still matches this row."""
+    lease = leases.Lease(attempt_id, user_id, "sweep", token, DEFAULT_LEASE_TTL)
+    try:
+        evidence = await _destroy(workdirs)
+    except Exception as exc:  # noqa: BLE001 — an exception is not proof of absence
+        logger.error(
+            "reconciler.stranded_cleanup_error attempt_id=%s error=%s",
+            attempt_id, type(exc).__name__,
+        )
+        cleanup.log_cleanup_failed(str(attempt_id), None, error_type=type(exc).__name__)
+        recorded = await _record_cleanup(
+            pool, lease, verified=False,
+            evidence={"verified": False, "error": type(exc).__name__},
+        )
+        if recorded:
+            admission.halt(attempt_id)
+        else:
+            _note_unrecorded_cleanup(attempt_id)
+        return
+    recorded = await _record_cleanup(
+        pool, lease, verified=evidence.verified, evidence=evidence.as_json(),
+    )
+    if evidence.verified:
+        return
+    if recorded:
+        admission.halt(attempt_id)
+    else:
+        _note_unrecorded_cleanup(attempt_id)
+    logger.error("reconciler.stranded_cleanup_failed attempt_id=%s", attempt_id)
+
+
+async def sweep_stranded(
+    pool: rls.Executor, *, tmp_dir: str | None = None,
+) -> tuple[uuid.UUID, ...]:
     """End receiving/transcribing attempts whose lease expired. Bounded, never retranscribes.
 
-    Committed attempts sit in ``transcript_committed_cleanup_pending`` and are not selected.
-    ``awaiting_upload`` is not selected either. ``cleanup_status`` is not touched.
+    A local attempt directory is destroyed and verified before the row is fenced.
+    No directory is not proof the audio is gone, so ``cleanup_status`` stays as it was.
+    Committed attempts and ``awaiting_upload`` are not selected.
     """
+    root = Path(tmp_dir) if tmp_dir is not None else Path(tempfile.gettempdir())
     ended: list[uuid.UUID] = []
     for _ in range(SWEEP_MAX_BATCHES):
-        rows = await rls.fetch(pool, None,
-            _SWEEP_SQL, list(STRANDED_STATES), SWEEP_BATCH_SIZE,
-            STRANDED_STATUS, STRANDED_ERROR_CODE,
+        rows = await rls.fetch(
+            pool, None, _DUE_SQL, list(STRANDED_STATES), SWEEP_BATCH_SIZE,
         )
+        if not rows:
+            break
         for row in rows:
             attempt_id = row["id"]
+            user_id = row["user_id"]
+            token = row["fencing_token"]
+            if (
+                not isinstance(attempt_id, uuid.UUID)
+                or not isinstance(user_id, uuid.UUID)
+                or isinstance(token, bool)
+                or not isinstance(token, int)
+            ):
+                continue
+            workdirs = local_workdirs(root, attempt_id)
+            if workdirs:
+                await _destroy_stranded(pool, attempt_id, user_id, token, workdirs)
+            status = await rls.execute(
+                pool, user_id, _FENCE_SQL,
+                attempt_id, user_id, STRANDED_STATUS, STRANDED_ERROR_CODE, token,
+                list(STRANDED_STATES),
+            )
+            if status != "UPDATE 1":
+                continue
             ended.append(attempt_id)
             logger.info(
-                "reconciler.stranded_ended attempt_id=%s user_id=%s", attempt_id, row["user_id"],
+                "reconciler.stranded_ended attempt_id=%s user_id=%s", attempt_id, user_id,
             )
         if len(rows) < SWEEP_BATCH_SIZE:
             break

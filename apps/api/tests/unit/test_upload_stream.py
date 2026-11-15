@@ -421,7 +421,8 @@ async def test_disconnect_after_the_commit_never_leaks_a_409() -> None:
         await _receive(request, sink, attempt=attempt, db=db)
 
     assert attempt.status == "transcript_committed_cleanup_pending"  # unchanged
-    assert cast(_StubDb, db).commits == 0
+    # The read transaction is closed before the hop. That commit writes no status.
+    assert cast(_StubDb, db).commits == 1
     assert sink.events == ["begin", "write", "abort"]
 
 

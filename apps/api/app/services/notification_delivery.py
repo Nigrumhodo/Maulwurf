@@ -17,13 +17,14 @@ exactly-once delivery, so an automatic retry could send the email twice. The pro
 is bounded by the caller-supplied `sender_timeout`, so a hung adapter cannot hold the row
 lock until the process is killed.
 
-The caller owns the transaction. The occurrence row is locked for the whole settlement so a
-duplicate worker cannot send the same claim concurrently, and a retried settlement of a
-terminal row is reported as `skipped` without calling the sender. If the process dies while
-holding the lock, PostgreSQL releases it and the scheduler's delivery lease expires the row
-as uncertain instead of retrying it. The caller must not retry the function after a database
-or commit failure: the sender may already have been called, so the row must be left to the
-delivery lease, which closes it as `delivery_unknown` and never as `pending`.
+The lease is the ownership proof during the provider call. The row lock is released
+before `sender.send` and taken again only to record the outcome, and only if the row is
+still `sending` on the same lease. A retried settlement of a terminal row is reported as
+`skipped` without calling the sender. If the process dies during the send, the scheduler's
+delivery lease expires the row as uncertain instead of retrying it. The caller must not
+retry the function after a database or commit failure: the sender may already have been
+called, so the row must be left to the delivery lease, which closes it as
+`delivery_unknown` and never as `pending`.
 """
 
 import asyncio
@@ -126,20 +127,24 @@ async def settle_delivery(
 
     row = await db.get(Notification, notification_id, with_for_update=True)
     if row is None:
+        await db.commit()
         return DeliveryReport(
             notification_id=notification_id, outcome="skipped", status=None
         )
     if row.status != "sending":
+        status = row.status
+        await db.commit()
         return DeliveryReport(
-            notification_id=notification_id, outcome="skipped", status=row.status
+            notification_id=notification_id, outcome="skipped", status=status
         )
     if lease_expired(row, now=instant):
         expire_lease(row, now=instant)
-        await db.flush()
+        status = row.status
+        await db.commit()
         return DeliveryReport(
             notification_id=notification_id,
             outcome=DELIVERY_UNKNOWN,
-            status=row.status,
+            status=status,
             error_code=LEASE_EXPIRED,
         )
 
@@ -154,51 +159,102 @@ async def settle_delivery(
     )
     # The lease is the ownership proof; the network call cannot outlive it. `lease_expired`
     # above guarantees a non-NULL deadline in the future.
-    remaining = cast(datetime, row.lease_expires_at) - instant
+    lease_deadline = row.lease_expires_at
+    remaining = cast(datetime, lease_deadline) - instant
     effective_timeout = min(sender_timeout, remaining)
     if effective_timeout <= timedelta(0):
         expire_lease(row, now=instant)
-        await db.flush()
+        status = row.status
+        await db.commit()
         return DeliveryReport(
             notification_id=notification_id,
             outcome=DELIVERY_UNKNOWN,
-            status=row.status,
+            status=status,
             error_code=LEASE_EXPIRED,
         )
+    # Drop the row lock before the provider call. The lease still names this claim.
+    await db.commit()
     try:
         provider_message_id = await asyncio.wait_for(
             sender.send(request), timeout=effective_timeout.total_seconds()
         )
     except Exception as error:  # noqa: BLE001 - any sender failure is conservatively uncertain
         outcome, error_code = delivery_error_outcome(error)
-        if outcome == DELIVERY_FAILED:
-            mark_failed(row, error_code=error_code)
-        else:
-            mark_delivery_unknown(row, error_code=error_code)
-        await db.flush()
+        settled = await _settle_after_send(
+            db,
+            notification_id,
+            lease_deadline=lease_deadline,
+            outcome=outcome,
+            error_code=error_code,
+            now=instant,
+            provider_message_id=None,
+        )
         return DeliveryReport(
             notification_id=notification_id,
-            outcome=outcome,
-            status=row.status,
-            error_code=error_code,
+            outcome=outcome if settled is not None else "skipped",
+            status=settled,
+            error_code=error_code if settled is not None else None,
         )
 
     if not isinstance(provider_message_id, str) or not provider_message_id.strip():
         # A success without a provider identity cannot prove a delivery; fail closed.
-        mark_delivery_unknown(row, error_code=RESPONSE_LOST)
-        await db.flush()
+        settled = await _settle_after_send(
+            db,
+            notification_id,
+            lease_deadline=lease_deadline,
+            outcome=DELIVERY_UNKNOWN,
+            error_code=RESPONSE_LOST,
+            now=instant,
+            provider_message_id=None,
+        )
         return DeliveryReport(
             notification_id=notification_id,
-            outcome=DELIVERY_UNKNOWN,
-            status=row.status,
-            error_code=RESPONSE_LOST,
+            outcome=DELIVERY_UNKNOWN if settled is not None else "skipped",
+            status=settled,
+            error_code=RESPONSE_LOST if settled is not None else None,
         )
 
-    mark_sent(row, now=instant, provider_message_id=provider_message_id)
-    await db.flush()
-    return DeliveryReport(
-        notification_id=notification_id,
+    settled = await _settle_after_send(
+        db,
+        notification_id,
+        lease_deadline=lease_deadline,
         outcome="sent",
-        status=row.status,
+        error_code=None,
+        now=instant,
         provider_message_id=provider_message_id,
     )
+    return DeliveryReport(
+        notification_id=notification_id,
+        outcome="sent" if settled is not None else "skipped",
+        status=settled,
+        provider_message_id=provider_message_id if settled is not None else None,
+    )
+
+
+async def _settle_after_send(
+    db: AsyncSession,
+    notification_id: uuid.UUID,
+    *,
+    lease_deadline: datetime | None,
+    outcome: str,
+    error_code: str | None,
+    now: datetime,
+    provider_message_id: str | None,
+) -> str | None:
+    """Write the provider outcome only while this claim still owns the row."""
+    row = await db.get(Notification, notification_id, with_for_update=True)
+    if row is None or row.status != "sending" or row.lease_expires_at != lease_deadline:
+        await db.commit()
+        return None
+    if outcome == "sent":
+        if provider_message_id is None:
+            mark_delivery_unknown(row, error_code=RESPONSE_LOST)
+        else:
+            mark_sent(row, now=now, provider_message_id=provider_message_id)
+    elif outcome == DELIVERY_FAILED:
+        mark_failed(row, error_code=error_code or "unknown")
+    else:
+        mark_delivery_unknown(row, error_code=error_code or RESPONSE_LOST)
+    status = row.status
+    await db.commit()
+    return status

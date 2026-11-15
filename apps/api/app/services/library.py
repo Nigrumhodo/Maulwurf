@@ -14,7 +14,6 @@ import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -32,8 +31,8 @@ from app.services import analysis_backfill, state_machine
 from app.services import progress as progress_service
 from app.services import runs as runs_service
 from app.services.exports import srt_exportable
-from app.services.progress import ProgressSnapshot
-from app.services.quality import normalize_quality_warnings
+from app.services.progress import ProgressSnapshot, TerminalDone, TerminalError
+from app.services.quality import QualityWarning, normalize_quality_warnings
 from app.services.tenant import get_owned
 
 
@@ -74,7 +73,7 @@ class TranscriptInfo:
     version: int
     timestamp_precision: str
     char_count: int
-    quality_warnings: tuple[dict[str, Any], ...]
+    quality_warnings: tuple[QualityWarning, ...]
     # L3.8: null / empty until the analyze run publishes the v1 summary.
     summary: str | None
     topics: tuple[str, ...]
@@ -280,7 +279,7 @@ async def list_audios(
     return summaries
 
 
-def _quality_warnings(transcript: Transcript) -> tuple[dict[str, Any], ...]:
+def _quality_warnings(transcript: Transcript) -> tuple[QualityWarning, ...]:
     """ASR signals from the persisted commit, normalized before leaving the API (S3.6).
 
     `quality_flags` is the ingestion-owned quality column; `warnings` is its historical
@@ -441,15 +440,15 @@ async def progress_snapshot(
     )
 
 
-def _terminal_event(snapshot: ProgressSnapshot) -> dict[str, Any]:
+def _terminal_event(snapshot: ProgressSnapshot) -> TerminalDone | TerminalError:
     if snapshot.aggregate == "failed":
         # The terminal code is the attempt's persisted `error_code`, or `aggregate_failed`
         # when the failure has no attempt to name (S2.md §A2.9 / DISENO §3.5).
-        return {
-            "code": snapshot.attempt_error_code or "aggregate_failed",
-            "detail": snapshot.attempt_status,
-        }
-    return {"aggregate": snapshot.aggregate, "stages": dict(snapshot.stages)}
+        return TerminalError(
+            code=snapshot.attempt_error_code or "aggregate_failed",
+            detail=snapshot.attempt_status,
+        )
+    return TerminalDone(aggregate=snapshot.aggregate, stages=dict(snapshot.stages))
 
 
 async def stream_progress(

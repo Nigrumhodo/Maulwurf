@@ -32,7 +32,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.task_event_sync import TaskSnapshot
+from app.services.task_event_sync import SyncTask
 from app.services.task_state import SyncCommand, sync_origins
 
 SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
@@ -83,14 +83,14 @@ class SqlTaskEventStore:
     def __init__(self, sessions: SessionFactory) -> None:
         self._sessions = sessions
 
-    async def load(self, task_id: uuid.UUID) -> TaskSnapshot | None:
+    async def load(self, task_id: uuid.UUID) -> SyncTask | None:
         async with self._sessions() as db:
             row = (
                 await db.execute(select(TASKS).where(TASKS.c.id == task_id))
             ).mappings().one_or_none()
         if row is None:
             return None
-        return TaskSnapshot(
+        return SyncTask(
             task_id=row["id"],
             user_id=row["user_id"],
             version=row["version"],

@@ -506,9 +506,9 @@ def render_report(payload: Mapping[str, Any]) -> str:
             "",
             "## Method",
             "",
-            "- Retrieval p95 times `SearchService.retrieve(top_k=8)` in-process, one fresh "
-            "database session per item: session checkout, query embedding, both branches, "
-            "RRF fusion and hydration.",
+            "- Retrieval p95 times `embed_query` then `SearchService.retrieve_with_vector"
+            "(top_k=8)` in-process: the query embedding runs before the database session "
+            "opens, then one fresh session runs both branches, RRF fusion and hydration.",
             "- Chat first-token p95 times `RAGService.prepare` plus the SSE stream up to the "
             "first non-empty `delta`. It includes embedding, retrieval, prompt assembly, the "
             "turn persistence and the provider's first delta.",

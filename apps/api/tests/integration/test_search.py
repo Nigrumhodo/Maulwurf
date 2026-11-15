@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.db import get_session
+from app.core.deps import search_session_factory
 from app.core.providers import get_embedding_provider
 from app.main import app
 from app.models import (
@@ -31,10 +32,12 @@ from app.models import (
     Subject,
     Transcript,
 )
-from app.services.embeddings import EmbeddingProviderError, EmbeddingRateLimited
+from app.services.embeddings import EmbeddingProviderError, EmbeddingRateLimited, embed_query
 from app.services.indexing import chunk_tsvector
-from app.services.search import _CURSOR_INVALID, _CURSOR_STALE, SearchService
+from app.services.retrieval import _CURSOR_INVALID, _CURSOR_STALE
+from app.services.search import SearchService
 from tests.integration import actors
+from tests.integration.conftest import reuse_session
 
 pytestmark = pytest.mark.integration
 
@@ -88,6 +91,7 @@ async def client(
         yield db_session
 
     app.dependency_overrides[get_session] = override
+    app.dependency_overrides[search_session_factory] = lambda: reuse_session(db_session)
     app.dependency_overrides[get_embedding_provider] = lambda: provider
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url=settings.allowed_origin
@@ -790,8 +794,11 @@ async def test_search_service_returns_content_for_chat_consumers(
     content = "alpha complete content for the chat prompt"
     await _indexed_class(db_session, actor, generation=generation, content=content)
     service = SearchService(db_session, provider=provider)
+    vector = await embed_query(provider, "alpha")
 
-    results = await service.retrieve(user_id=actor.user_id, query="alpha")
+    results = await service.retrieve_with_vector(
+        user_id=actor.user_id, query_text="alpha", query_vector=vector
+    )
 
     assert len(results) == 1
     assert results[0].content == content

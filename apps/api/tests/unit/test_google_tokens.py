@@ -29,8 +29,16 @@ from app.services.google_tokens import (
 NOW = datetime(2026, 11, 2, 14, 0, tzinfo=UTC)
 
 
+class _One:
+    def __init__(self, credential: GoogleCredential | None) -> None:
+        self._credential = credential
+
+    def scalar_one_or_none(self) -> GoogleCredential | None:
+        return self._credential
+
+
 class FakeSession:
-    """Only the two coroutines `fresh_access_token` uses."""
+    """The coroutines `fresh_access_token` uses around the token POST."""
 
     def __init__(self, credential: GoogleCredential | None = None) -> None:
         self.credential = credential
@@ -39,8 +47,17 @@ class FakeSession:
     async def flush(self) -> None:
         self.flushes += 1
 
+    async def commit(self) -> None:
+        return None
+
+    async def rollback(self) -> None:
+        return None
+
     async def get(self, _model: Any, _key: Any) -> GoogleCredential | None:
         return self.credential
+
+    async def execute(self, _statement: object) -> _One:
+        return _One(self.credential)
 
 
 class TokenEndpoint:

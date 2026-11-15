@@ -21,7 +21,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.services.calendar_sync import CoverageNotice
+from app.services.calendar_window import CoverageNotice
 
 
 class CalendarEventOut(BaseModel):

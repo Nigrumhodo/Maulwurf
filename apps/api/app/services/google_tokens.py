@@ -3,9 +3,9 @@
 The worker has no browser: when the stored Calendar access token is expired it must renew it
 from the encrypted refresh token instead of failing the task. Three rules keep this safe:
 
-- **One refresh at a time.** The caller loads the credential with ``SELECT … FOR UPDATE``, so
-  two concurrent deliveries cannot spend the same refresh token or overwrite each other's
-  result.
+- **One stored refresh at a time.** The token POST runs with no transaction open. The
+  write takes a short ``FOR UPDATE`` and stores the new blobs only when the refresh
+  ciphertext is still the one this call decrypted.
 - **Re-encrypt both blobs with the row's current key version.** ``google_credentials`` keeps a
   single ``key_version``; keeping the old refresh ciphertext while bumping the version would
   make the next decrypt fail when the key rotates.
@@ -23,12 +23,15 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
+from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.crypto import decrypt, encrypt
 from app.models import GoogleCredential
 from app.services.google_calendar import disconnect_google_credential
+from app.services.oauth_google import GoogleTokenResponse
 
 logger = logging.getLogger(__name__)
 
@@ -92,11 +95,10 @@ def _error_code(payload: Mapping[str, Any]) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _expires_in(payload: Mapping[str, Any]) -> float:
-    value = payload.get("expires_in")
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+def _expires_in(tokens: GoogleTokenResponse) -> float:
+    if tokens.expires_in is None or tokens.expires_in <= 0:
         return DEFAULT_EXPIRES_IN_SECONDS
-    return float(value)
+    return float(tokens.expires_in)
 
 
 async def _request_tokens(
@@ -104,7 +106,7 @@ async def _request_tokens(
     client_secret: str,
     refresh_token: str,
     transport: httpx.AsyncBaseTransport | None,
-) -> dict[str, Any]:
+) -> GoogleTokenResponse:
     data = {
         "client_id": client_id,
         "client_secret": client_secret,
@@ -124,7 +126,13 @@ async def _request_tokens(
         payload = {}
     body = payload if isinstance(payload, dict) else {}
     if response.status_code == httpx.codes.OK:
-        return body
+        try:
+            tokens = GoogleTokenResponse.model_validate(body)
+        except ValidationError as exc:
+            raise GoogleTokenTransient("token_response_without_access_token") from exc
+        if not tokens.access_token:
+            raise GoogleTokenTransient("token_response_without_access_token")
+        return tokens
     code = _error_code(body)
     if code == "invalid_grant":
         raise GoogleTokenRejected("invalid_grant")
@@ -140,6 +148,26 @@ async def _request_tokens(
     raise GoogleTokenUnavailable("token_endpoint_rejected")
 
 
+async def _end_read(db: AsyncSession) -> None:
+    """Release the caller's transaction before a token POST.
+
+    ``commit`` rather than ``rollback``: the caller may have flushed work in this
+    transaction that must survive, and a commit is what returns the connection.
+    """
+    await db.commit()
+
+
+async def _lock_credential(db: AsyncSession, user_id: uuid.UUID) -> GoogleCredential | None:
+    return (
+        await db.execute(
+            select(GoogleCredential)
+            .where(GoogleCredential.user_id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+
+
 async def fresh_access_token(
     db: AsyncSession,
     credential: GoogleCredential,
@@ -152,46 +180,75 @@ async def fresh_access_token(
 
     ``force`` is used after a 401: Google can invalidate an access token before its advertised
     expiry, so the reactive path asks for a new one regardless of the stored timestamp.
-    The caller must hold the row lock (``SELECT … FOR UPDATE``) so renewals do not race.
+    The refresh POST runs with no transaction open. A later short lock stores the new blobs
+    only when the refresh-token ciphertext is still the one this call decrypted.
     """
     reference = now or datetime.now(UTC)
     user_id: uuid.UUID = credential.user_id
-    if not force and not token_needs_refresh(credential.token_expires_at, now=reference):
+    expires_at = credential.token_expires_at
+    access_blob = credential.access_token_enc
+    access_version = credential.key_version
+    refresh_blob = credential.refresh_token_enc
+    refresh_version = credential.key_version
+    if not force and not token_needs_refresh(expires_at, now=reference):
+        await _end_read(db)
         return decrypt(
-            credential.access_token_enc,
-            key_version=credential.key_version,
+            access_blob,
+            key_version=access_version,
             user_id=user_id,
             field="google_credentials.access_token",
         )
-    if credential.refresh_token_enc is None:
+    if refresh_blob is None:
+        await _end_read(db)
         raise GoogleTokenUnavailable("refresh_token_missing")
     client_id, client_secret = _client_credentials()
+    seen_refresh = bytes(refresh_blob)
     refresh_token = decrypt(
-        credential.refresh_token_enc,
-        key_version=credential.key_version,
+        seen_refresh,
+        key_version=refresh_version,
         user_id=user_id,
         field="google_credentials.refresh_token",
     )
+    await _end_read(db)
     try:
         payload = await _request_tokens(client_id, client_secret, refresh_token, transport)
     except GoogleTokenRejected:
         await disconnect_google_credential(db, user_id)
+        await db.commit()
         logger.warning("google_tokens.invalid_grant user_id=%s", user_id)
         raise
-    access_token = payload.get("access_token")
-    if not isinstance(access_token, str) or not access_token:
-        raise GoogleTokenTransient("token_response_without_access_token")
+    access_token = payload.access_token
 
-    credential.access_token_enc, credential.key_version = encrypt(
+    current = await _lock_credential(db, user_id)
+    if (
+        current is None
+        or current.status != "connected"
+        or current.refresh_token_enc is None
+        or bytes(current.refresh_token_enc) != seen_refresh
+    ):
+        if current is None or current.status != "connected" or current.refresh_token_enc is None:
+            await db.rollback()
+            raise GoogleTokenUnavailable("google_not_connected")
+        # Another refresh stored a new ciphertext first. Use that access token.
+        stored = decrypt(
+            current.access_token_enc,
+            key_version=current.key_version,
+            user_id=user_id,
+            field="google_credentials.access_token",
+        )
+        await db.rollback()
+        return stored
+
+    current.access_token_enc, current.key_version = encrypt(
         access_token, user_id=user_id, field="google_credentials.access_token"
     )
-    rotated = payload.get("refresh_token")
-    keep = refresh_token if not (isinstance(rotated, str) and rotated) else rotated
-    credential.refresh_token_enc, _ = encrypt(
+    keep = payload.refresh_token if payload.refresh_token else refresh_token
+    current.refresh_token_enc, _ = encrypt(
         keep, user_id=user_id, field="google_credentials.refresh_token"
     )
-    credential.token_expires_at = reference + timedelta(seconds=_expires_in(payload))
-    credential.last_refresh_at = reference
+    current.token_expires_at = reference + timedelta(seconds=_expires_in(payload))
+    current.last_refresh_at = reference
     await db.flush()
+    await db.commit()
     logger.info("google_tokens.refreshed user_id=%s", user_id)
     return access_token

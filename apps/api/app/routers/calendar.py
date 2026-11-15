@@ -43,15 +43,15 @@ from app.schemas.calendar import (
     DeadlineItemOut,
     TimeConflictOut,
 )
-from app.services.calendar_sync import (
+from app.services.calendar_read import CalendarService
+from app.services.calendar_sync import refresh_calendar_mirror
+from app.services.calendar_window import (
     LOCK_RETRY_AFTER_SECONDS,
-    CalendarService,
     CalendarSyncBusy,
     CalendarSyncCooldown,
     CalendarSyncError,
     CalendarSyncUnavailable,
     CalendarWindowInvalid,
-    refresh_calendar_mirror,
 )
 from app.services.conflicts import CalendarConflicts, ConflictService
 from app.services.google_calendar import (

@@ -13,6 +13,8 @@ quién es el propietario, no el reloj del proceso:
   must prove the absence of temporaries (descriptors, processes and mounts, not just
   file names): a `verified` claim without those checks is not written. A
   `cleanup_status = 'failed'` is terminal: it cannot return to `verified`.
+- `attest_host_destroyed` is the other writer of `verified`. It refuses when a local
+  attempt directory is still present. `enable_text_outbox` accepts only those two.
 
 SQL parametrizado con asyncpg; el esquema lo migra la API (`apps/api/alembic`).
 """
@@ -192,3 +194,45 @@ async def reclaim_committed(
     if row is None:
         return None
     return Lease(attempt_id, user_id, instance, row["fencing_token"], ttl)
+
+
+_ATTEST_SQL = """
+UPDATE ingestion_attempts
+   SET cleanup_status = 'verified',
+       cleanup_evidence = $4::jsonb,
+       cleanup_verified_at = now(),
+       audio_deleted_at = now(),
+       updated_at = now()
+ WHERE id = $1 AND user_id = $2 AND fencing_token = $3
+   AND cleanup_status = $5
+   AND (lease_expires_at IS NULL OR lease_expires_at <= now())
+RETURNING id
+"""
+
+
+async def attest_host_destroyed(
+    pool: asyncpg.Pool,
+    *,
+    user_id: uuid.UUID,
+    attempt_id: uuid.UUID,
+    fencing_token: int,
+    evidence_json: str,
+    expected_cleanup_status: str,
+    local_directory_present: bool,
+) -> bool:
+    """Mark cleanup verified from an operator host-loss attestation.
+
+    A directory still on this host is not host loss. Nothing is written, and the
+    caller keeps the attempt unresolved. This is the only `verified` write that does
+    not come from `destroy_and_verify` evidence.
+    """
+    if local_directory_present:
+        logger.error(
+            "lease.attest_refused_local_directory attempt_id=%s", attempt_id,
+        )
+        return False
+    row = await rls.fetchrow(
+        pool, user_id, _ATTEST_SQL,
+        attempt_id, user_id, fencing_token, evidence_json, expected_cleanup_status,
+    )
+    return row is not None

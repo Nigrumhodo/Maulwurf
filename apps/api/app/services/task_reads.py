@@ -243,8 +243,8 @@ async def _assemble(db: AsyncSession, user_id: uuid.UUID, tasks: list[Task]) -> 
         evidence = [
             TaskEvidenceOut(
                 segment_id=str(item.evidence.segment_id),
-                char_start=item.evidence.inicio_char,
-                char_end=item.evidence.fin_char,
+                char_start=item.evidence.char_start,
+                char_end=item.evidence.char_end,
                 quote=item.evidence.quote,
                 t_start=item.evidence.t_start,
                 t_end=item.evidence.t_end,

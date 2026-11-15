@@ -162,17 +162,14 @@ def _event_block(task: TaskEventContent) -> tuple[dict[str, str], dict[str, str]
                 _EVENT_BLOCK_INVALID,
                 "El bloque con hora requiere instantes con zona y fin posterior.",
             )
-        return (
-            {"dateTime": _rfc3339(start_at), "timeZone": task.timezone.strip()},
-            {"dateTime": _rfc3339(end_at), "timeZone": task.timezone.strip()},
-        )
+        return timed_event_bounds(start_at, end_at, task.timezone)
     start_date, end_date = task.event_start_date, task.event_end_date_exclusive
     if start_date is None or end_date is None or end_date <= start_date:
         raise CalendarEventContentError(
             _EVENT_BLOCK_INVALID,
             "El bloque de día completo requiere un fin exclusivo posterior al inicio.",
         )
-    return {"date": start_date.isoformat()}, {"date": end_date.isoformat()}
+    return all_day_event_bounds(start_date, end_date)
 
 
 def _reader_line(task: TaskEventContent, *, public_origin: str) -> str | None:
@@ -243,6 +240,22 @@ def _is_aware(value: datetime) -> bool:
     return value.tzinfo is not None and value.utcoffset() is not None
 
 
-def _rfc3339(value: datetime) -> str:
+def rfc3339_utc(value: datetime) -> str:
     text = value.astimezone(UTC).isoformat()
     return text[:-6] + "Z" if text.endswith("+00:00") else text
+
+
+def timed_event_bounds(
+    start: datetime, end: datetime, timezone: str
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Google `start`/`end` for a timed block. Shared by the content builder and the sync job."""
+    zone = timezone.strip()
+    return (
+        {"dateTime": rfc3339_utc(start), "timeZone": zone},
+        {"dateTime": rfc3339_utc(end), "timeZone": zone},
+    )
+
+
+def all_day_event_bounds(start: date, end: date) -> tuple[dict[str, str], dict[str, str]]:
+    """Google `start`/`end` for an all-day block with an exclusive end."""
+    return {"date": start.isoformat()}, {"date": end.isoformat()}
