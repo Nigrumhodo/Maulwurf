@@ -64,9 +64,9 @@ def _item(title: str, segment_id: uuid.UUID) -> dict[str, object]:
         "titulo": title,
         "detalle": None,
         "due_date": None,
-        "due_at": "2026-09-21T00:00:00-06:00",
-        "timezone": "UTC",
-        "all_day": False,
+        "due_at": None,
+        "timezone": "America/Bogota",
+        "all_day": True,
         "date_status": "resolved",
         "confidence_score": 0.5,
         "mencion": {"kind": "all_day", "due_date": DUE_DAY.isoformat()},
@@ -444,20 +444,28 @@ async def _task_row_lock(
             await db.rollback()
 
 
+# `pg_locks` is cluster-wide: count only this test database and only sessions whose
+# current statement is a real wait. `\m`/`\M` are PostgreSQL word boundaries, so a query
+# that merely mentions "tasks" in a comment cannot satisfy the probe.
+_TASK_LOCK_WAITERS = text(
+    r"SELECT count(DISTINCT a.pid) FROM pg_locks l "
+    r"JOIN pg_stat_activity a ON a.pid = l.pid "
+    r"WHERE NOT l.granted "
+    r"AND a.datname = current_database() "
+    r"AND a.pid <> pg_backend_pid() "
+    r"AND a.query ~* '\mFROM\s+tasks\M'"
+)
+
+
 async def _wait_for_task_lock_waiters(
     factory: async_sessionmaker[AsyncSession], expected: int
 ) -> None:
     """Wait until the expected request transactions are queued on the task row lock."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + 10
-    query = text(
-        "SELECT count(*) FROM pg_stat_activity "
-        "WHERE wait_event_type = 'Lock' AND state = 'active' "
-        "AND lower(query) LIKE '%from tasks%'"
-    )
     while loop.time() < deadline:
         async with factory() as db:
-            waiting = await db.scalar(query)
+            waiting = await db.scalar(_TASK_LOCK_WAITERS)
         if int(waiting or 0) >= expected:
             return
         await asyncio.sleep(0.01)
