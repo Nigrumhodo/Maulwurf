@@ -66,6 +66,8 @@ async def test_task_inbox_returns_the_quote_and_keeps_statuses_separate(
     task = _task(actor, audio_id=audio.id, subject_id=audio.subject_id, title="Tarea")
     task.date_status = "resolved"
     task.due_date = date(2026, 11, 9)
+    task.calendar_id = "calendar-1"
+    task.calendar_event_id = "event-1"
     db_session.add(task)
     await db_session.flush()
     db_session.add(
@@ -101,11 +103,14 @@ async def test_task_inbox_returns_the_quote_and_keeps_statuses_separate(
     assert item["id"] == str(task.id)
     assert item["status"] == "needs_review"
     assert item["calendar_sync_status"] == "not_requested"
+    assert item["calendar_id"] == "calendar-1"
+    assert item["calendar_event_id"] == "event-1"
     assert item["date_status"] == "resolved"
     assert item["due_date"] == "2026-11-09"
     assert item["evidence"] == [
         {
             "segment_id": str(segment.id),
+            "ordinal": 1,
             "char_start": 0,
             "char_end": 7,
             "quote": "texto d",
@@ -170,6 +175,35 @@ async def _alice_tasks(db: AsyncSession, actor: actors.Actor) -> list[Task]:
     from sqlalchemy import select
 
     return list((await db.scalars(select(Task).where(Task.user_id == actor.user_id))).all())
+
+
+async def test_task_listing_filters_by_class(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    first_audio, _, _ = await actors.make_class_with_transcript(db_session, actor)
+    second_audio, _, _ = await actors.make_class_with_transcript(db_session, actor)
+    first = _task(
+        actor,
+        audio_id=first_audio.id,
+        subject_id=first_audio.subject_id,
+        title="De la primera clase",
+    )
+    second = _task(
+        actor,
+        audio_id=second_audio.id,
+        subject_id=second_audio.subject_id,
+        title="De la segunda clase",
+    )
+    db_session.add_all([first, second])
+    await db_session.flush()
+
+    response = await client.get(
+        "/tasks", params={"audio_id": str(first_audio.id)}, cookies=actor.cookies
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == [str(first.id)]
 
 
 async def test_invalid_status_and_cursor_are_typed_422(

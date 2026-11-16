@@ -357,6 +357,20 @@ def test_identity_requires_the_maulwurf_task_property() -> None:
     )
 
 
+def test_event_block_is_independent_of_the_due_representation() -> None:
+    # D3.2 allows an all-day deadline with a timed agenda block; the due mode must not
+    # decide whether the Calendar block exists.
+    task = _task(
+        all_day=True,
+        event_start_at=datetime(2026, 11, 2, 14, 0, tzinfo=UTC),
+        event_end_at=datetime(2026, 11, 2, 15, 0, tzinfo=UTC),
+        event_start_date=None,
+        event_end_date_exclusive=None,
+    )
+
+    assert task.has_event_block() is True
+
+
 def test_body_carries_identity_and_the_timed_block() -> None:
     task = _task()
 

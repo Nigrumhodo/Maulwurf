@@ -224,10 +224,10 @@ async def _calendar_callback(
             access_token=access_token,
             on_invalid_grant=disconnect,
         )
-        if mode == CALENDAR_RECONNECT:
-            # Only a reconnect reactivates waiting work (DISENO §3.8/A3.7): current-version
-            # blocked tasks go back to pending with one outbox event each.
-            await calendar_resume.resume_blocked_tasks(db, user_id=user_id)
+        # Both a first connect and a reconnect reactivate waiting work (DISENO A3.8/A3.7):
+        # current-version blocked tasks go back to pending with one outbox event each and
+        # the newly bound write calendar.
+        await calendar_resume.resume_blocked_tasks(db, user_id=user_id)
     except GoogleCalendarInvalidGrant:
         # The grant Google just issued cannot be used: keep the integration disconnected
         # in its own transaction instead of rolling the revocation back with the rest.

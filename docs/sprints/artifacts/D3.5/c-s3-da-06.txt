@@ -1,0 +1,31 @@
+D3.5 / C-S3-DA-06 evidence
+Date: 2026-11-03 (UTC)
+Environment: Windows, Node 24.12 local (CI Node 22), PostgreSQL 16/pgvector + Redis 7
+
+Automated component coverage
+Command:
+  cd apps/web
+  npx vitest run tests/unit/class-summary.test.tsx tests/unit/class-status.test.tsx tests/unit/class-items.test.tsx tests/unit/transcript-reader-page.test.tsx
+Result: 12 passed
+Covered:
+- persisted summary, topics, analysis version and ASR warning counts;
+- aggregate, attempt, index and analyze statuses;
+- F1 backfill action, failed-analysis retry and index retry;
+- detected items filtered by class, active first, empty and error states;
+- complete page composition and POST /audios/{id}/analysis/backfill;
+- reader ?segment= anchoring remains intact.
+
+Full web gate
+Command: npm run typecheck && npm run lint && npm test && npm run build
+Result: typecheck/lint clean; 186 tests in 29 files passed; build 391 modules.
+
+Backend
+Command:
+  uv run ruff check .
+  uv run mypy .
+  uv run pytest tests/integration/test_task_read.py tests/integration/test_analysis_backfill.py -q
+Result: ruff/mypy clean; test_task_read.py 4 passed; test_analysis_backfill.py 17 passed.
+
+Pending delivery
+- Manual browser C-S3-DA-06 and PR/CI run id are not recorded yet.
+- No real audio, provider call, credential or secret is involved.

@@ -32,6 +32,7 @@ export interface TaskSource {
 
 export interface TaskEvidence {
   segment_id: string;
+  ordinal: number;
   char_start: number;
   char_end: number;
   quote: string;
@@ -72,6 +73,8 @@ export interface Task {
   confidence_score: number | null;
   status: TaskStatus;
   calendar_sync_status: string;
+  calendar_id: string | null;
+  calendar_event_id: string | null;
   version: number;
   due_version: number;
   event_block: TaskEventBlock;
@@ -88,6 +91,7 @@ export interface TaskPage {
 export interface TaskQuery {
   status?: TaskStatusFilter;
   subjectId?: string;
+  audioId?: string;
   dueFrom?: string;
   dueTo?: string;
   limit?: number;
@@ -104,6 +108,9 @@ export interface TaskQualitySignal {
 export interface TaskQualityState {
   signals: TaskQualitySignal[];
   unavailable: boolean;
+  /** Reader metadata used by the task-to-segment link, never to invent a time. */
+  timestamp_precision: string | null;
+  duration_seconds: number | null;
 }
 
 const QUALITY_LABELS: Record<TaskQualitySignal["code"], string> = {
@@ -112,11 +119,19 @@ const QUALITY_LABELS: Record<TaskQualitySignal["code"], string> = {
   repetition: "repeticiones",
 };
 
+export async function fetchTask(taskId: string): Promise<Task> {
+  const res = await apiFetch(`/tasks/${encodeURIComponent(taskId)}`);
+  return (await res.json()) as Task;
+}
+
 export async function fetchTasks(query: TaskQuery = {}): Promise<TaskPage> {
   const params = new URLSearchParams({ limit: String(query.limit ?? 20) });
   if (query.status !== undefined && query.status !== "all") params.set("status", query.status);
   if (query.subjectId !== undefined && query.subjectId !== "") {
     params.set("subject_id", query.subjectId);
+  }
+  if (query.audioId !== undefined && query.audioId !== "") {
+    params.set("audio_id", query.audioId);
   }
   if (query.dueFrom !== undefined && query.dueFrom !== "") params.set("due_from", query.dueFrom);
   if (query.dueTo !== undefined && query.dueTo !== "") params.set("due_to", query.dueTo);
@@ -247,6 +262,195 @@ export async function patchTask(taskId: string, patch: TaskPatch): Promise<TaskU
     retries: 0,
   });
   return (await res.json()) as TaskUpdate;
+}
+
+export interface TaskConfirmation {
+  task: Task;
+  revision_id: string | null;
+}
+
+export interface TaskLifecycleResult {
+  task: Task;
+  notice: string | null;
+  cancelled_reminders: number;
+}
+
+export async function confirmTask(
+  taskId: string,
+  expectedVersion: number,
+  revisionId: string | null = null,
+): Promise<TaskConfirmation> {
+  const res = await apiFetch(`/tasks/${encodeURIComponent(taskId)}/confirm`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      expected_version: expectedVersion,
+      revision_id: revisionId,
+    }),
+    retries: 0,
+  });
+  return (await res.json()) as TaskConfirmation;
+}
+
+export async function dismissTask(
+  taskId: string,
+  expectedVersion: number,
+): Promise<TaskLifecycleResult> {
+  return closeTask(taskId, "dismiss", expectedVersion);
+}
+
+export async function completeTask(
+  taskId: string,
+  expectedVersion: number,
+): Promise<TaskLifecycleResult> {
+  return closeTask(taskId, "complete", expectedVersion);
+}
+
+async function closeTask(
+  taskId: string,
+  action: "dismiss" | "complete",
+  expectedVersion: number,
+): Promise<TaskLifecycleResult> {
+  const res = await apiFetch(`/tasks/${encodeURIComponent(taskId)}/${action}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ expected_version: expectedVersion }),
+    retries: 0,
+  });
+  return (await res.json()) as TaskLifecycleResult;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readString(record: Record<string, unknown>, key: string): string | null | undefined {
+  if (!(key in record)) return undefined;
+  const value = record[key];
+  if (typeof value === "string") return value;
+  return value === null ? null : undefined;
+}
+
+function readNumber(record: Record<string, unknown>, key: string): number | null | undefined {
+  if (!(key in record)) return undefined;
+  const value = record[key];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  return value === null ? null : undefined;
+}
+
+function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
+  if (!(key in record)) return undefined;
+  return typeof record[key] === "boolean" ? record[key] : undefined;
+}
+
+function readDateStatus(
+  record: Record<string, unknown>,
+  key: string,
+): TaskDateStatus | undefined {
+  if (!(key in record)) return undefined;
+  const value = record[key];
+  return value === "resolved" || value === "ambiguous" || value === "missing"
+    ? value
+    : undefined;
+}
+
+/**
+ * D3.3: the effective task a confirmation would write. A pending revision is an overlay;
+ * omitted fields keep the active value and unknown keys are ignored.
+ */
+export function effectiveTask(task: Task): Task {
+  const proposed = task.pending_revision?.proposed_fields;
+  if (proposed === undefined) return task;
+  const next: Task = { ...task, event_block: { ...task.event_block } };
+
+  const tipo = readString(proposed, "tipo");
+  if (tipo !== null && tipo !== undefined) next.tipo = tipo;
+  const titulo = readString(proposed, "titulo");
+  if (titulo !== null && titulo !== undefined) next.titulo = titulo;
+  const detalle = readString(proposed, "detalle");
+  if (detalle !== undefined) next.detalle = detalle;
+  const dueDate = readString(proposed, "due_date");
+  if (dueDate !== undefined) next.due_date = dueDate;
+  const dueAt = readString(proposed, "due_at");
+  if (dueAt !== undefined) next.due_at = dueAt;
+  const timezone = readString(proposed, "timezone");
+  if (timezone !== null && timezone !== undefined) next.timezone = timezone;
+  const allDay = readBoolean(proposed, "all_day");
+  if (allDay !== undefined) next.all_day = allDay;
+  const dateStatus = readDateStatus(proposed, "date_status");
+  if (dateStatus !== undefined) next.date_status = dateStatus;
+  const dateText = readString(proposed, "date_text");
+  if (dateText !== undefined) next.date_text = dateText;
+  const dateReason = readString(proposed, "date_reason");
+  if (dateReason !== undefined) next.date_reason = dateReason;
+  const confidence = readNumber(proposed, "confidence_score");
+  if (confidence !== undefined) next.confidence_score = confidence;
+
+  if (isRecord(proposed.event_block)) {
+    const block = proposed.event_block;
+    const startAt = readString(block, "start_at");
+    const endAt = readString(block, "end_at");
+    const startDate = readString(block, "start_date");
+    const endDate = readString(block, "end_date_exclusive");
+    next.event_block = {
+      ...task.event_block,
+      start_at: startAt === undefined ? task.event_block.start_at : startAt,
+      end_at: endAt === undefined ? task.event_block.end_at : endAt,
+      start_date: startDate === undefined ? task.event_block.start_date : startDate,
+      end_date_exclusive:
+        endDate === undefined ? task.event_block.end_date_exclusive : endDate,
+    };
+  }
+  return next;
+}
+
+function formatDateOnly(value: string): string | null {
+  const [year, month, day] = value.split("-");
+  if (year === undefined || month === undefined || day === undefined) return null;
+  return `${day}/${month}/${year}`;
+}
+
+function formatInstant(value: string, timeZone: string): string | null {
+  const instant = new Date(value);
+  if (Number.isNaN(instant.getTime())) return null;
+  try {
+    return new Intl.DateTimeFormat("es", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone,
+    }).format(instant);
+  } catch {
+    return null;
+  }
+}
+
+/** D3.3: the agenda block as the user will see it, never a guessed duration. */
+export function formatEventBlock(task: Task): string | null {
+  const block = task.event_block;
+  if (block.start_at !== null && block.end_at !== null) {
+    const start = formatInstant(block.start_at, task.timezone);
+    const end = formatInstant(block.end_at, task.timezone);
+    if (start !== null && end !== null) return `${start} – ${end}`;
+  }
+  if (block.start_date !== null && block.end_date_exclusive !== null) {
+    const start = formatDateOnly(block.start_date);
+    const end = formatDateOnly(block.end_date_exclusive);
+    if (start !== null && end !== null) return `${start} – ${end} (fin exclusivo)`;
+  }
+  return null;
+}
+
+export function eventModeLabel(task: Task): string {
+  if (task.event_block.start_at !== null || task.event_block.end_at !== null) {
+    return "con hora";
+  }
+  if (
+    task.event_block.start_date !== null ||
+    task.event_block.end_date_exclusive !== null
+  ) {
+    return "todo el día";
+  }
+  return "sin bloque de agenda";
 }
 
 function wallParts(instant: Date, timeZone: string): Record<string, string> | null {

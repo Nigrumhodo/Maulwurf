@@ -1,0 +1,61 @@
+D3.6 / C-S3-DA-07 evidence
+Date: 2026-11-03 (UTC)
+Environment: Windows, Node 24.12 local (CI Node 22)
+
+Automated coverage
+Commands:
+  cd apps/web
+  npx vitest run tests/unit/calendar.test.ts tests/unit/calendar-freshness.test.tsx tests/unit/calendar-view.test.tsx tests/unit/agenda-page.test.tsx
+Result: 14 passed
+Covered:
+- linked task + mirror event -> one task event;
+- task without event id + same block -> one task event;
+- unrelated Google event remains;
+- closed task does not hide its kept Google event;
+- task without block counted;
+- cancelled/missing mirror skipped;
+- all-day and timed mapping;
+- CalendarView receives one linked task, Google event and independent task;
+- task fetch failure leaves Google events visible;
+- last_synced_at, coverage and stale labels.
+
+Caddy route check
+Command: unauthenticated GET https://localhost/calendar/events
+Result: 401 application/json auth_required (not the SPA HTML)
+
+Full web gate
+Command: npm run typecheck && npm run lint && npm test && npm run build
+Result: typecheck/lint clean; 201 tests in 34 files passed; build 408 modules.
+
+Backend
+Command:
+  uv run ruff check .
+  uv run mypy .
+  uv run pytest tests/integration/test_task_read.py -q
+Result: ruff/mypy clean; test_task_read.py 4 passed.
+
+Manual browser C-S3-DA-07
+1. Start compose and apply migrations.
+2. Seed one Google mirror event, one active task linked to a mirror event with the same
+   (calendar_id,event_id), one active task with an event block but no mirror row, and two
+   subjects with different colors. Set settings.calendar_last_synced_at and a complete
+   coverage window.
+3. Open /gestion/agenda with the synthetic session.
+4. Verify:
+   - the linked task appears once, not twice;
+   - the independent task and Google event are visible;
+   - task colors match their subjects and the legend;
+   - "ultima sincronizacion" and coverage are visible;
+   - no <audio> element and no console errors.
+5. Repeat on / and verify the compact calendar section.
+
+Browser layout check (Playwright + Edge, 1440x1100)
+- /gestion/agenda month: calendar shell and FullCalendar 940 px wide, harness 940 px,
+  document scrollWidth == clientWidth (no horizontal overflow).
+- Week view: same 940 px width and no horizontal overflow.
+- CSP allows the FullCalendar inline stylesheet and data icon font; no console errors.
+- Screenshots were used only as local review evidence and are not versioned.
+
+Pending delivery
+- PR/CI run id is not recorded yet.
+- No real Google call, audio, credential or secret is involved.

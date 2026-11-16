@@ -49,13 +49,17 @@ SYNC_TASK_EVENT = "sync_task_event"
 # Only a confirmed task owes a Calendar event; completed/dismissed rows are tombstones.
 _RESUMABLE_TASKS = text(
     """
-    UPDATE tasks
+    UPDATE tasks AS t
        SET calendar_sync_status = 'pending',
+           calendar_id = s.calendar_write_calendar_id,
            updated_at = now()
-     WHERE user_id = :user_id
-       AND calendar_sync_status = 'blocked'
-       AND status = 'confirmed'
-    RETURNING id, version
+      FROM settings AS s
+     WHERE t.user_id = :user_id
+       AND s.user_id = t.user_id
+       AND s.calendar_write_calendar_id IS NOT NULL
+       AND t.calendar_sync_status = 'blocked'
+       AND t.status = 'confirmed'
+    RETURNING t.id, t.version
     """
 )
 

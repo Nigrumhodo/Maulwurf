@@ -241,7 +241,9 @@ Gmail).
 
 **Endpoints:** `GET /auth/google/start`, `GET /auth/google/callback`, `POST /auth/logout`,
 `GET /me`, `PATCH /me`, `GET /integrations/status`, `POST /integrations/google/connect`,
-`POST /integrations/google/reconnect`.
+`POST /integrations/google/reconnect`, and the browser-navigation variants
+`GET /integrations/google/connect|reconnect` (same signed state and rate limit; a `fetch`
+`POST` cannot follow the cross-origin `302` to Google or render the consent screen).
 
 ---
 

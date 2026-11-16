@@ -1,16 +1,19 @@
-import { Card } from "@/components/ui/Card";
+import { CalendarView } from "@/components/calendar/CalendarView";
 
-// D3.6 (esqueleto) — Agenda: vista de calendario con eventos de Google y tareas
-// Maulwurf coloreadas por materia, sin dibujar dos veces la tarea y su evento.
+// D3.6 - Agenda: Google events and Maulwurf tasks in one duplicate-free calendar. The
+// calendar is read-only; no event is created, moved or deleted from this page.
+
 export function AgendaPage() {
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="capitalize text-2xl text-mint">agenda</h1>
+      <div className="flex flex-col gap-1">
+        <h1 className="capitalize text-2xl text-mint">agenda</h1>
+        <p className="lowercase text-lavender/60">
+          &gt; eventos de google y tareas maulwurf; cada tarea enlazada se dibuja una sola vez.
+        </p>
+      </div>
 
-      <Card title="calendario">
-        <p className="lowercase text-lavender">aún no hay eventos sincronizados.</p>
-        <p className="lowercase text-lavender">la agenda con google calendar llega en d3.x.</p>
-      </Card>
+      <CalendarView />
     </div>
   );
 }

@@ -4,6 +4,7 @@ These are the HTTP shapes, not the frozen LLM contract in `schemas.analysis`. Th
 detail routes share `TaskOut` so the inbox and the future editor cannot drift.
 """
 
+import uuid
 from datetime import date, datetime
 from typing import Any
 
@@ -25,6 +26,7 @@ class TaskSourceOut(BaseModel):
 
 class TaskEvidenceOut(BaseModel):
     segment_id: str
+    ordinal: int
     char_start: int
     char_end: int
     quote: str
@@ -76,6 +78,8 @@ class TaskOut(BaseModel):
     confidence_score: float | None
     status: str
     calendar_sync_status: str
+    calendar_id: str | None
+    calendar_event_id: str | None
     version: int
     due_version: int
     event_block: TaskEventBlockOut
@@ -115,6 +119,27 @@ class TaskVersionBody(BaseModel):
     expected_version: int = Field(ge=1)
 
 
+class TaskConfirmationBody(TaskVersionBody):
+    """A3.4: confirm the active version, optionally promoting exactly one revision."""
+
+    revision_id: uuid.UUID | None = None
+
+
 class TaskUpdateOut(BaseModel):
     task: TaskOut
     revision_id: str | None = None
+
+
+class TaskConfirmationOut(BaseModel):
+    """A3.4: the confirmed task plus the revision that was promoted, if any."""
+
+    task: TaskOut
+    revision_id: str | None = None
+
+
+class TaskLifecycleOut(BaseModel):
+    """A3.7: the closed task plus the notice about its kept Calendar event."""
+
+    task: TaskOut
+    notice: str | None = None
+    cancelled_reminders: int = 0

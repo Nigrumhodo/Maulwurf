@@ -229,7 +229,9 @@ a test gRPC server.
   does not mutate active fields; confirming promotes `revision_id` with version control and
   an atomic outbox.
 - [ ] Validate real scopes and secondary calendar creation; coordinated reconnect/refresh.
-  Test scope rejection without breaking library/chat.
+  Test scope rejection without breaking library/chat. The browser starts consent through
+  `GET /integrations/google/connect|reconnect` because a `fetch` `POST` cannot follow the
+  cross-origin `302`; both variants keep the signed, user-bound state and the rate limit.
 - [ ] Deterministic event ID, reconciled timeout/409, stale jobs discarded, and ETag for
   external conflicts. Local editing requires reconfirming before writing to Google.
   Reconnecting Calendar reactivates only current `blocked` versions and creates/reuses the

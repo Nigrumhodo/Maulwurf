@@ -56,6 +56,7 @@ export interface LibraryExports {
 
 export interface LibraryAudioDetail extends LibraryAudio {
   audio_retained: boolean;
+  analysis_backfill_available: boolean;
   transcript: LibraryTranscript | null;
   exports: LibraryExports;
 }
@@ -105,6 +106,22 @@ export async function retryAudio(
 }
 
 /** `POST /audios/{id}/reupload`: nueva sesión efímera solo sin transcripción utilizable. */
+export interface AnalysisBackfillResult {
+  audio_id: string;
+  status: string;
+  transcript_version: number | null;
+  run_id: string | null;
+  run_status: string | null;
+}
+
+/** `POST /audios/{id}/analysis/backfill`: solo texto persistido, sin re-subir audio. */
+export async function backfillAnalysis(audioId: string): Promise<AnalysisBackfillResult> {
+  const res = await apiFetch(`/audios/${encodeURIComponent(audioId)}/analysis/backfill`, {
+    method: "POST",
+  });
+  return (await res.json()) as AnalysisBackfillResult;
+}
+
 export async function reuploadAudio(audioId: string): Promise<AudioCreated> {
   const res = await apiFetch(`/audios/${encodeURIComponent(audioId)}/reupload`, {
     method: "POST",

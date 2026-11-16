@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -38,7 +38,7 @@ async def _patch(
     actor: actors.Actor,
     task_id: object,
     **body: object,
-) -> object:
+) -> Response:
     return await client.patch(
         f"/tasks/{task_id}",
         json=body,

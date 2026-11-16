@@ -1,16 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { ClassSummary } from "@/components/transcript/ClassSummary";
 import { Button } from "@/components/ui/Button";
 import { buttonClasses } from "@/components/ui/buttonStyles";
 import { Card } from "@/components/ui/Card";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { audioLabel } from "@/lib/library";
 import type { LibraryAudioDetail } from "@/lib/library";
-import {
-  downloadSrt,
-  segmentLabel,
-  summaryState,
-} from "@/lib/reader";
+import { downloadSrt, segmentLabel } from "@/lib/reader";
 import type { ReaderTranscript } from "@/lib/reader";
 
 // D2.5 — Lector enlazable (C-S2-DA-04): segmentos con `?segment=`, foco/highlight,
@@ -40,7 +37,6 @@ export function TranscriptReader({
   const [srtBusy, setSrtBusy] = useState(false);
   const [srtUnavailable, setSrtUnavailable] = useState(false);
   const [srtError, setSrtError] = useState<string | null>(null);
-  const summary = summaryState(detail, transcript);
   const activeExists =
     activeSegmentId === null ||
     transcript.segments.some((segment) => segment.id === activeSegmentId);
@@ -158,27 +154,7 @@ export function TranscriptReader({
         </div>
       </Card>
 
-      <Card title="resumen">
-        <div className="lowercase flex flex-col gap-2">
-          {summary.text !== null ? (
-            <p className="leading-relaxed text-lavender">{summary.text}</p>
-          ) : (
-            <p className="text-lavender/60">&gt; {summary.note ?? "resumen no disponible"}</p>
-          )}
-          {transcript.topics.length > 0 && (
-            <ul className="flex flex-wrap gap-2">
-              {transcript.topics.map((topic) => (
-                <li
-                  key={topic}
-                  className="border-2 border-lavender/40 px-2 py-0.5 text-lavender/70"
-                >
-                  {topic}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </Card>
+      <ClassSummary detail={detail} transcript={transcript} />
 
       {!activeExists && (
         <p role="alert" className="lowercase border-2 border-mint px-3 py-2 text-mint">

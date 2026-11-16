@@ -63,7 +63,7 @@ from app.core.errors import (
 )
 from app.core.validation import is_iana_timezone
 from app.models import Audio, IngestionAttempt, Subject
-from app.services import library, progress
+from app.services import analysis_backfill, library, progress
 from app.services.audios import (
     allowed_languages,
     cancel_attempt,
@@ -164,6 +164,16 @@ class RetryAccepted(BaseModel):
     audio_id: uuid.UUID
     transcript_version: int
     runs: list[RetryStageAccepted]
+
+
+class AnalysisBackfillOut(BaseModel):
+    """D3.5/S3.1: outcome of one explicit F1 -> F2 analysis backfill."""
+
+    audio_id: uuid.UUID
+    status: str
+    transcript_version: int | None = None
+    run_id: uuid.UUID | None = None
+    run_status: str | None = None
 
 
 class ReuploadCreated(BaseModel):
@@ -733,6 +743,60 @@ async def retry_audio(
     )
     await db.commit()
     return accepted
+
+
+@router.post(
+    "/audios/{audio_id}/analysis/backfill",
+    status_code=202,
+    responses={
+        202: {"description": "Análisis encolado o ya encolado (idempotente)"},
+        200: {"description": "La clase ya tiene el análisis actual; no se duplica"},
+        401: {"description": "Sin sesión (auth_required)"},
+        403: {"description": "CSRF u Origin inválido (csrf_invalid)"},
+        404: {"description": "Audio inexistente, ajeno o tombstoneado (not_found)"},
+        409: {"description": "transcript_unavailable o invalid_transition"},
+    },
+)
+async def backfill_analysis(
+    audio_id: uuid.UUID,
+    response: Response,
+    session: MutationSession,
+    db: DbSession,
+) -> AnalysisBackfillOut:
+    """D3.5/S3.1: queue analysis over the persisted text, never through ASR."""
+    item = await analysis_backfill.backfill_audio(
+        db, user_id=session.user_id, audio_id=audio_id, apply=True
+    )
+    status = item.status
+    if status is analysis_backfill.BackfillStatus.NOT_FOUND:
+        raise not_found()
+    if status is analysis_backfill.BackfillStatus.NO_TRANSCRIPT:
+        raise ApiError(
+            409,
+            "transcript_unavailable",
+            "Esta clase no tiene una transcripción utilizable.",
+        )
+    if status not in {
+        analysis_backfill.BackfillStatus.QUEUED,
+        analysis_backfill.BackfillStatus.ALREADY_QUEUED,
+        analysis_backfill.BackfillStatus.ALREADY_ANALYZED,
+    }:
+        raise ApiError(
+            409,
+            "invalid_transition",
+            "La clase no puede encolar análisis en su estado actual.",
+            {"status": status.value},
+        )
+    await db.commit()
+    if status is analysis_backfill.BackfillStatus.ALREADY_ANALYZED:
+        response.status_code = 200
+    return AnalysisBackfillOut(
+        audio_id=item.audio_id,
+        status=status.value,
+        transcript_version=item.transcript_version,
+        run_id=item.run_id,
+        run_status=item.run_status,
+    )
 
 
 @router.post(

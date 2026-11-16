@@ -96,6 +96,7 @@ const ITEMS: LibraryAudio[] = [
 const DETAIL_A2: LibraryAudioDetail = {
   ...ITEMS[1],
   audio_retained: false,
+  analysis_backfill_available: false,
   transcript: {
     version: 7,
     timestamp_precision: "segment",

@@ -8,6 +8,13 @@ responde `302` a Google. El callback (`/auth/google/callback`) distingue el modo
 `state` firmado, intercambia el código y reconcilia el calendario «Maulwurf»; los tokens
 solo se actualizan si Google confirma los scopes de Calendar y el ID token pertenece al
 mismo `sub` de la sesión (ver `services/calendar_connection.py`).
+
+D3.7 añade las variantes `GET` de connect/reconnect para que el navegador pueda navegar de
+verdad: un `fetch` `POST` no puede seguir el `302` cross-origin a Google ni mostrar el
+consentimiento, así que la UI enlaza a estas rutas. La seguridad no cambia: el `state`
+firmado sigue ligado al `user_id` de la sesión y el callback exige consentimiento explícito
+y una sesión viva del mismo usuario. Un fallo de arranque vuelve a
+`/settings?calendar=error&reason=<razón cerrada>` en vez de renderizar JSON en el navegador.
 """
 
 import time
@@ -25,7 +32,12 @@ from app.core.deps import (
     MutationSession,
     set_oauth_state_cookie,
 )
-from app.core.errors import auth_required, google_integration_unavailable, google_not_connected
+from app.core.errors import (
+    ApiError,
+    auth_required,
+    google_integration_unavailable,
+    google_not_connected,
+)
 from app.core.redis import RedisDep
 from app.core.security import sign_state
 from app.models import CalendarSettings, GoogleCredential, User
@@ -37,6 +49,29 @@ router = APIRouter(tags=["integrations"])
 
 CALENDAR_CONNECT = "connect"
 CALENDAR_RECONNECT = "reconnect"
+SETTINGS_PATH = "/settings"
+
+# Closed vocabulary the Settings page renders (D3.7). Unknown codes fall back to `error`.
+_NAVIGATION_REASONS = {
+    "google_integration_unavailable": "not_configured",
+    "google_not_connected": "not_connected",
+    "rate_limited": "rate_limited",
+    "capacity_unavailable": "capacity_unavailable",
+}
+
+
+def _calendar_error_redirect(reason: str) -> RedirectResponse:
+    redirect = RedirectResponse(
+        f"{SETTINGS_PATH}?calendar=error&reason={reason}", status_code=302
+    )
+    redirect.headers["Cache-Control"] = "no-store"
+    return redirect
+
+
+def _login_redirect() -> RedirectResponse:
+    redirect = RedirectResponse("/login?error=session_expired", status_code=302)
+    redirect.headers["Cache-Control"] = "no-store"
+    return redirect
 
 
 async def _integration_rate_limit(session: MutationSession, redis: RedisDep) -> None:
@@ -52,6 +87,8 @@ class GoogleStatus(BaseModel):
     scopes: list[str]
     # Remote ID of the app-created secondary calendar (M5); NULL until it is reconciled.
     calendar_id: str | None
+    # A3.4: the exact condition the confirm endpoint uses to choose pending vs blocked.
+    calendar_write_ready: bool
     token_expires_at: datetime | None
     last_refresh_at: datetime | None
 
@@ -74,14 +111,21 @@ async def integrations_status(
             status="disconnected",
             scopes=[],
             calendar_id=calendar_id,
+            calendar_write_ready=False,
             token_expires_at=None,
             last_refresh_at=None,
         )
     else:
+        scopes = list(credential.scopes or [])
         google = GoogleStatus(
             status="connected" if credential.status == "connected" else "disconnected",
-            scopes=list(credential.scopes or []),
+            scopes=scopes,
             calendar_id=calendar_id,
+            calendar_write_ready=bool(
+                credential.status == "connected"
+                and calendar_id is not None
+                and not oauth_google.missing_calendar_scopes(scopes)
+            ),
             token_expires_at=credential.token_expires_at,
             last_refresh_at=credential.last_refresh_at,
         )
@@ -123,6 +167,54 @@ async def _start_calendar_flow(
     redirect.headers["Cache-Control"] = "no-store"
     set_oauth_state_cookie(redirect, token, OAUTH_STATE_TTL_SECONDS)
     return redirect
+
+
+async def _start_calendar_navigation(
+    db: DbSession, session: CurrentSession, redis: RedisDep, *, reconnect: bool
+) -> RedirectResponse:
+    """GET entry point for a real browser navigation (D3.7).
+
+    A `fetch` POST cannot follow the cross-origin `302` to Google and the browser never
+    shows the consent screen, so the UI links here. The signed `state` still binds the
+    grant to this session's `user_id`, and the callback still needs Google's explicit
+    consent plus a live session of the same user. Expected start failures are redirected
+    back to Settings instead of rendering JSON in a navigation.
+    """
+    try:
+        await enforce_integration_limit(redis, session.user_id)
+        return await _start_calendar_flow(db, session, reconnect=reconnect)
+    except ApiError as exc:
+        if exc.code == "auth_required":
+            return _login_redirect()
+        return _calendar_error_redirect(_NAVIGATION_REASONS.get(exc.code, "error"))
+
+
+@router.get(
+    "/integrations/google/connect",
+    status_code=302,
+    response_model=None,
+    responses={
+        302: {"description": "Browser navigation: Google consent or /settings on failure"},
+    },
+)
+async def google_connect_navigation(
+    db: DbSession, session: CurrentSession, redis: RedisDep
+) -> RedirectResponse:
+    return await _start_calendar_navigation(db, session, redis, reconnect=False)
+
+
+@router.get(
+    "/integrations/google/reconnect",
+    status_code=302,
+    response_model=None,
+    responses={
+        302: {"description": "Browser navigation: Google consent or /settings on failure"},
+    },
+)
+async def google_reconnect_navigation(
+    db: DbSession, session: CurrentSession, redis: RedisDep
+) -> RedirectResponse:
+    return await _start_calendar_navigation(db, session, redis, reconnect=True)
 
 
 @router.post(

@@ -2,7 +2,7 @@
 
 /*
  * Maulwurf — estética Cyber Y2K / Retro OS / Glitch Terminal, dos temas:
- *   - oscuro (por defecto): fondo #050505, acento #ff0033 (rojo neón), texto #ffffff.
+ *   - oscuro (por defecto): fondo #050505, acento #f5c542 (dorado), texto #ffffff.
  *   - claro  (clase `.light` en <html>): fondo #ebebeb, acento #0000ff (cobalto), texto #000000.
  *
  * Los colores son variables CSS que se sobreescriben bajo `:root.light`; los
@@ -11,7 +11,7 @@
  *
  * Semántica de los tokens:
  *   --color-dark        → fondo de página.
- *   --color-mint        → acento primario (cobalto en claro, rojo neón en oscuro).
+ *   --color-mint        → acento primario (cobalto en claro, dorado en oscuro).
  *   --color-lavender    → texto secundario (negro en claro, blanco en oscuro).
  *   --color-pure-black  → tinta / bordes / sombras (negro en claro, blanco en oscuro).
  *   --color-pure-white  → papel / texto sobre superficies oscuras.
@@ -23,9 +23,9 @@
   --color-pure-black: #ffffff;
   --color-dark: #050505;
   --color-pure-white: #ffffff;
-  --color-mint: #ff0033;
+  --color-mint: #f5c542;
   --color-lavender: #ffffff;
-  --color-on-accent: #ffffff;
+  --color-on-accent: #050505;
   --color-surface: #0a0a0a;
 
   /* Tipografía retro monospaced */
@@ -223,13 +223,13 @@
   }
   .glitch-hover:hover {
     animation: glitch-shake 0.22s steps(2, end) infinite;
-    text-shadow: 1px 0 rgba(255, 0, 51, 0.55), -1px 0 rgba(0, 255, 255, 0.55);
+    text-shadow: 1px 0 rgba(245, 197, 66, 0.55), -1px 0 rgba(0, 255, 255, 0.55);
   }
 
   /* Glitch de un solo disparo (p. ej. al entrar como invitado). */
   .glitch-once {
     animation: glitch-shake 0.3s steps(2, end);
-    text-shadow: 1px 0 rgba(255, 0, 51, 0.55), -1px 0 rgba(0, 255, 255, 0.55);
+    text-shadow: 1px 0 rgba(245, 197, 66, 0.55), -1px 0 rgba(0, 255, 255, 0.55);
   }
 
   /* Imágenes específicas por tema: la oscura es el default, la clara en .light. */
@@ -268,6 +268,144 @@
     );
     background-size: 14px 14px;
   }
+}
+
+/* D3.6: bring FullCalendar into the terminal palette instead of its default theme. */
+.calendar-shell {
+  --fc-border-color: color-mix(in srgb, var(--color-lavender) 22%, transparent);
+  --fc-page-bg-color: var(--color-surface);
+  --fc-neutral-bg-color: color-mix(in srgb, var(--color-lavender) 8%, transparent);
+  --fc-neutral-text-color: var(--color-lavender);
+  --fc-today-bg-color: color-mix(in srgb, var(--color-mint) 12%, transparent);
+  --fc-button-text-color: var(--color-on-accent);
+  --fc-button-bg-color: var(--color-mint);
+  --fc-button-border-color: var(--color-pure-black);
+  --fc-button-hover-bg-color: var(--color-surface);
+  --fc-button-hover-border-color: var(--color-mint);
+  --fc-button-active-bg-color: var(--color-surface);
+  --fc-button-active-border-color: var(--color-mint);
+  --fc-event-bg-color: var(--color-mint);
+  --fc-event-border-color: var(--color-mint);
+  --fc-event-text-color: var(--color-on-accent);
+  color: var(--color-lavender);
+  font-family: var(--font-pixel);
+  text-transform: none;
+}
+
+.calendar-shell .fc {
+  color: var(--color-lavender);
+}
+
+.calendar-shell .fc-toolbar {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.calendar-shell .fc-toolbar.fc-header-toolbar {
+  margin-bottom: 0.75rem;
+}
+
+.calendar-shell .fc-toolbar-chunk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.calendar-shell .fc-toolbar-title {
+  color: var(--color-mint);
+  font-size: 1.5rem;
+  text-transform: capitalize;
+}
+
+.calendar-shell .fc-button {
+  border: 2px solid var(--color-pure-black);
+  box-shadow: var(--shadow-block-sm);
+  font-family: var(--font-pixel);
+  padding: 0.2rem 0.55rem;
+  text-transform: capitalize;
+}
+
+.calendar-shell .fc-button-primary {
+  background-color: var(--color-mint);
+  border-color: var(--color-pure-black);
+  color: var(--color-on-accent);
+}
+
+.calendar-shell .fc-button-primary:hover {
+  background-color: var(--color-surface);
+  border-color: var(--color-mint);
+  color: var(--color-mint);
+}
+
+.calendar-shell .fc-button-primary:not(:disabled).fc-button-active,
+.calendar-shell .fc-button-primary:not(:disabled):active {
+  background-color: var(--color-surface);
+  border-color: var(--color-mint);
+  color: var(--color-mint);
+}
+
+.calendar-shell .fc-button-group > .fc-button {
+  margin-left: -2px;
+}
+
+.calendar-shell .fc-scrollgrid {
+  border: 2px solid var(--color-pure-black);
+}
+
+.calendar-shell .fc-theme-standard td,
+.calendar-shell .fc-theme-standard th {
+  border-color: var(--fc-border-color);
+}
+
+.calendar-shell .fc-col-header-cell {
+  background-color: color-mix(in srgb, var(--color-mint) 8%, transparent);
+}
+
+.calendar-shell .fc-col-header-cell-cushion {
+  color: var(--color-mint);
+  padding: 0.35rem 0.25rem;
+  text-transform: capitalize;
+}
+
+.calendar-shell .fc-daygrid-day-number {
+  color: var(--color-lavender);
+  padding: 0.25rem;
+  text-decoration: none;
+}
+
+.calendar-shell .fc-daygrid-day.fc-day-today {
+  background-color: var(--fc-today-bg-color);
+}
+
+.calendar-shell .fc-daygrid-day-top {
+  flex-direction: row;
+  justify-content: flex-end;
+}
+
+.calendar-shell .fc-event {
+  border: 1px solid var(--color-pure-black);
+  border-radius: 0;
+  font-family: var(--font-pixel);
+  font-size: 0.95rem;
+}
+
+.calendar-shell .fc-daygrid-event {
+  margin: 1px 2px;
+  padding: 0 2px;
+}
+
+.calendar-shell .fc-daygrid-more-link {
+  color: var(--color-mint);
+}
+
+.calendar-shell .fc-scrollgrid-section-sticky > * {
+  background-color: var(--color-surface);
+}
+
+.calendar-shell .fc-view-harness {
+  background-color: var(--color-surface);
 }
 
 /* Decorative motion is optional: honour the OS setting and stop the loops. */

@@ -9,8 +9,10 @@ import {
   fetchTranscriptReader,
   formatClock,
   segmentLabel,
+  segmentLabelFromTimes,
   summaryState,
   validSegmentTime,
+  validTimes,
 } from "@/lib/reader";
 import type { ReaderSegment, ReaderTranscript } from "@/lib/reader";
 
@@ -38,6 +40,7 @@ function detail(stages: { index: string; analyze: string }): LibraryAudioDetail 
     stages,
     aggregate_status: "ready",
     audio_retained: false,
+    analysis_backfill_available: false,
     transcript: {
       version: 1,
       timestamp_precision: "segment",
@@ -89,6 +92,15 @@ describe("tiempos del lector", () => {
     expect(segmentLabel(SEGMENT, "segment", 20)).toBe("0:05");
     expect(segmentLabel(SEGMENT, "none", 20)).toBe("segmento 1");
     expect(segmentLabel({ ...SEGMENT, t_end: 99 }, "segment", 20)).toBe("segmento 1");
+  });
+
+  it("comparte la misma regla con el enlace desde la tarea", () => {
+    expect(validTimes(5, 10, "segment", 20)).toBe(true);
+    expect(validTimes(5, 10, "none", 20)).toBe(false);
+    expect(validTimes(5, 10, "segment", 9)).toBe(false);
+    expect(validTimes(null, 10, "segment", 20)).toBe(false);
+    expect(segmentLabelFromTimes(5, 10, 2, "segment", 20)).toBe("0:05");
+    expect(segmentLabelFromTimes(5, 10, 2, "none", 20)).toBe("segmento 2");
   });
 });
 

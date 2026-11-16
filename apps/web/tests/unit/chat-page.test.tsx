@@ -58,6 +58,7 @@ const AUDIO_DETAIL: LibraryAudioDetail = {
   stages: { index: "succeeded", analyze: "not_requested" },
   aggregate_status: "ready",
   audio_retained: false,
+  analysis_backfill_available: false,
   transcript: {
     version: 1,
     timestamp_precision: "segment",

@@ -1243,6 +1243,8 @@ itself `retryable=false` in `details`: the header is the retry signal (A2.19).
 | `GET` | `/integrations/status` | S1 | Login/Calendar/Gmail status, scopes, freshness | `200` |
 | `POST` | `/integrations/google/connect` | S3 | Incremental OAuth with Calendar scopes (real verification D7) | `302` to Google · `429` conditional · `503` |
 | `POST` | `/integrations/google/reconnect` | S3 | Re-authorization after `invalid_grant` (Testing expires after 7 days) | `302` to Google · `429` conditional · `503` |
+| `GET` | `/integrations/google/connect` | S3 | Browser-navigation variant (D3.7): same signed state and rate limit; a start failure redirects to `/settings?calendar=error&reason=...` | `302` |
+| `GET` | `/integrations/google/reconnect` | S3 | Browser-navigation variant (D3.7) for `invalid_grant`; same state/rate limit and failure redirect | `302` |
 | `GET` | `/me/notifications` | S4 | Current M8 preferences (read companion of the PATCH) | `200` |
 | `PATCH` | `/me/notifications` | S4 | M8 preferences (Gmail opt-in, digests, thresholds) | `200` |
 | `POST` | `/notifications/test` | S4 | Test send to the verified email | `202` |

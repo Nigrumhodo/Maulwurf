@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiHttpError } from "@/lib/api";
 import {
   audioLabel,
+  backfillAnalysis,
   failedStages,
   fetchAudioDetail,
   fetchAudios,
@@ -127,6 +128,7 @@ describe("llamadas al contrato", () => {
     const detail: LibraryAudioDetail = {
       ...audio({ aggregate_status: "partial", stages: { index: "succeeded", analyze: "failed" } }),
       audio_retained: false,
+      analysis_backfill_available: false,
       transcript: {
         version: 3,
         timestamp_precision: "segment",
@@ -168,6 +170,29 @@ describe("llamadas al contrato", () => {
       stages: ["analyze"],
       transcript_version: 3,
     });
+  });
+
+  it("encola el backfill de análisis sin cuerpo ni audio", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          audio_id: "a1",
+          status: "queued",
+          transcript_version: 3,
+          run_id: "r1",
+          run_status: "pending",
+        }),
+        { status: 202, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await backfillAnalysis("a1");
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/audios/a1/analysis/backfill");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
   });
 
   it("reupload es un POST sin cuerpo a la clase exacta", async () => {

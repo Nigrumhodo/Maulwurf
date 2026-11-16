@@ -1,4 +1,4 @@
-﻿// @vitest-environment jsdom
+// @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TaskEditor } from "@/components/tasks/TaskEditor";
@@ -22,6 +22,8 @@ const TASK: Task = {
   confidence_score: null,
   status: "needs_review",
   calendar_sync_status: "not_requested",
+    calendar_id: null,
+    calendar_event_id: null,
   version: 1,
   due_version: 1,
   event_block: {

@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
+import { GoogleReconnect } from "@/components/calendar/GoogleReconnect";
 import { TaskEditor } from "@/components/tasks/TaskEditor";
 import { TaskInbox } from "@/components/tasks/TaskInbox";
+import { TaskReviewDialog } from "@/components/tasks/TaskReviewDialog";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ApiHttpError } from "@/lib/api";
+import { fetchIntegrationsStatus } from "@/lib/integrations";
+import type { GoogleStatus } from "@/lib/integrations";
 import { fetchAudioDetail } from "@/lib/library";
 import { fetchSubjects } from "@/lib/subjects";
 import type { Subject } from "@/lib/subjects";
@@ -42,8 +46,19 @@ async function loadQuality(tasks: Task[]): Promise<Record<string, TaskQualitySta
     const result = results[index];
     quality[audioId] =
       result?.status === "fulfilled"
-        ? { signals: qualitySignals(result.value), unavailable: false }
-        : { signals: [], unavailable: true };
+        ? {
+            signals: qualitySignals(result.value),
+            unavailable: false,
+            timestamp_precision:
+              result.value.transcript?.timestamp_precision ?? null,
+            duration_seconds: result.value.duration_seconds ?? null,
+          }
+        : {
+            signals: [],
+            unavailable: true,
+            timestamp_precision: null,
+            duration_seconds: null,
+          };
   });
   return quality;
 }
@@ -61,6 +76,22 @@ export function TareasPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [reviewingTask, setReviewingTask] = useState<Task | null>(null);
+  const [google, setGoogle] = useState<GoogleStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchIntegrationsStatus()
+      .then((status) => {
+        if (!cancelled) setGoogle(status.google ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setGoogle(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -138,6 +169,13 @@ export function TareasPage() {
     setEditingTask(update.task);
   }
 
+  function handleReviewed(task: Task) {
+    setTasks((current) =>
+      current.map((item) => (item.id === task.id ? task : item)),
+    );
+    setReviewingTask(task);
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-1">
@@ -146,6 +184,10 @@ export function TareasPage() {
           &gt; propuestas del análisis para revisar; ninguna se escribe en Calendar desde aquí.
         </p>
       </div>
+
+      {google !== null && !google.calendar_write_ready && (
+        <GoogleReconnect google={google} compact />
+      )}
 
       <Card title="filtros">
         <div className="lowercase flex flex-wrap items-end gap-3">
@@ -198,10 +240,19 @@ export function TareasPage() {
 
       {editingTask !== null && (
         <TaskEditor
-          key={editingTask.id}
+          key={`edit-${editingTask.id}`}
           task={editingTask}
           onSaved={handleSaved}
           onCancel={() => setEditingTask(null)}
+        />
+      )}
+
+      {reviewingTask !== null && (
+        <TaskReviewDialog
+          key={`review-${reviewingTask.id}`}
+          task={reviewingTask}
+          onUpdated={handleReviewed}
+          onClose={() => setReviewingTask(null)}
         />
       )}
 
@@ -227,6 +278,7 @@ export function TareasPage() {
               tasks={tasks}
               qualityByAudio={qualityByAudio}
               onEdit={setEditingTask}
+              onReview={setReviewingTask}
             />
             {nextCursor !== null && (
               <Button

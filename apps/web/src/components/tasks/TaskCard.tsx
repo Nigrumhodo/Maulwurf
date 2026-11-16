@@ -1,11 +1,11 @@
-import { Link } from "react-router-dom";
+import { TranscriptLink } from "@/components/transcript/TranscriptLink";
+import { SyncStatus } from "@/components/calendar/SyncStatus";
 import { Button } from "@/components/ui/Button";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
   confidenceLabel,
   formatTaskDue,
   qualitySummary,
-  taskEvidenceHref,
 } from "@/lib/tasks";
 import type { Task, TaskQualityState } from "@/lib/tasks";
 
@@ -15,9 +15,10 @@ export interface TaskCardProps {
   task: Task;
   quality: TaskQualityState | null;
   onEdit?: () => void;
+  onReview?: () => void;
 }
 
-export function TaskCard({ task, quality, onEdit }: TaskCardProps) {
+export function TaskCard({ task, quality, onEdit, onReview }: TaskCardProps) {
   const due = formatTaskDue(task);
   const hasQualityWarning =
     quality !== null && (quality.unavailable || quality.signals.length > 0);
@@ -65,6 +66,8 @@ export function TaskCard({ task, quality, onEdit }: TaskCardProps) {
         )}
       </div>
 
+      <SyncStatus task={task} />
+
       {hasQualityWarning && (
         <div role="status" className="capitalize border-2 border-mint px-2 py-1 text-mint">
           {quality?.unavailable ? (
@@ -86,36 +89,33 @@ export function TaskCard({ task, quality, onEdit }: TaskCardProps) {
         <p className="text-lavender/60">sin cita textual; no se presenta como extracción.</p>
       ) : (
         <ul className="flex flex-col gap-2">
-          {task.evidence.map((evidence) => {
-            const href = taskEvidenceHref(task, evidence);
-            return (
-              <li
-                key={`${evidence.segment_id}-${evidence.char_start}-${evidence.char_end}`}
-                className="flex flex-col gap-1 border-l-2 border-lavender/40 pl-3"
-              >
-                <blockquote className="text-lavender/80">“{evidence.quote}”</blockquote>
-                {href !== null && (
-                  <Link
-                    to={href}
-                    className="capitalize text-xs text-mint underline decoration-dotted hover:text-on-accent hover:bg-mint"
-                  >
-                    ver cita en la clase
-                  </Link>
-                )}
-              </li>
-            );
-          })}
+          {task.evidence.map((evidence) => (
+            <li
+              key={`${evidence.segment_id}-${evidence.char_start}-${evidence.char_end}`}
+              className="flex flex-col gap-1 border-l-2 border-lavender/40 pl-3"
+            >
+              <blockquote className="text-lavender/80">“{evidence.quote}”</blockquote>
+              <TranscriptLink task={task} evidence={evidence} quality={quality} />
+            </li>
+          ))}
         </ul>
       )}
 
-      {onEdit !== undefined &&
+      {(onEdit !== undefined || onReview !== undefined) &&
         (task.status === "needs_review" ||
           task.status === "pending" ||
           task.status === "confirmed") && (
-          <div>
-            <Button type="button" size="sm" variant="secondary" onClick={onEdit}>
-              editar
-            </Button>
+          <div className="flex flex-wrap gap-2">
+            {onReview !== undefined && (
+              <Button type="button" size="sm" variant="primary" onClick={onReview}>
+                revisar
+              </Button>
+            )}
+            {onEdit !== undefined && (
+              <Button type="button" size="sm" variant="secondary" onClick={onEdit}>
+                editar
+              </Button>
+            )}
           </div>
         )}
     </li>

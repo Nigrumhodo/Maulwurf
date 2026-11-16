@@ -36,19 +36,31 @@ export async function fetchTranscriptReader(audioId: string): Promise<ReaderTran
 const TIMED_PRECISIONS = new Set(["word", "segment"]);
 
 /** Un tiempo solo es visible si la transcripción lo declara fiable y está dentro del audio. */
+export function validTimes(
+  tStart: number | null,
+  tEnd: number | null,
+  timestampPrecision: string,
+  durationSeconds: number | null,
+): boolean {
+  if (!TIMED_PRECISIONS.has(timestampPrecision)) return false;
+  if (tStart === null || tEnd === null) return false;
+  if (!Number.isFinite(tStart) || !Number.isFinite(tEnd)) return false;
+  if (tStart < 0 || tEnd <= tStart) return false;
+  if (durationSeconds !== null && tEnd > durationSeconds + 0.001) return false;
+  return true;
+}
+
 export function validSegmentTime(
   segment: ReaderSegment,
   timestampPrecision: string,
   durationSeconds: number | null,
 ): boolean {
-  if (!TIMED_PRECISIONS.has(timestampPrecision)) return false;
-  const start = segment.t_start;
-  const end = segment.t_end;
-  if (start === null || end === null) return false;
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
-  if (start < 0 || end <= start) return false;
-  if (durationSeconds !== null && end > durationSeconds + 0.001) return false;
-  return true;
+  return validTimes(
+    segment.t_start,
+    segment.t_end,
+    timestampPrecision,
+    durationSeconds,
+  );
 }
 
 /** `mm:ss` o `h:mm:ss`; el servidor ya validó el valor antes de llegar aquí. */
@@ -62,14 +74,30 @@ export function formatClock(seconds: number): string {
 }
 
 /** Etiqueta visible del segmento: tiempo válido o el ordinal honesto. */
+export function segmentLabelFromTimes(
+  tStart: number | null,
+  tEnd: number | null,
+  ordinal: number,
+  timestampPrecision: string,
+  durationSeconds: number | null,
+): string {
+  return validTimes(tStart, tEnd, timestampPrecision, durationSeconds)
+    ? formatClock(tStart ?? 0)
+    : `segmento ${ordinal}`;
+}
+
 export function segmentLabel(
   segment: ReaderSegment,
   timestampPrecision: string,
   durationSeconds: number | null,
 ): string {
-  return validSegmentTime(segment, timestampPrecision, durationSeconds)
-    ? formatClock(segment.t_start ?? 0)
-    : `segmento ${segment.ordinal}`;
+  return segmentLabelFromTimes(
+    segment.t_start,
+    segment.t_end,
+    segment.ordinal,
+    timestampPrecision,
+    durationSeconds,
+  );
 }
 
 export function summaryState(

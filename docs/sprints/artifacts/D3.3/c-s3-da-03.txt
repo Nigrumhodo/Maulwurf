@@ -1,0 +1,28 @@
+D3.3 / C-S3-DA-03 evidence
+Date: 2026-11-03 (UTC)
+Environment: Windows, Node 24.12 local (CI Node 22), local compose/browser + Vitest/jsdom
+
+Automated regression
+Command:
+  cd apps/web
+  npx vitest run tests/unit/tareas-page.test.tsx
+Result: 5 passed
+Case: "refreshes after a 409 without auto-confirming or losing the editor draft"
+- The review dialog opens with task version 1 while TaskEditor holds an unsaved draft.
+- POST /tasks/{id}/confirm returns 409 version_conflict.
+- The dialog shows the conflict notice and refreshes the preview to task version 2.
+- The TaskEditor input still contains "Borrador local".
+- confirm was called exactly once; no automatic second confirmation.
+
+Full web gate
+Command: npm run typecheck && npm run lint && npm test && npm run build
+Result: typecheck/lint clean; 168 tests in 25 files passed; build 387 modules.
+
+Manual browser
+The user reproduced the concurrent-edit flow and observed:
+  "La tarea cambió desde que la cargaste; recarga antes de continuar."
+This is the expected 409 version_conflict; the UI must refresh and not auto-confirm.
+
+Pending delivery
+- PR to develop and Quality CI run id are not recorded yet.
+- No real Google Calendar call was made; no credential or secret is involved.

@@ -13,18 +13,30 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, cast
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError, not_found, validation_failed
 from app.core.validation import is_iana_timezone
-from app.models import Segment, Subject, Task, TaskRevision, TaskSource
+from app.models import (
+    CalendarSettings,
+    GoogleCredential,
+    OutboxEvent,
+    Segment,
+    Subject,
+    Task,
+    TaskRevision,
+    TaskSource,
+)
 from app.models.task import ACTIVITY_TYPES, DATE_STATUSES, TASK_STATUSES
 from app.schemas.tasks import (
     PendingRevisionOut,
+    TaskConfirmationOut,
     TaskEventBlockOut,
     TaskEventBlockPatch,
     TaskEvidenceOut,
+    TaskLifecycleOut,
     TaskListOut,
     TaskOut,
     TaskPatch,
@@ -32,6 +44,10 @@ from app.schemas.tasks import (
     TaskSubjectOut,
     TaskUpdateOut,
 )
+from app.services.oauth_google import missing_calendar_scopes
+from app.services.task_lifecycle import TaskLifecycle
+from app.services.task_lifecycle_store import SqlTaskLifecycleStore
+from app.services.task_state import TaskCandidate, ensure_confirmable
 
 TASK_CURSOR_VERSION = 1
 _DEFAULT_LIMIT = 50
@@ -149,6 +165,8 @@ def _task_out(
         confidence_score=task.confidence_score,
         status=task.status,
         calendar_sync_status=task.calendar_sync_status,
+        calendar_id=task.calendar_id,
+        calendar_event_id=task.calendar_event_id,
         version=task.version,
         due_version=task.due_version,
         event_block=_event_block(task),
@@ -234,6 +252,7 @@ async def _assemble(
                 source.char_start,
                 TaskEvidenceOut(
                     segment_id=str(segment.id),
+                    ordinal=segment.ordinal,
                     char_start=source.char_start,
                     char_end=source.char_end,
                     quote=quote,
@@ -287,6 +306,7 @@ async def list_tasks(
     *,
     status: str | None = None,
     subject_id: uuid.UUID | None = None,
+    audio_id: uuid.UUID | None = None,
     due_from: date | None = None,
     due_to: date | None = None,
     limit: int = _DEFAULT_LIMIT,
@@ -300,6 +320,8 @@ async def list_tasks(
         stmt = stmt.where(Task.status == status)
     if subject_id is not None:
         stmt = stmt.where(Task.subject_id == subject_id)
+    if audio_id is not None:
+        stmt = stmt.where(Task.audio_id == audio_id)
     stmt = _due_conditions(stmt, due_from, due_to)
     if cursor is not None:
         position = _decode_cursor(cursor)
@@ -529,3 +551,392 @@ async def patch_task(
     await db.flush()
     updated = await _assemble(db, user_id, [task])
     return TaskUpdateOut(task=updated[0], revision_id=None)
+
+
+def _current_patch(task: Task) -> TaskPatch:
+    """The active row as a full patch, so confirm validates the stored state too."""
+    return TaskPatch(
+        version=task.version,
+        tipo=task.tipo,
+        titulo=task.titulo,
+        detalle=task.detalle,
+        due_date=task.due_date,
+        due_at=task.due_at,
+        timezone=task.timezone,
+        all_day=task.all_day,
+        date_status=task.date_status,
+        date_text=task.date_text,
+        date_reason=task.date_reason,
+        confidence_score=task.confidence_score,
+        event_block=TaskEventBlockPatch(
+            start_at=task.event_start_at,
+            end_at=task.event_end_at,
+            start_date=task.event_start_date,
+            end_date_exclusive=task.event_end_date_exclusive,
+        ),
+    )
+
+
+def _revision_patch(task: Task, proposed: dict[str, Any]) -> TaskPatch:
+    data = dict(proposed)
+    data["version"] = task.version
+    return TaskPatch.model_validate(data)
+
+
+def _candidate(task: Task, values: dict[str, Any], source_count: int) -> TaskCandidate:
+    return TaskCandidate(
+        source=task.source,
+        audio_id=task.audio_id,
+        tipo=values["tipo"],
+        titulo=values["titulo"],
+        detalle=values["detalle"],
+        date_status=values["date_status"],
+        due_date=values["due_date"],
+        due_at=values["due_at"],
+        timezone=values["timezone"],
+        all_day=values["all_day"],
+        event_start_at=values["start_at"],
+        event_end_at=values["end_at"],
+        event_start_date=values["start_date"],
+        event_end_date_exclusive=values["end_date"],
+        source_count=source_count,
+    )
+
+
+async def _valid_source_count(
+    db: AsyncSession, user_id: uuid.UUID, task_id: uuid.UUID
+) -> int:
+    rows = await db.execute(
+        select(TaskSource.char_start, TaskSource.char_end, Segment.text)
+        .join(
+            Segment,
+            and_(
+                TaskSource.user_id == Segment.user_id,
+                TaskSource.transcript_id == Segment.transcript_id,
+                TaskSource.segment_id == Segment.id,
+            ),
+        )
+        .where(TaskSource.user_id == user_id, TaskSource.task_id == task_id)
+    )
+    count = 0
+    for char_start, char_end, text in rows:
+        if 0 <= char_start < char_end <= len(text):
+            count += 1
+    return count
+
+
+async def _calendar_target(
+    db: AsyncSession, user_id: uuid.UUID
+) -> tuple[bool, str | None]:
+    """Whether a Calendar write can start now, and which calendar it targets."""
+    credential = await db.get(GoogleCredential, user_id)
+    calendar = await db.get(CalendarSettings, user_id)
+    calendar_id = calendar.calendar_write_calendar_id if calendar is not None else None
+    ready = bool(
+        credential is not None
+        and credential.status == "connected"
+        and calendar_id is not None
+        and not missing_calendar_scopes(credential.scopes or [])
+    )
+    return ready, calendar_id
+
+
+async def _ensure_sync_outbox(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    task_id: uuid.UUID,
+    version: int,
+    due_version: int,
+) -> uuid.UUID:
+    """Reuse a live event for this version, otherwise insert one atomic confirmation event."""
+    existing = await db.scalar(
+        select(OutboxEvent.id)
+        .where(
+            OutboxEvent.user_id == user_id,
+            OutboxEvent.type == "sync_task_event",
+            OutboxEvent.resource_id == task_id,
+            OutboxEvent.resource_version == version,
+            OutboxEvent.status.in_(("pending", "dispatched")),
+        )
+        .order_by(OutboxEvent.created_at.desc(), OutboxEvent.id.desc())
+        .limit(1)
+    )
+    if existing is not None:
+        return existing
+    inserted = await db.execute(
+        pg_insert(OutboxEvent)
+        .values(
+            user_id=user_id,
+            type="sync_task_event",
+            resource_type="task",
+            resource_id=task_id,
+            resource_version=version,
+            payload={},
+            enabled=True,
+            blocked_reason=None,
+            dedupe_key=f"confirm:{due_version}",
+        )
+        .on_conflict_do_nothing(
+            index_elements=["type", "resource_id", "resource_version", "dedupe_key"]
+        )
+        .returning(OutboxEvent.id)
+    )
+    event_id = inserted.scalar_one_or_none()
+    if event_id is not None:
+        return event_id
+    existing = await db.scalar(
+        select(OutboxEvent.id)
+        .where(
+            OutboxEvent.user_id == user_id,
+            OutboxEvent.type == "sync_task_event",
+            OutboxEvent.resource_id == task_id,
+            OutboxEvent.resource_version == version,
+            OutboxEvent.status.in_(("pending", "dispatched")),
+        )
+        .order_by(OutboxEvent.created_at.desc(), OutboxEvent.id.desc())
+        .limit(1)
+    )
+    if existing is None:
+        raise RuntimeError("sync_task_event could not be created or reused")
+    return cast(uuid.UUID, existing)
+
+
+def _apply_values(task: Task, values: dict[str, Any]) -> None:
+    task.tipo = values["tipo"]
+    task.titulo = values["titulo"]
+    task.detalle = values["detalle"]
+    task.date_status = values["date_status"]
+    task.due_date = values["due_date"]
+    task.due_at = values["due_at"]
+    task.date_text = values["date_text"]
+    task.date_reason = values["date_reason"]
+    task.confidence_score = values["confidence_score"]
+    task.timezone = values["timezone"]
+    task.all_day = values["all_day"]
+    task.event_start_at = values["start_at"]
+    task.event_end_at = values["end_at"]
+    task.event_start_date = values["start_date"]
+    task.event_end_date_exclusive = values["end_date"]
+
+
+async def confirm_task(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    task_id: uuid.UUID,
+    *,
+    expected_version: int,
+    revision_id: uuid.UUID | None,
+) -> TaskConfirmationOut:
+    """A3.4: promote one revision and enqueue its Calendar write in the same transaction."""
+    task = cast(
+        Task | None,
+        await db.scalar(
+            select(Task)
+            .where(Task.user_id == user_id, Task.id == task_id)
+            .with_for_update()
+        ),
+    )
+    if task is None:
+        raise not_found()
+    if task.version != expected_version:
+        raise ApiError(
+            409,
+            "version_conflict",
+            "La tarea cambió desde que la cargaste; recarga antes de continuar.",
+            {"current_version": task.version, "current_status": task.status},
+        )
+    if task.status in ("dismissed", "completed"):
+        raise ApiError(
+            409,
+            "invalid_transition",
+            "Esta tarea ya está cerrada.",
+            {"current_status": task.status, "attempted_status": "confirmed"},
+        )
+
+    revision: TaskRevision | None = None
+    if revision_id is not None:
+        if task.status != "confirmed":
+            raise ApiError(
+                409,
+                "invalid_transition",
+                "Solo una tarea confirmada puede promover una revisión.",
+                {"current_status": task.status, "attempted_status": "confirmed"},
+            )
+        revision = cast(
+            TaskRevision | None,
+            await db.scalar(
+                select(TaskRevision)
+                .where(
+                    TaskRevision.user_id == user_id,
+                    TaskRevision.task_id == task_id,
+                    TaskRevision.id == revision_id,
+                )
+                .with_for_update()
+            ),
+        )
+        if revision is None or revision.status != "pending_confirmation":
+            raise ApiError(
+                409,
+                "revision_stale",
+                "La revisión ya no está pendiente; recarga la tarea.",
+                {"revision_id": str(revision_id)},
+            )
+        if revision.base_task_version != task.version:
+            raise ApiError(
+                409,
+                "version_conflict",
+                "La tarea cambió desde que se creó la revisión; recarga antes de continuar.",
+                {
+                    "current_version": task.version,
+                    "revision_base_version": revision.base_task_version,
+                },
+            )
+        patch = _revision_patch(task, revision.proposed_fields)
+    else:
+        if task.status == "confirmed":
+            pending = await db.scalar(
+                select(TaskRevision.id)
+                .where(
+                    TaskRevision.user_id == user_id,
+                    TaskRevision.task_id == task_id,
+                    TaskRevision.status == "pending_confirmation",
+                )
+                .limit(1)
+            )
+            if pending is not None:
+                raise ApiError(
+                    409,
+                    "revision_required",
+                    "Hay un cambio pendiente; elige la revisión antes de confirmar.",
+                    {"revision_id": str(pending)},
+                )
+            return TaskConfirmationOut(
+                task=(await _assemble(db, user_id, [task]))[0],
+                revision_id=None,
+            )
+        patch = _current_patch(task)
+
+    values = _validate_patch(task, patch)
+    source_count = await _valid_source_count(db, user_id, task_id)
+    ensure_confirmable(_candidate(task, values, source_count))
+
+    due_changed = any(
+        getattr(task, field) != values[field] for field in _DUE_FIELDS
+    )
+    _apply_values(task, values)
+    task.version += 1
+    if due_changed:
+        task.due_version += 1
+    task.status = "confirmed"
+    task.confirmed_at = datetime.now(UTC)
+
+    ready, calendar_id = await _calendar_target(db, user_id)
+    if ready and calendar_id is not None:
+        task.calendar_id = calendar_id
+        task.calendar_sync_status = "pending"
+    else:
+        task.calendar_sync_status = "blocked"
+
+    if revision is not None:
+        revision.status = "activated"
+        revision.activated_at = datetime.now(UTC)
+        revision.evidence_validated = True
+
+    await db.flush()
+    if task.calendar_sync_status == "pending":
+        await _ensure_sync_outbox(
+            db,
+            user_id=user_id,
+            task_id=task.id,
+            version=task.version,
+            due_version=task.due_version,
+        )
+    updated = await _assemble(db, user_id, [task])
+    return TaskConfirmationOut(
+        task=updated[0],
+        revision_id=str(revision.id) if revision is not None else None,
+    )
+
+
+async def _discard_pending_revisions(
+    db: AsyncSession, user_id: uuid.UUID, task_id: uuid.UUID
+) -> None:
+    await db.execute(
+        update(TaskRevision)
+        .where(
+            TaskRevision.user_id == user_id,
+            TaskRevision.task_id == task_id,
+            TaskRevision.status == "pending_confirmation",
+        )
+        .values(status="discarded")
+    )
+
+
+async def _close_task(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    task_id: uuid.UUID,
+    *,
+    expected_version: int,
+    target: str,
+) -> TaskLifecycleOut:
+    store = SqlTaskLifecycleStore.for_session(db)
+    lifecycle = TaskLifecycle(store)
+    if target == "completed":
+        result = await lifecycle.complete(
+            user_id, task_id, expected_version=expected_version
+        )
+    else:
+        result = await lifecycle.dismiss(
+            user_id, task_id, expected_version=expected_version
+        )
+    await _discard_pending_revisions(db, user_id, task_id)
+    await db.flush()
+    db.expire_all()
+    task = cast(
+        Task | None,
+        await db.scalar(
+            select(Task).where(Task.user_id == user_id, Task.id == task_id)
+        ),
+    )
+    if task is None:
+        raise not_found()
+    updated = await _assemble(db, user_id, [task])
+    return TaskLifecycleOut(
+        task=updated[0],
+        notice=result.notice,
+        cancelled_reminders=result.cancelled_reminders,
+    )
+
+
+async def complete_task(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    task_id: uuid.UUID,
+    *,
+    expected_version: int,
+) -> TaskLifecycleOut:
+    return await _close_task(
+        db,
+        user_id,
+        task_id,
+        expected_version=expected_version,
+        target="completed",
+    )
+
+
+async def dismiss_task(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    task_id: uuid.UUID,
+    *,
+    expected_version: int,
+) -> TaskLifecycleOut:
+    return await _close_task(
+        db,
+        user_id,
+        task_id,
+        expected_version=expected_version,
+        target="dismissed",
+    )

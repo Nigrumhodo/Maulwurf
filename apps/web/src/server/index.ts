@@ -18,12 +18,14 @@ const app = express();
 
 // Security headers for the shell and static assets. The CSP allows only this origin plus the
 // Google Fonts stylesheet and files that index.html loads; login goes to Google by navigation,
-// which the CSP does not restrict.
+// which the CSP does not restrict. `style-src` needs inline styles because React sets style
+// attributes (progress bars, subject colors) and FullCalendar injects its own stylesheet at
+// runtime; `script-src` stays strict.
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
   "script-src 'self'",
-  "style-src 'self' https://fonts.googleapis.com",
-  "font-src https://fonts.gstatic.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data:",
   "connect-src 'self'",
   "object-src 'none'",

@@ -40,6 +40,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+import fakeredis.aioredis
 import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
@@ -51,6 +52,7 @@ from app.core import crypto
 from app.core.config import settings
 from app.core.db import get_session
 from app.core.deps import OAUTH_COOKIE_NAME
+from app.core.redis import get_redis
 from app.main import app
 from app.models import GoogleCredential, User
 from app.services import calendar_connection, oauth_google
@@ -77,6 +79,7 @@ CREATE TABLE tasks (
     calendar_sync_status  text NOT NULL DEFAULT 'not_requested'
                               CHECK (calendar_sync_status IN
                                      ('not_requested','pending','synced','failed','blocked')),
+    calendar_id           text,
     version               integer NOT NULL DEFAULT 1,
     updated_at            timestamptz NOT NULL DEFAULT now()
 )
@@ -317,6 +320,10 @@ async def test_connect_and_reconnect_are_in_the_openapi_contract(client: AsyncCl
     # The contract sends the user to Google with a 302 (DISENO §3.3), not a 200.
     assert "302" in paths[CONNECT]["post"]["responses"]
     assert "302" in paths[RECONNECT]["post"]["responses"]
+    # D3.7: the browser navigates with GET because a fetch POST cannot follow the
+    # cross-origin 302 to Google.
+    assert "302" in paths[CONNECT]["get"]["responses"]
+    assert "302" in paths[RECONNECT]["get"]["responses"]
 
 
 async def test_connect_requires_a_mutation_session(
@@ -328,6 +335,69 @@ async def test_connect_requires_a_mutation_session(
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "csrf_invalid"
+
+
+async def test_connect_navigation_is_a_get_without_csrf(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await make_actor(db_session)
+
+    response = await client.get(CONNECT, cookies=actor.cookies, follow_redirects=False)
+
+    assert response.status_code == 302
+    assert "accounts.google.com" in response.headers["location"]
+    assert response.headers["cache-control"] == "no-store"
+    assert _cookie_value(response, OAUTH_COOKIE_NAME)
+
+
+async def test_reconnect_navigation_without_a_grant_returns_to_settings(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await make_actor(db_session)
+
+    response = await client.get(RECONNECT, cookies=actor.cookies, follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/settings?calendar=error&reason=not_connected"
+
+
+async def test_connect_navigation_without_oauth_configuration_returns_to_settings(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    actor = await make_actor(db_session)
+    monkeypatch.setattr(settings, "google_client_id", None)
+    monkeypatch.setattr(settings, "google_client_secret", None)
+
+    response = await client.get(CONNECT, cookies=actor.cookies, follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/settings?calendar=error&reason=not_configured"
+
+
+async def test_connect_navigation_rate_limit_returns_to_settings(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = await make_actor(db_session)
+    monkeypatch.setattr(settings, "integration_rate_limit_per_minute", 1)
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+    async def override_redis() -> AsyncIterator[fakeredis.aioredis.FakeRedis]:
+        yield fake
+
+    app.dependency_overrides[get_redis] = override_redis
+    try:
+        first = await client.get(CONNECT, cookies=actor.cookies, follow_redirects=False)
+        second = await client.get(CONNECT, cookies=actor.cookies, follow_redirects=False)
+    finally:
+        app.dependency_overrides.pop(get_redis, None)
+        await fake.aclose()
+
+    assert first.status_code == 302
+    assert "accounts.google.com" in first.headers["location"]
+    assert second.status_code == 302
+    assert second.headers["location"] == "/settings?calendar=error&reason=rate_limited"
 
 
 async def test_connect_requests_only_the_new_calendar_scopes(
@@ -824,6 +894,15 @@ async def _task_sync(db_session: AsyncSession, task_id: uuid.UUID) -> str:
     return status
 
 
+async def _task_calendar(db_session: AsyncSession, task_id: uuid.UUID) -> str | None:
+    await db_session.commit()
+    calendar_id = await db_session.scalar(
+        text("SELECT calendar_id FROM tasks WHERE id = :id"), {"id": task_id}
+    )
+    assert calendar_id is None or isinstance(calendar_id, str)
+    return calendar_id
+
+
 async def _sync_events(db_session: AsyncSession, actor: Actor) -> list[dict[str, Any]]:
     await db_session.commit()
     rows = (
@@ -869,6 +948,7 @@ async def test_reconnect_resumes_only_current_blocked_tasks(
 
     assert response.headers["location"] == "/settings?calendar=connected"
     assert await _task_sync(db_session, blocked) == "pending"
+    assert await _task_calendar(db_session, blocked) == MAULWURF_ID
     assert await _task_sync(db_session, dismissed) == "blocked"
     assert await _task_sync(db_session, completed) == "blocked"
     assert await _task_sync(db_session, unconfirmed) == "blocked"
@@ -881,6 +961,32 @@ async def test_reconnect_resumes_only_current_blocked_tasks(
     assert events[0]["blocked_reason"] is None
     assert events[0]["status"] == "pending"
     assert events[0]["dedupe_key"] == "reconnect:3:0"
+
+
+async def test_first_connect_also_resumes_blocked_tasks(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    tasks_table: None,
+) -> None:
+    actor = await make_actor(db_session)
+    await _seed_credential(
+        db_session, actor, scopes=["openid"], status="disconnected"
+    )
+    blocked = await _insert_task(db_session, actor, status="confirmed", sync="blocked", version=2)
+    _fake_google(monkeypatch, sub=actor.google_sub, scope=" ".join(CALENDAR_SCOPES))
+    _use_calendar(monkeypatch, _calendar_handler())
+
+    _, state, cookie = await _start(client, actor)
+
+    assert (await _callback(client, actor, state, cookie)).headers["location"] == (
+        "/settings?calendar=connected"
+    )
+    assert await _task_sync(db_session, blocked) == "pending"
+    assert await _task_calendar(db_session, blocked) == MAULWURF_ID
+    events = await _sync_events(db_session, actor)
+    assert len(events) == 1
+    assert events[0]["resource_id"] == blocked
 
 
 async def test_second_reconnect_reuses_the_live_outbox_and_starts_a_new_cycle_after_failure(

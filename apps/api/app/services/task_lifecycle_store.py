@@ -44,11 +44,25 @@ class SqlTaskLifecycleStore:
     """One locked transaction per command, mirroring `services.task_lifecycle`.
 
     `sessions` must be a factory whose context manager commits on a clean exit and rolls
-    back on error; the adapter never calls `commit()` itself.
+    back on error; the adapter never calls `commit()` itself. `for_session` binds the
+    adapter to an existing request transaction (A3.7) so the task, its revision cleanup
+    and the caller's commit share one unit of work.
     """
 
-    def __init__(self, sessions: SessionFactory) -> None:
+    def __init__(
+        self,
+        sessions: SessionFactory | None = None,
+        *,
+        session: AsyncSession | None = None,
+    ) -> None:
+        if (sessions is None) == (session is None):
+            raise ValueError("provide exactly one of sessions or session")
         self._sessions = sessions
+        self._session = session
+
+    @classmethod
+    def for_session(cls, session: AsyncSession) -> "SqlTaskLifecycleStore":
+        return cls(session=session)
 
     async def transition(
         self,
@@ -61,64 +75,94 @@ class SqlTaskLifecycleStore:
     ) -> LifecycleTransition:
         if target not in LIFECYCLE_TARGETS:
             raise ValueError(f"unsupported lifecycle target: {target!r}")
-        async with self._sessions() as db:
-            row = (
-                await db.execute(
-                    select(
-                        TASKS.c.user_id,
-                        TASKS.c.version,
-                        TASKS.c.status,
-                        TASKS.c.calendar_event_id,
-                    )
-                    .where(TASKS.c.id == task_id, TASKS.c.user_id == user_id)
-                    .with_for_update()
-                )
-            ).mappings().one_or_none()
-            if row is None:
-                return LifecycleTransition(outcome=LifecycleOutcome.NOT_FOUND)
-            if row["version"] != expected_version:
-                return LifecycleTransition(
-                    outcome=LifecycleOutcome.VERSION_CONFLICT,
-                    status=row["status"],
-                    current_version=row["version"],
-                    calendar_event_id=row["calendar_event_id"],
-                )
-            if row["status"] == target:
-                # Repeating the command with the current version is a no-op for the task, but
-                # leftovers are still cancelled; the stored version does not change.
-                cancelled = await self._cancel_pending(
-                    db, user_id=row["user_id"], task_id=task_id
-                )
-                return LifecycleTransition(
-                    outcome=LifecycleOutcome.ALREADY,
-                    status=target,
-                    current_version=row["version"],
-                    calendar_event_id=row["calendar_event_id"],
-                    cancelled_reminders=cancelled,
-                )
-            ensure_task_transition(row["status"], target)
-            values: dict[str, Any] = {
-                "status": target,
-                # Bump the token so queued Calendar jobs and stale client commands lose.
-                "version": TASKS.c.version + 1,
-                "updated_at": func.now(),
-                f"{target}_at": now,
-            }
-            await db.execute(
-                update(TASKS)
-                .where(TASKS.c.id == task_id, TASKS.c.version == expected_version)
-                .values(**values)
+        if self._session is not None:
+            return await self._transition_in_session(
+                self._session,
+                user_id,
+                task_id,
+                expected_version=expected_version,
+                target=target,
+                now=now,
             )
+        if self._sessions is None:  # pragma: no cover - __init__ rejects this
+            raise RuntimeError("lifecycle store has no session")
+        async with self._sessions() as db:
+            return await self._transition_in_session(
+                db,
+                user_id,
+                task_id,
+                expected_version=expected_version,
+                target=target,
+                now=now,
+            )
+
+    async def _transition_in_session(
+        self,
+        db: AsyncSession,
+        user_id: uuid.UUID,
+        task_id: uuid.UUID,
+        *,
+        expected_version: int,
+        target: str,
+        now: datetime,
+    ) -> LifecycleTransition:
+        row = (
+            await db.execute(
+                select(
+                    TASKS.c.user_id,
+                    TASKS.c.version,
+                    TASKS.c.status,
+                    TASKS.c.calendar_event_id,
+                )
+                .where(TASKS.c.id == task_id, TASKS.c.user_id == user_id)
+                .with_for_update()
+            )
+        ).mappings().one_or_none()
+        if row is None:
+            return LifecycleTransition(outcome=LifecycleOutcome.NOT_FOUND)
+        if row["version"] != expected_version:
+            return LifecycleTransition(
+                outcome=LifecycleOutcome.VERSION_CONFLICT,
+                status=row["status"],
+                current_version=row["version"],
+                calendar_event_id=row["calendar_event_id"],
+            )
+        if row["status"] == target:
+            # Repeating the command with the current version is a no-op for the task, but
+            # leftovers are still cancelled; the stored version does not change.
             cancelled = await self._cancel_pending(
                 db, user_id=row["user_id"], task_id=task_id
             )
             return LifecycleTransition(
-                outcome=LifecycleOutcome.UPDATED,
+                outcome=LifecycleOutcome.ALREADY,
                 status=target,
-                current_version=expected_version + 1,
+                current_version=row["version"],
                 calendar_event_id=row["calendar_event_id"],
                 cancelled_reminders=cancelled,
             )
+        ensure_task_transition(row["status"], target)
+        values: dict[str, Any] = {
+            "status": target,
+            # Bump the token so queued Calendar jobs and stale client commands lose.
+            "version": TASKS.c.version + 1,
+            "updated_at": func.now(),
+            f"{target}_at": now,
+        }
+        await db.execute(
+            update(TASKS)
+            .where(TASKS.c.id == task_id, TASKS.c.version == expected_version)
+            .values(**values)
+        )
+        cancelled = await self._cancel_pending(
+            db, user_id=row["user_id"], task_id=task_id
+        )
+        return LifecycleTransition(
+            outcome=LifecycleOutcome.UPDATED,
+            status=target,
+            current_version=expected_version + 1,
+            calendar_event_id=row["calendar_event_id"],
+            cancelled_reminders=cancelled,
+        )
 
     @staticmethod
     async def _cancel_pending(
