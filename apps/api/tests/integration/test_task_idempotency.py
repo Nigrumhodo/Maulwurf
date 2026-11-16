@@ -237,9 +237,14 @@ async def _connect_calendar(db: AsyncSession, actor: actors.Actor) -> None:
 @pytest.fixture
 async def committed_client(
     migrated_database_url: str,
-) -> AsyncIterator[tuple[AsyncClient, async_sessionmaker[AsyncSession]]]:
+) -> AsyncIterator[tuple[AsyncClient, async_sessionmaker[AsyncSession], str]]:
     """HTTP client whose requests each get their own committed session."""
-    engine = create_async_engine(migrated_database_url, poolclass=NullPool)
+    application_name = f"maulwurf-a3.9-{uuid.uuid4().hex[:12]}"
+    engine = create_async_engine(
+        migrated_database_url,
+        poolclass=NullPool,
+        connect_args={"server_settings": {"application_name": application_name}},
+    )
     factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async def override() -> AsyncIterator[AsyncSession]:
@@ -255,7 +260,7 @@ async def committed_client(
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url=settings.allowed_origin
         ) as client:
-            yield client, factory
+            yield client, factory, application_name
     finally:
         app.dependency_overrides.clear()
         await engine.dispose()
@@ -444,28 +449,29 @@ async def _task_row_lock(
             await db.rollback()
 
 
-# `pg_locks` is cluster-wide: count only this test database and only sessions whose
-# current statement is a real wait. `\m`/`\M` are PostgreSQL word boundaries, so a query
-# that merely mentions "tasks" in a comment cannot satisfy the probe.
+# `pg_stat_activity` is cluster-wide. The unique application name scopes the probe to this
+# test's request sessions, so the SQL text, another database, or a parallel test cannot
+# satisfy the count. A lock wait is the only blocking state the held task row can cause.
 _TASK_LOCK_WAITERS = text(
-    r"SELECT count(DISTINCT a.pid) FROM pg_locks l "
-    r"JOIN pg_stat_activity a ON a.pid = l.pid "
-    r"WHERE NOT l.granted "
-    r"AND a.datname = current_database() "
-    r"AND a.pid <> pg_backend_pid() "
-    r"AND a.query ~* '\mFROM\s+tasks\M'"
+    "SELECT count(DISTINCT a.pid) FROM pg_stat_activity a "
+    "WHERE a.datname = current_database() "
+    "AND a.application_name = :application_name "
+    "AND a.pid <> pg_backend_pid() "
+    "AND a.wait_event_type = 'Lock' AND a.state = 'active'"
 )
 
 
 async def _wait_for_task_lock_waiters(
-    factory: async_sessionmaker[AsyncSession], expected: int
+    factory: async_sessionmaker[AsyncSession], expected: int, application_name: str
 ) -> None:
     """Wait until the expected request transactions are queued on the task row lock."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + 10
     while loop.time() < deadline:
         async with factory() as db:
-            waiting = await db.scalar(_TASK_LOCK_WAITERS)
+            waiting = await db.scalar(
+                _TASK_LOCK_WAITERS, {"application_name": application_name}
+            )
         if int(waiting or 0) >= expected:
             return
         await asyncio.sleep(0.01)
@@ -473,9 +479,9 @@ async def _wait_for_task_lock_waiters(
 
 
 async def test_concurrent_patch_returns_409_and_refresh_applies_the_loser(
-    committed_client: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
+    committed_client: tuple[AsyncClient, async_sessionmaker[AsyncSession], str],
 ) -> None:
-    client, factory = committed_client
+    client, factory, application_name = committed_client
     user_id: uuid.UUID | None = None
     try:
         actor, user_id, task_id = await _seed_manual_task(factory)
@@ -489,7 +495,7 @@ async def test_concurrent_patch_returns_409_and_refresh_applies_the_loser(
         ]
         try:
             async with _task_row_lock(factory, task_id):
-                await _wait_for_task_lock_waiters(factory, 2)
+                await _wait_for_task_lock_waiters(factory, 2, application_name)
             responses = await asyncio.gather(*requests)
         except BaseException:
             for request in requests:
@@ -537,9 +543,9 @@ async def test_concurrent_patch_returns_409_and_refresh_applies_the_loser(
 
 
 async def test_concurrent_double_confirmation_creates_one_outbox(
-    committed_client: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
+    committed_client: tuple[AsyncClient, async_sessionmaker[AsyncSession], str],
 ) -> None:
-    client, factory = committed_client
+    client, factory, application_name = committed_client
     user_id: uuid.UUID | None = None
     try:
         actor, user_id, task_id = await _seed_confirmable_task(factory)
@@ -552,7 +558,7 @@ async def test_concurrent_double_confirmation_creates_one_outbox(
         ]
         try:
             async with _task_row_lock(factory, task_id):
-                await _wait_for_task_lock_waiters(factory, 2)
+                await _wait_for_task_lock_waiters(factory, 2, application_name)
             responses = await asyncio.gather(*requests)
         except BaseException:
             for request in requests:
