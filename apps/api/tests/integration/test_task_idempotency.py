@@ -3,7 +3,10 @@
 The suite drives the real analyze worker and the task routes against PostgreSQL. The model
 is scripted and the Calendar integration is seeded, so no provider, Google call, audio or
 secret is involved. Concurrent cases use one request session per call, not a shared session,
-so the row locks and the optimistic version token are exercised for real.
+and hold the task row lock while both requests queue, so the row locks and the optimistic
+version token are exercised under real contention. Analysis edits a `needs_review` task in
+place; only a confirmed task's edit becomes a pending revision (M4), so those cases expect
+no revision row.
 """
 
 import asyncio
@@ -291,6 +294,11 @@ async def _delete_user(
         await db.commit()
 
 
+def _authenticate(client: AsyncClient, actor: actors.Actor) -> None:
+    """Persist the session cookie once; httpx deprecates per-request cookies."""
+    client.cookies.update(actor.cookies)
+
+
 async def _patch(
     client: AsyncClient,
     actor: actors.Actor,
@@ -302,7 +310,6 @@ async def _patch(
     return await client.patch(
         f"/tasks/{task_id}",
         json={"version": version, "titulo": title},
-        cookies=actor.cookies,
         headers=actor.headers,
     )
 
@@ -317,7 +324,6 @@ async def _confirm(
     return await client.post(
         f"/tasks/{task_id}/confirm",
         json={"expected_version": expected_version},
-        cookies=actor.cookies,
         headers=actor.headers,
     )
 
@@ -365,7 +371,7 @@ async def test_duplicate_evidence_in_one_analysis_persists_one_task(
     assert (await _run(db_session, audio_id)).status == "succeeded"
 
 
-async def test_second_delivery_does_not_duplicate_the_task(
+async def test_second_delivery_keeps_one_task_and_one_run(
     db_session: AsyncSession,
 ) -> None:
     actor, audio, segment = await _class(db_session)
@@ -425,6 +431,39 @@ async def test_a_second_analysis_with_the_same_evidence_updates_the_same_task(
 # --- Concurrent edits and confirmation -------------------------------------------------
 
 
+@asynccontextmanager
+async def _task_row_lock(
+    factory: async_sessionmaker[AsyncSession], task_id: uuid.UUID
+) -> AsyncIterator[None]:
+    """Hold the task row so both HTTP requests queue before the race starts."""
+    async with factory() as db:
+        await db.execute(select(Task.id).where(Task.id == task_id).with_for_update())
+        try:
+            yield
+        finally:
+            await db.rollback()
+
+
+async def _wait_for_task_lock_waiters(
+    factory: async_sessionmaker[AsyncSession], expected: int
+) -> None:
+    """Wait until the expected request transactions are queued on the task row lock."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 10
+    query = text(
+        "SELECT count(*) FROM pg_stat_activity "
+        "WHERE wait_event_type = 'Lock' AND state = 'active' "
+        "AND lower(query) LIKE '%from tasks%'"
+    )
+    while loop.time() < deadline:
+        async with factory() as db:
+            waiting = await db.scalar(query)
+        if int(waiting or 0) >= expected:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"expected {expected} requests waiting on the tasks row lock")
+
+
 async def test_concurrent_patch_returns_409_and_refresh_applies_the_loser(
     committed_client: tuple[AsyncClient, async_sessionmaker[AsyncSession]],
 ) -> None:
@@ -432,13 +471,23 @@ async def test_concurrent_patch_returns_409_and_refresh_applies_the_loser(
     user_id: uuid.UUID | None = None
     try:
         actor, user_id, task_id = await _seed_manual_task(factory)
+        _authenticate(client, actor)
         edits = [("First edit", 1), ("Second edit", 1)]
-        responses = await asyncio.gather(
-            *(
+        requests = [
+            asyncio.create_task(
                 _patch(client, actor, task_id, version=version, title=title)
-                for title, version in edits
             )
-        )
+            for title, version in edits
+        ]
+        try:
+            async with _task_row_lock(factory, task_id):
+                await _wait_for_task_lock_waiters(factory, 2)
+            responses = await asyncio.gather(*requests)
+        except BaseException:
+            for request in requests:
+                request.cancel()
+            await asyncio.gather(*requests, return_exceptions=True)
+            raise
 
         assert sorted(response.status_code for response in responses) == [200, 409]
         winner = next(
@@ -455,7 +504,7 @@ async def test_concurrent_patch_returns_409_and_refresh_applies_the_loser(
             "current_status": "needs_review",
         }
 
-        refreshed = await client.get(f"/tasks/{task_id}", cookies=actor.cookies)
+        refreshed = await client.get(f"/tasks/{task_id}")
         assert refreshed.status_code == 200
         assert refreshed.json()["version"] == 2
         assert refreshed.json()["titulo"] == edits[winner][0]
@@ -486,10 +535,22 @@ async def test_concurrent_double_confirmation_creates_one_outbox(
     user_id: uuid.UUID | None = None
     try:
         actor, user_id, task_id = await _seed_confirmable_task(factory)
-        responses = await asyncio.gather(
-            _confirm(client, actor, task_id, expected_version=1),
-            _confirm(client, actor, task_id, expected_version=1),
-        )
+        _authenticate(client, actor)
+        requests = [
+            asyncio.create_task(
+                _confirm(client, actor, task_id, expected_version=1)
+            )
+            for _ in range(2)
+        ]
+        try:
+            async with _task_row_lock(factory, task_id):
+                await _wait_for_task_lock_waiters(factory, 2)
+            responses = await asyncio.gather(*requests)
+        except BaseException:
+            for request in requests:
+                request.cancel()
+            await asyncio.gather(*requests, return_exceptions=True)
+            raise
 
         assert sorted(response.status_code for response in responses) == [202, 409]
         confirmed = next(
@@ -520,7 +581,7 @@ async def test_concurrent_double_confirmation_creates_one_outbox(
             assert stored.status == "confirmed"
             assert stored.calendar_sync_status == "pending"
 
-        refreshed = await client.get(f"/tasks/{task_id}", cookies=actor.cookies)
+        refreshed = await client.get(f"/tasks/{task_id}")
         assert refreshed.status_code == 200
         assert refreshed.json()["version"] == 2
         assert refreshed.json()["status"] == "confirmed"
