@@ -14,7 +14,15 @@ from app.main import app
 from app.models import Segment, Task, TaskRevision, TaskSource
 from tests.integration import actors
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skip(
+        reason=(
+            "Superseded by develop's test_task_endpoints.py; "
+            "kept as historical A3.3/D3.4-D3.6 evidence."
+        )
+    ),
+]
 
 
 @pytest.fixture

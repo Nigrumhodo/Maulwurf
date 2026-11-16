@@ -56,7 +56,6 @@ EXPECTED_FILES: dict[str, str] = {
     "apps/web/src/components/chat/Citation.tsx": "historical D2.7; removed by the develop web refactor",
     "apps/web/src/components/chat/MarkdownBody.tsx": "historical D2.7; removed by the develop web refactor",
     "apps/web/tests/unit/upload-form.test.tsx": "historical D2.2; removed by the develop web refactor",
-    "apps/api/tests/integration/test_task_confirm.py": "historical A3.4; superseded by test_task_endpoints.py",
     "apps/web/src/components/transcript/": "planned by D2.5/D3.5",
     "apps/web/src/lib/sse.ts": "planned by D2.3",
     "apps/web/src/lib/stream.ts": "planned by D2.6",
