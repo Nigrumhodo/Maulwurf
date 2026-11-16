@@ -30,7 +30,7 @@ from test_supervisor import (  # noqa: E402
     tmpfs_dir,
 )
 
-from maulwurf_ingest import admission, cleanup, persistence, supervisor
+from maulwurf_ingest import admission, cleanup, persistence
 from maulwurf_ingest import lease as leases
 from maulwurf_ingest.receiver import iter_bytes
 from maulwurf_ingest.reconciler import ReconcileAction, ReconcileResult, reconcile_committed
@@ -134,21 +134,24 @@ async def test_post_commit_death_is_recovered_without_retranscribing(
     monkeypatch.setattr(persistence, "commit_transcript", commit_spy)
     asr_workdirs: list[Path] = []
 
+    original_exit = cleanup.AttemptDir.__aexit__
+    armed = True
+
     async def die_before_cleanup(
-        _pool: asyncpg.Pool,
-        _lease: leases.Lease,
-        _attempt_id: uuid.UUID,
-        _workdir: Path,
-        _job: supervisor._Job,
-        keeper: supervisor._LeaseKeeper,
-        _result: supervisor.RunResult,
-        **_kwargs: object,
-    ) -> None:
+        self: cleanup.AttemptDir,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object,
+    ) -> bool:
         # A dead process stops renewing the lease and never reaches cleanup.
-        await keeper.stop()
+        # The reconciler later uses the real exit, so the patch cannot stay armed.
+        if not armed:
+            return await original_exit(self, exc_type, exc, traceback)
+        if self.keeper is not None:
+            await self.keeper.stop()
         raise _SimulatedProcessDeath
 
-    monkeypatch.setattr(supervisor, "_close_attempt", die_before_cleanup)
+    monkeypatch.setattr(cleanup.AttemptDir, "__aexit__", die_before_cleanup)
     with pytest.raises(_SimulatedProcessDeath):
         await run_attempt(
             pool, user_id=attempt.user_id, attempt_id=attempt.attempt_id,
@@ -156,6 +159,7 @@ async def test_post_commit_death_is_recovered_without_retranscribing(
             config=_config(tmpfs_dir, stub_transcript=SYNTHETIC_TEXT),
             on_child=lambda _pid, workdir: asr_workdirs.append(workdir),
         )
+    armed = False
     audio_id = await _audio_id(pool, attempt)
 
     row = await _row(pool, attempt)

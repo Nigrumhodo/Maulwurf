@@ -230,6 +230,27 @@ async def test_startup_reconcile_skips_without_a_database_url(
     assert called is False
 
 
+def test_internal_metrics_requires_the_ingest_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "ab" * 32
+    monkeypatch.setattr(hardening, "check", _no_failures)
+    monkeypatch.setattr(settings, "ingest_hardening", "report")
+    monkeypatch.setattr(settings, "credential_secret", secret)
+    monkeypatch.setattr(main, "reconcile_on_startup", _skip_reconcile)
+    monkeypatch.setattr(
+        main,
+        "CHECKS",
+        {"hardening": main.check_hardening, "tmpfs": _ok, "postgres": _ok, "credential": _ok},
+    )
+    with TestClient(main.app) as client:
+        refused = client.get("/internal/metrics")
+        accepted = client.get("/internal/metrics", headers={"Authorization": f"Bearer {secret}"})
+    assert refused.status_code == 401
+    assert accepted.status_code == 200
+    assert "maulwurf_ingest_" in accepted.text
+
+
 async def test_startup_reconcile_failure_hides_the_dsn(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -40,6 +40,7 @@ from pathlib import Path
 import asyncpg
 
 from maulwurf_ingest import hardening, metrics, rls
+from maulwurf_ingest import lease as leases
 from maulwurf_ingest.config import settings
 from maulwurf_ingest.logs import configure_logging
 from maulwurf_ingest.reconciler import (
@@ -116,19 +117,6 @@ SELECT id, user_id, status, cleanup_status, fencing_token, heartbeat_at, created
   FROM ingestion_attempts
  WHERE id = ANY($1::uuid[])
  ORDER BY id
-"""
-
-RESOLVE_UPDATE_SQL = """
-UPDATE ingestion_attempts
-   SET cleanup_status = 'verified',
-       cleanup_evidence = $4::jsonb,
-       cleanup_verified_at = now(),
-       audio_deleted_at = now(),
-       updated_at = now()
- WHERE id = $1 AND user_id = $2 AND fencing_token = $3
-   AND cleanup_status = $5
-   AND (lease_expires_at IS NULL OR lease_expires_at <= now())
-RETURNING id
 """
 
 EXIT_OK = 0
@@ -462,7 +450,7 @@ async def sweep_once(
 ) -> SweepReport:
     """One startup-equivalent recovery pass. It never runs ASR and never takes a live lease."""
     reconciled = await reconcile_committed(pool, instance=instance, tmp_dir=tmp_dir)
-    ended = await sweep_stranded(pool)
+    ended = await sweep_stranded(pool, tmp_dir=tmp_dir)
     return SweepReport.from_results(reconciled, ended)
 
 
@@ -640,17 +628,16 @@ async def resolve_attempts(
                 )
             )
             continue
-        updated = await rls.fetchrow(
+        updated = await leases.attest_host_destroyed(
             pool,
-            _uuid_value(row, "user_id"),
-            RESOLVE_UPDATE_SQL,
-            attempt_id,
-            _uuid_value(row, "user_id"),
-            _int_value(row, "fencing_token"),
-            encoded,
-            cleanup_status,
+            user_id=_uuid_value(row, "user_id"),
+            attempt_id=attempt_id,
+            fencing_token=_int_value(row, "fencing_token"),
+            evidence_json=encoded,
+            expected_cleanup_status=cleanup_status,
+            local_directory_present=bool(local_workdirs(Path(root), attempt_id)),
         )
-        if updated is None:
+        if not updated:
             decisions.append(
                 _refused(attempt_id, "state_changed", status=status,
                          cleanup_status=cleanup_status)

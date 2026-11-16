@@ -148,6 +148,8 @@ class _Verification:
     embeddings: int
     chunks_without_embeddings: int
     missing_audios: int
+    # Eligible classes this user-wide generation did not chunk. One of them blocks activation.
+    missing_audio_ids: tuple[uuid.UUID, ...] = ()
 
 
 def require_text_kind(text_kind: str) -> TextKind:
@@ -275,11 +277,15 @@ async def activate_generation(
             details={"reason": "no_content", "chunks": verification.chunks},
         )
     if verification.chunks_without_embeddings or verification.missing_audios:
+        # The version name is one class, but the rows cover every eligible class of the user.
+        # Naming the blocked ids keeps a partial class from looking like a one-class failure.
         raise GenerationIncomplete(
-            "La generación está incompleta: activarla expondría un índice parcial.",
+            "La generación cubre todas las clases elegibles del usuario y está incompleta.",
             details={
+                "scope": "user",
                 "chunks_without_embeddings": verification.chunks_without_embeddings,
                 "missing_audios": verification.missing_audios,
+                "blocked_audio_ids": [str(audio_id) for audio_id in verification.missing_audio_ids],
             },
         )
     activated_at = datetime.now(UTC)
@@ -426,29 +432,35 @@ async def _embed_generation(
     fence: FenceHook | None,
 ) -> tuple[int, int]:
     pending = await _chunks_without_embeddings(db, user_id=user_id, version=version)
+    # Plain copies: the load transaction ends before the first provider call, including
+    # its retries, so a slow embed never holds a pooled connection.
+    rows = [(chunk.user_id, chunk.id, chunk.content) for chunk in pending]
+    model = generation.model
+    dimension = generation.dimension
+    await db.commit()
     created = 0
     batches = 0
-    for start in range(0, len(pending), provider.batch_size):
-        batch = pending[start : start + provider.batch_size]
-        vectors = await provider.embed([chunk.content for chunk in batch], input_type="passage")
+    for start in range(0, len(rows), provider.batch_size):
+        batch = rows[start : start + provider.batch_size]
+        vectors = await provider.embed([content for _, _, content in batch], input_type="passage")
         if len(vectors) != len(batch):
             raise EmbeddingProviderError(
                 "El proveedor devolvió un número de vectores distinto del lote.",
                 details={"expected": len(batch), "observed": len(vectors)},
             )
-        for chunk, vector in zip(batch, vectors, strict=True):
+        for (chunk_user_id, chunk_id, _), vector in zip(batch, vectors, strict=True):
             db.add(
                 Embedding(
-                    user_id=chunk.user_id,
-                    chunk_id=chunk.id,
+                    user_id=chunk_user_id,
+                    chunk_id=chunk_id,
                     index_version=version,
-                    model=generation.model,
-                    dimension=generation.dimension,
+                    model=model,
+                    dimension=dimension,
                     vector=vector,
                 )
             )
-        # The provider call above may be slow; the shared run lock is taken only for the
-        # commit window so the reconciler can still close an actually expired lease.
+        # The shared run lock is taken only for the commit window so the reconciler can
+        # still close an actually expired lease.
         await _apply_fence(db, fence)
         await db.commit()
         batches += 1
@@ -470,13 +482,19 @@ async def _embed_generation(
 async def _verify_generation(
     db: AsyncSession, *, user_id: uuid.UUID, version: str
 ) -> _Verification:
+    # Counts stay first: activation's single transaction is pinned to that order.
+    chunks = await _count(db, _chunk_count_statement(user_id, version=version))
+    embeddings = await _count(db, _embedding_count_statement(user_id, version=version))
+    chunks_without_embeddings = await _count(
+        db, _chunks_without_embeddings_count_statement(user_id, version=version)
+    )
+    missing = await _missing_audio_ids(db, user_id=user_id, version=version)
     return _Verification(
-        chunks=await _count(db, _chunk_count_statement(user_id, version=version)),
-        embeddings=await _count(db, _embedding_count_statement(user_id, version=version)),
-        chunks_without_embeddings=await _count(
-            db, _chunks_without_embeddings_count_statement(user_id, version=version)
-        ),
-        missing_audios=len(await _missing_audio_ids(db, user_id=user_id, version=version)),
+        chunks=chunks,
+        embeddings=embeddings,
+        chunks_without_embeddings=chunks_without_embeddings,
+        missing_audios=len(missing),
+        missing_audio_ids=tuple(missing),
     )
 
 

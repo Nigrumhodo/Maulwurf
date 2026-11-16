@@ -750,13 +750,15 @@ async def test_real_google_upsert_bootstraps_without_a_tenant(
         try:
             user = await oauth_google.upsert_google_identity(
                 session,
-                {
-                    "sub": sub,
-                    "email": "first-login@example.test",
-                    "email_verified": True,
-                    "name": "First Login",
-                },
-                {"access_token": "ya29.test-first-login", "expires_in": 3600},
+                oauth_google.GoogleIdClaims(
+                    sub=sub,
+                    email="first-login@example.test",
+                    email_verified=True,
+                    name="First Login",
+                ),
+                oauth_google.GoogleTokenResponse(
+                    access_token="ya29.test-first-login", expires_in=3600
+                ),
             )
             assert user.google_sub == sub
             assert db._current_user.get() == user.id

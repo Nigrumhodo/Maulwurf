@@ -21,9 +21,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.services.chat_prompt import ABSTENTION_TEXT, PROMPT_VERSION
 from app.services.embeddings import EmbeddingInputType, EmbeddingProvider
 from app.services.llm import ChatMessage, LLMProvider
-from app.services.rag import ABSTENTION_TEXT, PROMPT_VERSION
 from tools.eval.chat import AnswerOutcome, answer_from_dict, answer_to_dict, run_answers
 from tools.eval.corpus import (
     CorpusError,

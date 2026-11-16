@@ -144,7 +144,7 @@ class IngestionCapabilities(BaseModel):
 
 
 class IngestionCapabilitiesOut(IngestionCapabilities):
-    """Respuesta pública de ``GET /ingestion/capabilities``.
+    """Respuesta autenticada de ``GET /ingestion/capabilities``.
 
     El endpoint siempre inyecta la versión vigente del aviso, así que el contrato publicado
     la exige: ``None`` solo existe en el objeto de configuración interno.

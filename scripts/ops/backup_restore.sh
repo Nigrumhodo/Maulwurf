@@ -594,9 +594,12 @@ cmd_restore() {
   # name goes in argv; user, host and the password stay in PG* variables and PGPASSFILE.
   # pg_restore is not transactional with the replay: once it starts writing, a failure leaves
   # a target that contains rows deleted after the backup. The operator must discard it.
+  # pg_dump 17+ writes `SET transaction_timeout`, which the pinned PostgreSQL 16
+  # server rejects. Drop that one statement; leaving it unset is the 16 default.
   if ! decrypt_stream "${backup}" \
-    | pg_restore --clean --if-exists --no-owner --no-privileges --exit-on-error \
-      --dbname="${PGDATABASE}"; then
+    | pg_restore --clean --if-exists --no-owner --no-privileges --file=- \
+    | awk '!/^SET transaction_timeout /' \
+    | psql --dbname="${PGDATABASE}" --set ON_ERROR_STOP=1 --quiet --no-psqlrc; then
     die "pg_restore failed after it may have written rows; discard the target database and restore into a clean one"
   fi
   if ! reapply_tombstones "${url}" "${log_json}"; then

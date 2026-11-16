@@ -43,11 +43,21 @@ EXCLUDED_PARTS = {DOCS / "es"}
 
 # Entries are exact paths, or directory prefixes ending in "/".
 EXPECTED_FILES: dict[str, str] = {
-    # S2 web work still open (D2.x); D1.8 remains unclaimed.
+    # S2 web work still open (D1.8); the D2.x components below were removed by the
+    # develop web refactor (#172) and remain only in the historical D2.x plans.
     "apps/web/src/components/landing/": "planned by D1.8 (public landing)",
-    "apps/web/src/components/upload/IngestProgress.tsx": "planned by D2.3",
+    "apps/web/src/components/IngestProgress.tsx": "historical D2.3; removed by the develop web refactor",
+    "apps/web/src/components/upload/IngestProgress.tsx": "historical D2.3; removed by the develop web refactor",
+    "apps/web/src/lib/progress.ts": "historical D2.3; removed by the develop web refactor",
+    "apps/web/src/components/upload/AudioUploadPanel.tsx": "historical D2.4; removed by the develop web refactor",
+    "apps/web/src/components/library/AudioCard.tsx": "historical D2.4/D2.5; removed by the develop web refactor",
+    "apps/web/src/components/chat/ChatWorkspace.tsx": "historical D2.6/D2.7; removed by the develop web refactor",
+    "apps/web/src/components/chat/ChatPanel.tsx": "historical D2.6; removed by the develop web refactor",
+    "apps/web/src/components/chat/Citation.tsx": "historical D2.7; removed by the develop web refactor",
+    "apps/web/src/components/chat/MarkdownBody.tsx": "historical D2.7; removed by the develop web refactor",
+    "apps/web/tests/unit/upload-form.test.tsx": "historical D2.2; removed by the develop web refactor",
+    "apps/api/tests/integration/test_task_confirm.py": "historical A3.4; superseded by test_task_endpoints.py",
     "apps/web/src/components/transcript/": "planned by D2.5/D3.5",
-    "apps/web/src/components/chat/Citation.tsx": "planned by D2.7",
     "apps/web/src/lib/sse.ts": "planned by D2.3",
     "apps/web/src/lib/stream.ts": "planned by D2.6",
     "apps/web/src/lib/markdown.ts": "planned by D2.7",

@@ -13,7 +13,7 @@ import { fetchAudioDetail } from "@/lib/library";
 import { fetchSubjects } from "@/lib/subjects";
 import type { Subject } from "@/lib/subjects";
 import {
-  fetchTasks,
+  fetchTaskPage,
   qualitySignals,
   taskStatusFilters,
 } from "@/lib/tasks";
@@ -111,7 +111,7 @@ export function TareasPage() {
     setLoading(true);
     setError(null);
     try {
-      const page = await fetchTasks({
+      const page = await fetchTaskPage({
         status: statusFilter,
         subjectId: subjectFilter,
         limit: TASK_PAGE_SIZE,
@@ -139,7 +139,7 @@ export function TareasPage() {
     setLoadingMore(true);
     setError(null);
     try {
-      const page = await fetchTasks({
+      const page = await fetchTaskPage({
         status: statusFilter,
         subjectId: subjectFilter,
         limit: TASK_PAGE_SIZE,

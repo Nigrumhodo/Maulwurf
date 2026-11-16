@@ -19,11 +19,13 @@ CLEANUP_GATED_TYPES = frozenset({"index_requested", "analyze_requested"})
 KNOWN_WITHOUT_CONSUMER = frozenset(
     {"task_cancelled", "notify", "send_digest", "delete_event", "account_deleted"}
 )
+# Calendar sync of one task version (A3.4 emits it; J3.4 consumes it).
+SYNC_TASK_EVENT = "sync_task_event"
 # Tipo de evento -> función ARQ del worker.
 JOB_FOR_TYPE = {
     "index_requested": "index",
     "analyze_requested": "analyze",
-    "sync_task_event": "sync_task_event",
+    SYNC_TASK_EVENT: "sync_task_event",
 }
 
 

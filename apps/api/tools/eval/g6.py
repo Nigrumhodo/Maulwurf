@@ -242,8 +242,8 @@ def score_language(language: str, partition: str = "test") -> LanguageScore:
                 (
                     WindowCitation(
                         segment_id=span.segment_id,
-                        char_start=part.segment_char_start + span.inicio_char,
-                        char_end=part.segment_char_start + span.fin_char,
+                        char_start=part.segment_char_start + span.char_start,
+                        char_end=part.segment_char_start + span.char_end,
                     ),
                 ),
             )
@@ -340,7 +340,7 @@ def _same_evidence(left: ProposedItem, right: ProposedItem) -> bool:
 
 def _evidence(item: ProposedItem) -> frozenset[tuple[UUID, int, int, str]]:
     return frozenset(
-        (span.segment_id, span.inicio_char, span.fin_char, span.cita_textual)
+        (span.segment_id, span.char_start, span.char_end, span.cita_textual)
         for span in item.fuente.spans
     )
 

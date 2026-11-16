@@ -15,11 +15,11 @@ from test_supervisor import PROVEN_CLEANUP, Attempt, _seed  # noqa: E402
 
 from maulwurf_ingest import lease
 from maulwurf_ingest.asr_job import STUB_TRANSCRIPT_NAME, _read_stub
+from maulwurf_ingest.audio.reconcile import Word
 from maulwurf_ingest.persistence import (
     CommitOutcome,
     CommitResult,
     TranscriptDraft,
-    TranscriptWord,
     _no_usable_text,
     commit_transcript,
     draft_from_job,
@@ -42,7 +42,7 @@ def _json(value: object) -> object:
 
 def _draft(text: str = "Hoy repasamos", *, precision: str = "word") -> TranscriptDraft:
     words = (
-        (TranscriptWord("Hoy", 0.0, 0.4), TranscriptWord("repasamos", 0.5, 1.1))
+        (Word("Hoy", 0.0, 0.4), Word("repasamos", 0.5, 1.1))
         if precision == "word" else ()
     )
     return TranscriptDraft(
@@ -55,7 +55,7 @@ def test_blank_text_is_not_padded() -> None:
     assert prepare_transcript(_draft("   ", precision="none")) is None
     assert prepare_transcript(TranscriptDraft("", "none", (), "whisper-large-v3")) is None
     assert _no_usable_text(TranscriptDraft(
-        "  ", "word", (TranscriptWord("Hoy", 0.0, 0.4),), "whisper-large-v3",
+        "  ", "word", (Word("Hoy", 0.0, 0.4),), "whisper-large-v3",
     ))
     prepared = prepare_transcript(_draft("  hola  ", precision="none"))
     assert prepared is not None
@@ -75,7 +75,7 @@ def test_repetition_warning_omits_the_token() -> None:
 def test_invalid_times_drop_to_precision_none() -> None:
     prepared = prepare_transcript(TranscriptDraft(
         text="Hoy hay clase", precision="word",
-        words=(TranscriptWord("Hoy", 1.0, 0.2),),
+        words=(Word("Hoy", 1.0, 0.2),),
         model="whisper-large-v3",
     ))
     assert prepared is not None
@@ -87,7 +87,7 @@ def test_invalid_times_drop_to_precision_none() -> None:
 def test_word_offsets_count_unicode_code_points() -> None:
     prepared = prepare_transcript(TranscriptDraft(
         text="", precision="word",
-        words=(TranscriptWord("café", 0.0, 0.2), TranscriptWord("niño", 0.3, 0.6)),
+        words=(Word("café", 0.0, 0.2), Word("niño", 0.3, 0.6)),
         model="whisper-large-v3",
     ))
     assert prepared is not None
@@ -104,9 +104,9 @@ def test_word_segments_partition_the_text_for_the_chunker() -> None:
     prepared = prepare_transcript(TranscriptDraft(
         text="", precision="word",
         words=(
-            TranscriptWord("La", 0.0, 0.2),
-            TranscriptWord("fotosíntesis", 0.3, 0.9),
-            TranscriptWord("¡convierte!", 1.0, 1.5),
+            Word("La", 0.0, 0.2),
+            Word("fotosíntesis", 0.3, 0.9),
+            Word("¡convierte!", 1.0, 1.5),
         ),
         model="whisper-large-v3",
     ))

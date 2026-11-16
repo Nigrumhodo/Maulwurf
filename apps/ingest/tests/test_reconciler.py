@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import uuid
 from collections.abc import Iterator
@@ -104,9 +105,9 @@ async def test_expired_or_stale_token_does_not_publish(pool: asyncpg.Pool) -> No
     await pool.execute(
         """UPDATE ingestion_attempts
               SET cleanup_status = 'verified', cleanup_verified_at = now(),
-                  audio_deleted_at = now()
+                  audio_deleted_at = now(), cleanup_evidence = $2::jsonb
             WHERE id = $1""",
-        owned.attempt_id,
+        owned.attempt_id, json.dumps(PROVEN_CLEANUP),
     )
     reclaimed = await reclaim_committed(
         pool, user_id=owned.user_id, attempt_id=owned.attempt_id, instance=_INSTANCE,
@@ -136,10 +137,10 @@ async def test_verified_cleanup_enables_the_outbox_without_a_directory(
     await pool.execute(
         """UPDATE ingestion_attempts
               SET cleanup_status = 'verified', cleanup_verified_at = now(),
-                  audio_deleted_at = now(),
+                  audio_deleted_at = now(), cleanup_evidence = $2::jsonb,
                   lease_expires_at = now() - interval '1 second'
             WHERE id = $1""",
-        attempt.attempt_id,
+        attempt.attempt_id, json.dumps(PROVEN_CLEANUP),
     )
 
     results = await reconcile_committed(pool, instance=_INSTANCE, tmp_dir=None)
@@ -307,6 +308,30 @@ async def test_expired_stranded_attempt_ends_requires_reupload(
     assert row["fencing_token"] == owned.fencing_token + 1
     assert row["cleanup_status"] == "pending"
     assert await _transcripts(pool, audio_id) == 0
+
+
+async def test_stranded_attempt_destroys_a_local_directory_before_fencing(
+    pool: asyncpg.Pool, tmpfs_dir: Path,
+) -> None:
+    """A dead receiving attempt must not leave its audio on this host's tmpfs."""
+    if cleanup.open_descriptors_under(tmpfs_dir)[1]:
+        pytest.skip("multi-UID /proc: cleanup is fail-closed; run the ingest suite as root")
+    attempt, _owned, _audio_id = await _ready(pool)
+    await pool.execute(
+        "UPDATE ingestion_attempts SET status = 'receiving' WHERE id = $1",
+        attempt.attempt_id,
+    )
+    await _expire(pool, attempt.attempt_id)
+    workdir = cleanup.create_workdir(str(attempt.attempt_id), str(tmpfs_dir))
+    cleanup.write_private(workdir / "original", b"RIFF" + b"\x00" * 8)
+
+    ended = await sweep_stranded(pool, tmp_dir=str(tmpfs_dir))
+
+    assert attempt.attempt_id in ended
+    assert not workdir.exists()
+    row = await _status_and_token(pool, attempt.attempt_id)
+    assert (row["status"], row["error_code"]) == ("requires_reupload", "technical_loss")
+    assert row["cleanup_status"] == "verified"
 
 
 async def test_live_lease_is_not_touched(pool: asyncpg.Pool) -> None:

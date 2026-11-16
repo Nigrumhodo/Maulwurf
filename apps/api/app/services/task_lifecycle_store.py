@@ -1,23 +1,22 @@
 """PostgreSQL adapter for the J3.6 task lifecycle (complete/dismiss).
 
-The adapter owns the row-level work but **not** the transaction: the injected
-`SessionFactory` must yield a session that commits when the context exits successfully and
-rolls back when an exception escapes (production uses `app.core.db.session_scope`). It locks
-the task row **scoped to the caller's tenant**, validates the transition, bumps `version`,
-writes the new status/timestamp and cancels the task's not-yet-sent reminders, so a
-completed task can never receive a stale Gmail reminder and a Calendar job queued for the
-previous version can no longer win its compare-and-set. A task of another user is
-indistinguishable from a missing one (`NOT_FOUND`). Google Calendar is not touched here:
-the linked event is kept, and removing it requires the explicit remote-operation flow (S4).
+The adapter owns the row-level work but **not** the transaction. The caller passes the
+`AsyncSession` it already holds and commits or rolls that session back; this adapter
+never calls `commit()`. It locks the task row **scoped to the caller's tenant**,
+validates the transition, bumps `version`, writes the new status/timestamp and cancels
+the task's not-yet-sent reminders, so a completed task can never receive a stale Gmail
+reminder and a Calendar job queued for the previous version can no longer win its
+compare-and-set. A task of another user is indistinguishable from a missing one
+(`NOT_FOUND`). Google Calendar is not touched here: the linked event is kept, and
+removing it requires the explicit remote-operation flow (S4).
 
 A3.1 owns the real ``tasks`` table and A4.1 owns ``notifications``. Both now exist; the
-`TASKS` projection comes from `task_event_store` and `NOTIFICATIONS` is the real M8 table from
-`app.models.notification`, so the cancellation query cannot drift from the persisted shape.
+`TASKS` projection comes from `task_event_store` and `NOTIFICATIONS` is the real M8 table
+from `app.models.notification`, so the cancellation query cannot drift from the persisted
+shape.
 """
 
 import uuid
-from collections.abc import Callable
-from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from typing import Any, cast
 
@@ -32,8 +31,6 @@ from app.services.task_lifecycle import (
     ensure_task_transition,
 )
 
-SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
-
 # `complete` and `dismiss` are the only commands this adapter writes.
 LIFECYCLE_TARGETS = frozenset({"completed", "dismissed"})
 
@@ -41,28 +38,13 @@ NOTIFICATIONS = cast(Table, Notification.__table__)
 
 
 class SqlTaskLifecycleStore:
-    """One locked transaction per command, mirroring `services.task_lifecycle`.
+    """Row lock, transition and reminder cancellation on the caller's session.
 
-    `sessions` must be a factory whose context manager commits on a clean exit and rolls
-    back on error; the adapter never calls `commit()` itself. `for_session` binds the
-    adapter to an existing request transaction (A3.7) so the task, its revision cleanup
-    and the caller's commit share one unit of work.
+    The caller owns the transaction. This adapter never calls `commit()`.
     """
 
-    def __init__(
-        self,
-        sessions: SessionFactory | None = None,
-        *,
-        session: AsyncSession | None = None,
-    ) -> None:
-        if (sessions is None) == (session is None):
-            raise ValueError("provide exactly one of sessions or session")
-        self._sessions = sessions
-        self._session = session
-
-    @classmethod
-    def for_session(cls, session: AsyncSession) -> "SqlTaskLifecycleStore":
-        return cls(session=session)
+    def __init__(self, db: AsyncSession) -> None:
+        self._db = db
 
     async def transition(
         self,
@@ -75,37 +57,7 @@ class SqlTaskLifecycleStore:
     ) -> LifecycleTransition:
         if target not in LIFECYCLE_TARGETS:
             raise ValueError(f"unsupported lifecycle target: {target!r}")
-        if self._session is not None:
-            return await self._transition_in_session(
-                self._session,
-                user_id,
-                task_id,
-                expected_version=expected_version,
-                target=target,
-                now=now,
-            )
-        if self._sessions is None:  # pragma: no cover - __init__ rejects this
-            raise RuntimeError("lifecycle store has no session")
-        async with self._sessions() as db:
-            return await self._transition_in_session(
-                db,
-                user_id,
-                task_id,
-                expected_version=expected_version,
-                target=target,
-                now=now,
-            )
-
-    async def _transition_in_session(
-        self,
-        db: AsyncSession,
-        user_id: uuid.UUID,
-        task_id: uuid.UUID,
-        *,
-        expected_version: int,
-        target: str,
-        now: datetime,
-    ) -> LifecycleTransition:
+        db = self._db
         row = (
             await db.execute(
                 select(
@@ -153,9 +105,7 @@ class SqlTaskLifecycleStore:
             .where(TASKS.c.id == task_id, TASKS.c.version == expected_version)
             .values(**values)
         )
-        cancelled = await self._cancel_pending(
-            db, user_id=row["user_id"], task_id=task_id
-        )
+        cancelled = await self._cancel_pending(db, user_id=row["user_id"], task_id=task_id)
         return LifecycleTransition(
             outcome=LifecycleOutcome.UPDATED,
             status=target,

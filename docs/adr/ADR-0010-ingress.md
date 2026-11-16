@@ -94,9 +94,10 @@ RAM:
    request bodies in the access log; the native mode also prints Caddy's peak RSS to show
    the body is not held whole in memory.
 
-The J1.3 `proxy_no_buffering.sh` default size drops from 512 MiB to 200 MiB (below the
-220 MB ceiling) so the stream still reaches the sink; a larger `SIZE_BYTES` is now cut at the
-edge with `413`.
+The J1.3 no-buffering check now runs inside `scripts/load/ingress_limits.sh`.
+`scripts/load/proxy_no_buffering.sh` only execs that harness. Its old default of 512 MiB
+was lowered to 200 MiB (below the 220 MB ceiling) so the stream still reaches the sink; a
+larger body is cut at the edge with `413`.
 
 The record with date, environment and observed status codes is in
 [`docs/spike/J2.10-ingress-limits.md`](../spike/J2.10-ingress-limits.md). The static

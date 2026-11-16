@@ -29,13 +29,19 @@ export interface Me {
   csrf_token: string;
 }
 
+/** 401 is anonymous. Anything else that is not a profile is an outage, not a logout. */
+export type SessionProbe =
+  | { status: "authenticated"; me: Me }
+  | { status: "anonymous" }
+  | { status: "unavailable" };
+
 /**
  * Consulta `GET /me` same-origin (cookie `mw_session`) y guarda el token CSRF en
- * memoria. Devuelve `null` sin lanzar si no hay sesión (401), si el endpoint no
- * responde JSON o ante fallo de red. El `Cache-Control: no-store` lo garantiza el
- * backend; aquí además se fuerza `cache: "no-store"`.
+ * memoria. No lanza: un 401 es `anonymous`; un fallo de red, un 5xx o un cuerpo
+ * ilegible es `unavailable`. El `Cache-Control: no-store` lo garantiza el backend;
+ * aquí además se fuerza `cache: "no-store"`.
  */
-export async function fetchMe(): Promise<Me | null> {
+export async function fetchMe(): Promise<SessionProbe> {
   return bootstrapCsrf();
 }
 

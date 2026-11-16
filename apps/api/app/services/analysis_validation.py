@@ -5,7 +5,7 @@ by the L3.2 models; this module adds the checks those models cannot do alone:
 
 - every cited segment belongs to the class, tenant and transcript version in the view;
 - every span lies inside that segment's immutable text;
-- every `cita_textual` is exactly `segment_text[inicio_char:fin_char]`.
+- every `cita_textual` is exactly `segment_text[char_start:char_end]`.
 
 `check_against` remains the pure comparison. The view is the class-scoped segment map, loaded
 by `class_segments_statement` (and the transcript lookup that gives the map its version).
@@ -40,7 +40,7 @@ _MESSAGES: Final[dict[str, str]] = {
 # start echoing the transcript through `str(exc)`.
 _CHECK_CODES: Final[dict[str, str]] = {
     "segmento desconocido en la evidencia": "segment_not_in_class",
-    "fin_char excede el texto del segmento": "span_out_of_range",
+    "char_end excede el texto del segmento": "span_out_of_range",
     "la cita textual no coincide con el segmento": "quote_mismatch",
 }
 
@@ -53,7 +53,12 @@ class AnalysisValidationError(Exception):
         super().__init__(message)
 
 
-def _reject(code: str, cause: BaseException | None = None) -> NoReturn:
+def reject(code: str, cause: BaseException | None = None) -> NoReturn:
+    """Raise the fixed L3.3 error for a closed code.
+
+    The DB-backed reconstruction (A3.6) uses the same errors as `validate_analysis`, so a
+    caller cannot accidentally surface a different message or echo transcript text.
+    """
     error = AnalysisValidationError(code, _MESSAGES[code])
     if cause is None:
         raise error
@@ -83,7 +88,7 @@ def validate_analysis(result: AnalysisResult, view: ClassTranscript) -> None:
     try:
         result.check_against(view.segments)
     except ValueError as exc:
-        _reject(_CHECK_CODES.get(str(exc), "quote_mismatch"), exc)
+        reject(_CHECK_CODES.get(str(exc), "quote_mismatch"), exc)
 
 
 def class_transcript_statement(
@@ -159,7 +164,7 @@ async def load_class_transcript(
         await db.execute(class_transcript_statement(user_id, audio_id, transcript_version))
     ).scalar_one_or_none()
     if transcript_id is None:
-        _reject("transcript_not_in_class")
+        reject("transcript_not_in_class")
     rows = (
         await db.execute(class_segments_statement(user_id, audio_id, transcript_version))
     ).scalars().all()

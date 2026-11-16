@@ -70,8 +70,8 @@ def _spans(item: ProposedItem) -> list[EvidenceSpan]:
     return [
         EvidenceSpan(
             segment_id=span.segment_id,
-            char_start=span.inicio_char,
-            char_end=span.fin_char,
+            char_start=span.char_start,
+            char_end=span.char_end,
             quote=span.cita_textual,
         )
         for span in item.fuente.spans

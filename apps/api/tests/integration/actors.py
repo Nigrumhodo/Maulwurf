@@ -33,7 +33,9 @@ from app.models import (
     Session,
     Subject,
     Task,
+    TaskEvidence,
     TaskRevision,
+    TaskSource,
     Transcript,
     User,
     VariantConfirmationToken,
@@ -544,6 +546,57 @@ async def make_task(db: AsyncSession, actor: Actor) -> Task:
     return task
 
 
+async def make_task_evidence(db: AsyncSession, actor: Actor) -> TaskEvidence:
+    """A validated quote anchored to a source of an extraction task (A3.2)."""
+    transcript = await make_transcript(db, actor)
+    segment = Segment(
+        user_id=actor.user_id,
+        transcript_id=transcript.id,
+        ordinal=1,
+        text=transcript.text,
+        char_start=0,
+        char_end=transcript.char_count,
+    )
+    db.add(segment)
+    await db.flush()
+    task = Task(
+        user_id=actor.user_id,
+        audio_id=transcript.audio_id,
+        source="extraction",
+        tipo="tarea",
+        titulo=f"Tarea {uuid.uuid4().hex[:6]}",
+        timezone="America/Bogota",
+        all_day=True,
+        date_status="missing",
+    )
+    db.add(task)
+    await db.flush()
+    source = TaskSource(
+        user_id=actor.user_id,
+        task_id=task.id,
+        audio_id=transcript.audio_id,
+        transcript_id=transcript.id,
+        transcript_version=transcript.version,
+        segment_id=segment.id,
+        char_start=0,
+        char_end=transcript.char_count,
+    )
+    db.add(source)
+    await db.flush()
+    evidence = TaskEvidence(
+        user_id=actor.user_id,
+        task_id=task.id,
+        task_version=task.version,
+        segment_id=segment.id,
+        char_start=0,
+        char_end=transcript.char_count,
+        quote=transcript.text,
+    )
+    db.add(evidence)
+    await db.flush()
+    return evidence
+
+
 async def make_notification(db: AsyncSession, actor: Actor) -> Notification:
     """One audited T-24 reminder for the actor's task; the dedupe key is canonical (A4.1)."""
     task = await make_task(db, actor)
@@ -602,6 +655,7 @@ FACTORIES: dict[type[TenantOwned], Factory] = {
     OutboxEvent: make_outbox_event,
     CalendarEvent: make_calendar_event,
     Task: make_task,
+    TaskEvidence: make_task_evidence,
     TaskRevision: make_task_revision,
     Notification: make_notification,
 }

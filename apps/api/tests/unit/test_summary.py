@@ -48,6 +48,20 @@ def test_sentence_count_ignores_decimals_and_ellipsis(text: str, expected: int) 
     assert sentence_count(text) == expected
 
 
+def test_a_missing_final_period_does_not_discard_the_summary() -> None:
+    text = (
+        "The class reviewed integration. The midterm covers four topics. "
+        "Students should review before the exam"
+    )
+
+    assert sentence_count(text) == 3
+    parsed = parse_summary_payload(
+        '{"resumen_clase":"The class reviewed integration. The midterm covers four topics. '
+        'Students should review before the exam","temas":["integration"]}'
+    )
+    assert parsed.text == text
+
+
 def test_a_decimal_does_not_reject_a_three_sentence_summary() -> None:
     parsed = parse_summary_payload(
         '{"resumen_clase":"The class lasted 3.5 hours. Students should review. '

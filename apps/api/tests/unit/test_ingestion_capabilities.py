@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.core.config import Settings
+from app.core.deps import current_session
 from app.main import app
 from app.routers import ingestion
 from app.schemas.ingestion import (
@@ -29,6 +30,20 @@ _SECRETS: dict[str, Any] = {
 }
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _signed_in() -> Any:
+    """The route requires a session. These cases check the payload, not the cookie."""
+    app.dependency_overrides[current_session] = lambda: None
+    yield
+    app.dependency_overrides.pop(current_session, None)
+
+
+def test_capabilities_reject_an_anonymous_client() -> None:
+    app.dependency_overrides.pop(current_session, None)
+    response = client.get("/ingestion/capabilities")
+    assert response.status_code == 401
 
 
 def _settings(**overrides: Any) -> Settings:

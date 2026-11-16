@@ -51,10 +51,11 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
+from app.services.calendar_event import all_day_event_bounds, timed_event_bounds
 from app.services.google_calendar import (
     GoogleCalendarConflict,
     GoogleCalendarError,
@@ -98,7 +99,7 @@ class SyncOutcome(StrEnum):
 
 
 @dataclass(frozen=True)
-class TaskSnapshot:
+class SyncTask:
     """The task projection J3.4 needs. Event content is filled by the caller's builder."""
 
     task_id: uuid.UUID
@@ -130,7 +131,7 @@ class TaskSnapshot:
 
 
 class TaskEventStore(Protocol):
-    async def load(self, task_id: uuid.UUID) -> TaskSnapshot | None: ...
+    async def load(self, task_id: uuid.UUID) -> SyncTask | None: ...
 
     async def mark_synced(
         self,
@@ -173,8 +174,8 @@ class CalendarGateway(Protocol):
     ) -> Mapping[str, Any]: ...
 
 
-GatewayFactory = Callable[[TaskSnapshot], Awaitable[CalendarGateway]]
-BodyBuilder = Callable[[TaskSnapshot], Mapping[str, Any]]
+GatewayFactory = Callable[[SyncTask], Awaitable[CalendarGateway]]
+BodyBuilder = Callable[[SyncTask], Mapping[str, Any]]
 Sleeper = Callable[[float], Awaitable[None]]
 
 
@@ -248,13 +249,7 @@ def event_content_matches(event: Mapping[str, Any], body: Mapping[str, Any]) -> 
     )
 
 
-def _rfc3339(value: datetime) -> str:
-    if value.tzinfo is None:
-        raise ValueError("event block must be timezone-aware")
-    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
-
-
-def build_event_body(task: TaskSnapshot) -> dict[str, Any]:
+def build_event_body(task: SyncTask) -> dict[str, Any]:
     """Provisional J3.4 body: identity envelope plus the confirmed block.
 
     J3.5 owns the final content (``[Maulwurf]`` prefix, details and the authenticated
@@ -274,13 +269,17 @@ def build_event_body(task: TaskSnapshot) -> dict[str, Any]:
     if task.all_day:
         if task.event_start_date is None or task.event_end_date_exclusive is None:
             raise ValueError("event block is missing")
-        body["start"] = {"date": task.event_start_date.isoformat()}
-        body["end"] = {"date": task.event_end_date_exclusive.isoformat()}
+        start, end = all_day_event_bounds(task.event_start_date, task.event_end_date_exclusive)
+        body["start"] = start
+        body["end"] = end
         return body
     if task.event_start_at is None or task.event_end_at is None:
         raise ValueError("event block is missing")
-    body["start"] = {"dateTime": _rfc3339(task.event_start_at), "timeZone": task.timezone}
-    body["end"] = {"dateTime": _rfc3339(task.event_end_at), "timeZone": task.timezone}
+    if task.event_start_at.tzinfo is None or task.event_end_at.tzinfo is None:
+        raise ValueError("event block must be timezone-aware")
+    start, end = timed_event_bounds(task.event_start_at, task.event_end_at, task.timezone)
+    body["start"] = start
+    body["end"] = end
     return body
 
 
@@ -311,10 +310,10 @@ class TaskEventSync:
             return SyncOutcome.TASK_NOT_FOUND
         return await self.sync(task, expected_version=task_version)
 
-    async def load(self, task_id: uuid.UUID) -> TaskSnapshot | None:
+    async def load(self, task_id: uuid.UUID) -> SyncTask | None:
         return await self._store.load(task_id)
 
-    async def sync(self, task: TaskSnapshot, *, expected_version: int) -> SyncOutcome:
+    async def sync(self, task: SyncTask, *, expected_version: int) -> SyncOutcome:
         """Synchronize an already loaded task; obsolete versions never reach Google."""
         if task.version != expected_version:
             logger.info(
@@ -384,7 +383,7 @@ class TaskEventSync:
 
     async def _reconcile(
         self,
-        task: TaskSnapshot,
+        task: SyncTask,
         existing: Mapping[str, Any] | None,
         event_id: str,
         gateway: CalendarGateway,
@@ -483,7 +482,7 @@ class TaskEventSync:
 
     async def _external_conflict(
         self,
-        task: TaskSnapshot,
+        task: SyncTask,
         body: Mapping[str, Any],
         event_id: str,
         gateway: CalendarGateway,
@@ -517,7 +516,7 @@ class TaskEventSync:
 
     async def _repair_newer_version(
         self,
-        task: TaskSnapshot,
+        task: SyncTask,
         sent: Mapping[str, Any],
         event_id: str,
         gateway: CalendarGateway,
@@ -608,7 +607,7 @@ class TaskEventSync:
 
     async def _settle(
         self,
-        task: TaskSnapshot,
+        task: SyncTask,
         event_id: str,
         outcome: SyncOutcome,
         *,
@@ -632,10 +631,10 @@ class TaskEventSync:
             return SyncOutcome.STALE_VERSION
         return outcome
 
-    async def _blocked(self, task: TaskSnapshot, code: str) -> SyncOutcome:
+    async def _blocked(self, task: SyncTask, code: str) -> SyncOutcome:
         logger.info("calendar_sync.blocked task_id=%s code=%s", task.task_id, code)
         await self._store.mark_blocked(task.task_id, task.version)
         return SyncOutcome.BLOCKED
 
-    async def _mark_failed(self, task: TaskSnapshot) -> None:
+    async def _mark_failed(self, task: SyncTask) -> None:
         await self._store.mark_failed(task.task_id, task.version)

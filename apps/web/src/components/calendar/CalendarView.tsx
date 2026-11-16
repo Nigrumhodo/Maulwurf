@@ -17,7 +17,7 @@ import {
 } from "@/lib/calendar";
 import { fetchSubjects } from "@/lib/subjects";
 import type { Subject } from "@/lib/subjects";
-import { fetchTasks, formatTaskDue } from "@/lib/tasks";
+import { fetchTaskPage, formatTaskDue } from "@/lib/tasks";
 import type { Task } from "@/lib/tasks";
 
 // D3.6 - Google events + Maulwurf tasks in one agenda. The merge happens in
@@ -103,7 +103,7 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
 
   useEffect(() => {
     let cancelled = false;
-    fetchTasks({ status: "all", limit: 200 })
+    fetchTaskPage({ status: "all", limit: 200 })
       .then((page) => {
         if (cancelled) return;
         setTasks(Array.isArray(page.items) ? page.items : []);

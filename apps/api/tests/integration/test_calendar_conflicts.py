@@ -50,15 +50,14 @@ from app.core.config import settings
 from app.core.db import get_session
 from app.main import app
 from app.models import CalendarEvent, CalendarSettings, GoogleCredential, User
+from app.services import calendar_mirror, calendar_window, sessions
 from app.services import calendar_sync as calendar_sync_service
-from app.services import sessions
-from app.services.calendar_sync import (
+from app.services.calendar_remote import CalendarRead, RemoteCalendarEvent
+from app.services.calendar_sync import refresh_calendar_mirror
+from app.services.calendar_window import (
     MANUAL_SYNC_COOLDOWN_SECONDS,
     CalendarEventInvalid,
-    CalendarRead,
     CalendarWindow,
-    RemoteCalendarEvent,
-    refresh_calendar_mirror,
 )
 from app.services.google_calendar import (
     GoogleCalendarInvalidGrant,
@@ -949,8 +948,8 @@ async def test_sync_reports_a_busy_publication_lock_as_transient(
     monkeypatch.setattr(calendar_sync_service, "LOCK_TIMEOUT_MS", 250)
     _patch_source(monkeypatch, FakeSource())
     lock = {
-        "namespace": calendar_sync_service._ADVISORY_LOCK_NAMESPACE,
-        "user_key": calendar_sync_service._user_lock_key(actor.user_id),
+        "namespace": calendar_mirror._ADVISORY_LOCK_NAMESPACE,
+        "user_key": calendar_window._user_lock_key(actor.user_id),
     }
     holder = create_async_engine(migrated_database_url, poolclass=NullPool)
     try:

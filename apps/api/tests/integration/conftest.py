@@ -6,7 +6,8 @@ las pruebas no dependen ni ensucian la BD de desarrollo.
 """
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -21,6 +22,25 @@ from alembic import command
 from app.core.config import settings
 
 API_ROOT = Path(__file__).resolve().parents[2]
+
+
+def reuse_session(
+    session: AsyncSession,
+) -> Callable[[], AbstractAsyncContextManager[AsyncSession]]:
+    """Yield the fixture transaction without closing it.
+
+    `GET /search` opens a session, closes it, embeds, then opens another. These
+    tests share one rolled-back transaction, so both opens are that session.
+    """
+
+    @asynccontextmanager
+    async def _open() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    def _opener() -> AbstractAsyncContextManager[AsyncSession]:
+        return _open()
+
+    return _opener
 
 
 async def _admin(sql: str) -> None:

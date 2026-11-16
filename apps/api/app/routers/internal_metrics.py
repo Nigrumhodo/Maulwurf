@@ -1,8 +1,9 @@
 """`/internal/metrics` endpoint (J2.5): Prometheus text for the internal network only.
 
-Caddy answers 404 to `/internal/*` (A2.13 and `infra/Caddyfile`), so the route is not
-public. The endpoint does not authenticate: it relies on that network boundary, not on a
-secret.
+Caddy answers 404 to `/internal/*` (A2.13 and `infra/Caddyfile`). Outside `local` the
+route also requires `Authorization: Bearer` matching `MAULWURF_METRICS_TOKEN`, so a
+published API port is not an open cross-tenant aggregate. Local leaves the token unset
+for the loopback runbook.
 
 A2.17: the outbox aggregate is cross-tenant by definition. The read runs in one transaction
 as the jobs role with the explicit `app.cross_tenant` switch (the same documented policy the
@@ -14,10 +15,14 @@ scrape and are not cached, so the example Prometheus configuration scrapes this 
 60 s or slower; see `infra/alerting/prometheus.example.yml`.
 """
 
-from fastapi import APIRouter
+import hmac
+
+from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse
 
+from app.core.config import settings
 from app.core.db import session_scope
+from app.core.errors import auth_required
 from app.core.prometheus import PROMETHEUS_CONTENT_TYPE, render
 from app.services.outbox_metrics import collect_outbox_samples
 from app.services.provider_budget import collect_budget_samples
@@ -25,9 +30,24 @@ from app.services.provider_budget import collect_budget_samples
 router = APIRouter(prefix="/internal", tags=["metrics"])
 
 
+def _authorize_metrics(request: Request) -> None:
+    """Reject a scrape that does not present the configured bearer."""
+    configured = settings.metrics_token
+    if configured is None:
+        if settings.env == "local":
+            return
+        raise auth_required()
+    header = request.headers.get("authorization") or ""
+    presented = header.removeprefix("Bearer ") if header.startswith("Bearer ") else ""
+    expected = configured.get_secret_value()
+    if not presented or not hmac.compare_digest(presented.encode(), expected.encode()):
+        raise auth_required()
+
+
 @router.get("/metrics", response_class=PlainTextResponse)
-async def metrics() -> PlainTextResponse:
+async def metrics(request: Request) -> PlainTextResponse:
     """Outbox and provider-budget metrics in the Prometheus exposition format."""
+    _authorize_metrics(request)
     async with session_scope() as db:
         samples = await collect_outbox_samples(db, cross_tenant=True)
         samples.extend(await collect_budget_samples(db, cross_tenant=True))

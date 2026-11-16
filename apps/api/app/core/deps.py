@@ -181,3 +181,16 @@ def chat_session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 ChatSessions = Annotated[async_sessionmaker[AsyncSession], Depends(chat_session_factory)]
+
+
+def search_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Short sessions for `GET /search`.
+
+    The handler authenticates on one session, closes it, embeds the query, then opens
+    another session for retrieval. A request-scoped `get_session` would stay checked out
+    for the whole embedding call.
+    """
+    return SessionFactory
+
+
+SearchSessions = Annotated[async_sessionmaker[AsyncSession], Depends(search_session_factory)]

@@ -20,6 +20,7 @@ MIGRATION_0007 = VERSIONS / "0007_s3_calendar_mirror.py"
 MIGRATION_0011 = VERSIONS / "0011_s3_tasks.py"
 MIGRATION_0014 = VERSIONS / "0014_s4_notifications.py"
 MIGRATION_0015 = VERSIONS / "0015_s4_account_deletions.py"
+MIGRATION_0020 = VERSIONS / "0020_s3_task_evidence.py"
 
 
 def _migration(path: Path, name: str) -> ModuleType:
@@ -37,6 +38,7 @@ def test_every_tenant_model_has_a_policy_in_the_migrations() -> None:
     tasks = _migration(MIGRATION_0011, "rls_0011")
     notifications = _migration(MIGRATION_0014, "rls_0014")
     deletion = _migration(MIGRATION_0015, "rls_0015")
+    evidence = _migration(MIGRATION_0020, "rls_0020")
     # `TenantOwned` is a mixin, but a few tenant tables (chunk_segments, embeddings,
     # google_credentials, settings) declare `user_id` directly; the `user_id` column is the
     # contract every RLS migration follows. A4.4's `account_deletions` keys on
@@ -53,6 +55,7 @@ def test_every_tenant_model_has_a_policy_in_the_migrations() -> None:
         | set(tasks.TABLES)
         | {notifications.TABLE}
         | set(deletion.TABLES)
+        | set(evidence.TABLES)
     )
     assert models == covered
     assert set(base.RLS_TABLES) == set(base.TENANT_TABLES) | {"users"}
@@ -61,6 +64,7 @@ def test_every_tenant_model_has_a_policy_in_the_migrations() -> None:
     assert set(tasks.TABLES) == {"tasks", "task_sources", "task_revisions"}
     assert notifications.TABLE == "notifications"
     assert set(deletion.TABLES) == {"account_deletions", "google_remote_operations"}
+    assert set(evidence.TABLES) == {"task_evidence"}
 
 
 def test_role_scoped_exceptions_stay_narrow() -> None:

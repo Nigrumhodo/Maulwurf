@@ -2,14 +2,16 @@
 //
 // `apiFetch` es el único camino para hablar con la API desde el navegador:
 // cookies same-origin (`credentials: "include"`), inyecta `X-CSRF-Token` en toda
-// mutación y enruta los errores: `401 → redirigir a login`, `403 → mensaje de
-// permisos`, `429 → reintento diferido respetando Retry-After` (acotado).
+// mutación y enruta los errores: `401` redirige a login, `403` se lanza para que
+// lo muestre quien hizo la llamada (una sola vez), `429` reintenta lecturas
+// respetando `Retry-After` y `AbortSignal`.
 //
 // El token se obtiene con `bootstrapCsrf()` (`GET /me`, `cache: "no-store"`) y se
 // conserva solo en memoria (`lib/csrf.ts`). La identidad la fija el backend
 // (cookie opaca), nunca un payload del cliente (ADR-0006).
 import { clearCsrfToken, getCsrfToken, setCsrfToken } from "./csrf";
-import type { Me } from "./auth";
+import { isRecord } from "./json";
+import type { Me, SessionProbe } from "./auth";
 
 /** Mismo origen: Caddy enruta /auth/*, /me, /subjects/* y /audios/* a la API. */
 const SAME_ORIGIN = true;
@@ -40,10 +42,54 @@ const RETRYABLE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const MAX_JITTER_MS = 1_000;
 
 /** Envelope de error de la API: `{"error": {code, message, details}}` (DISENO §3.2). */
-interface ApiErrorBody {
+export interface ParsedApiError {
   code?: string;
   message?: string;
-  details?: Record<string, unknown>;
+  details?: Record<string, unknown> | unknown[];
+}
+
+/** `409 duplicate_variant`: the only error that carries a one-time confirmation token. */
+export interface DuplicateVariantDetails {
+  existing_audio_id: string;
+  variant_confirmation_token: string;
+  expires_at: string;
+}
+
+/** Extrae el envelope; `null` si el cuerpo no lo tiene. Un code no-string se descarta. */
+export function parseErrorEnvelope(body: unknown): ParsedApiError | null {
+  if (!isRecord(body)) return null;
+  const error = body.error;
+  if (!isRecord(error)) return null;
+  let details: ParsedApiError["details"] = undefined;
+  if (isRecord(error.details) || Array.isArray(error.details)) {
+    details = error.details;
+  }
+  return {
+    code: typeof error.code === "string" ? error.code : undefined,
+    message: typeof error.message === "string" ? error.message : undefined,
+    details,
+  };
+}
+
+/** Mensaje de un campo: string, o el primer string de un array. */
+export function fieldMessage(details: unknown, field: string): string | undefined {
+  if (!isRecord(details)) return undefined;
+  const value = details[field];
+  if (typeof value === "string") return value;
+  if (Array.isArray(value) && typeof value[0] === "string") return value[0];
+  return undefined;
+}
+
+function isMe(value: unknown): value is Me {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.email === "string" &&
+    (value.display_name === null || typeof value.display_name === "string") &&
+    typeof value.timezone === "string" &&
+    typeof value.csrf_token === "string" &&
+    value.csrf_token !== ""
+  );
 }
 
 /** Error tipado que lanza `apiFetch` ante una respuesta no 2xx. */
@@ -52,18 +98,64 @@ export class ApiHttpError extends Error {
   readonly code: string | null;
   readonly details: Record<string, unknown>;
 
-  constructor(status: number, body: ApiErrorBody | null) {
+  constructor(status: number, body: ParsedApiError | null) {
     super(body?.message ?? `Solicitud fallida (${status}).`);
     this.name = "ApiHttpError";
     this.status = status;
     this.code = body?.code ?? null;
-    this.details = body?.details ?? {};
+    const details = body?.details;
+    this.details = isRecord(details) ? details : {};
+  }
+
+  /** First `details.fields` entry whose value is a string or a list of strings. */
+  firstFieldMessage(): { field: string; message: string } | null {
+    const fields = this.details.fields;
+    if (!isRecord(fields)) return null;
+    for (const [field, value] of Object.entries(fields)) {
+      const message = fieldMessage({ [field]: value }, field);
+      if (message !== undefined) return { field, message };
+    }
+    return null;
+  }
+
+  /** `details[key]` when every element is a string. Mixed arrays are not coerced. */
+  stringList(key: string): string[] | null {
+    const value = this.details[key];
+    if (!Array.isArray(value)) return null;
+    const items: string[] = [];
+    for (const item of value) {
+      if (typeof item !== "string") return null;
+      items.push(item);
+    }
+    return items;
+  }
+
+  duplicateVariant(): DuplicateVariantDetails | null {
+    const existingAudioId = this.details.existing_audio_id;
+    const token = this.details.variant_confirmation_token;
+    const expiresAt = this.details.expires_at;
+    if (
+      typeof existingAudioId !== "string" ||
+      existingAudioId === "" ||
+      typeof token !== "string" ||
+      token === "" ||
+      typeof expiresAt !== "string" ||
+      expiresAt === ""
+    ) {
+      return null;
+    }
+    return {
+      existing_audio_id: existingAudioId,
+      variant_confirmation_token: token,
+      expires_at: expiresAt,
+    };
   }
 }
 
 /** Handlers de interceptor, inyectables para desacoplar el router (testeable). */
 export interface ApiHandlers {
   onUnauthorized?: () => void;
+  /** Optional side effect. The caller that caught the error owns the message. */
   onForbidden?: (error: ApiHttpError) => void;
 }
 
@@ -81,22 +173,12 @@ function redirectToLogin(): void {
   }
 }
 
-// Mensaje de permisos visible por defecto; D1.5 lo sustituye por un toast vía
-// `configureApiHandlers`. En tests (sin `window`) cae al log.
-function showForbiddenMessage(error: ApiHttpError): void {
-  if (typeof window !== "undefined") {
-    window.alert(error.message);
-  } else {
-    console.error(error);
-  }
-}
-
-async function readErrorBody(res: Response): Promise<ApiErrorBody | null> {
+async function readErrorBody(res: Response): Promise<ParsedApiError | null> {
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) return null;
   try {
-    const contentType = res.headers.get("content-type") ?? "";
-    if (!contentType.includes("application/json")) return null;
-    const payload = (await res.json()) as { error?: ApiErrorBody };
-    return payload.error ?? null;
+    const payload: unknown = await res.json();
+    return parseErrorEnvelope(payload);
   } catch {
     return null;
   }
@@ -112,8 +194,32 @@ export function parseRetryAfter(value: string | null): number | null {
   return null;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/** Reason carried by `AbortSignal`, or a DOM `AbortError` when the signal has none. */
+export function abortError(signal: AbortSignal): unknown {
+  if (signal.reason !== undefined) return signal.reason;
+  return new DOMException("The operation was aborted.", "AbortError");
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError(signal));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(timer);
+      reject(
+        signal === undefined
+          ? new DOMException("The operation was aborted.", "AbortError")
+          : abortError(signal),
+      );
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export interface ApiRequestInit extends Omit<RequestInit, "headers"> {
@@ -136,6 +242,7 @@ export async function apiFetch(path: string, init: ApiRequestInit = {}): Promise
     const token = getCsrfToken();
     if (token !== null) headers.set(CSRF_HEADER, token);
   }
+  const signal = init.signal ?? undefined;
 
   // D2.8: every API response is tenant-private. This override is deliberate: a caller
   // must not be able to opt into browser caching for private class or chat data.
@@ -155,7 +262,8 @@ export async function apiFetch(path: string, init: ApiRequestInit = {}): Promise
       const base = Math.min(retryAfter, MAX_RETRY_DELAY_MS);
       // Jitter keeps every client from retrying in the same millisecond.
       const delay = base + Math.random() * Math.min(base * 0.2, MAX_JITTER_MS);
-      if (delay > 0) await sleep(delay);
+      if (signal?.aborted) throw abortError(signal);
+      if (delay > 0) await sleep(delay, signal);
       return apiFetch(path, { ...init, retries: retries - 1 });
     }
   }
@@ -169,36 +277,50 @@ export async function apiFetch(path: string, init: ApiRequestInit = {}): Promise
     if (handlers.onUnauthorized) handlers.onUnauthorized();
     else redirectToLogin();
   } else if (res.status === 403) {
-    if (handlers.onForbidden) handlers.onForbidden(error);
-    else showForbiddenMessage(error);
+    // The screen that issued the call renders this error. A second toast would repeat it.
+    handlers.onForbidden?.(error);
   }
 
   throw error;
 }
 
 /**
- * Obtiene perfil + CSRF vía `GET /me` (`cache: "no-store"`) y guarda el token en
- * memoria. Devuelve `null` sin lanzar si no hay sesión (401), si la respuesta no
- * es JSON o ante fallo de red.
+ * `GET /me` (`cache: "no-store"`). `anonymous` is only a 401. Network failures,
+ * 5xx and a body that is not a profile are `unavailable`, so the gate can finish
+ * without sending a signed-in user to login.
  */
-export async function bootstrapCsrf(): Promise<Me | null> {
+export async function bootstrapCsrf(): Promise<SessionProbe> {
   let res: Response;
   try {
     res = await fetch("/me", { cache: "no-store", credentials: "include" });
   } catch {
     clearCsrfToken();
-    return null;
+    return { status: "unavailable" };
+  }
+  if (res.status === 401) {
+    clearCsrfToken();
+    return { status: "anonymous" };
   }
   if (!res.ok) {
     clearCsrfToken();
-    return null;
+    return { status: "unavailable" };
   }
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
     clearCsrfToken();
-    return null;
+    return { status: "unavailable" };
   }
-  const me = (await res.json()) as Me;
-  setCsrfToken(me.csrf_token);
-  return me;
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch {
+    clearCsrfToken();
+    return { status: "unavailable" };
+  }
+  if (!isMe(payload)) {
+    clearCsrfToken();
+    return { status: "unavailable" };
+  }
+  setCsrfToken(payload.csrf_token);
+  return { status: "authenticated", me: payload };
 }

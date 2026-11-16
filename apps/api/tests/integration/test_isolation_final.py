@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import (
 
 from app.core.config import settings
 from app.core.db import get_session
-from app.core.deps import chat_session_factory, progress_session_factory
+from app.core.deps import chat_session_factory, progress_session_factory, search_session_factory
 from app.core.providers import get_embedding_provider
 from app.main import app
 from app.models import (
@@ -52,6 +52,7 @@ from app.models import (
     ProcessingRun,
     Segment,
     Task,
+    TaskEvidence,
     TaskRevision,
     TaskSource,
     Transcript,
@@ -65,6 +66,7 @@ from app.services.search_quota import SEARCH_QUOTA_KEY_PREFIX
 from app.services.tenant import get_owned, owned_by
 from tests.integration import actors
 from tests.integration.actors import FACTORIES, Actor
+from tests.integration.conftest import reuse_session
 
 pytestmark = pytest.mark.integration
 
@@ -108,6 +110,7 @@ async def client(
         yield db_session
 
     app.dependency_overrides[get_session] = override
+    app.dependency_overrides[search_session_factory] = lambda: reuse_session(db_session)
     app.dependency_overrides[get_embedding_provider] = lambda: provider
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url=settings.allowed_origin
@@ -288,16 +291,27 @@ async def _seed_full_class(
     )
     db.add(task)
     await db.flush()
+    task_source = TaskSource(
+        user_id=actor.user_id,
+        task_id=task.id,
+        audio_id=audio.id,
+        transcript_id=transcript.id,
+        transcript_version=transcript.version,
+        segment_id=segment.id,
+        char_start=0,
+        char_end=len(text),
+    )
+    db.add(task_source)
+    await db.flush()
     db.add(
-        TaskSource(
+        TaskEvidence(
             user_id=actor.user_id,
             task_id=task.id,
-            audio_id=audio.id,
-            transcript_id=transcript.id,
-            transcript_version=transcript.version,
+            task_version=task.version,
             segment_id=segment.id,
             char_start=0,
             char_end=len(text),
+            quote=text,
         )
     )
     db.add(
@@ -859,6 +873,7 @@ async def test_class_deletion_purges_every_derived_row_and_the_sweep_stays_clean
     assert purged["message_sources_deleted"] == 1
     assert purged["tasks_deleted"] == 1
     assert purged["task_sources_deleted"] == 1
+    assert purged["task_evidence_deleted"] == 1
     assert purged["task_revisions_deleted"] == 1
 
     for model, where in (
@@ -870,6 +885,7 @@ async def test_class_deletion_purges_every_derived_row_and_the_sweep_stays_clean
         (MessageSource, {"user_id": alice.user_id}),
         (Task, {"user_id": alice.user_id}),
         (TaskSource, {"user_id": alice.user_id}),
+        (TaskEvidence, {"user_id": alice.user_id}),
         (TaskRevision, {"user_id": alice.user_id}),
         (Notification, {"user_id": alice.user_id}),
     ):
@@ -917,6 +933,7 @@ async def test_account_deletion_leaves_no_derived_rows_and_the_sweep_stays_clean
         MessageSource,
         Task,
         TaskSource,
+        TaskEvidence,
         TaskRevision,
         Notification,
         Conversation,

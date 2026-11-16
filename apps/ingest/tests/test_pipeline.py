@@ -10,7 +10,7 @@ import pytest
 
 from maulwurf_ingest.audio.ffmpeg import DEFAULT_LIMITS
 from maulwurf_ingest.audio.fragmenter import FragmentSpan, fragment_argv
-from maulwurf_ingest.audio.reconcile import LocalWord
+from maulwurf_ingest.audio.reconcile import Word
 from maulwurf_ingest.pipeline import FIRST_FRAGMENT, FragmentWords, process
 
 _RATE = 16_000
@@ -48,8 +48,8 @@ def test_one_fragment_is_active_and_the_class_pcm_is_not_written(tmp_path: Path)
         assert path.name in {item.name for item in live}
         assert not (tmp_path / "converted.wav").exists()
         if path.name == FIRST_FRAGMENT:
-            return FragmentWords(words=(LocalWord("hoy", 0.1, 0.4),))
-        return FragmentWords(words=(LocalWord("clase", 0.2, 0.5),))
+            return FragmentWords(words=(Word("hoy", 0.1, 0.4),))
+        return FragmentWords(words=(Word("clase", 0.2, 0.5),))
 
     result = process(
         source,

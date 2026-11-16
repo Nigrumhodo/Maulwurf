@@ -3,17 +3,13 @@ import { BlinkingCaret } from "@/components/motion/BlinkingCaret";
 // Dashboard — telemetry strip: a blinking system line plus quick counters
 // (mock numbers labelled as demo, replaced by real metrics later). Keeps the Cyber
 // Y2K tokens: `mint` accent, `surface` panels and hard `shadow-block` shadows.
-interface TelemetryBannerProps {
-  guest: boolean;
-}
-
 const METRICS = [
   { label: "audio ingerido", value: "24.5 hrs" },
   { label: "clases activas", value: "06" },
   { label: "apuntes .md", value: "18" },
 ];
 
-export function TelemetryBanner({ guest }: TelemetryBannerProps) {
+export function TelemetryBanner() {
   return (
     <section className="border-2 border-pure-black bg-surface shadow-block">
       <div className="flex flex-col gap-3 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
@@ -32,7 +28,7 @@ export function TelemetryBanner({ guest }: TelemetryBannerProps) {
           <span className="text-lavender/40" aria-hidden="true">
             //
           </span>
-          <span>{guest ? "sesión: invitado" : "sesión activa"}</span>
+          <span>sesión activa</span>
           <BlinkingCaret block />
         </div>
 

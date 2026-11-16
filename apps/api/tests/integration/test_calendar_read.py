@@ -32,15 +32,14 @@ from app.core.config import settings
 from app.core.db import get_session
 from app.main import app
 from app.models import CalendarEvent, CalendarSettings
-from app.services.calendar_sync import (
-    CalendarEventInvalid,
+from app.services.calendar_remote import (
     CalendarRead,
-    CalendarWindow,
     GoogleCalendarEventSource,
     RemoteCalendarEvent,
     RemoteCancelledEvent,
-    sync_calendar_window,
 )
+from app.services.calendar_sync import sync_calendar_window
+from app.services.calendar_window import CalendarEventInvalid, CalendarWindow
 from app.services.google_calendar import GoogleCalendarService
 from tests.integration.actors import Actor, make_actor, make_task
 

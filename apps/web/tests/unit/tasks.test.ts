@@ -9,7 +9,7 @@ import {
   effectiveTask,
   eventModeLabel,
   fetchTask,
-  fetchTasks,
+  fetchTaskPage,
   formatEventBlock,
   formatTaskDue,
   instantToWall,
@@ -101,7 +101,7 @@ describe("task inbox helpers", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await fetchTasks({
+    await fetchTaskPage({
       status: "all",
       subjectId: "s1",
       dueFrom: "2026-11-01",
@@ -122,7 +122,7 @@ describe("task inbox helpers", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await fetchTasks({ audioId: AUDIO_ID, limit: 200 });
+    await fetchTaskPage({ audioId: AUDIO_ID, limit: 200 });
 
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
       `/tasks?limit=200&audio_id=${AUDIO_ID}`,

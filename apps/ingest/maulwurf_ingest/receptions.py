@@ -11,7 +11,6 @@ import asyncio
 import hmac
 import logging
 import os
-import shutil
 import tempfile
 import time
 import uuid
@@ -41,8 +40,7 @@ from maulwurf_ingest.supervisor import (
     Outcome,
     RunResult,
     SupervisorConfig,
-    _close_attempt,
-    _Job,
+    _AttemptClose,
     _LeaseKeeper,
     finish_transcription,
 )
@@ -95,11 +93,13 @@ class _Gate:
 
 class _Hold:
     def __init__(
-        self, *, lease: leases.Lease, workdir: Path, keeper: _LeaseKeeper, sha256: str,
-        received_bytes: int, duration_s: float, audio_id: uuid.UUID,
+        self, *, lease: leases.Lease, workdir: Path, audio: cleanup.AttemptDir,
+        keeper: _LeaseKeeper, sha256: str, received_bytes: int, duration_s: float,
+        audio_id: uuid.UUID,
     ) -> None:
         self.lease = lease
         self.workdir = workdir
+        self.audio = audio
         self.keeper = keeper
         self.sha256 = sha256
         self.received_bytes = received_bytes
@@ -221,6 +221,9 @@ async def open_service_pool(app: object) -> None:
         return
     dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
     try:
+        # Four connections for this process. Compose's budget is
+        # 3 * (pool 5 + overflow 5) for api/worker/scheduler, plus this 4,
+        # under Postgres' default max_connections of 100.
         created = await asyncpg.create_pool(dsn, min_size=1, max_size=4, timeout=2.0)
     except Exception as exc:  # noqa: BLE001 — a down database is capacity, and the message may hold the DSN
         logger.warning("reception.pool_failed error=%s", type(exc).__name__)
@@ -268,10 +271,12 @@ def _asr_config(request: Request) -> SupervisorConfig:
 
 async def _cleanup(pool: asyncpg.Pool, hold: _Hold) -> str:
     result = RunResult(Outcome.LEASE_LOST, fencing_token=hold.lease.fencing_token)
-    await _close_attempt(
-        pool, hold.lease, hold.lease.attempt_id, hold.workdir, _Job(), hold.keeper, result,
-        owned_audio=True, committed=False, audio_id=None, version=None,
-    )
+    close = _AttemptClose(pool, hold.lease, result)
+    close.owned_audio = True
+    hold.audio.keeper = hold.keeper
+    hold.audio.on_destroyed = close
+    async with hold.audio:
+        pass
     recorded = "verified" if result.evidence.get("verified") is True else "failed"
     hold.cleanup_status = recorded
     _remember(hold.lease.attempt_id, recorded)
@@ -288,26 +293,31 @@ async def _terminal(pool: asyncpg.Pool, hold: _Hold, *, code: str, from_status: 
     return await _cleanup(pool, hold)
 
 
-async def _force_release(hold: _Hold) -> str:
-    """Drop the tmpfs file and the slot when recording cleanup has already failed.
+async def _abandon(hold: _Hold) -> str:
+    """Release the slot after verified destruction when recording cleanup failed.
 
-    The keeper must stop here. If it kept renewing the lease, the audio would
-    sit in tmpfs until the process restarted.
+    The directory is destroyed by ``AttemptDir`` before this returns. The keeper
+    must stop here so it does not renew a lease whose audio is already gone.
     """
-    if hold.phase == "closed":
-        return hold.cleanup_status or "failed"
-    hold.phase = "closed"
-    hold.finished.set()
-    try:
-        await hold.keeper.stop()
-    except Exception as exc:  # noqa: BLE001 — stopping the keeper must not keep the slot
-        logger.warning("reception.keeper_stop_failed error=%s", type(exc).__name__)
-    shutil.rmtree(hold.workdir, ignore_errors=True)
-    hold.cleanup_status = "failed"
-    _remember(hold.lease.attempt_id, "failed")
+    if hold.phase != "closed":
+        hold.phase = "closed"
+        hold.finished.set()
+        try:
+            await hold.audio.aclose()
+        except Exception as exc:  # noqa: BLE001 — the slot still has to go
+            logger.warning(
+                "reception.cleanup_failed attempt_id=%s error=%s",
+                hold.lease.attempt_id, type(exc).__name__,
+            )
+        try:
+            await hold.keeper.stop()
+        except Exception as exc:  # noqa: BLE001 — stopping the keeper must not keep the slot
+            logger.warning("reception.keeper_stop_failed error=%s", type(exc).__name__)
+    hold.cleanup_status = hold.cleanup_status or "failed"
+    _remember(hold.lease.attempt_id, hold.cleanup_status)
     _holds.pop(hold.lease.attempt_id, None)
     await _gate.release(hold.lease.user_id)
-    return "failed"
+    return hold.cleanup_status
 
 
 async def _safe_cleanup(pool: asyncpg.Pool, hold: _Hold) -> str:
@@ -318,7 +328,7 @@ async def _safe_cleanup(pool: asyncpg.Pool, hold: _Hold) -> str:
             "reception.cleanup_failed attempt_id=%s error=%s",
             hold.lease.attempt_id, type(exc).__name__,
         )
-        return await _force_release(hold)
+        return await _abandon(hold)
 
 
 async def _safe_terminal(
@@ -331,7 +341,7 @@ async def _safe_terminal(
             "reception.terminal_failed attempt_id=%s error=%s",
             hold.lease.attempt_id, type(exc).__name__,
         )
-        return await _force_release(hold)
+        return await _abandon(hold)
 
 
 async def _expire(pool: asyncpg.Pool, hold: _Hold) -> None:
@@ -376,20 +386,28 @@ async def _open_hold(
     if lease is None:
         await _gate.release(claims.user_id)
         return _error(409, "attempt_not_active")
-    workdir: Path | None = None
+    attempt_dir = cleanup.AttemptDir(str(claims.attempt_id), None)
     try:
-        workdir = cleanup.create_workdir(str(claims.attempt_id), None)
-        keeper = _LeaseKeeper(pool, lease, 10.0)
+        async with attempt_dir:
+            keeper = _LeaseKeeper(pool, lease, 10.0)
+            workdir = attempt_dir.path
+            if workdir is None:
+                raise RuntimeError("attempt_dir")
+            # The directory stays alive until admit, discard, or expiry exits it.
+            attempt_dir.handoff()
+            return _Hold(
+                lease=lease, workdir=workdir, audio=attempt_dir, keeper=keeper,
+                sha256="", received_bytes=0, duration_s=0.0, audio_id=claims.audio_id,
+            )
     except Exception as exc:  # noqa: BLE001 — the slot is already taken
         # The slot was taken before the lease. A failure here must give it back
-        # even when the status write itself fails.
+        # even when the status write itself fails. Destruction, when a directory
+        # exists, already ran in ``AttemptDir.__aexit__``.
         logger.warning(
             "reception.open_failed attempt_id=%s error=%s",
             claims.attempt_id, type(exc).__name__,
         )
         await _gate.release(claims.user_id)
-        if workdir is not None:
-            shutil.rmtree(workdir, ignore_errors=True)
         try:
             await leases.transition(
                 pool, lease, from_status="receiving", to_status="requires_reupload",
@@ -398,10 +416,7 @@ async def _open_hold(
         except Exception as write_exc:  # noqa: BLE001 — the slot is already released
             logger.warning("reception.open_status_failed error=%s", type(write_exc).__name__)
         return _error(500, "internal_error")
-    return _Hold(
-        lease=lease, workdir=workdir, keeper=keeper, sha256="", received_bytes=0,
-        duration_s=0.0, audio_id=claims.audio_id,
-    )
+    raise RuntimeError("attempt_dir")
 
 
 @router.put("/internal/v1/receptions/{attempt_id}")
@@ -532,7 +547,7 @@ async def post_admit(attempt_id: uuid.UUID, request: Request) -> JSONResponse:
     async def _admitted() -> None:
         try:
             await finish_transcription(
-                pool, lease=hold.lease, workdir=hold.workdir, config=_asr_config(request),
+                pool, lease=hold.lease, audio=hold.audio, config=_asr_config(request),
                 keeper=hold.keeper,
             )
         finally:

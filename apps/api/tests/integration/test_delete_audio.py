@@ -38,6 +38,7 @@ from app.models import (
     ProcessingRun,
     Segment,
     Task,
+    TaskEvidence,
     TaskRevision,
     TaskSource,
     Transcript,
@@ -84,6 +85,7 @@ class SeededClass:
     source: MessageSource
     task: Task
     task_source: TaskSource
+    task_evidence: TaskEvidence
     task_revision: TaskRevision
 
 
@@ -235,6 +237,17 @@ async def _seed_class(
     )
     db.add(task_source)
     await db.flush()
+    task_evidence = TaskEvidence(
+        user_id=actor.user_id,
+        task_id=task.id,
+        task_version=task.version,
+        segment_id=segment.id,
+        char_start=0,
+        char_end=5,
+        quote=TEXT[0:5],
+    )
+    db.add(task_evidence)
+    await db.flush()
     task_revision = TaskRevision(
         user_id=actor.user_id,
         task_id=task.id,
@@ -260,6 +273,7 @@ async def _seed_class(
         source=source,
         task=task,
         task_source=task_source,
+        task_evidence=task_evidence,
         task_revision=task_revision,
     )
 
@@ -306,6 +320,7 @@ async def test_delete_purges_every_derivative_and_keeps_google_by_default(
         "processing_runs_cancelled": 1,
         "tasks_deleted": 1,
         "task_sources_deleted": 1,
+        "task_evidence_deleted": 1,
         "task_revisions_deleted": 1,
         "message_sources_deleted": 1,
         "messages_tombstoned": 1,
@@ -328,6 +343,7 @@ async def test_delete_purges_every_derivative_and_keeps_google_by_default(
         MessageSource,
         Task,
         TaskSource,
+        TaskEvidence,
         TaskRevision,
     ):
         assert await _count(db_session, model, user_id) == 0, model.__name__

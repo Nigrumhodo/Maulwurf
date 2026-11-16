@@ -11,7 +11,7 @@ import threading
 from pathlib import Path
 
 from maulwurf_ingest.asr.riva_client import RecognizeCall, Transcript, TransportError
-from maulwurf_ingest.audio.reconcile import LocalWord, parse_confidence
+from maulwurf_ingest.audio.reconcile import Word, parse_confidence
 
 BLOCKED_NAME = "rpc_blocked"
 
@@ -53,7 +53,7 @@ class ScriptedTransport:
             raise RuntimeError("scripted_transport")
         if not isinstance(words_raw, list):
             raise RuntimeError("scripted_transport")
-        words: list[LocalWord] = []
+        words: list[Word] = []
         for item in words_raw:
             if not isinstance(item, dict):
                 raise RuntimeError("scripted_transport")
@@ -65,7 +65,7 @@ class ScriptedTransport:
             if not isinstance(start, int | float) or not isinstance(end, int | float):
                 raise RuntimeError("scripted_transport")
             words.append(
-                LocalWord(
+                Word(
                     word,
                     float(start),
                     float(end),

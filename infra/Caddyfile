@@ -1,12 +1,15 @@
-# J1.3 — Caddy TLS local, mismo origen para web/api/ingest.
-# Reglas: streaming puro en uploads (sin buffers a disco), sin caché, sin
-# captura de bodies en logs, flush inmediato en SSE y sin admin API publicada.
+# J1.3 / ADR-0008 / ADR-0010 — Caddy is the only public ingress.
+# Same origin for the web SPA and the API. Ingest is not on this site: it
+# listens on the `data` network only, and the API streams each upload to it
+# (ADR-0008). `/internal/*` is answered here with 404 and never proxied.
 #
-# J2.10 / ADR-0010: Caddy is the only public ingress (no Cloudflare Tunnel and no
-# HTTP proxy or CDN in front). The values below are the edge envelope; the contract
-# limit stays the one published by GET /ingestion/capabilities and enforced by the
-# API. Keep the upload ceiling above that limit so the API answers with its
-# structured `payload_too_large` envelope instead of Caddy's plain 413.
+# Uploads stream (no disk spool), nothing is cached, access logs do not record
+# bodies, SSE flushes immediately, and the admin API is off.
+#
+# J2.10: the values below are the edge envelope. The contract limit stays the
+# one published by GET /ingestion/capabilities and enforced by the API. Keep
+# the upload ceiling above that limit so the API answers with its structured
+# `payload_too_large` envelope instead of Caddy's plain 413.
 {
 	admin off
 
@@ -62,10 +65,10 @@ https://localhost {
 		}
 	}
 
-	# 3) Chat: M7 CRUD and POST SSE. The POST stream is a fetch response, so it
-	# needs the same no-buffering treatment as progress; JSON bodies stay bounded.
-	@chat path /chat /chat/*
-	handle @chat {
+	# 2b) Chat SSE. More specific than @api so the stream is not buffered. Cancel and
+	# the other chat routes stay on the JSON handler below.
+	@chat_sse path /chat/conversations/*/messages
+	handle @chat_sse {
 		request_body {
 			max_size 10MB
 		}
@@ -74,8 +77,14 @@ https://localhost {
 		}
 	}
 
-	# 4) API JSON (M1/M2 y /readyz para el smoke I-S1-JF-01).
-	@api path /auth/* /me /me/* /subjects /subjects/* /integrations/* /audios /audios/* /tasks /tasks/* /calendar /calendar/* /ingestion/* /readyz
+	# 3) API JSON, including the S2–S4 surfaces. A path missing here falls through to
+	# the web SPA and the browser receives index.html instead of the API.
+	# In Caddy 2.8 a single trailing `*` is a prefix match: `MatchPath` strips
+	# the star and uses HasPrefix, so `/chat/*` already covers every deeper chat
+	# route. Extra stars are a different matcher (`path.Match`, one segment
+	# each) and are not used here. Bare collection routes (`/me`, `/tasks`)
+	# stay exact because the prefix needs the slash after the root.
+	@api path /auth/* /me /me/* /subjects /subjects/* /integrations/* /audios /audios/* /ingestion/* /search /chat/* /calendar /calendar/* /tasks /tasks/* /notifications /notifications/* /healthz /readyz
 	handle @api {
 		# J2.10: JSON bodies are small; this is an abuse guard, not a contract limit.
 		request_body {
@@ -84,7 +93,7 @@ https://localhost {
 		reverse_proxy api:8000
 	}
 
-	# 5) Web (fallback). Every route that does not match above lands here, including
+	# 4) Web (fallback). Every route that does not match above lands here, including
 	# unknown PUT/POST paths. Without this ceiling the fallback would forward an
 	# unbounded body; `read_body` bounds time, not size.
 	handle {

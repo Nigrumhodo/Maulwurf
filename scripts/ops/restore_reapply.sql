@@ -85,6 +85,8 @@ DELETE FROM notifications
 WHERE user_id IN (SELECT user_id FROM restore_deleted_users);
 DELETE FROM task_revisions
 WHERE user_id IN (SELECT user_id FROM restore_deleted_users);
+DELETE FROM task_evidence
+WHERE user_id IN (SELECT user_id FROM restore_deleted_users);
 DELETE FROM task_sources
 WHERE user_id IN (SELECT user_id FROM restore_deleted_users);
 DELETE FROM calendar_events
@@ -262,6 +264,20 @@ ON CONFLICT DO NOTHING;
 
 DELETE FROM task_revisions
 WHERE (user_id, task_id) IN (SELECT user_id, id FROM restore_audio_tasks);
+DELETE FROM task_evidence AS evidence
+WHERE (evidence.user_id, evidence.task_id)
+        IN (SELECT user_id, id FROM restore_audio_tasks)
+   OR EXISTS (
+     SELECT 1
+     FROM task_sources AS source
+     WHERE source.user_id = evidence.user_id
+       AND source.task_id = evidence.task_id
+       AND source.segment_id = evidence.segment_id
+       AND source.char_start = evidence.char_start
+       AND source.char_end = evidence.char_end
+       AND (source.user_id, source.audio_id)
+             IN (SELECT user_id, id FROM restore_deleted_audios)
+   );
 DELETE FROM task_sources
 WHERE (user_id, task_id) IN (SELECT user_id, id FROM restore_audio_tasks)
    OR (user_id, audio_id) IN (SELECT user_id, id FROM restore_deleted_audios);

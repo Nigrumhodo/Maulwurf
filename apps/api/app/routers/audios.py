@@ -39,7 +39,7 @@ SRT only when the measured times are usable (`409 srt_unavailable`). All SQL liv
 import uuid
 from contextlib import suppress
 from datetime import date, datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, Header, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -77,6 +77,7 @@ from app.services.audios import (
 )
 from app.services.exports import render_srt, render_txt, srt_exportable
 from app.services.ingest_sink import get_reception_sink
+from app.services.quality import QualityWarning
 from app.services.runs import (
     RunHistoryEntry,
     ensure_reupload_allowed,
@@ -210,6 +211,7 @@ class TombstonePurged(BaseModel):
     processing_runs_cancelled: int
     tasks_deleted: int
     task_sources_deleted: int
+    task_evidence_deleted: int
     task_revisions_deleted: int
     message_sources_deleted: int
     messages_tombstoned: int
@@ -268,9 +270,13 @@ class TranscriptOut(BaseModel):
     timestamp_precision: str
     char_count: int
     # S3.6: non-sensitive ASR signals (code + counts) for the inbox/class page.
-    quality_warnings: list[dict[str, Any]] = Field(default_factory=list)
+    quality_warnings: list[QualityWarning] = Field(default_factory=list)
     # L3.8: null / empty until analysis publishes the versioned summary.
-    summary: str | None = None
+    # Not a citation: task evidence is the only persisted quote.
+    summary: str | None = Field(
+        default=None,
+        description="Versioned class summary. Not a citation and not evidence.",
+    )
     topics: list[str] = Field(default_factory=list)
     analysis_version: int | None = None
 
@@ -682,6 +688,7 @@ async def delete_audio(
             processing_runs_cancelled=result.processing_runs_cancelled,
             tasks_deleted=result.tasks_deleted,
             task_sources_deleted=result.task_sources_deleted,
+            task_evidence_deleted=result.task_evidence_deleted,
             task_revisions_deleted=result.task_revisions_deleted,
             message_sources_deleted=result.message_sources_deleted,
             messages_tombstoned=result.messages_tombstoned,

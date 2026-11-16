@@ -16,15 +16,24 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Audio, Task, TaskSource
+from app.models import Audio, Task
 from app.schemas.analysis import ActivityType
+from app.schemas.tasks import PendingTaskItem
+from app.schemas.tools import (
+    CalendarToolPayload,
+    PendingTasksPayload,
+    ProposalPayload,
+    ToolCalendarEvent,
+    ToolErrorPayload,
+    ToolPayload,
+)
 from app.services.analysis import (
     AnalysisPayloadError,
     mention_from_payload,
@@ -35,8 +44,16 @@ from app.services.analysis_validation import (
     load_class_transcript,
     validate_analysis,
 )
-from app.services.calendar_sync import CalendarService, CalendarWindowInvalid
-from app.services.date_resolution import DateResolutionError, MentionKind, resolve_due
+from app.services.analysis_windows import EvidenceSpan
+from app.services.calendar_read import CalendarService
+from app.services.calendar_window import CalendarWindowInvalid
+from app.services.date_resolution import (
+    DateResolutionError,
+    MentionKind,
+    resolve_due,
+)
+from app.services.task_evidence import ProvenanceInvalid, persist_task_spans
+from app.services.task_snapshot import ProposalFields, needs_review_task
 
 MAX_TOOL_ROUNDS = 4
 TOOL_BUDGET_SECONDS = 15.0
@@ -76,7 +93,7 @@ class ToolCall:
 class ToolResult:
     name: str
     ok: bool
-    payload: dict[str, Any]
+    payload: ToolPayload
 
 
 class _CalendarArgs(BaseModel):
@@ -91,12 +108,14 @@ class _EmptyArgs(BaseModel):
 
 
 class _SourceArg(BaseModel):
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     audio_id: UUID
     segment_id: UUID
-    inicio_char: int = Field(ge=0)
-    fin_char: int = Field(gt=0)
+    char_start: int = Field(
+        ge=0, validation_alias=AliasChoices("char_start", "inicio_char")
+    )
+    char_end: int = Field(gt=0, validation_alias=AliasChoices("char_end", "fin_char"))
     cita_textual: str = Field(min_length=1)
 
 
@@ -182,7 +201,7 @@ class ToolOrchestrator:
 
     async def _dispatch(
         self, call: ToolCall, *, user_id: UUID, now: datetime
-    ) -> dict[str, Any]:
+    ) -> ToolPayload:
         if call.name == "get_calendar_events":
             return await self._calendar(call.arguments, user_id=user_id, now=now)
         if call.name == "get_pending_tasks":
@@ -194,7 +213,7 @@ class ToolOrchestrator:
 
     async def _calendar(
         self, arguments: Mapping[str, Any], *, user_id: UUID, now: datetime
-    ) -> dict[str, Any]:
+    ) -> CalendarToolPayload:
         parsed = _parse(_CalendarArgs, arguments)
         try:
             page = await CalendarService(self._db).page(
@@ -205,55 +224,48 @@ class ToolOrchestrator:
             )
         except CalendarWindowInvalid as exc:
             raise ToolError("window_invalid", "the calendar range is not valid") from exc
-        return {
-            "source": "calendar",
-            "from": page.date_from.isoformat(),
-            "to": page.date_to.isoformat(),
-            "coverage_ok": page.coverage_ok,
-            "stale": page.stale,
-            "coverage_notice": page.coverage_notice,
-            "events": [
-                {
-                    "calendar_id": event.calendar_id,
-                    "event_id": event.event_id,
-                    "title": event.title,
-                    "start_at": None if event.start_at is None else event.start_at.isoformat(),
-                    "end_at": None if event.end_at is None else event.end_at.isoformat(),
-                    "start_date": (
-                        None if event.start_date is None else event.start_date.isoformat()
-                    ),
-                    "end_date_exclusive": (
-                        None
-                        if event.end_date_exclusive is None
-                        else event.end_date_exclusive.isoformat()
-                    ),
-                }
+        notice = page.coverage_notice
+        return CalendarToolPayload(
+            date_from=page.date_from,
+            date_to=page.date_to,
+            coverage_ok=page.coverage_ok,
+            stale=page.stale,
+            coverage_notice=notice,
+            events=[
+                ToolCalendarEvent(
+                    calendar_id=event.calendar_id,
+                    event_id=event.event_id,
+                    title=event.title,
+                    start_at=event.start_at,
+                    end_at=event.end_at,
+                    start_date=event.start_date,
+                    end_date_exclusive=event.end_date_exclusive,
+                )
                 for event in page.events
             ],
-        }
+        )
 
-    async def _pending(self, user_id: UUID) -> dict[str, Any]:
+    async def _pending(self, user_id: UUID) -> PendingTasksPayload:
         rows = (await self._db.scalars(pending_tasks_statement(user_id))).all()
-        return {
-            "source": "tasks",
-            "tasks": [
-                {
-                    "id": str(task.id),
-                    "titulo": task.titulo,
-                    "tipo": task.tipo,
-                    "status": task.status,
-                    "date_status": task.date_status,
-                    "due_date": None if task.due_date is None else task.due_date.isoformat(),
-                    "due_at": None if task.due_at is None else task.due_at.isoformat(),
-                    "source": task.source,
-                }
+        return PendingTasksPayload(
+            tasks=[
+                PendingTaskItem(
+                    id=str(task.id),
+                    titulo=task.titulo,
+                    tipo=task.tipo,
+                    status=task.status,
+                    date_status=task.date_status,
+                    due_date=task.due_date,
+                    due_at=task.due_at,
+                    source=task.source,
+                )
                 for task in rows
-            ],
-        }
+            ]
+        )
 
     async def _propose(
         self, arguments: Mapping[str, Any], *, user_id: UUID, now: datetime
-    ) -> dict[str, Any]:
+    ) -> ToolPayload:
         parsed = _parse(_ProposeArgs, arguments)
         if not parsed.sources:
             return await self._suggest(parsed, user_id=user_id, now=now)
@@ -293,8 +305,8 @@ class ToolOrchestrator:
                             "spans": [
                                 {
                                     "segment_id": str(source.segment_id),
-                                    "inicio_char": source.inicio_char,
-                                    "fin_char": source.fin_char,
+                                    "char_start": source.char_start,
+                                    "char_end": source.char_end,
                                     "cita_textual": source.cita_textual,
                                 }
                                 for source in parsed.sources
@@ -324,45 +336,55 @@ class ToolOrchestrator:
                 "evidence_rejected", "the cited evidence does not match the class"
             ) from exc
         item = extracted.result.items[0]
-        task = Task(
+        task = needs_review_task(
             user_id=user_id,
             audio_id=audio_id,
             subject_id=audio.subject_id,
             source="chat",
-            tipo=item.tipo,
-            titulo=item.titulo,
-            detalle=item.detalle,
-            due_date=item.due_date,
-            due_at=item.due_at,
-            timezone=item.timezone,
-            all_day=item.all_day,
-            date_status=item.date_status.value,
-            date_reason=extracted.reasons[0],
-            confidence_score=item.confidence_score,
-            status="needs_review",
-            calendar_sync_status="not_requested",
+            fields=ProposalFields(
+                tipo=item.tipo,
+                titulo=item.titulo,
+                detalle=item.detalle,
+                due_date=item.due_date,
+                due_at=item.due_at,
+                timezone=item.timezone,
+                all_day=item.all_day,
+                date_status=item.date_status.value,
+                confidence_score=item.confidence_score,
+                date_reason=extracted.reasons[0],
+            ),
         )
-        self._db.add(task)
-        await self._db.flush()
-        for span in item.fuente.spans:
-            self._db.add(
-                TaskSource(
-                    user_id=user_id,
-                    task_id=task.id,
+        try:
+            # The savepoint keeps a late provenance rejection from committing the task
+            # that was already flushed for its id.
+            async with self._db.begin_nested():
+                self._db.add(task)
+                await self._db.flush()
+                await persist_task_spans(
+                    self._db,
+                    task=task,
                     audio_id=audio_id,
                     transcript_id=view.transcript_id,
                     transcript_version=view.transcript_version,
-                    segment_id=span.segment_id,
-                    char_start=span.inicio_char,
-                    char_end=span.fin_char,
+                    spans=tuple(
+                        EvidenceSpan(
+                            segment_id=span.segment_id,
+                            char_start=span.char_start,
+                            char_end=span.char_end,
+                            quote=span.cita_textual,
+                        )
+                        for span in item.fuente.spans
+                    ),
                 )
-            )
-        await self._db.flush()
+        except ProvenanceInvalid as exc:
+            raise ToolError(
+                "evidence_rejected", "the cited evidence does not match the class"
+            ) from exc
         return _proposal_payload(task, evidence="corpus")
 
     async def _suggest(
         self, parsed: _ProposeArgs, *, user_id: UUID, now: datetime
-    ) -> dict[str, Any]:
+    ) -> ProposalPayload:
         try:
             mention = mention_from_payload(parsed.mencion)
         except DateResolutionError as exc:
@@ -381,34 +403,39 @@ class ToolOrchestrator:
             )
         except DateResolutionError as exc:
             raise ToolError("mention_invalid", "the date mention is not usable") from exc
-        task = Task(
+        task = needs_review_task(
             user_id=user_id,
             source="chat",
-            tipo=parsed.tipo,
-            titulo=parsed.titulo,
-            detalle=parsed.detalle,
-            due_date=resolved.due_date,
-            due_at=resolved.due_at,
-            timezone=resolved.timezone,
-            all_day=resolved.all_day if resolved.date_status.value == "resolved" else False,
-            date_status=resolved.date_status.value,
-            date_reason=resolved.reason,
-            status="needs_review",
-            calendar_sync_status="not_requested",
+            fields=ProposalFields(
+                tipo=parsed.tipo,
+                titulo=parsed.titulo,
+                detalle=parsed.detalle,
+                due_date=resolved.due_date,
+                due_at=resolved.due_at,
+                timezone=resolved.timezone,
+                all_day=(
+                    resolved.all_day if resolved.date_status.value == "resolved" else False
+                ),
+                date_status=resolved.date_status.value,
+                confidence_score=None,
+                date_reason=resolved.reason,
+            ),
         )
         self._db.add(task)
         await self._db.flush()
         return _proposal_payload(task, evidence="general_suggestion")
 
 
-def _proposal_payload(task: Task, *, evidence: str) -> dict[str, Any]:
-    return {
-        "task_id": str(task.id),
-        "source": task.source,
-        "status": task.status,
-        "calendar_sync_status": task.calendar_sync_status,
-        "evidence": evidence,
-    }
+def _proposal_payload(
+    task: Task, *, evidence: Literal["corpus", "general_suggestion"]
+) -> ProposalPayload:
+    return ProposalPayload(
+        task_id=str(task.id),
+        source=task.source,
+        status=task.status,
+        calendar_sync_status=task.calendar_sync_status,
+        evidence=evidence,
+    )
 
 
 def _parse[T: BaseModel](model: type[T], arguments: Mapping[str, Any]) -> T:
@@ -419,4 +446,4 @@ def _parse[T: BaseModel](model: type[T], arguments: Mapping[str, Any]) -> T:
 
 
 def _rejected(name: str, code: str) -> ToolResult:
-    return ToolResult(name=name, ok=False, payload={"code": code})
+    return ToolResult(name=name, ok=False, payload=ToolErrorPayload(code=code))

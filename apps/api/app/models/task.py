@@ -20,13 +20,16 @@ The database enforces the parts the service layer must not be able to break:
   `proposed_fields` plus a `pending_confirmation` state instead of mutating the task.
 
 `task_sources` stores the corpus provenance (class/transcript/segment plus Unicode span); a
-manual task has zero rows. The literal evidence with its verbatim quote (`task_evidence`) is
-A3.2's table: this revision creates only the shape A3.1 owns.
+manual task has zero rows. `task_evidence` stores the literal quote for one source span of
+one task version, anchored to the exact `task_sources` row: deleting a source deletes its
+quote, and the same span may exist for a later task version while the active version's quote
+is the one the review inbox reads.
 
 `task_sources` declares `user_id` directly instead of using `TenantOwned`: its primary key is
 composite and the table has no `id` column for the generic tenant repository. It still
 carries the composite tenant FK, so a row can never point at another user's task.
-`task_revisions` is `TenantOwned` because it has an `id` and the tenant helpers apply.
+`task_evidence` and `task_revisions` are `TenantOwned` because they have an `id` and the
+tenant helpers apply.
 """
 
 import uuid
@@ -136,6 +139,8 @@ class Task(TenantOwned, Base):
         # referencing side). The inbox indexes are partial and cannot serve them.
         Index("tasks_by_audio", "user_id", "audio_id"),
         Index("tasks_by_subject", "user_id", "subject_id"),
+        # Keyset listing reads one user's rows newest-first, with `id` as the tiebreaker.
+        Index("tasks_by_user_created", "user_id", "created_at", "id"),
         # One index per due representation: `date` and `timestamptz` are never mixed in an
         # expression, whose meaning would depend on the session timezone.
         Index(
@@ -257,6 +262,75 @@ class TaskSource(Base):
     char_end: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class TaskEvidence(TenantOwned, Base):
+    """The literal quote behind one `task_sources` span of one task version.
+
+    The composite FK makes the quote impossible to detach from its provenance: a row can
+    only exist for an existing source of the same tenant/task/segment/span, and deleting
+    that source deletes the quote. `task_version` versions the evidence without touching
+    the source list, which stays the active task's provenance.
+
+    The quote is checked on write and on read against the persisted segment text (A3.2):
+    the database can enforce the length, the non-blank rule and the source membership, but
+    only the service can compare the text itself.
+    """
+
+    __tablename__ = "task_evidence"
+    __table_args__ = (
+        # One quote per span per task version; a later version may repeat the same span.
+        UniqueConstraint(
+            "user_id",
+            "task_id",
+            "task_version",
+            "segment_id",
+            "char_start",
+            "char_end",
+        ),
+        ForeignKeyConstraint(
+            [
+                "user_id",
+                "task_id",
+                "segment_id",
+                "char_start",
+                "char_end",
+            ],
+            [
+                "task_sources.user_id",
+                "task_sources.task_id",
+                "task_sources.segment_id",
+                "task_sources.char_start",
+                "task_sources.char_end",
+            ],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("task_version >= 1", name="task_version"),
+        CheckConstraint("char_start >= 0 AND char_start < char_end", name="char_range"),
+        CheckConstraint(
+            "char_length(quote) = char_end - char_start", name="quote_length"
+        ),
+        CheckConstraint("btrim(quote) <> ''", name="quote_non_blank"),
+        Index("task_evidence_by_task", "user_id", "task_id", "task_version"),
+        # Non-partial covering index for the composite FK (A2.18).
+        Index(
+            "task_evidence_by_source",
+            "user_id",
+            "task_id",
+            "segment_id",
+            "char_start",
+            "char_end",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    task_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    segment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    char_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    quote: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = created_at()
+
+
 class TaskRevision(TenantOwned, Base):
     """A pending change to a confirmed task (edit or reanalysis), never an active write.
 
@@ -265,13 +339,12 @@ class TaskRevision(TenantOwned, Base):
     that bumps `tasks.version` (A3.4). `base_task_version` is the task version the proposal
     was computed from, so a stale revision is rejected instead of silently winning.
 
-    The unique key includes `run_id`; it is NULL for `edit_of_confirmed`, and PostgreSQL's
-    default NULL-distinct semantics deliberately let a user keep several pending edits of
-    the same base version while a repeated reanalysis of the same run cannot duplicate the
-    revision. This is the contract recorded in ESPECIFICACION §M4: only an explicit confirm
-    promotes one revision and bumps `tasks.version`, so the stale ones answer
-    `409 version_conflict`. A future "one edit per base version" rule would require
-    `NULLS NOT DISTINCT` (PG 15+) and a spec revision, not a silent constraint change here.
+    The unique key includes `run_id`; it is NULL for `edit_of_confirmed`, so a repeated
+    reanalysis of the same run cannot duplicate its revision. The partial unique index
+    `task_revisions_one_pending` is the stronger contract: at most one pending proposal per
+    task. PATCH retires the previous pending edit before inserting its replacement, and
+    confirm discards any legacy sibling after promoting the chosen revision. A revision
+    whose `base_task_version` is older than the active task answers `409 version_conflict`.
     """
 
     __tablename__ = "task_revisions"
@@ -298,6 +371,13 @@ class TaskRevision(TenantOwned, Base):
         ),
         Index("task_revisions_by_task", "user_id", "task_id"),
         Index("task_revisions_by_run", "user_id", "run_id"),
+        Index(
+            "task_revisions_one_pending",
+            "user_id",
+            "task_id",
+            unique=True,
+            postgresql_where=text("status = 'pending_confirmation'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()

@@ -44,6 +44,7 @@ _SECRET_FIELDS = (
     "google_client_secret",
     "embedding_api_key",
     "llm_api_key",
+    "metrics_token",
 )
 # Policy floor for secrets we generate. HKDF in `crypto.py` derives the AES-256 key, so this
 # is not an AES-GCM requirement. Provider-issued keys are excluded below: their length and
@@ -108,11 +109,14 @@ class Settings(BaseSettings):
     # must replace it with the provider quota measured by the contract spike.
     search_rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
     # A4.6: authentication and incremental consent have no published numeric decision yet
-    # (D4/D5 open), so the fixed-window mechanism ships wired but unset. `None` means "no
-    # limit", the same rule as the A2.3 upload quota; a deployment that freezes a number
-    # enables it without a code change.
+    # (D4/D5 open). Local may leave the OAuth window unset. Any other env must set it:
+    # an open start/callback is an abuse path, and this process does not invent the number.
     auth_rate_limit_per_minute: int | None = Field(default=None, ge=1, le=600)
     integration_rate_limit_per_minute: int | None = Field(default=None, ge=1, le=600)
+    # Bearer for GET /internal/metrics. Local may leave it unset (loopback runbook).
+    # Any other env must set it: the route is unauthenticated apart from this token,
+    # and Caddy's /internal/* 404 is not a substitute when the API port is reachable.
+    metrics_token: SecretStr | None = None
     # Contrato de ingesta S1 (A1.8). Valores provisionales hasta D2/D4 (S1.A8/A2.2):
     # allowlist propuesta por S1.A3 y límite de bytes de `.env.example` (200 MiB, no aprobado).
     privacy_notice_version: str = "2026-09-v1"
@@ -203,6 +207,9 @@ class Settings(BaseSettings):
     # `sending` only to expire them as a false `delivery_unknown` (terminal). The scheduler
     # therefore starts disabled and must only be enabled once J4.1 consumes `sending`.
     notification_scheduler_enabled: bool = False
+    # Separate from the scheduler flag. Turning the scheduler on must not claim rows into
+    # `sending` until a delivery consumer exists; otherwise they sit there and then expire.
+    notification_delivery_enabled: bool = False
     # J4.8: monthly provider caps over units the application already measures. They are
     # operator inputs from the S4.5 cost table and the real provider contract, not invented
     # limits: unset means usage is reported with `configured=0` and nothing alarms.
@@ -346,7 +353,7 @@ class Settings(BaseSettings):
                 raise ValueError(f"{name} inseguro en env={self.env}")
             # Length is our policy only for the secrets we generate, not for provider keys.
             if (
-                name in _BOUNDARY_SECRET_FIELDS
+                name in (*_BOUNDARY_SECRET_FIELDS, "metrics_token")
                 and len(raw.encode("utf-8")) < BOUNDARY_SECRET_MIN_BYTES
             ):
                 raise ValueError(
@@ -388,6 +395,18 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 f"ingest_credential_secret reutiliza otro secreto en env={self.env}"
+            )
+        if self.auth_rate_limit_per_minute is None:
+            raise ValueError(
+                f"auth_rate_limit_per_minute es obligatorio en env={self.env}"
+            )
+        metrics_raw = secret_values.get("metrics_token")
+        if metrics_raw is None:
+            raise ValueError(f"metrics_token es obligatorio en env={self.env}")
+        if metrics_raw in boundary:
+            raise ValueError(
+                "metrics_token reutiliza secret_key, encryption_key u "
+                f"oauth_state_secret en env={self.env}"
             )
         if self.public_origin.scheme != "https":
             raise ValueError(f"public_origin debe usar https en env={self.env}")

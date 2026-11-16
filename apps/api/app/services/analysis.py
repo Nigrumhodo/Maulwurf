@@ -11,7 +11,8 @@ Dates come from `resolve_due`. The model's `due_date`, `due_at`, `all_day` and
 nothing else. Quotes still have to be the segment slice (`validate_analysis`); a miss
 drops the item. The surviving items are deduped by evidence and then turned into
 inserts, in-place updates, or pending revisions. A confirmed or edited task is never
-overwritten, and a revision is never activated here.
+overwritten, a terminal task never gains a revision, an unchanged proposal is a no-op,
+and a revision is never activated here.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import date, datetime, time
 from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
@@ -61,7 +62,11 @@ from app.services.date_resolution import (
     resolve_due,
 )
 from app.services.llm import ChatMessage, LLMProvider
+from app.services.revisions import TERMINAL_TASK_STATUSES, record_pending_revision
 from app.services.summary import SummaryRejected, parse_summary_payload
+from app.services.task_evidence import persist_task_spans
+from app.services.task_snapshot import ProposalFields as ProposalFields
+from app.services.task_snapshot import needs_review_task
 from prompts.registry import (
     load_extraction_prompts,
     load_summary_prompts,
@@ -127,36 +132,6 @@ class AnalysisBatch:
     summary: str
     topics: tuple[str, ...]
     prompt_version: str
-
-
-@dataclass(frozen=True)
-class ProposalFields:
-    """The columns a reanalysis may propose. The Calendar block is not one of them."""
-
-    tipo: str
-    titulo: str
-    detalle: str | None
-    due_date: date | None
-    due_at: datetime | None
-    timezone: str
-    all_day: bool
-    date_status: str
-    confidence_score: float | None
-    date_reason: str | None
-
-    def same_as(self, other: ProposalFields) -> bool:
-        return (
-            self.tipo == other.tipo
-            and self.titulo == other.titulo
-            and self.detalle == other.detalle
-            and self.due_date == other.due_date
-            and _same_instant(self.due_at, other.due_at)
-            and self.timezone == other.timezone
-            and self.all_day == other.all_day
-            and self.date_status == other.date_status
-            and self.confidence_score == other.confidence_score
-            and self.date_reason == other.date_reason
-        )
 
 
 @dataclass(frozen=True)
@@ -431,19 +406,7 @@ def plan_task_writes(
 
 def proposed_fields_payload(proposal: AggregatedProposal[PreparedProposal]) -> dict[str, object]:
     """JSON object stored on a revision. Dates are ISO strings; the block is absent."""
-    fields = proposal_fields(proposal)
-    return {
-        "tipo": fields.tipo,
-        "titulo": fields.titulo,
-        "detalle": fields.detalle,
-        "due_date": None if fields.due_date is None else fields.due_date.isoformat(),
-        "due_at": None if fields.due_at is None else fields.due_at.isoformat(),
-        "timezone": fields.timezone,
-        "all_day": fields.all_day,
-        "date_status": fields.date_status,
-        "confidence_score": fields.confidence_score,
-        "date_reason": fields.date_reason,
-    }
+    return proposal_fields(proposal).to_payload()
 
 
 async def load_existing_proposals(
@@ -494,18 +457,7 @@ async def load_existing_proposals(
                 ),
                 status=stored.status,
                 version=stored.version,
-                fields=ProposalFields(
-                    tipo=stored.tipo,
-                    titulo=stored.titulo,
-                    detalle=stored.detalle,
-                    due_date=stored.due_date,
-                    due_at=stored.due_at,
-                    timezone=stored.timezone,
-                    all_day=stored.all_day,
-                    date_status=stored.date_status,
-                    confidence_score=stored.confidence_score,
-                    date_reason=stored.date_reason,
-                ),
+                fields=ProposalFields.from_task(stored),
             )
         )
     return existing
@@ -559,25 +511,30 @@ async def apply_task_writes(
                 task_id=write.task_id,
                 base_version=write.base_version,
                 proposal=write.proposal,
+                audio_id=audio_id,
+                transcript_id=transcript_id,
+                transcript_version=transcript_version,
             )
             if updated == "revise":
-                await _revise_task(
+                await record_pending_revision(
                     db,
                     user_id=user_id,
                     task_id=write.task_id,
+                    proposed_fields=proposed_fields_payload(write.proposal),
+                    revision_type="reanalysis",
                     run_id=run_id,
-                    base_version=write.base_version,
-                    proposal=write.proposal,
+                    evidence_validated=True,
                 )
             continue
-        if write.kind is WriteKind.REVISE and write.base_version is not None:
-            await _revise_task(
+        if write.kind is WriteKind.REVISE:
+            await record_pending_revision(
                 db,
                 user_id=user_id,
                 task_id=write.task_id,
+                proposed_fields=proposed_fields_payload(write.proposal),
+                revision_type="reanalysis",
                 run_id=run_id,
-                base_version=write.base_version,
-                proposal=write.proposal,
+                evidence_validated=True,
             )
 
 
@@ -619,8 +576,8 @@ def _accepted(
             citations.append(
                 WindowCitation(
                     segment_id=span.segment_id,
-                    char_start=part.segment_char_start + span.inicio_char,
-                    char_end=part.segment_char_start + span.fin_char,
+                    char_start=part.segment_char_start + span.char_start,
+                    char_end=part.segment_char_start + span.char_end,
                 )
             )
         if outside or not citations:
@@ -640,11 +597,15 @@ def _write_for(
         task_id = None if current is None else current.task_id
         version = None if current is None else current.version
         return TaskWrite(proposal, WriteKind.SKIP, task_id, version)
-    protected = current.status in _PROTECTED_STATUSES or current.version > 1
+    if current.status in TERMINAL_TASK_STATUSES:
+        # `confirm` rejects completed/dismissed tasks, so a revision would be dead work.
+        return TaskWrite(proposal, WriteKind.SKIP, current.task_id, current.version)
+    if current.fields.same_as(proposal_fields(proposal)):
+        # Nothing new to compare: keep the active task and any pending manual edit.
+        return TaskWrite(proposal, WriteKind.SKIP, current.task_id, current.version)
+    protected = current.status == "confirmed" or current.version > 1
     if protected:
         return TaskWrite(proposal, WriteKind.REVISE, current.task_id, current.version)
-    if current.fields.same_as(proposal_fields(proposal)):
-        return TaskWrite(proposal, WriteKind.SKIP, current.task_id, current.version)
     return TaskWrite(proposal, WriteKind.UPDATE, current.task_id, current.version)
 
 
@@ -739,12 +700,6 @@ def _payload_qualifier(payload: Mapping[str, object]) -> WeekdayQualifier | None
         ) from exc
 
 
-def _same_instant(left: datetime | None, right: datetime | None) -> bool:
-    if left is None or right is None:
-        return left is right
-    return left.astimezone(UTC) == right.astimezone(UTC)
-
-
 async def _insert_task(
     db: AsyncSession,
     *,
@@ -755,35 +710,22 @@ async def _insert_task(
     transcript_version: int,
     proposal: AggregatedProposal[PreparedProposal],
 ) -> None:
-    fields = proposal_fields(proposal)
-    task = Task(
+    task = needs_review_task(
         user_id=user_id,
         audio_id=audio_id,
         subject_id=subject_id,
         source="extraction",
-        tipo=fields.tipo,
-        titulo=fields.titulo,
-        detalle=fields.detalle,
-        due_date=fields.due_date,
-        due_at=fields.due_at,
-        timezone=fields.timezone,
-        all_day=fields.all_day,
-        date_status=fields.date_status,
-        date_reason=fields.date_reason,
-        confidence_score=fields.confidence_score,
-        status="needs_review",
-        calendar_sync_status="not_requested",
+        fields=proposal_fields(proposal),
     )
     db.add(task)
     await db.flush()
-    _add_sources(
+    await persist_task_spans(
         db,
-        user_id=user_id,
-        task_id=task.id,
+        task=task,
         audio_id=audio_id,
         transcript_id=transcript_id,
         transcript_version=transcript_version,
-        proposal=proposal,
+        spans=proposal.evidence,
     )
 
 
@@ -805,11 +747,16 @@ async def _update_task(
     task_id: UUID,
     base_version: int,
     proposal: AggregatedProposal[PreparedProposal],
+    audio_id: UUID,
+    transcript_id: UUID,
+    transcript_version: int,
 ) -> str:
     """Lock the row. Return ``updated``, ``revise``, or ``missing``.
 
     ``revise`` keeps the proposal as a pending revision and does not touch active columns.
-    ``missing`` means the task disappeared; the caller must not invent a revision.
+    ``missing`` means the task disappeared; the caller must not invent a revision. An
+    in-place update replaces the task's sources and evidence with the newly validated
+    set, and bumps `due_version` only when the due representation actually changed.
     """
     task = (
         await db.execute(
@@ -823,62 +770,17 @@ async def _update_task(
     if not update_is_safe(task.status, task.version, base_version):
         return "revise"
     fields = proposal_fields(proposal)
-    task.tipo = fields.tipo
-    task.titulo = fields.titulo
-    task.detalle = fields.detalle
-    task.due_date = fields.due_date
-    task.due_at = fields.due_at
-    task.timezone = fields.timezone
-    task.all_day = fields.all_day
-    task.date_status = fields.date_status
-    task.date_reason = fields.date_reason
-    task.confidence_score = fields.confidence_score
-    return "updated"
-
-
-async def _revise_task(
-    db: AsyncSession,
-    *,
-    user_id: UUID,
-    task_id: UUID,
-    run_id: UUID,
-    base_version: int,
-    proposal: AggregatedProposal[PreparedProposal],
-) -> None:
-    db.add(
-        TaskRevision(
-            user_id=user_id,
-            task_id=task_id,
-            run_id=run_id,
-            base_task_version=base_version,
-            revision_type="reanalysis",
-            proposed_fields=proposed_fields_payload(proposal),
-            evidence_validated=True,
-            status="pending_confirmation",
-        )
+    due_changed = ProposalFields.from_task(task).due_changed(fields)
+    fields.apply(task)
+    if due_changed:
+        task.due_version += 1
+    await persist_task_spans(
+        db,
+        task=task,
+        audio_id=audio_id,
+        transcript_id=transcript_id,
+        transcript_version=transcript_version,
+        spans=proposal.evidence,
+        replace=True,
     )
-
-
-def _add_sources(
-    db: AsyncSession,
-    *,
-    user_id: UUID,
-    task_id: UUID,
-    audio_id: UUID,
-    transcript_id: UUID,
-    transcript_version: int,
-    proposal: AggregatedProposal[PreparedProposal],
-) -> None:
-    for span in proposal.evidence:
-        db.add(
-            TaskSource(
-                user_id=user_id,
-                task_id=task_id,
-                audio_id=audio_id,
-                transcript_id=transcript_id,
-                transcript_version=transcript_version,
-                segment_id=span.segment_id,
-                char_start=span.char_start,
-                char_end=span.char_end,
-            )
-        )
+    return "updated"

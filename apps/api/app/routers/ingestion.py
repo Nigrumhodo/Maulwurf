@@ -2,14 +2,18 @@
 from fastapi import APIRouter
 
 from app.core.config import settings
+from app.core.deps import CurrentSession
 from app.schemas.ingestion import IngestionCapabilitiesOut
 
 router = APIRouter(tags=["ingestion"])
 
 
 @router.get("/ingestion/capabilities")
-async def ingestion_capabilities() -> IngestionCapabilitiesOut:
+async def ingestion_capabilities(_session: CurrentSession) -> IngestionCapabilitiesOut:
     """Devuelve exclusivamente la configuración publicada y versionada.
+
+    La sesión es obligatoria: los TTLs y la versión del aviso no son un secreto, pero
+    tampoco se anuncian a un cliente anónimo.
 
     S4.4 publica los TTLs efectivos (10/30/60 min) con su benchmark; los límites de
     tamaño/duración siguen nulos mientras D4 esté bloqueada. No lee los valores

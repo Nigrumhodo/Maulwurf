@@ -31,9 +31,11 @@ Cited for tasks. A proposal whose quote is not the segment slice is dropped.
 (`resolve_textual_evidence`) rebuild the span from the persisted segment. The analyze job
 does not insert that item.
 
-Gap. The L3.8 class summary is stored after a shape and secret check
-(`app/services/summary.py`). It is not a quote reconstructed from the transcript. It must
-not be presented as evidence. Task rows remain the only place a citation is persisted.
+The L3.8 class summary is stored after a shape and secret check
+(`app/services/summary.py`). It is not a quote reconstructed from the transcript.
+`TranscriptOut.summary` describes it as not a citation. Task rows remain the only place
+a citation is persisted. A peer still has to confirm the UI never renders that field as
+evidence.
 
 ## 3. No external write without confirmation
 
@@ -55,9 +57,12 @@ text (`app/workers/jobs/analyze.py`). `tests/integration/test_redis_policy.py` f
 `Bearer ` and `NVIDIA_API_KEY` in Redis values. `test_openapi_exposes_contract_without_secrets`
 in `tests/integration/test_a18_endpoints.py` forbids those markers in the OpenAPI document.
 
-Gap. There is no repo-wide log scan in this draft. `riva_client.py` places the key in
-gRPC metadata (`authorization`, `Bearer` plus the env value). This review did not prove
-the gRPC stack does not log metadata.
+`riva_client.py` places the key in gRPC metadata (`authorization`, `Bearer` plus the env
+value). `silence_grpc_metadata_trace` pins `GRPC_VERBOSITY=ERROR` and an empty
+`GRPC_TRACE` before the channel exists, because the C-core tracer writes metadata to
+stderr outside Python logging, and it attaches `RedactionFilter` to the `grpc` logger.
+`tests/test_riva_client.py` asserts a bearer in that logger is redacted. A repo-wide log
+scan is still not in this draft. A peer still has to run it.
 
 ## 5. `NVIDIA_API_KEY` stays on the backend
 

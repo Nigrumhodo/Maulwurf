@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Segment, Task, TaskRevision, TaskSource, Transcript
+from app.models import Segment, Task, TaskEvidence, TaskRevision, TaskSource, Transcript
 from tests.integration.actors import (
     Actor,
     make_actor,
@@ -407,6 +407,154 @@ async def test_a_task_source_cannot_mismatch_the_cited_transcript(
     await _expect_integrity_error(db_session, TaskSource(**values))
 
 
+# --- Persisted evidence (A3.2) ---------------------------------------------------------
+
+
+def _source(
+    actor: Actor,
+    task: Task,
+    transcript: Transcript,
+    segment: Segment,
+    *,
+    char_start: int = 0,
+    char_end: int = 5,
+) -> TaskSource:
+    return TaskSource(
+        user_id=actor.user_id,
+        task_id=task.id,
+        audio_id=transcript.audio_id,
+        transcript_id=transcript.id,
+        transcript_version=transcript.version,
+        segment_id=segment.id,
+        char_start=char_start,
+        char_end=char_end,
+    )
+
+
+def _evidence(
+    actor: Actor,
+    task: Task,
+    segment: Segment,
+    *,
+    quote: str,
+    char_start: int = 0,
+    char_end: int = 5,
+    task_version: int | None = None,
+) -> TaskEvidence:
+    return TaskEvidence(
+        user_id=actor.user_id,
+        task_id=task.id,
+        task_version=task.version if task_version is None else task_version,
+        segment_id=segment.id,
+        char_start=char_start,
+        char_end=char_end,
+        quote=quote,
+    )
+
+
+async def test_task_evidence_is_anchored_to_a_real_source_span(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    task = await make_task(db_session, actor)
+    transcript, segment = await _transcript_with_segment(db_session, actor)
+    source = _source(actor, task, transcript, segment)
+    db_session.add(source)
+    await db_session.flush()
+
+    evidence = _evidence(actor, task, segment, quote=segment.text[0:5])
+    db_session.add(evidence)
+    await db_session.flush()
+    assert evidence.task_version == task.version
+
+
+async def test_task_evidence_requires_a_matching_source_span(
+    db_session: AsyncSession,
+) -> None:
+    alice, bob = await make_actor(db_session), await make_actor(db_session)
+    task = await make_task(db_session, alice)
+    transcript, segment = await _transcript_with_segment(db_session, alice)
+    db_session.add(_source(alice, task, transcript, segment, char_start=0, char_end=5))
+    await db_session.flush()
+
+    # Same task and segment but a span that has no source row.
+    await _expect_integrity_error(
+        db_session,
+        _evidence(alice, task, segment, quote=segment.text[1:6], char_start=1, char_end=6),
+    )
+    # Another tenant cannot quote Alice's source.
+    await _expect_integrity_error(
+        db_session,
+        _evidence(bob, task, segment, quote=segment.text[0:5]),
+    )
+
+
+async def test_task_evidence_rejects_bad_quote_shape_and_version(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    task = await make_task(db_session, actor)
+    transcript, segment = await _transcript_with_segment(db_session, actor)
+    db_session.add(_source(actor, task, transcript, segment))
+    await db_session.flush()
+
+    # Length must equal the span.
+    await _expect_integrity_error(
+        db_session, _evidence(actor, task, segment, quote=segment.text[0:4])
+    )
+    # A whitespace-only quote is not evidence.
+    await _expect_integrity_error(
+        db_session, _evidence(actor, task, segment, quote="     ")
+    )
+    await _expect_integrity_error(
+        db_session, _evidence(actor, task, segment, quote=segment.text[0:5], task_version=0)
+    )
+
+
+async def test_one_quote_per_span_and_task_version(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    task = await make_task(db_session, actor)
+    transcript, segment = await _transcript_with_segment(db_session, actor)
+    db_session.add(_source(actor, task, transcript, segment))
+    await db_session.flush()
+
+    db_session.add(_evidence(actor, task, segment, quote=segment.text[0:5]))
+    await db_session.flush()
+    await _expect_integrity_error(
+        db_session, _evidence(actor, task, segment, quote=segment.text[0:5])
+    )
+    # A later task version may quote the same span.
+    db_session.add(
+        _evidence(actor, task, segment, quote=segment.text[0:5], task_version=task.version + 1)
+    )
+    await db_session.flush()
+
+
+async def test_deleting_a_source_cascades_to_its_evidence(
+    db_session: AsyncSession,
+) -> None:
+    actor = await make_actor(db_session)
+    task = await make_task(db_session, actor)
+    transcript, segment = await _transcript_with_segment(db_session, actor)
+    source = _source(actor, task, transcript, segment)
+    db_session.add(source)
+    await db_session.flush()
+    db_session.add(_evidence(actor, task, segment, quote=segment.text[0:5]))
+    await db_session.flush()
+
+    await db_session.delete(source)
+    await db_session.flush()
+
+    assert (
+        await db_session.scalar(
+            text("SELECT count(*) FROM task_evidence WHERE task_id = :task"),
+            {"task": task.id},
+        )
+    ) == 0
+
+
 # --- Pending revisions -----------------------------------------------------------------
 
 
@@ -464,11 +612,13 @@ async def test_promotion_time_is_coherent_with_the_revision_state(
     await db_session.flush()
     assert row.status == status
 
+    # A second task isolates the activated_at CHECK from the one-pending index.
+    other = await make_task(db_session, actor)
     await _expect_integrity_error(
         db_session,
         _revision(
             actor,
-            task,
+            other,
             status=status,
             activated_at=None if status == "activated" else NOW,
         ),
@@ -494,12 +644,20 @@ async def test_a_repeated_reanalysis_run_cannot_duplicate_the_revision(
     await db_session.flush()
     await _expect_integrity_error(db_session, _revision(actor, task, run_id=run.id))
 
-    # `edit_of_confirmed` has no run: two successive edits at the same base version are
-    # legitimate pending proposals (the documented NULL-distinct contract, ESPECIFICACION
-    # §M4). Only one can win at confirm time; the stale one answers `409 version_conflict`.
-    db_session.add(_revision(actor, task, revision_type="edit_of_confirmed"))
+    # `edit_of_confirmed` has no run, but `task_revisions_one_pending` allows only one
+    # pending proposal per task (ESPECIFICACION §M4): a second one is rejected until the
+    # first is discarded, which is what PATCH and reanalysis do before proposing again.
+    edit_task = await make_task(db_session, actor)
+    first_edit = _revision(actor, edit_task, revision_type="edit_of_confirmed")
+    db_session.add(first_edit)
     await db_session.flush()
-    db_session.add(_revision(actor, task, revision_type="edit_of_confirmed"))
+    await _expect_integrity_error(
+        db_session, _revision(actor, edit_task, revision_type="edit_of_confirmed")
+    )
+
+    first_edit.status = "discarded"
+    await db_session.flush()
+    db_session.add(_revision(actor, edit_task, revision_type="edit_of_confirmed"))
     await db_session.flush()
 
 
@@ -537,6 +695,33 @@ async def test_the_inbox_indexes_are_partial_over_one_due_representation_each(
     )
     for definition in definitions.values():
         assert "COALESCE" not in definition
+
+
+async def test_the_keyset_and_one_pending_indexes_match_the_contract(
+    db_session: AsyncSession,
+) -> None:
+    rows = (
+        await db_session.execute(
+            text(
+                "SELECT indexname, indexdef FROM pg_indexes "
+                "WHERE schemaname = 'public' "
+                "AND indexname IN ('tasks_by_user_created', 'task_revisions_one_pending')"
+            )
+        )
+    ).all()
+    definitions = {str(name): str(definition) for name, definition in rows}
+
+    assert definitions["tasks_by_user_created"] == (
+        "CREATE INDEX tasks_by_user_created ON public.tasks USING btree "
+        "(user_id, created_at, id)"
+    )
+    assert definitions["task_revisions_one_pending"].startswith(
+        "CREATE UNIQUE INDEX task_revisions_one_pending ON public.task_revisions "
+        "USING btree (user_id, task_id) WHERE "
+    )
+    assert "(status = 'pending_confirmation'::text)" in definitions[
+        "task_revisions_one_pending"
+    ]
 
 
 async def test_the_calendar_etag_column_is_nullable(db_session: AsyncSession) -> None:

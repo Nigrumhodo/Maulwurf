@@ -14,7 +14,7 @@ import {
 import type { LibraryAudioDetail } from "@/lib/library";
 import { fetchTranscriptReader } from "@/lib/reader";
 import type { ReaderTranscript } from "@/lib/reader";
-import { fetchTasks, qualitySignals } from "@/lib/tasks";
+import { fetchTaskPage, qualitySignals } from "@/lib/tasks";
 import type { Task, TaskQualityState } from "@/lib/tasks";
 
 // D3.5 - the class page is the reader plus persisted metadata: stages, summary/topics,
@@ -70,7 +70,7 @@ export function TranscriptReaderPage() {
     let cancelled = false;
     setTasksLoading(true);
     setTasksError(null);
-    fetchTasks({ audioId, status: "all", limit: 200 })
+    fetchTaskPage({ audioId, status: "all", limit: 200 })
       .then((page) => {
         if (cancelled) return;
         setTasks(Array.isArray(page.items) ? page.items : []);

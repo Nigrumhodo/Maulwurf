@@ -8,16 +8,16 @@ import json
 
 import pytest
 
+from maulwurf_ingest.audio.reconcile import Word
 from maulwurf_ingest.persistence import (
     TranscriptDraft,
-    TranscriptWord,
     draft_from_job,
     prepare_transcript,
     quality_warnings,
 )
 
 
-def _draft(*words: TranscriptWord, text: str = "") -> TranscriptDraft:
+def _draft(*words: Word, text: str = "") -> TranscriptDraft:
     return TranscriptDraft(
         text=text,
         precision="word" if words else "none",
@@ -28,8 +28,8 @@ def _draft(*words: TranscriptWord, text: str = "") -> TranscriptDraft:
 
 def test_low_confidence_is_flagged_without_the_words() -> None:
     prepared = prepare_transcript(_draft(
-        TranscriptWord("La", 0.0, 0.2, confidence=0.21),
-        TranscriptWord("derivada", 0.3, 0.8, confidence=0.35),
+        Word("La", 0.0, 0.2, confidence=0.21),
+        Word("derivada", 0.3, 0.8, confidence=0.35),
     ))
 
     assert prepared is not None
@@ -42,8 +42,8 @@ def test_low_confidence_is_flagged_without_the_words() -> None:
 
 def test_confident_words_do_not_warn() -> None:
     prepared = prepare_transcript(_draft(
-        TranscriptWord("La", 0.0, 0.2, confidence=0.91),
-        TranscriptWord("derivada", 0.3, 0.8, confidence=0.84),
+        Word("La", 0.0, 0.2, confidence=0.91),
+        Word("derivada", 0.3, 0.8, confidence=0.84),
     ))
 
     assert prepared is not None
@@ -52,9 +52,9 @@ def test_confident_words_do_not_warn() -> None:
 
 def test_a_majority_of_low_confidence_words_is_required() -> None:
     prepared = prepare_transcript(_draft(
-        TranscriptWord("La", 0.0, 0.2, confidence=0.2),
-        TranscriptWord("derivada", 0.3, 0.8, confidence=0.95),
-        TranscriptWord("parcial", 0.9, 1.4, confidence=0.93),
+        Word("La", 0.0, 0.2, confidence=0.2),
+        Word("derivada", 0.3, 0.8, confidence=0.95),
+        Word("parcial", 0.9, 1.4, confidence=0.93),
     ))
 
     assert prepared is not None
@@ -63,8 +63,8 @@ def test_a_majority_of_low_confidence_words_is_required() -> None:
 
 def test_zero_confidence_is_unknown_not_low() -> None:
     prepared = prepare_transcript(_draft(
-        TranscriptWord("La", 0.0, 0.2, confidence=0.0),
-        TranscriptWord("derivada", 0.3, 0.8, confidence=0.0),
+        Word("La", 0.0, 0.2, confidence=0.0),
+        Word("derivada", 0.3, 0.8, confidence=0.0),
     ))
 
     assert prepared is not None
@@ -73,8 +73,8 @@ def test_zero_confidence_is_unknown_not_low() -> None:
 
 def test_missing_confidence_is_unknown_not_low() -> None:
     prepared = prepare_transcript(_draft(
-        TranscriptWord("La", 0.0, 0.2),
-        TranscriptWord("derivada", 0.3, 0.8),
+        Word("La", 0.0, 0.2),
+        Word("derivada", 0.3, 0.8),
     ))
 
     assert prepared is not None
@@ -83,9 +83,9 @@ def test_missing_confidence_is_unknown_not_low() -> None:
 
 def test_empty_word_entries_are_counted_but_not_stored() -> None:
     prepared = prepare_transcript(_draft(
-        TranscriptWord("", 0.0, 0.1),
-        TranscriptWord("   ", 0.1, 0.2),
-        TranscriptWord("derivada", 0.3, 0.8, confidence=0.9),
+        Word("", 0.0, 0.1),
+        Word("   ", 0.1, 0.2),
+        Word("derivada", 0.3, 0.8, confidence=0.9),
     ))
 
     assert prepared is not None
@@ -96,9 +96,9 @@ def test_empty_word_entries_are_counted_but_not_stored() -> None:
 
 def test_repetition_is_marked_together_with_quality_warnings() -> None:
     prepared = prepare_transcript(_draft(
-        TranscriptWord("la", 0.0, 0.2, confidence=0.2),
-        TranscriptWord("la", 0.3, 0.5, confidence=0.2),
-        TranscriptWord("la", 0.6, 0.8, confidence=0.2),
+        Word("la", 0.0, 0.2, confidence=0.2),
+        Word("la", 0.3, 0.5, confidence=0.2),
+        Word("la", 0.6, 0.8, confidence=0.2),
     ))
 
     assert prepared is not None

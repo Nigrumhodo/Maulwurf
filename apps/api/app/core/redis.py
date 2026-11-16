@@ -14,7 +14,10 @@ from fastapi import Depends
 
 from app.core.config import settings
 
-REDIS_TIMEOUT_S = 2.0
+# One Redis budget for the request client, `/readyz`, ARQ `conn_timeout`, and the
+# Compose Redis healthcheck (`timeout: 2s`). ARQ's field is whole seconds and
+# defaults to 1; leaving it unset makes workers give up while the API is still ready.
+REDIS_TIMEOUT_S = 2
 
 
 async def get_redis() -> AsyncIterator[redis.Redis]:

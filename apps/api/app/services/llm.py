@@ -11,7 +11,6 @@ errors carry status codes, attempt numbers and provider error codes, never conte
 import asyncio
 import json
 import logging
-import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -20,14 +19,15 @@ import httpx
 
 from app.core.config import Settings
 from app.core.config import settings as live_settings
+from app.services.http_retry import backoff as _backoff
+from app.services.http_retry import retry_after_seconds as _retry_after_seconds
+from app.services.http_retry import unit_interval as _unit_interval
 
 logger = logging.getLogger(__name__)
 
 CHAT_COMPLETIONS_PATH = "chat/completions"
 LLM_HTTP_LIMITS = httpx.Limits(max_connections=20, max_keepalive_connections=10)
 _shared_client: httpx.AsyncClient | None = None
-_BACKOFF_BASE_SECONDS = 0.5
-_MAX_RETRY_AFTER_SECONDS = 60.0
 _RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 _CONTEXT_MARKERS = (
     "context length",
@@ -83,29 +83,6 @@ class LLMProvider(Protocol):
     def stream(
         self, messages: Sequence[ChatMessage], *, max_tokens: int
     ) -> AsyncIterator[str]: ...
-
-
-def _unit_interval() -> float:
-    return secrets.randbelow(1_000_000) / 1_000_000
-
-
-def _backoff(attempt: int, jitter: Callable[[], float]) -> float:
-    base = _BACKOFF_BASE_SECONDS * float(1 << (attempt - 1))
-    drawn = min(max(jitter(), 0.0), 1.0)
-    return base + (drawn * base)
-
-
-def _retry_after_seconds(response: httpx.Response) -> float | None:
-    raw = response.headers.get("Retry-After")
-    if raw is None:
-        return None
-    try:
-        seconds = float(raw.strip())
-    except ValueError:
-        return None
-    if seconds < 0:
-        return None
-    return min(seconds, _MAX_RETRY_AFTER_SECONDS)
 
 
 def get_llm_http_client() -> httpx.AsyncClient:

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -6,7 +6,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { useToast } from "@/components/ui/ToastProvider";
 import { SubjectForm } from "@/components/subjects/SubjectForm";
 import { apiFetch, ApiHttpError } from "@/lib/api";
-import { fetchSubjects } from "@/lib/subjects";
+import { createSubject, fetchSubjects, updateSubject } from "@/lib/subjects";
 import type { Subject, SubjectDraft } from "@/lib/subjects";
 
 // D1.6 — CRUD de materias contra la API real (A1.6 / M2a §3.4): lista del tenant,
@@ -25,38 +25,35 @@ export function MateriasPage() {
     null,
   );
 
+  const loadGeneration = useRef(0);
+
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     setLoading(true);
     try {
-      setSubjects(await fetchSubjects());
+      const next = await fetchSubjects();
+      if (generation !== loadGeneration.current) return;
+      setSubjects(next);
     } catch (error) {
+      if (generation !== loadGeneration.current) return;
       toast(error instanceof Error ? error.message : "no se pudieron cargar las materias", "error");
     } finally {
-      setLoading(false);
+      if (generation === loadGeneration.current) setLoading(false);
     }
   }, [toast]);
 
   useEffect(() => {
     void load();
+    return () => {
+      loadGeneration.current += 1;
+    };
   }, [load]);
-
-  function bodyOf(draft: SubjectDraft) {
-    return JSON.stringify({
-      name: draft.name,
-      color: draft.color,
-      teacher: draft.teacher.trim() === "" ? null : draft.teacher,
-    });
-  }
 
   async function handleCreate(draft: SubjectDraft) {
     setBusy(true);
     try {
-      await apiFetch("/subjects", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: bodyOf(draft),
-      });
-      await load();
+      const created = await createSubject(draft);
+      setSubjects((current) => [...current.filter((subject) => subject.id !== created.id), created]);
       setForm(null);
       toast("materia creada", "success");
     } finally {
@@ -66,14 +63,13 @@ export function MateriasPage() {
 
   async function handleUpdate(draft: SubjectDraft) {
     if (form?.mode !== "edit") return;
+    const subjectId = form.subject.id;
     setBusy(true);
     try {
-      await apiFetch(`/subjects/${form.subject.id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: bodyOf(draft),
-      });
-      await load();
+      const updated = await updateSubject(subjectId, draft);
+      setSubjects((current) =>
+        current.map((subject) => (subject.id === updated.id ? updated : subject)),
+      );
       setForm(null);
       toast("materia actualizada", "success");
     } finally {
@@ -85,7 +81,7 @@ export function MateriasPage() {
     setBusy(true);
     try {
       await apiFetch(`/subjects/${subject.id}`, { method: "DELETE" });
-      await load();
+      setSubjects((current) => current.filter((item) => item.id !== subject.id));
       toast("materia eliminada", "success");
     } catch (error) {
       if (error instanceof ApiHttpError && error.code === "subject_has_active_audios") {

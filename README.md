@@ -6,19 +6,22 @@
 *Maulwurf* means “mole” in German: the project is intended to dig through class recordings
 and build connections between notes, a calendar, and reminders.
 
-> **Project status — S1 implementation complete (L1.7 pending); S2 in progress.** The
-> repository contains the monorepo with its S1 foundation and a growing S2 knowledge slice: a
-> local Docker Compose stack (8 services, S1/J1.1), five Alembic migrations (`0001`–`0005`),
-> opaque sessions with CSRF (A1.4), Google login (A1.3), subject CRUD (A1.6), streaming
-> upload with SHA-256 and dedupe (A2.3/A2.4), hybrid search (L2.3/L2.4/A2.11), chat SSE with
-> validated citations (L2.5/L2.6), a hardened ingestion package (S2.1–S2.13), ARQ dispatch,
-> indexing and reconciliation (J2.1–J2.4), unit and integration test suites, and the quality
-> CI workflow (J1.4/J2.9). There is still **no end-to-end feature**: the default ingest sink
-> answers `503` until the API-to-ingest transport is configured, the S2 upload/library web
-> flows (`D2.x`) are only starting (`D2.1` in progress), analysis/Calendar/Gmail (S3–S4) do
-> not exist, and real ingestion is gated by the open F0 decisions (D2/D6 `pending`,
-> D3-Audio/D4 `blocked`). Planned services and roadmap gates must not be read as implemented
-> features.
+> **Project status — S1 and S2 are on `develop`; S3/S4 code is partial and not an end-to-end class.**
+> The repository contains the monorepo, a local Docker Compose stack (8 services), and
+> nineteen Alembic migrations (`0001`–`0019`): opaque sessions with CSRF (A1.4), Google
+> login (A1.3), subject CRUD (A1.6), streaming upload with SHA-256 and dedupe (A2.3/A2.4),
+> hybrid search (L2.3/L2.4/A2.11), chat SSE with validated citations (L2.5/L2.6), a hardened
+> ingestion package (S2.1–S2.13), ARQ dispatch, indexing and reconciliation (J2.1–J2.4),
+> the upload form (D2.1; the browser still sends no bytes, D2.2), an analyze job with
+> reviewable tasks and a versioned class summary (L3.x), Calendar connect/sync code (J3.x),
+> notification rows and account deletion (A4.x), unit and integration suites, and the
+> quality CI workflow (J1.4/J2.9). There is still **no end-to-end class** on the default
+> stack: the ingest sink answers `503` until `MAULWURF_INGEST_URL` and the ingest
+> credential are set, real-text indexing stays closed while D3-Texto is open, and
+> Calendar/Gmail writes stay behind explicit confirmation. Real recordings stay gated by
+> the open F0 decisions (D2/D6 `pending`, D3-Audio/D4 `blocked`). See
+> [docs/RUNBOOK-dev.md](docs/RUNBOOK-dev.md) for the gates and the synthetic e2e overlay.
+> Planned services and roadmap gates must not be read as a finished product.
 
 ## Product vision
 
@@ -268,7 +271,7 @@ See [docs/RUNBOOK-dev.md](docs/RUNBOOK-dev.md) for the reproducible commands. Su
 | Lint and formatting | Ruff (Python) and ESLint (web), configured |
 | Type checking | mypy strict (Python) and `tsc --noEmit` (web), configured |
 | Documentation references | `python3 scripts/docs/check_refs.py` (docs, README and AGENTS paths) |
-| Migrations | Five revisions (`0001`–`0005`); the `api` container runs `alembic upgrade head` on boot (runbook §5) |
+| Migrations | Nineteen revisions (`0001`–`0019`); the `api` container runs `alembic upgrade head` on boot (runbook §5) |
 | Deployment | No deployment manifests exist yet (S4/J4.x) |
 
 CI is defined in `.github/workflows/quality.yml` (lint, types, unit and integration tests,

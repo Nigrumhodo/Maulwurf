@@ -88,6 +88,10 @@ export interface TaskPage {
   next_cursor: string | null;
 }
 
+/** Wire aliases used by the shared TaskList (develop's refactor). */
+export type TaskOut = Task;
+export type TaskListOut = TaskPage;
+
 export interface TaskQuery {
   status?: TaskStatusFilter;
   subjectId?: string;
@@ -124,7 +128,7 @@ export async function fetchTask(taskId: string): Promise<Task> {
   return (await res.json()) as Task;
 }
 
-export async function fetchTasks(query: TaskQuery = {}): Promise<TaskPage> {
+export async function fetchTaskPage(query: TaskQuery = {}): Promise<TaskPage> {
   const params = new URLSearchParams({ limit: String(query.limit ?? 20) });
   if (query.status !== undefined && query.status !== "all") params.set("status", query.status);
   if (query.subjectId !== undefined && query.subjectId !== "") {
@@ -138,6 +142,19 @@ export async function fetchTasks(query: TaskQuery = {}): Promise<TaskPage> {
   if (query.cursor !== undefined && query.cursor !== null) params.set("cursor", query.cursor);
   const res = await apiFetch(`/tasks?${params.toString()}`);
   return (await res.json()) as TaskPage;
+}
+
+/** `GET /tasks` list consumed by the shared `TaskList`/`useServerList` (dashboard). */
+export async function fetchTasks(): Promise<Task[]> {
+  const page = await fetchTaskPage({ limit: 50 });
+  return page.items;
+}
+
+/** Due instant from the task itself: `due_at`, else `due_date`, else `date_status`. */
+export function taskSchedule(task: Task): string {
+  if (task.due_at !== null) return task.due_at;
+  if (task.due_date !== null) return task.due_date;
+  return task.date_status;
 }
 
 export function qualitySignals(detail: LibraryAudioDetail | null): TaskQualitySignal[] {
@@ -261,18 +278,29 @@ export async function patchTask(taskId: string, patch: TaskPatch): Promise<TaskU
     body: JSON.stringify(patch),
     retries: 0,
   });
-  return (await res.json()) as TaskUpdate;
+  const payload = (await res.json()) as
+    | { task?: Task; revision_id?: string | null }
+    | Task;
+  const task =
+    "task" in payload && payload.task !== undefined ? payload.task : (payload as Task);
+  const revisionId =
+    "revision_id" in payload
+      ? (payload.revision_id ?? null)
+      : (task.pending_revision?.id ?? null);
+  return { task, revision_id: revisionId };
 }
 
 export interface TaskConfirmation {
   task: Task;
-  revision_id: string | null;
+  notice?: string | null;
+  revision_id?: string | null;
 }
 
 export interface TaskLifecycleResult {
   task: Task;
   notice: string | null;
   cancelled_reminders: number;
+  calendar_event_kept: boolean;
 }
 
 export async function confirmTask(
@@ -289,7 +317,16 @@ export async function confirmTask(
     }),
     retries: 0,
   });
-  return (await res.json()) as TaskConfirmation;
+  const payload = (await res.json()) as {
+    task: Task;
+    notice?: string | null;
+    revision_id?: string | null;
+  };
+  return {
+    task: payload.task,
+    notice: payload.notice ?? null,
+    revision_id: payload.revision_id ?? null,
+  };
 }
 
 export async function dismissTask(
@@ -317,7 +354,20 @@ async function closeTask(
     body: JSON.stringify({ expected_version: expectedVersion }),
     retries: 0,
   });
-  return (await res.json()) as TaskLifecycleResult;
+  const payload = (await res.json()) as {
+    task: Task;
+    notice?: string | null;
+    cancelled_reminders?: number;
+    calendar_event_kept?: boolean;
+  };
+  const kept =
+    payload.calendar_event_kept === true || payload.notice === "calendar_event_kept";
+  return {
+    task: payload.task,
+    notice: kept ? "calendar_event_kept" : (payload.notice ?? null),
+    cancelled_reminders: payload.cancelled_reminders ?? 0,
+    calendar_event_kept: kept,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

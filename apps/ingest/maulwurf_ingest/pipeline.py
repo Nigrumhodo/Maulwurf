@@ -28,8 +28,8 @@ from maulwurf_ingest.audio.fragmenter import (
 )
 from maulwurf_ingest.audio.reconcile import (
     FragmentTranscript,
-    LocalWord,
     ReconciledTranscript,
+    Word,
     reconcile,
 )
 from maulwurf_ingest.audio.validate import probe_file
@@ -40,7 +40,7 @@ FIRST_FRAGMENT = "frag-0000.wav"
 @dataclass(frozen=True)
 class FragmentWords:
     text: str = ""
-    words: tuple[LocalWord, ...] = ()
+    words: tuple[Word, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -44,6 +44,7 @@ from app.services.embeddings import (
     EmbeddingNotConfigured,
     EmbeddingProvider,
     HttpEmbeddingProvider,
+    embed_query,
 )
 from app.services.indexing import active_generation
 from app.services.llm import HttpChatProvider, LLMNotConfigured, LLMProvider
@@ -256,14 +257,16 @@ async def _measure_retrieval(
     question: str,
     provider: EmbeddingProvider,
 ) -> float:
-    """Time session checkout, query embedding, both branches, fusion and hydration."""
+    """Time query embedding, then session checkout, both branches, fusion and hydration."""
     bind_user(index.user_id)
     started = perf_counter()
     try:
+        vector = await embed_query(provider, question)
         async with session_factory() as db:
-            hits = await SearchService(db, provider=provider).retrieve(
+            hits = await SearchService(db, provider=provider).retrieve_with_vector(
                 user_id=index.user_id,
-                query=question,
+                query_text=question,
+                query_vector=vector,
                 top_k=TOP_K,
             )
     except EvalExit:

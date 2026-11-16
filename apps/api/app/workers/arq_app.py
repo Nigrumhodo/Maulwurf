@@ -17,6 +17,7 @@ from arq.worker import Function, func
 from app.core.config import settings
 from app.core.db import bind_cross_tenant, reset_cross_tenant, session_scope
 from app.core.logging import configure_logging
+from app.core.redis import REDIS_TIMEOUT_S
 from app.services.deletion import purge_expired_residuals
 from app.services.digests import materialize_due_digests
 from app.services.scheduler_lease import run_notification_scheduler
@@ -45,7 +46,15 @@ RETENTION_BATCHES_PER_RUN = 5
 # J4.6: materialize the next digest occurrence off the claim second; the following tick claims it.
 DIGEST_SECOND = 20
 
-_REDIS = RedisSettings.from_dsn(str(settings.redis_url))
+
+def _redis_settings() -> RedisSettings:
+    """DSN plus the shared timeout. `from_dsn` leaves `conn_timeout` at ARQ's 1s default."""
+    parsed = RedisSettings.from_dsn(str(settings.redis_url))
+    parsed.conn_timeout = REDIS_TIMEOUT_S
+    return parsed
+
+
+_REDIS = _redis_settings()
 
 
 async def dispatch_outbox(ctx: dict[str, Any]) -> None:
@@ -77,11 +86,13 @@ async def schedule_notifications(ctx: dict[str, Any]) -> None:
 
     Disabled by default (`MAULWURF_NOTIFICATION_SCHEDULER_ENABLED=false`): J4.1 (Gmail) owns
     the consumer of `sending`, and claiming before it is deployed would turn due rows into a
-    false, terminal `delivery_unknown` after the delivery lease expires. With the flag off
-    the cron returns before opening a session: it neither elects nor moves any row.
+    false, terminal `delivery_unknown` after the delivery lease expires. With either flag
+    off the cron returns before opening a session: it neither elects nor moves any row.
+    `MAULWURF_NOTIFICATION_DELIVERY_ENABLED` is the consumer gate, so the scheduler flag
+    alone cannot leave due rows in `sending`.
     """
     del ctx  # The cron needs no Redis; delivery is J4.1's job.
-    if not settings.notification_scheduler_enabled:
+    if not settings.notification_scheduler_enabled or not settings.notification_delivery_enabled:
         return
     token = bind_cross_tenant()
     try:

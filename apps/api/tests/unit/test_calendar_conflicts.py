@@ -12,11 +12,9 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.calendar_sync import (
-    MANUAL_SYNC_COOLDOWN_SECONDS,
-    CalendarEventView,
-    manual_sync_cooldown_remaining,
-)
+from app.services.calendar_read import CalendarEventView
+from app.services.calendar_sync import manual_sync_cooldown_remaining
+from app.services.calendar_window import MANUAL_SYNC_COOLDOWN_SECONDS
 from app.services.conflicts import (
     DEADLINE_TIPOS,
     MIN_DEADLINES_PER_DAY,

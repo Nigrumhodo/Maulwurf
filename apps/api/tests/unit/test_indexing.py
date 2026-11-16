@@ -331,16 +331,22 @@ async def test_indexing_refuses_incomplete_activation() -> None:
     with pytest.raises(indexing.GenerationIncomplete) as failure:
         await indexing.activate_generation(_db(db), user_id=user_id, version=VERSION)
 
-    assert failure.value.details == {"chunks_without_embeddings": 1, "missing_audios": 0}
+    assert failure.value.details == {
+        "scope": "user",
+        "chunks_without_embeddings": 1,
+        "missing_audios": 0,
+        "blocked_audio_ids": [],
+    }
     assert not any(event.startswith("sql:retire") for event in db.events)
 
 
 async def test_indexing_refuses_activation_when_audio_is_missing() -> None:
     """An eligible class without chunks also leaves the generation incomplete."""
     user_id = uuid.uuid4()
+    missing_audio = uuid.uuid4()
     db = StubSession(
         generation=_generation(user_id),
-        eligible_audio_ids=[uuid.uuid4()],
+        eligible_audio_ids=[missing_audio],
         chunked_audio_ids=[],
         chunks=3,
         embeddings=3,
@@ -349,7 +355,9 @@ async def test_indexing_refuses_activation_when_audio_is_missing() -> None:
     with pytest.raises(indexing.GenerationIncomplete) as failure:
         await indexing.activate_generation(_db(db), user_id=user_id, version=VERSION)
 
+    assert failure.value.details["scope"] == "user"
     assert failure.value.details["missing_audios"] == 1
+    assert failure.value.details["blocked_audio_ids"] == [str(missing_audio)]
     assert db.commits == 0
 
 

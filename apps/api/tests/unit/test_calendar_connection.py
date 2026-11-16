@@ -38,7 +38,12 @@ from app.services.google_calendar import (
     GoogleCalendarService,
     GoogleCalendarTransientError,
 )
-from app.services.oauth_google import CALENDAR_SCOPES, missing_calendar_scopes, scope_granted
+from app.services.oauth_google import (
+    CALENDAR_SCOPES,
+    GoogleTokenResponse,
+    missing_calendar_scopes,
+    scope_granted,
+)
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -100,13 +105,16 @@ def test_connect_asks_only_for_missing_scopes_and_reconnect_asks_for_all() -> No
     assert requested_scopes(list(CALENDAR_SCOPES), reconnect=True) == list(CALENDAR_SCOPES)
 
 
+def _tokens(scope: str | None) -> GoogleTokenResponse:
+    return GoogleTokenResponse(access_token="token", scope=scope)
+
+
 def test_grant_covers_calendar_requires_every_scope_in_the_token_response() -> None:
-    assert grant_covers_calendar({"scope": " ".join(CALENDAR_SCOPES)})
-    assert grant_covers_calendar({"scope": "openid email profile " + " ".join(CALENDAR_SCOPES)})
-    assert not grant_covers_calendar({"scope": "openid email profile"})
-    assert not grant_covers_calendar({"scope": " ".join(CALENDAR_SCOPES[:2])})
-    assert not grant_covers_calendar({})
-    assert not grant_covers_calendar({"scope": None})
+    assert grant_covers_calendar(_tokens(" ".join(CALENDAR_SCOPES)))
+    assert grant_covers_calendar(_tokens("openid email profile " + " ".join(CALENDAR_SCOPES)))
+    assert not grant_covers_calendar(_tokens("openid email profile"))
+    assert not grant_covers_calendar(_tokens(" ".join(CALENDAR_SCOPES[:2])))
+    assert not grant_covers_calendar(_tokens(None))
 
 
 def test_identity_requires_summary_description_and_a_secondary_calendar() -> None:

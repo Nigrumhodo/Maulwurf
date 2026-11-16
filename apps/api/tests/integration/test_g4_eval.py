@@ -34,6 +34,7 @@ from app.models import (
     Transcript,
     User,
 )
+from app.services.embeddings import embed_query
 from app.services.llm import ChatMessage
 from app.services.search import SearchService
 from tools.eval import cli as cli_module
@@ -697,11 +698,13 @@ async def test_g4_retrieval_never_sees_another_language_or_a_real_user(
     other_user_id = await _seed_other_user(
         session_factory, question=item.question, provider=provider
     )
+    vector = await embed_query(provider, item.question)
     async with session_factory() as db:
         other_chunk_id = await db.scalar(select(Chunk.id).where(Chunk.user_id == other_user_id))
-        hits = await SearchService(db, provider=provider).retrieve(
+        hits = await SearchService(db, provider=provider).retrieve_with_vector(
             user_id=index.user_id,
-            query=item.question,
+            query_text=item.question,
+            query_vector=vector,
             top_k=8,
         )
         assert hits

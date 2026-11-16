@@ -9,6 +9,7 @@ no se registra.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import os
 import secrets
@@ -18,7 +19,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from maulwurf_ingest.audio.reconcile import LocalWord, parse_confidence
+from maulwurf_ingest.audio.reconcile import Word, parse_confidence
+from maulwurf_ingest.logs import RedactionFilter
 
 MAX_ATTEMPTS = 3
 # Presupuesto entre llamadas. No es una cuota medida de Riva.
@@ -30,6 +32,20 @@ _INVALID = frozenset({"INVALID_ARGUMENT"})
 _DEFAULT_SERVER = "grpc.nvcf.nvidia.com:443"
 _DEFAULT_FUNCTION_ID = "b702f636-f60c-4a3d-a6f4-f3568c13bd7d"
 _CLIENT_MAX_MESSAGE_LENGTH = 1_073_741_824
+
+
+def silence_grpc_metadata_trace() -> None:
+    """Keep the bearer out of gRPC traces.
+
+    The C-core tracer writes call metadata to stderr, outside the Python redacting
+    handler, when ``GRPC_TRACE`` or a debug verbosity is set. Pin both off before the
+    channel exists, and scrub any ``grpc`` logger record that still carries a bearer.
+    """
+    os.environ["GRPC_VERBOSITY"] = "ERROR"
+    os.environ["GRPC_TRACE"] = ""
+    grpc_logger = logging.getLogger("grpc")
+    if not any(isinstance(item, RedactionFilter) for item in grpc_logger.filters):
+        grpc_logger.addFilter(RedactionFilter())
 
 
 class AsrReupload(RuntimeError):
@@ -49,7 +65,7 @@ class TransportError(Exception):
 @dataclass(frozen=True)
 class Transcript:
     text: str
-    words: tuple[LocalWord, ...]
+    words: tuple[Word, ...]
     precision: str
 
 
@@ -213,6 +229,7 @@ class GrpcRivaTransport:
             return self._asr
         import riva.client
 
+        silence_grpc_metadata_trace()
         auth = riva.client.Auth(
             use_ssl=True,
             uri=self._server,
@@ -301,7 +318,7 @@ def _status_name(exc: BaseException) -> str:
 
 def _transcript_from(response: object) -> Transcript:
     text_parts: list[str] = []
-    words: list[LocalWord] = []
+    words: list[Word] = []
     results = getattr(response, "results", None) or []
     for result in results:
         alternatives = getattr(result, "alternatives", None) or []
@@ -319,7 +336,7 @@ def _transcript_from(response: object) -> Transcript:
     return Transcript(text, tuple(words), "word")
 
 
-def _word_from(word: object) -> LocalWord | None:
+def _word_from(word: object) -> Word | None:
     text = str(getattr(word, "word", "") or "").strip()
     start = getattr(word, "start_time", None)
     end = getattr(word, "end_time", None)
@@ -334,4 +351,4 @@ def _word_from(word: object) -> LocalWord | None:
     raw_confidence = getattr(word, "confidence", None)
     # parse_confidence maps the protobuf default 0.0 to unknown on this path too.
     confidence = parse_confidence(raw_confidence)
-    return LocalWord(text, start_s, end_s, confidence)
+    return Word(text, start_s, end_s, confidence)

@@ -52,6 +52,7 @@ from app.models import (
     ProcessingRun,
     Segment,
     Task,
+    TaskEvidence,
     TaskRevision,
     TaskSource,
     Transcript,
@@ -473,6 +474,7 @@ class TombstoneResult:
     processing_runs_cancelled: int
     tasks_deleted: int
     task_sources_deleted: int
+    task_evidence_deleted: int
     task_revisions_deleted: int
     message_sources_deleted: int
     messages_tombstoned: int
@@ -568,6 +570,25 @@ async def tombstone_audio(
     task_revisions = await db.execute(
         delete(TaskRevision)
         .where(TaskRevision.user_id == user_id, TaskRevision.task_id.in_(task_ids))
+        .execution_options(synchronize_session=False)
+    )
+    # Evidence goes before its anchoring sources: the FK would cascade, but the reported
+    # count must reflect the rows this transaction actually purged.
+    purged_source = (
+        select(TaskSource.user_id)
+        .where(
+            TaskSource.user_id == TaskEvidence.user_id,
+            TaskSource.task_id == TaskEvidence.task_id,
+            TaskSource.segment_id == TaskEvidence.segment_id,
+            TaskSource.char_start == TaskEvidence.char_start,
+            TaskSource.char_end == TaskEvidence.char_end,
+            or_(TaskSource.audio_id == audio.id, TaskSource.task_id.in_(task_ids)),
+        )
+        .exists()
+    )
+    task_evidence = await db.execute(
+        delete(TaskEvidence)
+        .where(TaskEvidence.user_id == user_id, purged_source)
         .execution_options(synchronize_session=False)
     )
     task_sources = await db.execute(
@@ -669,6 +690,7 @@ async def tombstone_audio(
         processing_runs_cancelled=_rowcount(stopped) or 0,
         tasks_deleted=_rowcount(tasks) or 0,
         task_sources_deleted=_rowcount(task_sources) or 0,
+        task_evidence_deleted=_rowcount(task_evidence) or 0,
         task_revisions_deleted=_rowcount(task_revisions) or 0,
         message_sources_deleted=len(source_rows),
         messages_tombstoned=_rowcount(messages) or 0,

@@ -1,12 +1,6 @@
-// D- (Dashboard) — Cinta de estado (marquee). Puramente estética en S1: solo
-// muestra cadenas estáticas derivadas del estado de sesión, sin datos privados.
-export function StatusTicker({ guest }: { guest: boolean }) {
-  const items = [
-    "maulwurf.os v0.1",
-    guest ? "modo invitado" : "sesión activa",
-    "audio no conservado",
-    "sube → encuentra → decide",
-  ];
+// Status marquee. Session text does not include a guest mode.
+export function StatusTicker() {
+  const items = ["maulwurf.os v0.1", "sesión activa", "audio no conservado", "sube → encuentra → decide"];
   const line = items.join("  ·  ");
 
   return (

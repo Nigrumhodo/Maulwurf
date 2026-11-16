@@ -23,18 +23,19 @@ event), applies `services.outbox.decide`, revalidates the event and enqueues onl
   evento sigue pendiente y el siguiente ciclo lo reencola. `_job_id = outbox:<id>` solo
   deduplica mientras el job o su resultado siguen en Redis (`keep_result = 60 s`); pasado
   ese tiempo puede repetirse, así que los consumidores deben ser idempotentes.
-- El encolado ocurre con los row locks tomados: si Redis se degrada, la transacción se
-  alarga y otros schedulers saltan esas filas (SKIP LOCKED). Aceptable con lote 100 y cron
-  minutal; revisar si aparece presión real.
+- The batch is claimed and committed before Redis. A compare-and-set records the enqueue
+  result afterward, matching the reconciler, so a slow Redis does not hold row locks.
 """
 
 import logging
+import uuid
 from collections import Counter
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from arq.connections import ArqRedis
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import IngestionAttempt, OutboxEvent
@@ -46,7 +47,7 @@ from app.services.outbox import (
     decide,
 )
 from app.services.outbox_retry import DEFAULT_RETRY, RetryPolicy
-from app.workers.outbox_delivery import enqueue
+from app.workers.outbox_delivery import EnqueueResult, enqueue_ids
 from app.workers.outbox_revalidation import revalidate
 
 logger = logging.getLogger(__name__)
@@ -130,6 +131,10 @@ async def dispatch_pending(
         LATEST_CLEANUP == "verified",
     )
     now = clock()
+    # Tests read the same ORM instances after this returns. Ending the claim transaction
+    # must not expire them into a synchronous lazy load. The flag lives on the sync session.
+    expire = db.sync_session.expire_on_commit
+    db.sync_session.expire_on_commit = False
     rows = (
         await db.execute(
             select(OutboxEvent, LATEST_CLEANUP)
@@ -148,45 +153,114 @@ async def dispatch_pending(
     ).all()
 
     report: Counter[Outcome] = Counter()
+    ready: list[_Publish] = []
+    held: dict[uuid.UUID, OutboxEvent] = {}
     for event, cleanup_status in rows:
-        outcome = await _dispatch_one(
-            db, redis, event, cleanup_status, queue_name=queue_name, retry=retry,
-            clock=clock, report=report,
+        decision = _decide(event, cleanup_status)
+        if decision.outcome is Outcome.UNKNOWN_TYPE:
+            event.status = "skipped"
+            report[Outcome.UNKNOWN_TYPE] += 1
+            continue
+        if not decision.publish or decision.job is None:
+            report[decision.outcome] += 1
+            continue
+        rejection = (
+            await revalidate(db, event) if event.resource_type == "audio" else None
         )
-        report[outcome] += 1
-        if outcome is Outcome.DEFERRED_INFRA:
-            # Redis is not responding: the rest of the batch would fail the same way,
-            # and each failure blocks for a while.
-            break
-    return report
+        if rejection is not None:
+            logger.info(
+                "outbox.revalidation_rejected event_id=%s reason=%s", event.id, rejection
+            )
+            event.status = "skipped"
+            report[rejection] += 1
+            continue
+        held[event.id] = event
+        ready.append(
+            _Publish(
+                event_id=event.id,
+                job=decision.job,
+                resource_id=event.resource_id,
+                resource_version=event.resource_version,
+                attempts=event.attempts,
+                max_attempts=event.max_attempts,
+            )
+        )
+    # Release the claim before Redis. Skips above become durable with this commit.
+    await db.commit()
+
+    try:
+        for plan in ready:
+            result = await enqueue_ids(
+                redis,
+                event_id=plan.event_id,
+                job=plan.job,
+                resource_id=plan.resource_id,
+                resource_version=plan.resource_version,
+                attempts=plan.attempts,
+                max_attempts=plan.max_attempts,
+                queue_name=queue_name,
+                retry=retry,
+                clock=clock,
+            )
+            if result.outcome is Outcome.DEDUPLICATED:
+                report[Outcome.DEDUPLICATED] += 1
+            counted = (
+                Outcome.PUBLISH if result.outcome is Outcome.DEDUPLICATED else result.outcome
+            )
+            report[counted] += 1
+            if result.outcome is not Outcome.DEFERRED_INFRA:
+                _remember_enqueue(held.get(plan.event_id), result)
+                await _record_enqueue(db, plan.event_id, result)
+            if result.outcome is Outcome.DEFERRED_INFRA:
+                # Redis is not responding: the rest of the batch would fail the same way,
+                # and each failure blocks for a while.
+                break
+        return report
+    finally:
+        db.sync_session.expire_on_commit = expire
 
 
-async def _dispatch_one(
-    db: AsyncSession,
-    redis: ArqRedis,
-    event: OutboxEvent,
-    cleanup_status: str | None,
-    *,
-    queue_name: str,
-    retry: RetryPolicy,
-    clock: Callable[[], datetime],
-    report: Counter[Outcome],
-) -> Outcome:
-    decision = _decide(event, cleanup_status)
-    if decision.outcome is Outcome.UNKNOWN_TYPE:
-        event.status = "skipped"
-        return Outcome.UNKNOWN_TYPE
-    if not decision.publish or decision.job is None:
-        return decision.outcome
+@dataclass(frozen=True)
+class _Publish:
+    event_id: uuid.UUID
+    job: str
+    resource_id: uuid.UUID
+    resource_version: int | None
+    attempts: int
+    max_attempts: int
 
-    rejection = (
-        await revalidate(db, event) if event.resource_type == "audio" else None
+
+def _remember_enqueue(event: OutboxEvent | None, result: EnqueueResult) -> None:
+    """Keep the caller's identity-map instance aligned with the compare-and-set."""
+    if event is None or result.attempts is None:
+        return
+    event.attempts = result.attempts
+    if result.status is not None:
+        event.status = result.status
+    if result.published_at is not None:
+        event.published_at = result.published_at
+    if result.next_attempt_at is not None:
+        event.next_attempt_at = result.next_attempt_at
+
+
+async def _record_enqueue(db: AsyncSession, event_id: uuid.UUID, result: EnqueueResult) -> None:
+    """Compare-and-set the enqueue result. A row that left `pending` is left alone."""
+    if result.attempts is None:
+        return
+    values: dict[str, object] = {"attempts": result.attempts}
+    if result.status is not None:
+        values["status"] = result.status
+    if result.published_at is not None:
+        values["published_at"] = result.published_at
+    if result.next_attempt_at is not None:
+        values["next_attempt_at"] = result.next_attempt_at
+    await db.execute(
+        update(OutboxEvent)
+        .where(
+            OutboxEvent.id == event_id,
+            OutboxEvent.status == "pending",
+            OutboxEvent.published_at.is_(None),
+        )
+        .values(**values)
     )
-    if rejection is not None:
-        logger.info("outbox.revalidation_rejected event_id=%s reason=%s", event.id, rejection)
-        event.status = "skipped"
-        return rejection
-    return await enqueue(
-        redis, event, decision.job, queue_name=queue_name, retry=retry, clock=clock,
-        report=report,
-    )
+    await db.commit()

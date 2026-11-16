@@ -51,16 +51,16 @@ from app.services.task_event_store import SqlTaskEventStore
 from app.services.task_event_sync import (
     CalendarGateway,
     SyncOutcome,
+    SyncTask,
     TaskEventBlocked,
     TaskEventSync,
     TaskEventTransientError,
-    TaskSnapshot,
 )
 
 logger = logging.getLogger(__name__)
 
 SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
-GatewayFactory = Callable[[TaskSnapshot], Awaitable[CalendarGateway]]
+GatewayFactory = Callable[[SyncTask], Awaitable[CalendarGateway]]
 
 # ctx keys for injecting a database, a Calendar gateway or the Google HTTP transports. Only
 # tests set them. Calendar uses the blocking client; the token endpoint is called with httpx
@@ -134,7 +134,7 @@ async def sync_task_event(
 
 async def _load_cross_tenant(
     store: SqlTaskEventStore, task_id: uuid.UUID
-) -> TaskSnapshot | None:
+) -> SyncTask | None:
     token = bind_cross_tenant()
     try:
         return await store.load(task_id)
@@ -163,7 +163,7 @@ def _gateways(ctx: dict[str, Any], sessions: SessionFactory) -> GatewayFactory:
         token=ctx.get(TOKEN_TRANSPORT_KEY),
     )
 
-    async def factory(snapshot: TaskSnapshot) -> CalendarGateway:
+    async def factory(snapshot: SyncTask) -> CalendarGateway:
         return await _google_gateway(snapshot, sessions, transports)
 
     return factory
@@ -182,7 +182,7 @@ async def _load_credential(
 
 
 async def _google_gateway(
-    snapshot: TaskSnapshot,
+    snapshot: SyncTask,
     sessions: SessionFactory,
     transports: Transports,
 ) -> CalendarGateway:
