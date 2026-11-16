@@ -487,21 +487,23 @@ async def test_concurrent_patch_returns_409_and_refresh_applies_the_loser(
         actor, user_id, task_id = await _seed_manual_task(factory)
         _authenticate(client, actor)
         edits = [("First edit", 1), ("Second edit", 1)]
-        requests = [
-            asyncio.create_task(
-                _patch(client, actor, task_id, version=version, title=title)
-            )
-            for title, version in edits
-        ]
-        try:
-            async with _task_row_lock(factory, task_id):
+        # Take the row lock before starting the requests: if they start first, one can win
+        # the row, the probe never sees two queued waiters, and the test fails after 10 s.
+        async with _task_row_lock(factory, task_id):
+            requests = [
+                asyncio.create_task(
+                    _patch(client, actor, task_id, version=version, title=title)
+                )
+                for title, version in edits
+            ]
+            try:
                 await _wait_for_task_lock_waiters(factory, 2, application_name)
-            responses = await asyncio.gather(*requests)
-        except BaseException:
-            for request in requests:
-                request.cancel()
-            await asyncio.gather(*requests, return_exceptions=True)
-            raise
+            except BaseException:
+                for request in requests:
+                    request.cancel()
+                await asyncio.gather(*requests, return_exceptions=True)
+                raise
+        responses = await asyncio.gather(*requests)
 
         assert sorted(response.status_code for response in responses) == [200, 409]
         winner = next(
@@ -550,21 +552,23 @@ async def test_concurrent_double_confirmation_creates_one_outbox(
     try:
         actor, user_id, task_id = await _seed_confirmable_task(factory)
         _authenticate(client, actor)
-        requests = [
-            asyncio.create_task(
-                _confirm(client, actor, task_id, expected_version=1)
-            )
-            for _ in range(2)
-        ]
-        try:
-            async with _task_row_lock(factory, task_id):
+        # Same ordering as the PATCH case: the task row must be held before the requests
+        # start so both of them queue on it instead of racing the holder.
+        async with _task_row_lock(factory, task_id):
+            requests = [
+                asyncio.create_task(
+                    _confirm(client, actor, task_id, expected_version=1)
+                )
+                for _ in range(2)
+            ]
+            try:
                 await _wait_for_task_lock_waiters(factory, 2, application_name)
-            responses = await asyncio.gather(*requests)
-        except BaseException:
-            for request in requests:
-                request.cancel()
-            await asyncio.gather(*requests, return_exceptions=True)
-            raise
+            except BaseException:
+                for request in requests:
+                    request.cancel()
+                await asyncio.gather(*requests, return_exceptions=True)
+                raise
+        responses = await asyncio.gather(*requests)
 
         assert sorted(response.status_code for response in responses) == [202, 409]
         confirmed = next(
