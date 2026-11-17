@@ -78,6 +78,10 @@ async def apply_preferences(
     for field, value in changes.items():
         setattr(row, field, value)
     await db.flush()
+    # `updated_at` is an onupdate server default: the flush expires it, and reading it
+    # lazily outside greenlet_spawn raises MissingGreenlet on asyncpg. The endpoint needs
+    # the refreshed value for its complete response.
+    await db.refresh(row, ["updated_at"])
     return row
 
 

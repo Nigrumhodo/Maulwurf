@@ -4,6 +4,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, useSearchParams } from "react-router-dom";
 import { SettingsPage } from "@/pages/SettingsPage";
 import type { GoogleStatus } from "@/lib/integrations";
+import type { NotificationPreferences } from "@/lib/preferences";
 
 vi.mock("@/components/auth/AuthProvider", () => ({
   useAuth: () => ({
@@ -34,10 +35,24 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+function preferences(): NotificationPreferences {
+  return {
+    gmail_opt_in: false,
+    digest_daily_enabled: true,
+    digest_daily_time: "07:00",
+    digest_weekly_enabled: true,
+    digest_weekday: 0,
+    reminder_offsets_hours: [48, 24, 2],
+    reminder_allday_offsets_days: [3, 1],
+    updated_at: null,
+  };
+}
+
 function installFetch(status: GoogleStatus) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url === "/integrations/status") return json({ google: status });
+    if (url === "/me/notifications") return json(preferences());
     return json({});
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -110,7 +125,10 @@ describe("SettingsPage", () => {
   it("reports a status read failure honestly", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => json({ error: { code: "internal_error" } }, 500)),
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === "/me/notifications") return json(preferences());
+        return json({ error: { code: "internal_error" } }, 500);
+      }),
     );
 
     renderPage("/settings");
