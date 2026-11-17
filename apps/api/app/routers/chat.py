@@ -43,6 +43,7 @@ from app.schemas.chat import (
     SendMessageIn,
 )
 from app.schemas.citations import parse_citations
+from app.schemas.tools import parse_tool_calls
 from app.services import conversations
 from app.services.chat_prompt import ChatContextExceeded
 from app.services.conversations import DEFAULT_PAGE_SIZE, MAX_CURSOR_LENGTH, MAX_PAGE_SIZE
@@ -243,6 +244,7 @@ async def list_messages(
                 status=row.status,
                 client_message_id=row.client_message_id,
                 citas=list(parse_citations(row.citas)),
+                tool_calls=parse_tool_calls(row.tool_calls),
                 created_at=row.created_at,
             )
             for row in rows

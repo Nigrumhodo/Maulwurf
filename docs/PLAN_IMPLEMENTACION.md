@@ -244,7 +244,9 @@ a test gRPC server.
 - [ ] Bound the manual refresh: per-user cooldown (`429` with `Retry-After`), no row lock
   held across the Google reads, and a bounded lock wait answered as a transient `503`.
 - [ ] Task/agenda dashboard without duplicating the linked event; reading tools and
-  `propose_task`, never direct writing. Time conflict distinct from per-day deadline
+  `propose_task`, never direct writing. The chat stream exposes a structured `tool` event
+  and persists `messages.tool_calls`; answers label calendar/task data by source and a
+  proposal is rendered as an inbox item. Time conflict distinct from per-day deadline
   concentration.
 - [ ] Completing/dismissing cancels future reminders, increments `tasks.version` so a stale
   Calendar job is discarded, and keeps the event unless explicitly deleted. Remote deletion

@@ -7,6 +7,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.citations import Citation
+from app.schemas.tools import ToolCallOut
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 TITLE_MAX_CHARS = 200
@@ -48,6 +49,7 @@ class MessageOut(BaseModel):
     status: str
     client_message_id: str | None
     citas: list[Citation]
+    tool_calls: list[ToolCallOut] = Field(default_factory=list)
     created_at: datetime
 
 

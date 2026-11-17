@@ -651,6 +651,8 @@ CREATE TABLE messages (
   citas             jsonb NOT NULL DEFAULT '[]',
   -- [{audio_id, transcript_version, chunk_id, segment_id, t_start, t_end, quote}]
   -- only references validated in the DB; never timestamps/IDs invented by the LLM
+  tool_calls        jsonb NOT NULL DEFAULT '[]',
+  -- D3.8 [{name, ok, payload}] closed tool provenance; never transcript/audio/tokens
   model             text,
   prompt_version    text,
   input_tokens      integer,
@@ -1736,6 +1738,11 @@ Contract rules:
 - F2 tools (allowlist): `get_calendar_events(range)`, `get_pending_tasks()`,
   `propose_task()`; none writes Calendar or sends email; iterations/time are bounded;
   ranges and schemas validated by the backend.
+- D3.8 tool provenance: the stream may emit `tool` (`{name, ok, payload}`) before the
+  terminal `done`; `done.tools` and `done.proposals` mirror the turn. The assistant row
+  persists the same list in `messages.tool_calls` (revision `0022`) and `GET .../messages`
+  returns it, so the UI labels "según tu agenda"/"según tus tareas" and renders
+  `propose_task` as an inbox proposal, never a Calendar write.
 - Modes validated by the `conversations` CHECK; everything within the tenant.
 - L2.5 implements `POST .../messages` and `.../cancel` with the minimal turn persistence;
   A2.12 adds conversation create/list/paginated history/delete over the same tables; `DELETE`

@@ -396,8 +396,9 @@ async def test_repeated_markers_validate_once_per_stream(
         prepared: PreparedStream,
         content: str,
         citations: Sequence[dict[str, object]],
+        tool_calls: Sequence[object],
     ) -> bool:
-        del prepared, content, citations
+        del prepared, content, citations, tool_calls
         return True
 
     async def finalize(
@@ -405,8 +406,9 @@ async def test_repeated_markers_validate_once_per_stream(
         status: str,
         content: str,
         citations: Sequence[dict[str, object]],
+        tool_calls: Sequence[object],
     ) -> str:
-        del prepared, content, citations
+        del prepared, content, citations, tool_calls
         return status
 
     monkeypatch.setattr(service, "_message_status", streaming)

@@ -89,6 +89,10 @@ class Message(TenantOwned, Base):
     client_message_id: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="completed")
     citas: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'"))
+    # D3.8: non-sensitive tool provenance (`{name, ok, payload}`) for badges and proposals.
+    tool_calls: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'")
+    )
     model: Mapped[str | None] = mapped_column(Text)
     prompt_version: Mapped[str | None] = mapped_column(Text)
     input_tokens: Mapped[int | None] = mapped_column(Integer)

@@ -1,0 +1,62 @@
+D3.8 / C-S3-DA-04 evidence
+Date: 2026-11-16 (UTC)
+Environment: Windows, Node 24.12 local (CI Node 22), PostgreSQL 16/pgvector on 127.0.0.1:55432
+
+Backend
+Commands:
+  cd apps/api
+  uv run ruff check .
+  uv run mypy .
+  uv run pytest tests/unit -q
+  uv run pytest tests/unit/test_chat_tools.py -q
+  MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@127.0.0.1:55432/maulwurf \
+    uv run pytest tests/integration/test_chat_sse.py -q
+  MAULWURF_DATABASE_URL=... uv run pytest tests/integration/test_migrations.py::test_downgrade_and_upgrade_again -q
+Result:
+- ruff/mypy clean (364 files);
+- unit 1956 passed with the 2 pre-existing test_create_audio/test_upload_stream failures;
+- test_chat_tools.py 4 passed (strict JSON parser/protocol);
+- test_chat_sse.py 34 passed, including:
+  * propose_task: tool event + done.tools/proposals, task needs_review,
+    calendar_sync_status=not_requested, 0 outbox rows, messages.tool_calls persisted;
+  * get_pending_tasks: payload.source=tasks, empty list, done.tools;
+- migration 0022 round-trip passed in the linear chain.
+No real LLM or Google call; the LLM is a deterministic fake.
+
+Web
+Commands:
+  cd apps/web
+  npm run typecheck
+  npm run lint
+  npm run test
+  npm run build
+Result:
+- typecheck/lint clean;
+- 206 tests in 37 files;
+- tool-badge.test.tsx 5, proposal-card.test.tsx 2, chat-page.test.tsx 6 (streamed tool event
+  renders the badge and the inbox proposal), chat.test.ts 12, sse.test.ts 5;
+- build 409 modules.
+
+Docs and infra
+Commands (repo root):
+  python scripts/docs/check_refs.py
+  python scripts/ci/check_caddy_limits.py
+Result: documented paths OK; Caddy static checks OK.
+
+C-S3-DA-04 manual/browser
+Environment: Windows, Edge headless (Playwright), local compose with a temporary dev-only
+override pointing api/worker at the deterministic provider double and the Riva double.
+- /gestion/chat: sent "¿Qué convierte la luz del sol y crea una tarea para repasar la
+  fotosíntesis?"; the scripted model emitted one propose_task call, then answered.
+- The assistant turn showed the tool badge "propuesta para la bandeja", the ProposalCard
+  "propuesta creada en la bandeja", "no se escribió en Calendar" and a "ver en tareas"
+  link to /gestion/tareas.
+- /gestion/tareas listed "Repasar la fotosíntesis" with status needs_review.
+- DB for that task: status=needs_review, calendar_sync_status=not_requested,
+  calendar_id=NULL, calendar_event_id=NULL, sync_task_event outbox=0, calendar_events=0.
+- The assistant row persisted tool_calls=[{"name":"propose_task","ok":true,
+  "payload":{task_id, status:"needs_review", calendar_sync_status:"not_requested",
+  evidence:"general_suggestion"}}].
+- Console: zero errors and zero page errors.
+No real provider call, credential, Calendar write, outbox or audio. The temporary
+override, TLS material and screenshots are not versioned.

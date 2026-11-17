@@ -5,7 +5,9 @@ terminal frames live here so the service module stays the turn orchestrator.
 """
 
 import asyncio
+import json
 import logging
+import time
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 from contextlib import suppress
@@ -22,6 +24,7 @@ from app.schemas.citations import (
     dump_citations,
     parse_citations,
 )
+from app.schemas.tools import ToolCallOut, dump_tool_calls, parse_tool_calls
 from app.services.chat_prompt import (
     CITATION_VALIDATION_TIMEOUT_SECONDS,
     ChatStreamError,
@@ -29,6 +32,7 @@ from app.services.chat_prompt import (
     PreparedStream,
     _LLMEvent,
 )
+from app.services.chat_tools import TOOL_PROTOCOL, execute_tool, parse_tool_call
 from app.services.citations import (
     CitationBuffer,
     CitationRef,
@@ -50,6 +54,7 @@ from app.services.llm import (
 )
 from app.services.progress import encode_event, heartbeat
 from app.services.retrieval import RetrievedChunk
+from app.services.tools import MAX_TOOL_ROUNDS, TOOL_BUDGET_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -123,13 +128,14 @@ class ChatTurnStream:
             return
         queue: asyncio.Queue[_LLMEvent] = asyncio.Queue(maxsize=32)
         producer = asyncio.create_task(
-            self._produce(prepared.messages, self._output_reserve_tokens, queue)
+            self._produce(prepared, self._output_reserve_tokens, queue)
         )
         cancel_event = asyncio.Event()
         _CANCEL_EVENTS[prepared.assistant_message_id] = cancel_event
         buffer = CitationBuffer(len(prepared.sources))
         content = ""
         citations: list[Citation] = []
+        tool_calls: list[ToolCallOut] = []
         # A model may repeat the same marker. Validation is a DB round-trip, so reuse the
         # first result for the lifetime of this stream.
         validated_sources: dict[uuid.UUID, RetrievedChunk | None] = {}
@@ -190,7 +196,9 @@ class ChatTurnStream:
                             break
                     if content and now - last_checkpoint >= self._checkpoint_seconds:
                         last_checkpoint = now
-                        if not await self._checkpoint(prepared, content, citations):
+                        if not await self._checkpoint(
+                            prepared, content, citations, tool_calls
+                        ):
                             cancelled = True
                             break
                         last_checkpoint_content = content
@@ -232,10 +240,16 @@ class ChatTurnStream:
                         and (now - last_checkpoint >= self._checkpoint_seconds)
                     ):
                         last_checkpoint = now
-                        if not await self._checkpoint(prepared, content, citations):
+                        if not await self._checkpoint(
+                            prepared, content, citations, tool_calls
+                        ):
                             cancelled = True
                             break
                         last_checkpoint_content = content
+                elif event.kind == "tool":
+                    if event.tool is not None:
+                        tool_calls.append(event.tool)
+                        yield self._tool_event(event.tool, len(content) + 1)
                 elif event.kind == "error":
                     producer_error = event.error
                     break
@@ -248,18 +262,23 @@ class ChatTurnStream:
 
             await self._stop_producer(producer)
             if cancelled:
-                actual = await self._finalize(prepared, "cancelled", content, citations)
+                actual = await self._finalize(
+                    prepared, "cancelled", content, citations, tool_calls
+                )
                 terminal = True
                 yield self._done_event(
                     prepared,
                     status=actual,
                     event_id=len(content) + 1,
                     sources=cited_sources(citations),
+                    tool_calls=tool_calls,
                 )
                 return
             if producer_error is not None:
                 error = _map_llm_error(producer_error)
-                actual = await self._finalize(prepared, "failed", content, citations)
+                actual = await self._finalize(
+                    prepared, "failed", content, citations, tool_calls
+                )
                 terminal = True
                 if actual == "cancelled":
                     yield self._done_event(
@@ -267,17 +286,21 @@ class ChatTurnStream:
                         status="cancelled",
                         event_id=len(content) + 1,
                         sources=cited_sources(citations),
+                        tool_calls=tool_calls,
                     )
                 else:
                     yield self._error_event(error, len(content) + 1)
                 return
-            actual = await self._finalize(prepared, "completed", content, citations)
+            actual = await self._finalize(
+                prepared, "completed", content, citations, tool_calls
+            )
             terminal = True
             yield self._done_event(
                 prepared,
                 status=actual,
                 event_id=len(content) + 1,
                 sources=cited_sources(citations),
+                tool_calls=tool_calls,
             )
         finally:
             await self._stop_producer(producer)
@@ -288,7 +311,9 @@ class ChatTurnStream:
                 try:
                     # A client disconnect may cancel the generator task; the durable
                     # partial must survive that cancellation.
-                    await asyncio.shield(self._finalize(prepared, "cancelled", content, citations))
+                    await asyncio.shield(
+                        self._finalize(prepared, "cancelled", content, citations, tool_calls)
+                    )
                 except asyncio.CancelledError:
                     pass
                 except Exception:
@@ -296,14 +321,76 @@ class ChatTurnStream:
 
     async def _produce(
         self,
-        messages: Sequence[ChatMessage],
+        prepared: PreparedStream,
         max_tokens: int,
         queue: asyncio.Queue[_LLMEvent],
     ) -> None:
         assert self._llm is not None  # noqa: S101 - guarded by `_live_events`
+        messages = [
+            ChatMessage(role="system", content=TOOL_PROTOCOL),
+            *prepared.messages,
+        ]
+        rounds = 0
+        started = time.monotonic()
+        budget_exhausted = False
         try:
-            async for delta in self._llm.stream(messages, max_tokens=max_tokens):
-                await queue.put(_LLMEvent(kind="delta", text=delta))
+            while True:
+                if budget_exhausted:
+                    async for delta in self._llm.stream(messages, max_tokens=max_tokens):
+                        await queue.put(_LLMEvent(kind="delta", text=delta))
+                    break
+                buffer = ""
+                decided = False
+                tool_executed = False
+                async for delta in self._llm.stream(messages, max_tokens=max_tokens):
+                    if decided:
+                        await queue.put(_LLMEvent(kind="delta", text=delta))
+                        continue
+                    buffer += delta
+                    stripped = buffer.lstrip()
+                    if stripped and not stripped.startswith("{"):
+                        await queue.put(_LLMEvent(kind="delta", text=buffer))
+                        buffer = ""
+                        decided = True
+                        continue
+                    call = parse_tool_call(buffer)
+                    if call is not None:
+                        decided = True
+                        tool_executed = True
+                        record = await execute_tool(
+                            self._session_factory,
+                            user_id=prepared.user_id,
+                            call=call,
+                        )
+                        await queue.put(_LLMEvent(kind="tool", tool=record))
+                        messages.append(
+                            ChatMessage(
+                                role="user",
+                                content="Tool result: "
+                                + json.dumps(record.payload, ensure_ascii=False),
+                            )
+                        )
+                        break
+                if tool_executed:
+                    rounds += 1
+                    if (
+                        rounds >= MAX_TOOL_ROUNDS
+                        or time.monotonic() - started > TOOL_BUDGET_SECONDS
+                    ):
+                        budget_exhausted = True
+                        messages.append(
+                            ChatMessage(
+                                role="system",
+                                content=(
+                                    "Tool budget exhausted. Answer with the information "
+                                    "you already have."
+                                ),
+                            )
+                        )
+                    continue
+                if not decided and buffer:
+                    await queue.put(_LLMEvent(kind="delta", text=buffer))
+                break
             await queue.put(_LLMEvent(kind="end"))
         except LLMError as exc:
             await queue.put(_LLMEvent(kind="error", error=exc))
@@ -358,7 +445,11 @@ class ChatTurnStream:
             sent = len(state.content)
         if state.status != "streaming":
             yield self._terminal_from_status(
-                prepared, state.status, sent, cited_sources(state.citations)
+                prepared,
+                state.status,
+                sent,
+                cited_sources(state.citations),
+                state.tool_calls,
             )
             return
 
@@ -366,15 +457,19 @@ class ChatTurnStream:
         last_heartbeat = started
         latest_content = state.content
         latest_citations = list(state.citations)
+        latest_tool_calls = list(state.tool_calls)
         while True:
             if asyncio.get_running_loop().time() - started >= self._stream_max_seconds:
-                actual = await self._finalize(prepared, "failed", latest_content, latest_citations)
+                actual = await self._finalize(
+                    prepared, "failed", latest_content, latest_citations, latest_tool_calls
+                )
                 if actual == "cancelled":
                     yield self._done_event(
                         prepared,
                         status="cancelled",
                         event_id=sent + 1,
                         sources=cited_sources(latest_citations),
+                        tool_calls=latest_tool_calls,
                     )
                 else:
                     yield self._error_event(
@@ -415,13 +510,18 @@ class ChatTurnStream:
                 sent = len(snapshot.content)
             latest_content = snapshot.content
             latest_citations = list(snapshot.citations)
+            latest_tool_calls = list(snapshot.tool_calls)
             now = asyncio.get_running_loop().time()
             if now - last_heartbeat >= self._heartbeat_seconds:
                 last_heartbeat = now
                 yield heartbeat()
             if snapshot.status != "streaming":
                 yield self._terminal_from_status(
-                    prepared, snapshot.status, sent, cited_sources(snapshot.citations)
+                    prepared,
+                    snapshot.status,
+                    sent,
+                    cited_sources(snapshot.citations),
+                    snapshot.tool_calls,
                 )
                 return
     async def _message_status(self, user_id: uuid.UUID, message_id: uuid.UUID) -> str | None:
@@ -440,7 +540,12 @@ class ChatTurnStream:
         async with self._session_factory() as db:
             row = (
                 await db.execute(
-                    select(Message.content, Message.status, Message.citas).where(
+                    select(
+                        Message.content,
+                        Message.status,
+                        Message.citas,
+                        Message.tool_calls,
+                    ).where(
                         Message.user_id == user_id,
                         Message.id == message_id,
                     )
@@ -449,7 +554,10 @@ class ChatTurnStream:
         if row is None:
             return None
         return MessageSnapshot(
-            content=row.content, status=row.status, citations=parse_citations(row.citas)
+            content=row.content,
+            status=row.status,
+            citations=parse_citations(row.citas),
+            tool_calls=tuple(parse_tool_calls(row.tool_calls)),
         )
 
     async def _checkpoint(
@@ -457,6 +565,7 @@ class ChatTurnStream:
         prepared: PreparedStream,
         content: str,
         citations: Sequence[Citation],
+        tool_calls: Sequence[ToolCallOut],
     ) -> bool:
         async with self._session_factory() as db:
             result = await db.execute(
@@ -469,6 +578,7 @@ class ChatTurnStream:
                 .values(
                     content=content,
                     citas=dump_citations(citations),
+                    tool_calls=dump_tool_calls(tool_calls),
                     output_tokens=self._count_tokens(content),
                 )
             )
@@ -481,10 +591,12 @@ class ChatTurnStream:
         status: str,
         content: str,
         citations: Sequence[Citation],
+        tool_calls: Sequence[ToolCallOut],
     ) -> str:
         values = {
             "content": content,
             "citas": dump_citations(citations),
+            "tool_calls": dump_tool_calls(tool_calls),
             "output_tokens": self._count_tokens(content),
         }
         async with self._session_factory() as db:
@@ -557,6 +669,13 @@ class ChatTurnStream:
             data={"code": error.code, "message": error.message},
         )
 
+    def _tool_event(self, tool: ToolCallOut, event_id: int) -> str:
+        return encode_event(
+            name="tool",
+            id=event_id,
+            data=tool.model_dump(mode="json"),
+        )
+
     def _done_event(
         self,
         prepared: PreparedStream,
@@ -564,6 +683,7 @@ class ChatTurnStream:
         status: str,
         event_id: int,
         sources: Sequence[CitedSource] = (),
+        tool_calls: Sequence[ToolCallOut] = (),
     ) -> str:
         return encode_event(
             name="done",
@@ -573,6 +693,12 @@ class ChatTurnStream:
                 "conversation_id": str(prepared.conversation_id),
                 "status": status,
                 "sources": [item.model_dump(mode="json") for item in sources],
+                "tools": [item.model_dump(mode="json") for item in tool_calls],
+                "proposals": [
+                    item.payload
+                    for item in tool_calls
+                    if item.name == "propose_task" and item.ok
+                ],
             },
         )
 
@@ -582,14 +708,23 @@ class ChatTurnStream:
         status: str,
         event_id: int,
         sources: Sequence[CitedSource] = (),
+        tool_calls: Sequence[ToolCallOut] = (),
     ) -> str:
         if status == "completed":
             return self._done_event(
-                prepared, status="completed", event_id=event_id + 1, sources=sources
+                prepared,
+                status="completed",
+                event_id=event_id + 1,
+                sources=sources,
+                tool_calls=tool_calls,
             )
         if status == "cancelled":
             return self._done_event(
-                prepared, status="cancelled", event_id=event_id + 1, sources=sources
+                prepared,
+                status="cancelled",
+                event_id=event_id + 1,
+                sources=sources,
+                tool_calls=tool_calls,
             )
         return self._error_event(
             ChatStreamError(

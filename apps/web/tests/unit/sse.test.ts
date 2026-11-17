@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseProgressFrame, streamAudioProgress } from "@/lib/audios";
-import { parseChatFrame, streamChatMessage } from "@/lib/chat";
-import { setCsrfToken, clearCsrfToken } from "@/lib/csrf";
+import { clearCsrfToken } from "@/lib/csrf";
 import { streamSse } from "@/lib/sse";
 import type { SseFrame } from "@/lib/sse";
 
@@ -117,54 +116,10 @@ describe("streamAudioProgress", () => {
   });
 });
 
-describe("streamChatMessage", () => {
-  it("hace POST con CSRF y estrecha delta y done", async () => {
-    setCsrfToken("tok-a");
-    const citation = {
-      index: 1,
-      audio_id: "a",
-      transcript_version: 1,
-      chunk_id: "c",
-      segment_id: null,
-      t_start: 0,
-      t_end: 1.5,
-      label: "clase",
-      url: "/audios/a",
-    };
-    const body = [
-      'event: delta\nid: 2\ndata: {"text":"hola"}\n\n',
-      `event: citation\nid: 3\ndata: ${JSON.stringify(citation)}\n\n`,
-      `event: done\nid: 4\ndata: ${JSON.stringify({
-        message_id: "m",
-        conversation_id: "conv",
-        status: "completed",
-        sources: [{ kind: "transcript", audio_id: "a" }],
-      })}\n\n`,
-    ].join("");
-    const fetchMock = vi.fn().mockResolvedValue(sseResponse([body]));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const events = [];
-    for await (const event of streamChatMessage("conv", { content: "hola", client_message_id: "c1" })) {
-      events.push(event);
-    }
-
-    expect(events.map((event) => event.event)).toEqual(["delta", "citation", "done"]);
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(init.method).toBe("POST");
-    expect((init.headers as Headers).get("x-csrf-token")).toBe("tok-a");
-    expect(JSON.parse(String(init.body))).toEqual({ content: "hola", client_message_id: "c1" });
-  });
-});
-
 describe("parse frames", () => {
   it("rechaza un snapshot de progreso sin bytes", () => {
     expect(() =>
       parseProgressFrame({ event: "snapshot", id: "1", data: { aggregate: "processing" } }),
     ).toThrow(/snapshot/);
-  });
-
-  it("rechaza un delta de chat sin texto", () => {
-    expect(() => parseChatFrame({ event: "delta", id: null, data: {} })).toThrow(/delta/);
   });
 });

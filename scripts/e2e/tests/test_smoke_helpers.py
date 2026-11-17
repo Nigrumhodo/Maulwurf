@@ -202,5 +202,33 @@ class ProviderDoubleTest(unittest.TestCase):
         self.assertIn("[S1]", provider.ANSWER)
 
 
+class ProviderDoubleToolTest(unittest.TestCase):
+    def test_default_answer_has_no_tool_call(self) -> None:
+        messages = [{"role": "user", "content": "¿Qué convierte la luz del sol?"}]
+        self.assertEqual(
+            provider.chat_answer_for(messages, trigger=""), provider.ANSWER
+        )
+
+    def test_trigger_emits_the_propose_task_json_once(self) -> None:
+        messages = [
+            {"role": "user", "content": "crea una tarea para repasar la fotosíntesis"}
+        ]
+        answer = provider.chat_answer_for(messages, trigger="crea una tarea")
+        payload = json.loads(answer)
+        self.assertEqual(payload["tool"], "propose_task")
+        self.assertEqual(payload["arguments"]["tipo"], "tarea")
+        self.assertEqual(payload["arguments"]["sources"], [])
+
+    def test_tool_result_returns_the_normal_answer(self) -> None:
+        messages = [
+            {"role": "user", "content": "crea una tarea"},
+            {"role": "user", "content": 'Tool result: {"task_id": "t1"}'},
+        ]
+        self.assertEqual(
+            provider.chat_answer_for(messages, trigger="crea una tarea"),
+            provider.ANSWER,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
