@@ -4,7 +4,7 @@ Date: 2026-11-16 (UTC) / local 2026-11-17
 Environment: Windows 11, Node 24.12.0 local (CI Node 22), Docker Compose local stack
 (api, web, postgres, redis, worker, scheduler, caddy), Microsoft Edge headless via
 playwright-core, PostgreSQL 16/pgvector.
-Branch: d4.1 (stacked on frontJJ).
+Branch: d4.1 (stacked on frontJJ). PR: #176 (base frontJJ).
 
 1. Web gates
    cd apps/web
