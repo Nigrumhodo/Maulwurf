@@ -1,4 +1,5 @@
 import { ApiHttpError, apiFetch } from "./api";
+import { isRecord, readJson } from "./json";
 
 // D4.1 — M8 notification preferences. The backend owns the values and the closed
 // weekday vocabulary (0 = Sunday); this module only shapes the form, validates the
@@ -143,9 +144,51 @@ export function buildPreferencesPatch(
   return patch;
 }
 
+/** Single dirty check shared by the save and test buttons so they cannot disagree. */
+export function isPreferencesDirty(
+  current: NotificationPreferencesDraft,
+  draft: NotificationPreferencesDraft,
+): boolean {
+  return Object.keys(buildPreferencesPatch(current, draft)).length > 0;
+}
+
+function isNumberArray(value: unknown): value is number[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "number");
+}
+
+function isNotificationPreferences(value: unknown): value is NotificationPreferences {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.gmail_opt_in === "boolean" &&
+    typeof value.digest_daily_enabled === "boolean" &&
+    typeof value.digest_daily_time === "string" &&
+    typeof value.digest_weekly_enabled === "boolean" &&
+    typeof value.digest_weekday === "number" &&
+    isNumberArray(value.reminder_offsets_hours) &&
+    isNumberArray(value.reminder_allday_offsets_days) &&
+    (value.updated_at === null || typeof value.updated_at === "string")
+  );
+}
+
+function isNotificationTestResult(value: unknown): value is NotificationTestResult {
+  if (!isRecord(value) || !isRecord(value.warning)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.type === "string" &&
+    typeof value.status === "string" &&
+    typeof value.scheduled_at === "string" &&
+    typeof value.warning.code === "string" &&
+    typeof value.warning.message === "string"
+  );
+}
+
 export async function fetchNotificationPreferences(): Promise<NotificationPreferences> {
   const res = await apiFetch("/me/notifications");
-  return (await res.json()) as NotificationPreferences;
+  const payload = await readJson(res);
+  if (!isNotificationPreferences(payload)) {
+    throw new Error("La respuesta de preferencias no coincide con el contrato.");
+  }
+  return payload;
 }
 
 export async function updateNotificationPreferences(
@@ -157,7 +200,11 @@ export async function updateNotificationPreferences(
     body: JSON.stringify(patch),
     retries: 0,
   });
-  return (await res.json()) as NotificationPreferences;
+  const payload = await readJson(res);
+  if (!isNotificationPreferences(payload)) {
+    throw new Error("La respuesta de preferencias no coincide con el contrato.");
+  }
+  return payload;
 }
 
 export async function sendTestNotification(): Promise<NotificationTestResult> {
@@ -165,7 +212,11 @@ export async function sendTestNotification(): Promise<NotificationTestResult> {
     method: "POST",
     retries: 0,
   });
-  return (await res.json()) as NotificationTestResult;
+  const payload = await readJson(res);
+  if (!isNotificationTestResult(payload)) {
+    throw new Error("La respuesta del envío de prueba no coincide con el contrato.");
+  }
+  return payload;
 }
 
 export function preferencesErrorMessage(error: unknown): string {

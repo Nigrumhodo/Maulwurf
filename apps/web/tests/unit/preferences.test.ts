@@ -3,6 +3,7 @@ import { ApiHttpError } from "@/lib/api";
 import {
   buildPreferencesPatch,
   fetchNotificationPreferences,
+  isPreferencesDirty,
   normalizeThresholds,
   notificationTestErrorMessage,
   preferencesErrorMessage,
@@ -130,6 +131,8 @@ describe("buildPreferencesPatch", () => {
 
   it("returns an empty patch when nothing changed", () => {
     expect(buildPreferencesPatch(draft(), draft())).toEqual({});
+    expect(isPreferencesDirty(draft(), draft())).toBe(false);
+    expect(isPreferencesDirty(draft(), draft({ gmail_opt_in: true }))).toBe(true);
   });
 });
 
@@ -172,6 +175,13 @@ describe("notification endpoints", () => {
     await expect(sendTestNotification()).resolves.toEqual(result);
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/notifications/test");
     expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe("POST");
+  });
+
+  it("rejects malformed preference and test responses", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => json({ unexpected: true })));
+    await expect(fetchNotificationPreferences()).rejects.toThrow("contrato");
+    await expect(updateNotificationPreferences({ gmail_opt_in: true })).rejects.toThrow("contrato");
+    await expect(sendTestNotification()).rejects.toThrow("contrato");
   });
 });
 

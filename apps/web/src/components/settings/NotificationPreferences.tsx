@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
@@ -9,6 +9,7 @@ import {
   WEEKDAYS,
   buildPreferencesPatch,
   fetchNotificationPreferences,
+  isPreferencesDirty,
   notificationTestErrorMessage,
   preferencesErrorMessage,
   sendTestNotification,
@@ -79,11 +80,14 @@ function ThresholdEditor({
                 label={`umbral ${index + 1} (${limits.label})`}
                 min={limits.min}
                 max={limits.max}
-                value={value}
+                // Empty input becomes NaN rather than 0 so clearing stays visually blank
+                // and is rejected explicitly by validation on save.
+                value={Number.isNaN(value) ? "" : value}
                 disabled={disabled}
                 onChange={(event) => {
                   const next = [...values];
-                  next[index] = Number(event.target.value);
+                  next[index] =
+                    event.target.value === "" ? Number.NaN : Number(event.target.value);
                   onChange(next);
                 }}
               />
@@ -128,6 +132,15 @@ export function NotificationPreferences() {
   const [testing, setTesting] = useState(false);
   const [testError, setTestError] = useState<string | null>(null);
   const [testNotice, setTestNotice] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+  const draftVersionRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -155,6 +168,7 @@ export function NotificationPreferences() {
     key: K,
     value: NotificationPreferencesDraft[K],
   ) {
+    draftVersionRef.current += 1;
     setDraft((current) => (current === null ? current : { ...current, [key]: value }));
     setNotice(null);
     setSaveError(null);
@@ -172,21 +186,27 @@ export function NotificationPreferences() {
       setNotice("no hay cambios por guardar.");
       return;
     }
+    const versionAtStart = draftVersionRef.current;
     setSaving(true);
     setSaveError(null);
     setNotice(null);
     try {
       const updated = await updateNotificationPreferences(patch);
+      if (!mountedRef.current) return;
       setSaved(updated);
-      setDraft(draftOf(updated));
+      // Preserve edits typed by the user while the request was in flight.
+      if (draftVersionRef.current === versionAtStart) {
+        setDraft(draftOf(updated));
+      }
       setNotice("preferencias guardadas.");
       setTestError(null);
       setTestNotice(null);
     } catch (cause) {
+      if (!mountedRef.current) return;
       const field = cause instanceof ApiHttpError ? cause.firstFieldMessage() : null;
       setSaveError(field?.message ?? preferencesErrorMessage(cause));
     } finally {
-      setSaving(false);
+      if (mountedRef.current) setSaving(false);
     }
   }
 
@@ -196,8 +216,8 @@ export function NotificationPreferences() {
       setTestError("activa el opt-in de Gmail y guarda los cambios antes de enviar una prueba.");
       return;
     }
-    if (buildPreferencesPatch(draftOf(saved), draft).gmail_opt_in !== undefined) {
-      setTestError("guarda los cambios del opt-in antes de enviar una prueba.");
+    if (isPreferencesDirty(draftOf(saved), draft)) {
+      setTestError("guarda los cambios antes de enviar una prueba.");
       return;
     }
     setTesting(true);
@@ -205,11 +225,13 @@ export function NotificationPreferences() {
     setTestNotice(null);
     try {
       const result = await sendTestNotification();
+      if (!mountedRef.current) return;
       setTestNotice(`prueba registrada; ${result.warning.message}`);
     } catch (cause) {
+      if (!mountedRef.current) return;
       setTestError(notificationTestErrorMessage(cause));
     } finally {
-      setTesting(false);
+      if (mountedRef.current) setTesting(false);
     }
   }
 
@@ -238,7 +260,7 @@ export function NotificationPreferences() {
 
   if (saved === null || draft === null) return null;
 
-  const dirty = Object.keys(buildPreferencesPatch(draftOf(saved), draft)).length > 0;
+  const dirty = isPreferencesDirty(draftOf(saved), draft);
 
   return (
     <Card title="notificaciones" as="section">

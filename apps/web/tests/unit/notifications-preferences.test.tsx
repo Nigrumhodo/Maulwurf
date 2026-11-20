@@ -235,4 +235,49 @@ describe("NotificationPreferences", () => {
       await screen.findByText(/prueba registrada; Gmail no garantiza exactamente un envío/),
     ).toBeTruthy();
   });
+
+  it("keeps cleared threshold inputs blank instead of 0 and rejects on save", async () => {
+    const fetchMock = installFetch();
+    await renderLoaded();
+
+    const input = screen.getByLabelText(/umbral 1 \(horas\)/) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "" } });
+    expect(input.value).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "guardar preferencias" }));
+    expect(await screen.findByText(/debe ser un entero entre 1 y 8784/)).toBeTruthy();
+    expect(
+      fetchMock.mock.calls.some(
+        ([, init]) => (init as RequestInit | undefined)?.method === "PATCH",
+      ),
+    ).toBe(false);
+  });
+
+  it("preserves concurrent user edits made while a save is in flight", async () => {
+    let resolvePatch!: (res: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/me/notifications" && init?.method === "PATCH") {
+          return new Promise<Response>((resolve) => {
+            resolvePatch = resolve;
+          });
+        }
+        return Promise.resolve(json(preferences()));
+      }),
+    );
+
+    await renderLoaded();
+    fireEvent.click(screen.getByLabelText(/activar el opt-in de Gmail/i));
+    fireEvent.click(screen.getByRole("button", { name: "guardar preferencias" }));
+
+    // Edit another field while PATCH is pending.
+    const timeInput = screen.getByLabelText(/hora local/) as HTMLInputElement;
+    fireEvent.change(timeInput, { target: { value: "09:45" } });
+
+    resolvePatch(json(preferences({ gmail_opt_in: true })));
+    expect(await screen.findByText(/preferencias guardadas\./)).toBeTruthy();
+    expect(timeInput.value).toBe("09:45");
+  });
 });
