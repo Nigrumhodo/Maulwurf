@@ -402,6 +402,23 @@ async def test_connect_navigation_rate_limit_returns_to_settings(
     assert second.headers["location"] == "/settings?calendar=error&reason=rate_limited"
 
 
+@pytest.mark.parametrize("path", [CONNECT, RECONNECT])
+async def test_navigation_rejects_cross_site_sec_fetch_site(
+    client: AsyncClient, db_session: AsyncSession, path: str
+) -> None:
+    actor = await make_actor(db_session)
+
+    response = await client.get(
+        path,
+        cookies=actor.cookies,
+        headers={"Sec-Fetch-Site": "cross-site"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/settings?calendar=error&reason=csrf_invalid"
+
+
 async def test_connect_requests_only_the_new_calendar_scopes(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

@@ -21,7 +21,7 @@ import time
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
@@ -41,6 +41,7 @@ from app.core.errors import (
 from app.core.redis import RedisDep
 from app.core.security import sign_state
 from app.models import CalendarSettings, GoogleCredential, User
+from app.models import Session as SessionRow
 from app.services import calendar_connection, oauth_google
 from app.services.limits import enforce_integration_limit
 from app.services.oauth_google import OAUTH_STATE_TTL_SECONDS
@@ -57,6 +58,7 @@ _NAVIGATION_REASONS = {
     "google_not_connected": "not_connected",
     "rate_limited": "rate_limited",
     "capacity_unavailable": "capacity_unavailable",
+    "csrf_invalid": "csrf_invalid",
 }
 
 
@@ -133,7 +135,7 @@ async def integrations_status(
 
 
 async def _start_calendar_flow(
-    db: DbSession, session: MutationSession, *, reconnect: bool
+    db: DbSession, session: SessionRow, *, reconnect: bool
 ) -> RedirectResponse:
     """Build the incremental authorization URL and seal its state in the OAuth cookie."""
     if settings.google_client_id is None or settings.google_client_secret is None:
@@ -169,8 +171,20 @@ async def _start_calendar_flow(
     return redirect
 
 
+def _reject_cross_site_navigation(request: Request) -> None:
+    """Reject cross-site top-level navigations before starting OAuth."""
+    fetch_site = request.headers.get("sec-fetch-site", "none").lower()
+    if fetch_site not in {"none", "same-origin"}:
+        raise ApiError(403, "csrf_invalid", "Navegación de origen cruzado no permitida.")
+
+
 async def _start_calendar_navigation(
-    db: DbSession, session: CurrentSession, redis: RedisDep, *, reconnect: bool
+    request: Request,
+    db: DbSession,
+    session: CurrentSession,
+    redis: RedisDep,
+    *,
+    reconnect: bool,
 ) -> RedirectResponse:
     """GET entry point for a real browser navigation (D3.7).
 
@@ -181,6 +195,7 @@ async def _start_calendar_navigation(
     back to Settings instead of rendering JSON in a navigation.
     """
     try:
+        _reject_cross_site_navigation(request)
         await enforce_integration_limit(redis, session.user_id)
         return await _start_calendar_flow(db, session, reconnect=reconnect)
     except ApiError as exc:
@@ -198,9 +213,9 @@ async def _start_calendar_navigation(
     },
 )
 async def google_connect_navigation(
-    db: DbSession, session: CurrentSession, redis: RedisDep
+    request: Request, db: DbSession, session: CurrentSession, redis: RedisDep
 ) -> RedirectResponse:
-    return await _start_calendar_navigation(db, session, redis, reconnect=False)
+    return await _start_calendar_navigation(request, db, session, redis, reconnect=False)
 
 
 @router.get(
@@ -212,9 +227,9 @@ async def google_connect_navigation(
     },
 )
 async def google_reconnect_navigation(
-    db: DbSession, session: CurrentSession, redis: RedisDep
+    request: Request, db: DbSession, session: CurrentSession, redis: RedisDep
 ) -> RedirectResponse:
-    return await _start_calendar_navigation(db, session, redis, reconnect=True)
+    return await _start_calendar_navigation(request, db, session, redis, reconnect=True)
 
 
 @router.post(

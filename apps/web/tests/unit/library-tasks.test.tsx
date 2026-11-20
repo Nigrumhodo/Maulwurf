@@ -78,7 +78,7 @@ describe("biblioteca y radar", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input) === "/audios") return json({ items: [AUDIO] });
+        if (String(input).startsWith("/audios")) return json({ items: [AUDIO] });
         return json({});
       }),
     );
