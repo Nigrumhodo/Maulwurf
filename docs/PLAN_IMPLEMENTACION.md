@@ -231,7 +231,9 @@ a test gRPC server.
   an atomic outbox. Only one proposal per task stays pending: PATCH/reanalysis discard the
   previous one, and a task with persisted evidence cannot change its subject independently.
 - [ ] Validate real scopes and secondary calendar creation; coordinated reconnect/refresh.
-  Test scope rejection without breaking library/chat.
+  Test scope rejection without breaking library/chat. The browser starts consent through
+  `GET /integrations/google/connect|reconnect` because a `fetch` `POST` cannot follow the
+  cross-origin `302`; both variants keep the signed, user-bound state and the rate limit.
 - [ ] Deterministic event ID, reconciled timeout/409, stale jobs discarded, and ETag for
   external conflicts. Local editing requires reconfirming before writing to Google.
   Reconnecting Calendar reactivates only current `blocked` versions and creates/reuses the
@@ -242,7 +244,9 @@ a test gRPC server.
 - [ ] Bound the manual refresh: per-user cooldown (`429` with `Retry-After`), no row lock
   held across the Google reads, and a bounded lock wait answered as a transient `503`.
 - [ ] Task/agenda dashboard without duplicating the linked event; reading tools and
-  `propose_task`, never direct writing. Time conflict distinct from per-day deadline
+  `propose_task`, never direct writing. The chat stream exposes a structured `tool` event
+  and persists `messages.tool_calls`; answers label calendar/task data by source and a
+  proposal is rendered as an inbox item. Time conflict distinct from per-day deadline
   concentration.
 - [ ] Completing/dismissing cancels future reminders, increments `tasks.version` so a stale
   Calendar job is discarded, and keeps the event unless explicitly deleted. Remote deletion

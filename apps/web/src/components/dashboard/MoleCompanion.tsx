@@ -1,15 +1,14 @@
 import { Link } from "react-router-dom";
-import { AvatarSprite } from "@/components/dashboard/AvatarSprite";
-import { avatar, avatarred } from "@/components/Visual";
+import { GridSprite } from "@/components/motion/GridSprite";
+import { aLaEspera } from "@/components/Visual";
 
-// Dashboard — "compañero maulwurf.daemon" (pixel mole companion). Reuses the
-// 18-frame avatar sprite (dark/light sheets) and a speech bubble. The CTA opens
-// the chat, never writes to Calendar or sends mail.
-const FRAMES = 18;
-const SIZE = 88;
-
-const AVATAR_SHEET = { width: 2400, height: 122 };
-const AVATARRED_SHEET = { width: 4126, height: 211 };
+// Dashboard — "compañero maulwurf.daemon" (pixel mole companion). Usa la hoja
+// «a la espera» (4 columnas × 2 filas) animada por `GridSprite` y una burbuja de
+// diálogo. El CTA abre el chat; nunca escribe en Calendar ni envía correo.
+const SHEET = { width: 1408, height: 768 };
+const COLUMNS = 4;
+const ROWS = 2;
+const SIZE = 112;
 
 export function MoleCompanion() {
   return (
@@ -24,26 +23,15 @@ export function MoleCompanion() {
 
       <div className="flex flex-col items-center gap-3 p-3">
         <div className="relative border-2 border-pure-black bg-surface p-2 shadow-block">
-          <div className="img-dark-only">
-            <AvatarSprite
-              src={avatarred}
-              sheetWidth={AVATARRED_SHEET.width}
-              sheetHeight={AVATARRED_SHEET.height}
-              frames={FRAMES}
-              height={SIZE}
-              fps={1.5}
-            />
-          </div>
-          <div className="img-light-only">
-            <AvatarSprite
-              src={avatar}
-              sheetWidth={AVATAR_SHEET.width}
-              sheetHeight={AVATAR_SHEET.height}
-              frames={FRAMES}
-              height={SIZE}
-              fps={1.5}
-            />
-          </div>
+          <GridSprite
+            src={aLaEspera}
+            sheetWidth={SHEET.width}
+            sheetHeight={SHEET.height}
+            columns={COLUMNS}
+            rows={ROWS}
+            height={SIZE}
+            fps={5}
+          />
           <span
             className="absolute right-1 top-1 h-2 w-2 border border-pure-black bg-mint"
             aria-hidden="true"

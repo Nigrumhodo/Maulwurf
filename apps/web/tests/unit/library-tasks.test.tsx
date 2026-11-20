@@ -78,7 +78,7 @@ describe("biblioteca y radar", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input) === "/audios") return json({ items: [AUDIO] });
+        if (String(input).startsWith("/audios")) return json({ items: [AUDIO] });
         return json({});
       }),
     );
@@ -129,7 +129,7 @@ describe("tareas", () => {
     expect(screen.queryByText(/backprop/)).toBeNull();
   });
 
-  it("el vacío es el mismo en el tablero y en la página", async () => {
+  it("cada superficie muestra su vacío honesto", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => json({ items: [], next_cursor: null })));
 
     render(
@@ -139,6 +139,7 @@ describe("tareas", () => {
       </MemoryRouter>,
     );
 
-    expect((await screen.findAllByText("aún no hay tareas")).length).toBe(2);
+    expect(await screen.findByText("aún no hay tareas")).toBeTruthy();
+    expect(await screen.findByText("no hay tareas en este estado")).toBeTruthy();
   });
 });

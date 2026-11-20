@@ -63,7 +63,7 @@ from app.core.errors import (
 )
 from app.core.validation import is_iana_timezone
 from app.models import Audio, IngestionAttempt, Subject
-from app.services import library, progress
+from app.services import analysis_backfill, library, progress
 from app.services.audios import (
     allowed_languages,
     cancel_attempt,
@@ -165,6 +165,16 @@ class RetryAccepted(BaseModel):
     audio_id: uuid.UUID
     transcript_version: int
     runs: list[RetryStageAccepted]
+
+
+class AnalysisBackfillOut(BaseModel):
+    """D3.5/S3.1: outcome of one explicit F1 -> F2 analysis backfill."""
+
+    audio_id: uuid.UUID
+    status: str
+    transcript_version: int | None = None
+    run_id: uuid.UUID | None = None
+    run_status: str | None = None
 
 
 class ReuploadCreated(BaseModel):
@@ -269,6 +279,31 @@ class TranscriptOut(BaseModel):
     )
     topics: list[str] = Field(default_factory=list)
     analysis_version: int | None = None
+
+
+class TranscriptSegmentOut(BaseModel):
+    """One ordered segment of the active transcript (D2.5 reader contract)."""
+
+    id: str
+    ordinal: int
+    text: str
+    char_start: int
+    char_end: int
+    t_start: float | None
+    t_end: float | None
+
+
+class TranscriptReaderOut(BaseModel):
+    """Active transcript plus its ordered segments, without audio or storage locations."""
+
+    audio_id: str
+    version: int
+    timestamp_precision: str
+    char_count: int
+    summary: str | None = None
+    topics: list[str] = Field(default_factory=list)
+    analysis_version: int | None = None
+    segments: list[TranscriptSegmentOut]
 
 
 class ExportsOut(BaseModel):
@@ -718,6 +753,60 @@ async def retry_audio(
 
 
 @router.post(
+    "/audios/{audio_id}/analysis/backfill",
+    status_code=202,
+    responses={
+        202: {"description": "Análisis encolado o ya encolado (idempotente)"},
+        200: {"description": "La clase ya tiene el análisis actual; no se duplica"},
+        401: {"description": "Sin sesión (auth_required)"},
+        403: {"description": "CSRF u Origin inválido (csrf_invalid)"},
+        404: {"description": "Audio inexistente, ajeno o tombstoneado (not_found)"},
+        409: {"description": "transcript_unavailable o invalid_transition"},
+    },
+)
+async def backfill_analysis(
+    audio_id: uuid.UUID,
+    response: Response,
+    session: MutationSession,
+    db: DbSession,
+) -> AnalysisBackfillOut:
+    """D3.5/S3.1: queue analysis over the persisted text, never through ASR."""
+    item = await analysis_backfill.backfill_audio(
+        db, user_id=session.user_id, audio_id=audio_id, apply=True
+    )
+    status = item.status
+    if status is analysis_backfill.BackfillStatus.NOT_FOUND:
+        raise not_found()
+    if status is analysis_backfill.BackfillStatus.NO_TRANSCRIPT:
+        raise ApiError(
+            409,
+            "transcript_unavailable",
+            "Esta clase no tiene una transcripción utilizable.",
+        )
+    if status not in {
+        analysis_backfill.BackfillStatus.QUEUED,
+        analysis_backfill.BackfillStatus.ALREADY_QUEUED,
+        analysis_backfill.BackfillStatus.ALREADY_ANALYZED,
+    }:
+        raise ApiError(
+            409,
+            "invalid_transition",
+            "La clase no puede encolar análisis en su estado actual.",
+            {"status": status.value},
+        )
+    await db.commit()
+    if status is analysis_backfill.BackfillStatus.ALREADY_ANALYZED:
+        response.status_code = 200
+    return AnalysisBackfillOut(
+        audio_id=item.audio_id,
+        status=status.value,
+        transcript_version=item.transcript_version,
+        run_id=item.run_id,
+        run_status=item.run_status,
+    )
+
+
+@router.post(
     "/audios/{audio_id}/reupload",
     status_code=201,
     responses={
@@ -808,6 +897,54 @@ async def get_audio(
     audio = await _owned_live_audio(db, session.user_id, audio_id)
     detail = await library.get_audio_detail(db, user_id=session.user_id, audio=audio)
     return _detail_out(detail)
+
+
+@router.get(
+    "/audios/{audio_id}/transcript",
+    responses={
+        200: {"description": "Transcripción activa con segmentos ordenados (lector D2.5)"},
+        401: {"description": "Sin sesión (auth_required)"},
+        404: {"description": "Audio o transcripción inexistente, ajeno o tombstoneado"},
+    },
+)
+async def read_transcript(
+    audio_id: uuid.UUID, response: Response, session: CurrentSession, db: DbSession
+) -> TranscriptReaderOut:
+    """D2.5: ordered segments of the active transcript for the linkable reader.
+
+    The response carries identifiers, text, Unicode offsets and measured times only. It never
+    exposes audio, storage locations or a second transcript writer; a foreign or tombstoned
+    class is indistinguishable from a missing one (ADR-0006).
+    """
+    response.headers["Cache-Control"] = "no-store"
+    audio = await _owned_live_audio(db, session.user_id, audio_id)
+    transcript = await library.active_transcript(db, user_id=session.user_id, audio=audio)
+    if transcript is None:
+        raise not_found()
+    segments = await library.segments_for(
+        db, user_id=session.user_id, transcript_id=transcript.id
+    )
+    return TranscriptReaderOut(
+        audio_id=str(audio.id),
+        version=transcript.version,
+        timestamp_precision=transcript.timestamp_precision,
+        char_count=transcript.char_count,
+        summary=transcript.summary,
+        topics=list(transcript.topics or []),
+        analysis_version=transcript.analysis_version,
+        segments=[
+            TranscriptSegmentOut(
+                id=str(segment.id),
+                ordinal=segment.ordinal,
+                text=segment.text,
+                char_start=segment.char_start,
+                char_end=segment.char_end,
+                t_start=segment.t_start,
+                t_end=segment.t_end,
+            )
+            for segment in segments
+        ],
+    )
 
 
 @router.get(

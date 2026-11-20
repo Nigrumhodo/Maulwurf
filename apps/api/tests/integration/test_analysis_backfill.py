@@ -510,6 +510,70 @@ async def test_detail_does_not_offer_backfill_for_f2_class_without_run(
     assert retried.status_code == 202
 
 
+async def test_backfill_endpoint_queues_f1_and_is_idempotent(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    audio, _attempt, _transcript = await actors.make_class_with_transcript(
+        db_session, actor, required_stages=["index"]
+    )
+    audio_id = audio.id
+    before_attempts = await _attempt_rows(db_session, user_id=actor.user_id)
+
+    first = await client.post(
+        f"/audios/{audio_id}/analysis/backfill",
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+    assert first.status_code == 202
+    assert first.json()["status"] == "queued"
+
+    second = await client.post(
+        f"/audios/{audio_id}/analysis/backfill",
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+    assert second.status_code == 202
+    assert second.json()["status"] == "already_queued"
+
+    assert len(await _analysis_runs(db_session, user_id=actor.user_id, audio_id=audio_id)) == 1
+    assert len(await _analysis_events(db_session, user_id=actor.user_id, audio_id=audio_id)) == 1
+    assert await _attempt_rows(db_session, user_id=actor.user_id) == before_attempts
+
+
+async def test_backfill_endpoint_without_transcript_is_typed_409(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    audio = await actors.make_audio(db_session, actor)
+
+    response = await client.post(
+        f"/audios/{audio.id}/analysis/backfill",
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "transcript_unavailable"
+
+
+async def test_backfill_endpoint_is_tenant_scoped(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    alice, bob = await actors.make_actor(db_session), await actors.make_actor(db_session)
+    audio, _attempt, _transcript = await actors.make_class_with_transcript(
+        db_session, alice, required_stages=["index"]
+    )
+
+    response = await client.post(
+        f"/audios/{audio.id}/analysis/backfill",
+        cookies=bob.cookies,
+        headers=bob.headers,
+    )
+
+    assert response.status_code == 404
+
+
 async def test_dispatcher_publishes_only_the_audio_id(
     db_session: AsyncSession, redis: tuple[ArqRedis, str]
 ) -> None:

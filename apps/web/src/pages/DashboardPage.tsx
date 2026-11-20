@@ -1,5 +1,6 @@
 import { StatusTicker } from "@/components/dashboard/StatusTicker";
 import { TelemetryBanner } from "@/components/dashboard/TelemetryBanner";
+import { WeekStrip } from "@/components/dashboard/WeekStrip";
 import { TapeDeck } from "@/components/dashboard/TapeDeck";
 import { ActivityFeed } from "@/components/dashboard/ActivityFeed";
 import { TaskLog } from "@/components/dashboard/TaskLog";
@@ -15,6 +16,10 @@ export function DashboardPage() {
       <TelemetryBanner />
 
       <main className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
+        <section className="lg:col-span-12">
+          <WeekStrip />
+        </section>
+
         <section className="flex flex-col gap-4 lg:col-span-4">
           <TapeDeck />
         </section>

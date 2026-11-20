@@ -35,9 +35,11 @@ export const STATUS_TONES: Record<string, StatusTone> = {
   dismissed: "muted",
   completed: "success",
 
-  // calendar_sync_status (M5)
+  // calendar_sync_status (M5) e integración de Google
   synced: "success",
   blocked: "error",
+  connected: "success",
+  disconnected: "muted",
 
   // Notificaciones (M8) y chat (M7)
   sending: "active",

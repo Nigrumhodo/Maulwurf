@@ -419,12 +419,14 @@ async def test_integrations_status_without_and_with_google(
         "status": "disconnected",
         "scopes": [],
         "calendar_id": None,
+        "calendar_write_ready": False,
         "token_expires_at": None,
         "last_refresh_at": None,
     }
     assert after.headers["cache-control"] == "no-store"
     assert after.json()["google"]["status"] == "connected"
     assert after.json()["google"]["scopes"] == ["openid", "email"]
+    assert after.json()["google"]["calendar_write_ready"] is False
     assert "access_token" not in after.text
 
 

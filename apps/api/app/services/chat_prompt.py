@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.schemas.citations import Citation
+from app.schemas.tools import ToolCallOut
 from app.services.chunking import count_tokens_default, tokenizer_is_exact
 from app.services.evidence import evidence_reference
 from app.services.llm import ChatMessage, LLMError
@@ -111,6 +112,7 @@ class ReplayState:
     status: str
     citations: tuple[Citation, ...]
     created_at: datetime
+    tool_calls: tuple[ToolCallOut, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -133,6 +135,7 @@ class MessageSnapshot:
     content: str
     status: str
     citations: tuple[Citation, ...]
+    tool_calls: tuple[ToolCallOut, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -140,6 +143,7 @@ class _LLMEvent:
     kind: str
     text: str = ""
     error: LLMError | None = None
+    tool: ToolCallOut | None = None
 
 
 def load_system_prompt(path: Path = SYSTEM_PROMPT_PATH) -> str:

@@ -120,9 +120,14 @@ class SyncTask:
     calendar_etag: str | None = None
 
     def has_event_block(self) -> bool:
-        if self.all_day:
-            return self.event_start_date is not None and self.event_end_date_exclusive is not None
-        return self.event_start_at is not None and self.event_end_at is not None
+        # The event mode comes from the `event_*` pair, not from the due representation:
+        # an all-day deadline may legitimately have a timed agenda block (D3.2).
+        timed = self.event_start_at is not None and self.event_end_at is not None
+        all_day = (
+            self.event_start_date is not None
+            and self.event_end_date_exclusive is not None
+        )
+        return timed or all_day
 
 
 class TaskEventStore(Protocol):

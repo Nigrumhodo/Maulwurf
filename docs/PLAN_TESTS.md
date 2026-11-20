@@ -307,7 +307,7 @@ approval per language, not by global average.
 | C-S3-DA-01 | C | Inbox: task statuses, `date_status` badge (resolved/ambiguous/missing), low ASR quality warning | M4/M9 |
 | C-S3-DA-02 | C | Editing: due separate from the Calendar block; exclusive all-day/instant pairs, end after start, default duration visible/editable, and pending revision without mutating what is active | M4/M5/M9 |
 | C-S3-DA-03 | C | Confirmation shows **what will be written** to Calendar before writing it; 409 refreshes without losing the edit | M4/M9 |
-| C-S3-DA-04 | C | Chat `propose_task` creates a proposal in the inbox, **never** writes the calendar directly | rule 3 |
+| C-S3-DA-04 | C | Chat `propose_task` creates a proposal in the inbox, **never** writes the calendar directly; calendar/task answers show a structured source badge and proposals persist in `messages.tool_calls` | rule 3 |
 | E-S3-DA-05 | E | E2E with a test Google account: proposal → review/versioning → preview → confirmation → one visible event via an idempotent job | G5-F2/G6/G7-CAL |
 | C-S3-DA-06 | C | Full class page: summary, topics, items, per-stage analysis/index statuses, visible backfill/reanalysis and quality warnings without exposing audio | M4/M9 |
 | C-S3-DA-07 | C | Dashboard: does not draw the task and its linked event twice; `last_synced_at` and coverage visible | M5/M9 |

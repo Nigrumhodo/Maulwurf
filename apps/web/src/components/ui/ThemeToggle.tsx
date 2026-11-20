@@ -22,7 +22,7 @@ export function ThemeToggle() {
       type="button"
       onClick={toggle}
       aria-label={`cambiar a modo ${mode === "dark" ? "claro" : "oscuro"}`}
-      className="lowercase font-pixel border-2 border-pure-black bg-dark px-3 py-1 text-lavender shadow-block-sm transition-none hover:text-mint active:translate-x-[1px] active:translate-y-[1px]"
+      className="capitalize font-pixel border-2 border-pure-black bg-dark px-3 py-1 text-lavender shadow-block-sm transition-none hover:text-mint active:translate-x-[1px] active:translate-y-[1px]"
     >
       {labels[mode]}
     </button>

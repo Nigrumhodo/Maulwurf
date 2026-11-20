@@ -84,7 +84,7 @@ https://localhost {
 	# route. Extra stars are a different matcher (`path.Match`, one segment
 	# each) and are not used here. Bare collection routes (`/me`, `/tasks`)
 	# stay exact because the prefix needs the slash after the root.
-	@api path /auth/* /me /me/* /subjects /subjects/* /integrations/* /audios /audios/* /ingestion/* /search /chat/* /calendar/* /tasks /tasks/* /notifications /notifications/* /healthz /readyz
+	@api path /auth/* /me /me/* /subjects /subjects/* /integrations/* /audios /audios/* /ingestion/* /search /chat/* /calendar /calendar/* /tasks /tasks/* /notifications /notifications/* /healthz /readyz
 	handle @api {
 		# J2.10: JSON bodies are small; this is an abuse guard, not a contract limit.
 		request_body {

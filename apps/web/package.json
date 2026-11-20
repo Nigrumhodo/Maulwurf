@@ -15,10 +15,17 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fullcalendar/core": "^6.1.22",
+    "@fullcalendar/daygrid": "^6.1.22",
+    "@fullcalendar/react": "^6.1.22",
+    "@fullcalendar/timegrid": "^6.1.22",
     "express": "^5",
     "react": "^19",
     "react-dom": "^19",
-    "react-router-dom": "^7"
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^7",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@eslint/js": "^9",

@@ -163,6 +163,7 @@ async def test_detail_and_exports_are_404_for_foreign_or_tombstoned(
     audio_id = audio.id
     paths = (
         f"/audios/{audio_id}",
+        f"/audios/{audio_id}/transcript",
         f"/audios/{audio_id}/transcript.txt",
         f"/audios/{audio_id}/transcript.srt",
     )
@@ -184,6 +185,7 @@ async def test_reads_and_exports_require_a_session(
 
     assert (await client.get("/audios")).status_code == 401
     assert (await client.get(f"/audios/{audio.id}")).status_code == 401
+    assert (await client.get(f"/audios/{audio.id}/transcript")).status_code == 401
     assert (await client.get(f"/audios/{audio.id}/transcript.txt")).status_code == 401
     assert (await client.get(f"/audios/{audio.id}/transcript.srt")).status_code == 401
 
@@ -228,6 +230,57 @@ async def test_transcript_txt_segment_returns_only_that_segment(
 
     assert response.status_code == 200
     assert response.text == target.text
+
+
+async def test_transcript_reader_returns_ordered_segments_summary_and_no_store(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    audio, _, transcript, segments = await actors.make_class_with_timed_segments(
+        db_session, actor
+    )
+    transcript.summary = "resumen sintético de la clase"
+    transcript.topics = ["tema uno", "tema dos"]
+    transcript.analysis_version = 3
+    await db_session.flush()
+    audio_id = audio.id
+
+    response = await client.get(f"/audios/{audio_id}/transcript", cookies=actor.cookies)
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    body = response.json()
+    assert body["audio_id"] == str(audio_id)
+    assert body["version"] == transcript.version
+    assert body["timestamp_precision"] == "segment"
+    assert body["char_count"] == transcript.char_count
+    assert body["summary"] == "resumen sintético de la clase"
+    assert body["topics"] == ["tema uno", "tema dos"]
+    assert body["analysis_version"] == 3
+    assert [segment["id"] for segment in body["segments"]] == [
+        str(segment.id) for segment in segments
+    ]
+    assert [segment["ordinal"] for segment in body["segments"]] == [1, 2]
+    assert body["segments"][0] == {
+        "id": str(segments[0].id),
+        "ordinal": 1,
+        "text": segments[0].text,
+        "char_start": segments[0].char_start,
+        "char_end": segments[0].char_end,
+        "t_start": 0.0,
+        "t_end": 5.0,
+    }
+
+
+async def test_transcript_reader_without_text_is_404(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await actors.make_actor(db_session)
+    audio = await actors.make_audio(db_session, actor)
+
+    response = await client.get(f"/audios/{audio.id}/transcript", cookies=actor.cookies)
+
+    assert response.status_code == 404
 
 
 async def test_transcript_txt_foreign_segment_is_404(

@@ -52,7 +52,7 @@ export function Card({
         <header
           className={`flex items-center justify-between border-b-2 ${barBorder[variant]} ${headerBar[variant]} px-3 py-2`}
         >
-          <span className="lowercase font-bold">› {title}</span>
+          <span className="capitalize font-bold">› {title}</span>
           <span className="select-none" aria-hidden="true">
             [x]
           </span>

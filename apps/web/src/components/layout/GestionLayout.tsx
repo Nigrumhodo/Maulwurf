@@ -23,13 +23,13 @@ export function GestionLayout() {
         }`}
       >
         <header className="flex items-center justify-between border-b-2 border-pure-black bg-mint px-2 py-2 text-on-accent">
-          {!collapsed && <span className="lowercase font-bold">gestión</span>}
+          {!collapsed && <span className="capitalize font-bold">gestión</span>}
           <button
             type="button"
             onClick={() => setCollapsed((c) => !c)}
             aria-label={collapsed ? "expandir menú" : "colapsar menú"}
             aria-expanded={!collapsed}
-            className="lowercase font-pixel border-2 border-on-accent/40 px-1 leading-none hover:bg-on-accent hover:text-mint"
+            className="capitalize font-pixel border-2 border-on-accent/40 px-1 leading-none hover:bg-on-accent hover:text-mint"
           >
             {collapsed ? "▸" : "◂"}
           </button>
@@ -43,7 +43,7 @@ export function GestionLayout() {
                 to={item.to}
                 title={item.label}
                 className={({ isActive }) =>
-                  `lowercase flex justify-center border-2 px-1 py-1 ${
+                  `capitalize flex justify-center border-2 px-1 py-1 ${
                     isActive
                       ? "border-mint bg-mint text-on-accent"
                       : "border-transparent text-lavender hover:text-mint"
@@ -64,7 +64,7 @@ export function GestionLayout() {
                   key={item.to}
                   to={item.to}
                   className={({ isActive }) =>
-                    `lowercase flex items-center gap-2 border-2 px-2 py-1 ${
+                    `capitalize flex items-center gap-2 border-2 px-2 py-1 ${
                       isActive
                         ? "border-mint bg-mint text-on-accent"
                         : "border-pure-black text-lavender hover:border-mint hover:text-mint"
@@ -79,8 +79,8 @@ export function GestionLayout() {
 
             <div className="hidden flex-col gap-3 p-3 md:flex">
             <div className="border-2 border-pure-black bg-surface p-2.5">
-              <p className="lowercase text-lavender/50">// workspace_modules</p>
-              <p className="lowercase flex items-center justify-between text-lavender">
+              <p className="capitalize text-lavender/50">// workspace_modules</p>
+              <p className="capitalize flex items-center justify-between text-lavender">
                 <span className="font-bold">gestión</span>
                 <span className="border border-pure-black bg-mint px-1 text-on-accent">sys_ok</span>
               </p>
@@ -98,21 +98,21 @@ export function GestionLayout() {
                   }`}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="lowercase font-bold">
+                    <span className="capitalize font-bold">
                       {module.id}. {module.title}
                     </span>
-                    <span className="lowercase border border-pure-black px-1 text-[10px]">
+                    <span className="capitalize border border-pure-black px-1 text-[10px]">
                       [{active ? "activo" : module.tag}]
                     </span>
                   </div>
-                  <p className="lowercase text-[10px] opacity-70">{module.desc}</p>
+                  <p className="capitalize text-[10px] opacity-70">{module.desc}</p>
                   <div className="mt-1 flex flex-col gap-1">
                     {module.items.map((item) => (
                       <NavLink
                         key={item.to}
                         to={item.to}
                         className={({ isActive }) =>
-                          `lowercase flex items-center gap-2 border-2 px-2 py-1 ${
+                          `capitalize flex items-center gap-2 border-2 px-2 py-1 ${
                             isActive
                               ? "border-on-accent bg-on-accent text-mint"
                               : active
@@ -131,14 +131,14 @@ export function GestionLayout() {
             })}
 
             <div className="border-2 border-pure-black bg-surface p-3 shadow-block">
-              <div className="lowercase flex items-center justify-between text-lavender">
+              <div className="capitalize flex items-center justify-between text-lavender">
                 <span className="text-lavender/60">// mem_store · demo</span>
                 <span className="text-mint">64.2%</span>
               </div>
               <div className="mt-1 h-2.5 w-full border-2 border-pure-black p-0.5">
                 <div className="h-full bg-mint" style={{ width: "64%" }} />
               </div>
-              <div className="lowercase mt-1 flex items-center justify-between border-t border-lavender/20 pt-1 text-lavender/50">
+              <div className="capitalize mt-1 flex items-center justify-between border-t border-lavender/20 pt-1 text-lavender/50">
                 <span>buffer: 512/800mb</span>
                 <span className="text-mint">sector: 0x7f</span>
               </div>

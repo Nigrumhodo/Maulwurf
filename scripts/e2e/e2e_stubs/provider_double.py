@@ -24,6 +24,23 @@ from typing import Any
 DIMENSION = 1536
 MODEL = "maulwurf-e2e-synthetic-v1"
 ANSWER = "La fotosíntesis convierte la luz del sol en energía química [S1]."
+# D3.8: opt-in deterministic tool-call turn for the browser/chat demo. Unset keeps the
+# existing smoke answer; the trigger is matched only in the last user message.
+TOOL_TRIGGER = os.environ.get("PROVIDER_DOUBLE_TOOL_TRIGGER", "").strip()
+TOOL_CALL = json.dumps(
+    {
+        "tool": "propose_task",
+        "arguments": {
+            "titulo": "Repasar la fotosíntesis",
+            "tipo": "tarea",
+            "timezone": "America/Bogota",
+            "mencion": {"kind": "all_day", "due_date": "2026-11-20"},
+            "detalle": None,
+            "sources": [],
+        },
+    },
+    ensure_ascii=False,
+)
 _WORD = re.compile(r"\w+", re.UNICODE)
 
 
@@ -85,6 +102,28 @@ def chat_body(answer: str, model: str) -> bytes:
     return "".join(frames).encode("utf-8")
 
 
+def chat_answer_for(messages: object, *, trigger: str = TOOL_TRIGGER) -> str:
+    """Choose the deterministic answer for one chat request.
+
+    The tool turn is opt-in. Without a trigger the existing smoke answer is returned; a
+    second call after the `Tool result` message also returns it, so the backend's bounded
+    tool loop terminates instead of repeating the call.
+    """
+    if not trigger or not isinstance(messages, list):
+        return ANSWER
+    user_texts = [
+        item.get("content")
+        for item in messages
+        if isinstance(item, dict) and item.get("role") == "user"
+    ]
+    if any(
+        isinstance(text, str) and text.startswith("Tool result:") for text in user_texts
+    ):
+        return ANSWER
+    last = user_texts[-1] if user_texts else ""
+    return TOOL_CALL if isinstance(last, str) and trigger in last else ANSWER
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -144,7 +183,8 @@ class Handler(BaseHTTPRequestHandler):
             _json_response(self, 400, {"error": "stream_required"})
             return
         model = body.get("model", MODEL)
-        payload = chat_body(ANSWER, model if isinstance(model, str) else MODEL)
+        answer = chat_answer_for(body.get("messages"))
+        payload = chat_body(answer, model if isinstance(model, str) else MODEL)
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")

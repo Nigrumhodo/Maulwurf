@@ -651,6 +651,8 @@ CREATE TABLE messages (
   citas             jsonb NOT NULL DEFAULT '[]',
   -- [{audio_id, transcript_version, chunk_id, segment_id, t_start, t_end, quote}]
   -- only references validated in the DB; never timestamps/IDs invented by the LLM
+  tool_calls        jsonb NOT NULL DEFAULT '[]',
+  -- D3.8 [{name, ok, payload}] closed tool provenance; never transcript/audio/tokens
   model             text,
   prompt_version    text,
   input_tokens      integer,
@@ -1257,6 +1259,8 @@ itself `retryable=false` in `details`: the header is the retry signal (A2.19).
 | `GET` | `/integrations/status` | S1 | Login/Calendar/Gmail status, scopes, freshness | `200` |
 | `POST` | `/integrations/google/connect` | S3 | Incremental OAuth with Calendar scopes (real verification D7) | `302` to Google · `429` conditional · `503` |
 | `POST` | `/integrations/google/reconnect` | S3 | Re-authorization after `invalid_grant` (Testing expires after 7 days) | `302` to Google · `429` conditional · `503` |
+| `GET` | `/integrations/google/connect` | S3 | Browser-navigation variant (D3.7): same signed state and rate limit; a start failure redirects to `/settings?calendar=error&reason=...` | `302` |
+| `GET` | `/integrations/google/reconnect` | S3 | Browser-navigation variant (D3.7) for `invalid_grant`; same state/rate limit and failure redirect | `302` |
 | `GET` | `/me/notifications` | S4 | Current M8 preferences (read companion of the PATCH) | `200` |
 | `PATCH` | `/me/notifications` | S4 | M8 preferences (Gmail opt-in, digests, thresholds) | `200` |
 | `POST` | `/notifications/test` | S4 | Test send to the verified email | `202` |
@@ -1512,6 +1516,7 @@ Other M2 endpoints:
 | `DELETE` | `/audios/{id}` | S2 | Tombstone: cancels attempts/jobs, deletes derived transcripts/chunks/embeddings/tasks/summary/citations; existing Google events are kept by default (notice); removing them requires an explicit option via `google_remote_operations` | `202` |
 | `GET` | `/audios/{id}/transcript.txt` | S2 | TXT export of the active transcript, or of one `?segment={segment_id}` (owner-scoped) | `200` · `404` |
 | `GET` | `/audios/{id}/transcript.srt` | S2 | SRT export **only** with valid, ordered timestamps within the duration | `200` · `404` sin transcript · `409 srt_unavailable` |
+| `GET` | `/audios/{id}/transcript` | S2 · D2.5 | Active transcript metadata + ordered segments (`id`, `ordinal`, text, Unicode offsets, nullable times); no audio or storage locations; owner-scoped | `200` · `404` |
 
 ### 3.6 M3 — Internal transcription contract (not a public API)
 
@@ -1733,6 +1738,11 @@ Contract rules:
 - F2 tools (allowlist): `get_calendar_events(range)`, `get_pending_tasks()`,
   `propose_task()`; none writes Calendar or sends email; iterations/time are bounded;
   ranges and schemas validated by the backend.
+- D3.8 tool provenance: the stream may emit `tool` (`{name, ok, payload}`) before the
+  terminal `done`; `done.tools` and `done.proposals` mirror the turn. The assistant row
+  persists the same list in `messages.tool_calls` (revision `0022`) and `GET .../messages`
+  returns it, so the UI labels "según tu agenda"/"según tus tareas" and renders
+  `propose_task` as an inbox proposal, never a Calendar write.
 - Modes validated by the `conversations` CHECK; everything within the tenant.
 - L2.5 implements `POST .../messages` and `.../cancel` with the minimal turn persistence;
   A2.12 adds conversation create/list/paginated history/delete over the same tables; `DELETE`

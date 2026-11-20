@@ -162,6 +162,8 @@ def _task_out(
         confidence_score=task.confidence_score,
         status=task.status,
         calendar_sync_status=task.calendar_sync_status,
+        calendar_id=task.calendar_id,
+        calendar_event_id=task.calendar_event_id,
         version=task.version,
         due_version=task.due_version,
         event_block=_event_block(task),
@@ -243,6 +245,7 @@ async def _assemble(db: AsyncSession, user_id: uuid.UUID, tasks: list[Task]) -> 
         evidence = [
             TaskEvidenceOut(
                 segment_id=str(item.evidence.segment_id),
+                ordinal=item.evidence.ordinal,
                 char_start=item.evidence.char_start,
                 char_end=item.evidence.char_end,
                 quote=item.evidence.quote,
@@ -272,6 +275,7 @@ async def list_tasks(
     *,
     status: str | None = None,
     subject_id: uuid.UUID | None = None,
+    audio_id: uuid.UUID | None = None,
     due_from: date | None = None,
     due_to: date | None = None,
     limit: int = _DEFAULT_LIMIT,
@@ -288,6 +292,8 @@ async def list_tasks(
         stmt = stmt.where(Task.status == status)
     if subject_id is not None:
         stmt = stmt.where(Task.subject_id == subject_id)
+    if audio_id is not None:
+        stmt = stmt.where(Task.audio_id == audio_id)
     stmt = _due_conditions(stmt, due_from, due_to)
     if cursor is not None:
         position = _decode_cursor(cursor)

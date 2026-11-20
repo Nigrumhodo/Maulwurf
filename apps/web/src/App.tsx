@@ -7,6 +7,7 @@ import { RegisterPage } from "@/pages/RegisterPage";
 import { WelcomePage } from "@/pages/WelcomePage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { BibliotecaPage } from "@/pages/BibliotecaPage";
+import { TranscriptReaderPage } from "@/pages/TranscriptReaderPage";
 import { ChatPage } from "@/pages/ChatPage";
 import { MateriasPage } from "@/pages/MateriasPage";
 import { TareasPage } from "@/pages/TareasPage";
@@ -35,6 +36,7 @@ export function App() {
               <Route index element={<GestionOverview />} />
               <Route path="subir" element={<SubirClasePage />} />
               <Route path="biblioteca" element={<BibliotecaPage />} />
+              <Route path="biblioteca/:audioId" element={<TranscriptReaderPage />} />
               <Route path="chat" element={<ChatPage />} />
               <Route path="materias" element={<MateriasPage />} />
               <Route path="tareas" element={<TareasPage />} />
@@ -42,6 +44,7 @@ export function App() {
             </Route>
 
             <Route path="/biblioteca" element={<Navigate to="/gestion/biblioteca" replace />} />
+            <Route path="/biblioteca/:audioId" element={<TranscriptReaderPage />} />
             <Route path="/chat" element={<Navigate to="/gestion/chat" replace />} />
             <Route path="/materias" element={<Navigate to="/gestion/materias" replace />} />
           </Route>

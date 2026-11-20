@@ -27,6 +27,7 @@ from app.models.chat import Conversation, Message, MessageSource
 from app.schemas.citations import (
     parse_citations,
 )
+from app.schemas.tools import parse_tool_calls
 from app.services.chat_order import ASSISTANT_CREATED_AT_OFFSET, message_role_rank
 from app.services.chat_prompt import (
     ABSTENTION_TEXT,
@@ -470,6 +471,7 @@ class RAGService(ChatTurnStream):
                 status=message.status,
                 citations=citations,
                 created_at=message.created_at,
+                tool_calls=tuple(parse_tool_calls(message.tool_calls)),
             ),
         )
 

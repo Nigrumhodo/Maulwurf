@@ -1,0 +1,92 @@
+D3.7 / C-S3-DA-08 evidence
+Date: 2026-11-16 (UTC)
+Environment: Windows, Node 24.12 local (CI Node 22)
+
+Automated coverage
+Commands:
+  cd apps/web
+  npx vitest run --maxWorkers=2 --testTimeout=20000
+Result: 218 tests in 37 files passed (full suite).
+Targeted:
+  npx vitest run tests/unit/sync-status.test.tsx tests/unit/google-reconnect.test.tsx tests/unit/settings-page.test.tsx tests/unit/tareas-page.test.tsx
+Result: 23 passed.
+Covered:
+- every calendar_sync_status explanation;
+- blocked + bound calendar -> /integrations/google/reconnect;
+- blocked without calendar -> /integrations/google/connect;
+- failed is info-only and never offers a retry;
+- Settings consumes ?calendar=connected and states the resumption without auto-confirm;
+- Settings renders a closed error reason and never echoes an unknown one;
+- Settings shows the connect action with no query and reports a status read failure;
+- Tareas shows the compact banner while not write-ready and hides it when ready.
+
+Backend
+Commands:
+  cd apps/api
+  uv run ruff check .
+  uv run mypy .
+  uv run pytest tests/unit -q
+  MAULWURF_DATABASE_URL=postgresql+asyncpg://maulwurf:maulwurf@127.0.0.1:55432/maulwurf \
+    uv run pytest tests/integration/test_calendar_connect.py -q
+Result: ruff/mypy clean (337 files); 1852 unit passed with the 2 pre-existing
+test_create_audio/test_upload_stream failures; test_calendar_connect.py 26 passed
+(21 existing + 5 GET-navigation cases).
+
+GET navigation cases:
+- GET connect/reconnect are in the OpenAPI contract with a 302;
+- GET connect needs no CSRF header and sets mw_oauth;
+- GET reconnect without a grant -> /settings?calendar=error&reason=not_connected;
+- unconfigured OAuth client -> /settings?calendar=error&reason=not_configured;
+- GET rate limit -> /settings?calendar=error&reason=rate_limited.
+
+Docs and infra
+Commands (repo root):
+  python scripts/docs/check_refs.py
+  python scripts/ci/check_caddy_limits.py
+Result: 1259 documented paths OK; Caddy static checks OK.
+
+Manual browser C-S3-DA-08
+Environment: Windows, Edge headless (Playwright), local compose, session cookie for an
+existing local user.
+1. /settings?calendar=connected:
+   - banner "google calendar conectado." visible;
+   - "las tareas bloqueadas volvieron a pendiente; nada se confirmó automáticamente"
+     visible;
+   - the query is consumed: final URL is https://localhost/settings;
+   - the Calendar panel showed "sin escritura lista" before the real grant existed and a
+     reconnect anchor with href="/integrations/google/reconnect".
+2. /gestion/tareas:
+   - compact banner "calendar no está listo" visible while the grant had no writable
+     calendar;
+   - anchor href="/integrations/google/reconnect".
+3. Console: zero errors and zero page errors.
+4. Screenshots (not versioned): d37-settings.png, d37-tareas.png.
+
+GET navigation through Caddy (Playwright request, maxRedirects=0):
+- GET /integrations/google/connect -> 302 to accounts.google.com with
+  openid + calendar.app.created + calendar.events.readonly + calendar.calendarlist.readonly,
+  Cache-Control: no-store, sets the signed ephemeral mw_oauth cookie;
+- GET /integrations/google/reconnect -> 302 to accounts.google.com with the same scopes
+  and mode=reconnect, Cache-Control: no-store, sets mw_oauth.
+The ephemeral state/nonce/verifier and the cookie value are not recorded here. No token is
+returned to the browser.
+
+Real Google reconnect (2026-11-16)
+First attempts failed after a successful consent: the API log recorded
+  GET https://www.googleapis.com/calendar/v3/users/me/calendarList -> 403 Forbidden
+  calendar.connect_failed code=google_calendar_forbidden transient=False
+while the callback already carried the three Calendar scopes. That is a project-level
+403, not a consent or token problem: the Google Calendar API was not enabled for the
+OAuth client's Cloud project.
+After enabling the Google Calendar API in that project and retrying reconnect:
+  GET https://www.googleapis.com/calendar/v3/users/me/calendarList -> 200 OK
+  POST https://www.googleapis.com/calendar/v3/calendars -> 200 OK
+and the database shows:
+  google_credentials.status = connected, with calendar.calendarlist.readonly,
+    calendar.app.created and calendar.events.readonly granted;
+  settings.calendar_write_calendar_id set (remote ID redacted here), updated 18:24 UTC;
+  therefore calendar_write_ready = true (connected + calendar id + scopes).
+No code change was needed for the fix. The earlier 403 is kept here as the reason the first
+two attempts failed and to document that the UI banner was honest, not a client bug.
+
+

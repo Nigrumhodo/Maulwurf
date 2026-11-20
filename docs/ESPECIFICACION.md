@@ -241,7 +241,9 @@ Gmail).
 
 **Endpoints:** `GET /auth/google/start`, `GET /auth/google/callback`, `POST /auth/logout`,
 `GET /me`, `PATCH /me`, `GET /integrations/status`, `POST /integrations/google/connect`,
-`POST /integrations/google/reconnect`.
+`POST /integrations/google/reconnect`, and the browser-navigation variants
+`GET /integrations/google/connect|reconnect` (same signed state and rate limit; a `fetch`
+`POST` cannot follow the cross-origin `302` to Google or render the consent screen).
 
 ---
 
@@ -358,7 +360,9 @@ optional `variant_confirmation_token` → `audio_id`, `attempt_id`, URL, and exp
 `POST /audios/{id}/reupload` (only without a usable transcript);
 `POST /audios/{id}/attempts/{attempt_id}/cancel`; `DELETE /audios/{id}`;
 `GET /audios/{id}/transcript.txt`; `GET /audios/{id}/transcript.srt` (only with valid
-timestamps); `GET /audios/{id}/runs` (durable run history with the transcript, configuration
+timestamps); `GET /audios/{id}/transcript` (active transcript metadata plus ordered segments
+with stable ids, Unicode offsets and nullable measured times for the linkable reader);
+`GET /audios/{id}/runs` (durable run history with the transcript, configuration
 and prompt version each run applied, its status/timestamps and whether it is the run of the
 active transcript and current versions). The `GET /audios/{id}` detail reports the derived
 per-stage states, whether the explicit analysis backfill is available, and the non-sensitive
@@ -702,7 +706,12 @@ provisional 30/min value is replaced by the D5/F0 measured provider quota.
 - **F2 tool calling:** allowlist `get_calendar_events(range)`, `get_pending_tasks()`, and
   `propose_task()`. User/permissions are injected by the backend; ranges/schemas validated,
   maximum iterations/time. No chat tool writes to Calendar or sends email; always confirm in
-  the UI.
+  the UI. `propose_task` creates a `needs_review` task (`source=chat`), never an event or an
+  outbox row.
+- **Tool provenance:** the `tool` SSE event and `messages.tool_calls` carry the tool name,
+  its success flag and the closed payload; `done.tools`/`done.proposals` mirror them for the
+  turn. The UI labels calendar data as "según tu agenda", task data as "según tus tareas",
+  and `propose_task` as an inbox proposal; it never presents a proposal as a Calendar write.
 - Transcript, tool results, and messages are untrusted data: resist embedded instructions,
   do not execute extracted commands or URLs. Sanitized Markdown rendering, no unsafe HTML,
   and redaction of provider traces.

@@ -63,6 +63,7 @@ class PendingTaskItem(BaseModel):
 
 class TaskEvidenceOut(BaseModel):
     segment_id: str
+    ordinal: int
     char_start: int
     char_end: int
     quote: str
@@ -105,6 +106,8 @@ class TaskOut(BaseModel):
     confidence_score: float | None
     status: str
     calendar_sync_status: str
+    calendar_id: str | None
+    calendar_event_id: str | None
     version: int
     due_version: int
     event_block: TaskEventBlockOut

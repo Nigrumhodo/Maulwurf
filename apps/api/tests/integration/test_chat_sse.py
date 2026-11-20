@@ -35,8 +35,10 @@ from app.models import (
     IndexGeneration,
     Message,
     MessageSource,
+    OutboxEvent,
     Segment,
     Subject,
+    Task,
     Transcript,
 )
 from app.services.citations import validate_citation_source
@@ -78,6 +80,7 @@ class FakeLLM:
     def __init__(self) -> None:
         self.context_window = 8192
         self.chunks: list[str] = ["Según tu clase, ", "[S1]", " la integral acumula área."]
+        self.script: list[list[str]] | None = None
         self.calls = 0
         self.last_messages: list[ChatMessage] = []
         self.error_after: int | None = None
@@ -88,7 +91,10 @@ class FakeLLM:
         self.calls += 1
         self.last_messages = list(messages)
         assert max_tokens > 0
-        for index, chunk in enumerate(self.chunks):
+        chunks = self.chunks
+        if self.script is not None and self.calls <= len(self.script):
+            chunks = self.script[self.calls - 1]
+        for index, chunk in enumerate(chunks):
             if self.error_after is not None and index >= self.error_after:
                 raise LLMProviderError("fake provider failure")
             yield chunk
@@ -444,6 +450,93 @@ async def test_chat_stream_emits_ordered_deltas_citations_and_one_done(
     assert done["status"] == "completed"
     assert done["conversation_id"] == str(conversation.id)
     assert done["sources"] == [{"kind": "transcript", "audio_id": str(citation["audio_id"])}]
+
+
+async def test_chat_propose_task_creates_an_inbox_proposal_without_calendar(
+    chat_sse: Harness,
+) -> None:
+    actor, conversation, _, _ = await _setup_corpus(chat_sse.factory)
+    assert chat_sse.llm is not None
+    chat_sse.llm.script = [
+        [
+            json.dumps(
+                {
+                    "tool": "propose_task",
+                    "arguments": {
+                        "titulo": "Preparar la integral",
+                        "tipo": "tarea",
+                        "timezone": "America/Bogota",
+                        "mencion": {"kind": "all_day", "due_date": "2026-11-20"},
+                        "detalle": None,
+                        "sources": [],
+                    },
+                }
+            )
+        ],
+        ["Propuesta creada [S1]."],
+    ]
+
+    response = await _post(chat_sse, actor, conversation.id)
+
+    assert response.status_code == 200
+    events = _events(response.text)
+    names = [name for name, _, _ in events]
+    assert "tool" in names
+    tool = next(data for name, _, data in events if name == "tool")
+    assert tool["name"] == "propose_task"
+    assert tool["ok"] is True
+    assert tool["payload"]["status"] == "needs_review"
+    assert tool["payload"]["calendar_sync_status"] == "not_requested"
+    done = next(data for name, _, data in events if name == "done")
+    assert done["tools"] == [tool]
+    assert done["proposals"] == [tool["payload"]]
+
+    async with chat_sse.factory() as db:
+        task = await db.scalar(
+            select(Task).where(Task.user_id == actor.user_id, Task.source == "chat")
+        )
+        assert task is not None
+        assert task.status == "needs_review"
+        assert task.calendar_sync_status == "not_requested"
+        assistant = await db.scalar(
+            select(Message).where(
+                Message.conversation_id == conversation.id,
+                Message.role == "assistant",
+            )
+        )
+        assert assistant is not None
+        assert assistant.tool_calls[0]["name"] == "propose_task"
+        assert assistant.tool_calls[0]["payload"]["task_id"] == str(task.id)
+        outbox = await db.scalar(
+            select(func.count())
+            .select_from(OutboxEvent)
+            .where(OutboxEvent.resource_id == task.id)
+        )
+        assert outbox == 0
+
+
+async def test_chat_pending_tasks_tool_is_reported_as_a_task_source(
+    chat_sse: Harness,
+) -> None:
+    actor, conversation, _, _ = await _setup_corpus(chat_sse.factory)
+    assert chat_sse.llm is not None
+    chat_sse.llm.script = [
+        [json.dumps({"tool": "get_pending_tasks", "arguments": {}})],
+        ["Según tus tareas, no hay pendientes [S1]."],
+    ]
+
+    response = await _post(chat_sse, actor, conversation.id)
+
+    assert response.status_code == 200
+    events = _events(response.text)
+    tool = next(data for name, _, data in events if name == "tool")
+    assert tool["name"] == "get_pending_tasks"
+    assert tool["ok"] is True
+    assert tool["payload"]["source"] == "tasks"
+    assert tool["payload"]["tasks"] == []
+    done = next(data for name, _, data in events if name == "done")
+    assert done["tools"] == [tool]
+    assert done["proposals"] == []
 
 
 async def test_chat_prepare_timestamps_come_from_the_database_clock(
