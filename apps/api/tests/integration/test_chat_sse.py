@@ -539,6 +539,32 @@ async def test_chat_pending_tasks_tool_is_reported_as_a_task_source(
     assert done["proposals"] == []
 
 
+async def test_chat_preamble_before_tool_call_executes_tool_without_leaking_json(
+    chat_sse: Harness,
+) -> None:
+    actor, conversation, _, _ = await _setup_corpus(chat_sse.factory)
+    assert chat_sse.llm is not None
+    chat_sse.llm.script = [
+        [
+            "Voy a revisar tus tareas pendientes.\n\n",
+            '{"tool": "get_pending_tasks", ',
+            '"arguments": {}}',
+        ],
+        ["Según tus tareas, no hay pendientes [S1]."],
+    ]
+
+    response = await _post(chat_sse, actor, conversation.id)
+
+    assert response.status_code == 200
+    events = _events(response.text)
+    tool = next(data for name, _, data in events if name == "tool")
+    assert tool["name"] == "get_pending_tasks"
+    assert tool["ok"] is True
+    deltas = "".join(data["text"] for name, _, data in events if name == "delta")
+    assert '{"tool"' not in deltas
+    assert "Según tus tareas" in deltas
+
+
 async def test_chat_prepare_timestamps_come_from_the_database_clock(
     chat_sse: Harness,
 ) -> None:

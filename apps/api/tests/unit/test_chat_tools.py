@@ -1,5 +1,6 @@
 """D3.8: the chat tool protocol parser is strict and fails closed."""
 
+from app.services.chat_stream import _safe_prose_cut
 from app.services.chat_tools import TOOL_PROTOCOL, extract_tool_call, parse_tool_call
 
 
@@ -54,3 +55,16 @@ def test_extract_tool_call_handles_preamble_and_markdown_fences() -> None:
     assert fenced_extracted[1].name == "get_pending_tasks"
 
     assert extract_tool_call("El conjunto {1, 2, 3} no es una tool.") is None
+
+
+def test_safe_prose_cut_streams_short_prose_immediately_and_holds_json_or_fences() -> None:
+    assert _safe_prose_cut("parcial", flushed_any=False) == len("parcial")
+    assert _safe_prose_cut("   ", flushed_any=False) == 0
+    assert _safe_prose_cut('{"tool": ', flushed_any=False) == 0
+    assert _safe_prose_cut("```json\n", flushed_any=False) == 0
+    assert _safe_prose_cut('Voy a revisar.\n\n{"tool": ', flushed_any=False) == len(
+        "Voy a revisar.\n\n"
+    )
+    assert _safe_prose_cut("El conjunto {1, 2, 3} es finito", flushed_any=False) == len(
+        "El conjunto {1, 2, 3} es finito"
+    )

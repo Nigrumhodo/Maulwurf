@@ -58,9 +58,6 @@ from app.services.tools import MAX_TOOL_ROUNDS, TOOL_BUDGET_SECONDS
 
 logger = logging.getLogger(__name__)
 
-_PREAMBLE_HOLD_CHARS = 220
-
-
 def _merge_tool_protocol(messages: Sequence[ChatMessage]) -> list[ChatMessage]:
     if messages and messages[0].role == "system":
         merged = ChatMessage(
@@ -72,20 +69,22 @@ def _merge_tool_protocol(messages: Sequence[ChatMessage]) -> list[ChatMessage]:
 
 
 def _safe_prose_cut(buffer: str, *, flushed_any: bool) -> int:
-    """Number of leading characters in `buffer` guaranteed not to be part of a tool call."""
+    """Number of leading characters in `buffer` guaranteed not to be part of a tool call.
+
+    Plain prose streams immediately on the first delta; only `{` or markdown code fences are
+    held until they either form a valid tool call or close as ordinary prose.
+    """
+    if not flushed_any and not buffer.strip():
+        return 0
     fence_idx = buffer.find("`")
     brace_idx = buffer.find("{")
     candidates = [idx for idx in (fence_idx, brace_idx) if idx != -1]
-    if candidates:
-        earliest = min(candidates)
-        # If an unclosed brace/fence is already closed and is NOT a tool call, advance past it
-        # only when braces are balanced and no trailing fence remains.
-        if earliest == brace_idx and buffer.count("{") <= buffer.count("}") and fence_idx == -1:
-            return len(buffer) if (flushed_any or len(buffer) >= _PREAMBLE_HOLD_CHARS) else 0
-        return earliest if (flushed_any or earliest >= _PREAMBLE_HOLD_CHARS) else 0
-    if not flushed_any and len(buffer) < _PREAMBLE_HOLD_CHARS:
-        return 0
-    return len(buffer)
+    if not candidates:
+        return len(buffer)
+    earliest = min(candidates)
+    if earliest == brace_idx and buffer.count("{") <= buffer.count("}") and fence_idx == -1:
+        return len(buffer)
+    return earliest
 # In-process wake-up. The database status is authoritative.
 _CANCEL_EVENTS: dict[uuid.UUID, asyncio.Event] = {}
 
@@ -366,21 +365,27 @@ class ChatTurnStream:
                     break
                 buffer = ""
                 flushed_any = False
+                last_flushed = ""
                 tool_executed = False
                 async for delta in self._llm.stream(messages, max_tokens=max_tokens):
                     buffer += delta
                     extracted = extract_tool_call(buffer)
                     if extracted is not None:
-                        _prefix, call = extracted
+                        prefix, call = extracted
                         tool_executed = True
+                        if flushed_any:
+                            if prefix.strip():
+                                sep_chunk = prefix.rstrip() + "\n\n"
+                                await queue.put(_LLMEvent(kind="delta", text=sep_chunk))
+                            elif not last_flushed.endswith("\n\n"):
+                                sep = "\n" if last_flushed.endswith("\n") else "\n\n"
+                                await queue.put(_LLMEvent(kind="delta", text=sep))
                         record = await execute_tool(
                             self._session_factory,
                             user_id=prepared.user_id,
                             call=call,
                         )
                         await queue.put(_LLMEvent(kind="tool", tool=record))
-                        if flushed_any:
-                            await queue.put(_LLMEvent(kind="delta", text="\n\n"))
                         messages.append(
                             ChatMessage(
                                 role="assistant",
@@ -404,22 +409,29 @@ class ChatTurnStream:
                         break
                     cut = _safe_prose_cut(buffer, flushed_any=flushed_any)
                     if cut > 0:
-                        await queue.put(_LLMEvent(kind="delta", text=buffer[:cut]))
+                        chunk = buffer[:cut]
+                        await queue.put(_LLMEvent(kind="delta", text=chunk))
                         buffer = buffer[cut:]
                         flushed_any = True
+                        last_flushed = chunk
                 if not tool_executed and buffer:
                     extracted = extract_tool_call(buffer)
                     if extracted is not None:
-                        _prefix, call = extracted
+                        prefix, call = extracted
                         tool_executed = True
+                        if flushed_any:
+                            if prefix.strip():
+                                sep_chunk = prefix.rstrip() + "\n\n"
+                                await queue.put(_LLMEvent(kind="delta", text=sep_chunk))
+                            elif not last_flushed.endswith("\n\n"):
+                                sep = "\n" if last_flushed.endswith("\n") else "\n\n"
+                                await queue.put(_LLMEvent(kind="delta", text=sep))
                         record = await execute_tool(
                             self._session_factory,
                             user_id=prepared.user_id,
                             call=call,
                         )
                         await queue.put(_LLMEvent(kind="tool", tool=record))
-                        if flushed_any:
-                            await queue.put(_LLMEvent(kind="delta", text="\n\n"))
                         messages.append(
                             ChatMessage(
                                 role="assistant",
