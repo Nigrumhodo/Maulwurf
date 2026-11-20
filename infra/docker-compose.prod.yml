@@ -1,0 +1,285 @@
+# J4.7 — Reference production deployment stack.
+#
+# Invariants preserved from local compose (J1.1/J1.2/ADR-0005/ADR-0008):
+# - Versioned immutable tags (`MAULWURF_IMAGE_TAG`), never `:latest`.
+# - Dedicated one-shot `migrate` service (alembic runs once, never on api startup).
+# - `ingest` has read-only rootfs, bounded noexec/nosuid/nodev tmpfs, zero durable audio
+#   volumes, `memswap_limit == mem_limit`, `core: 0`, explicit allowlisted env (no env_file).
+# - Optional `prometheus` scraper under the `observability` profile against `/internal/metrics`.
+name: maulwurf-prod
+
+x-arq-healthcheck: &arq-healthcheck
+  interval: 15s
+  timeout: 10s
+  retries: 5
+  start_period: 30s
+
+x-api-prod-env: &api-prod-env
+  MAULWURF_ENV: prod
+  MAULWURF_DATABASE_ROLE: maulwurf_app
+  MAULWURF_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-maulwurf}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres:5432/${POSTGRES_DB:-maulwurf}
+  MAULWURF_REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD required}@redis:6379/0
+  MAULWURF_PUBLIC_ORIGIN: https://${MAULWURF_DOMAIN:?MAULWURF_DOMAIN required}
+  MAULWURF_SECRET_KEY: ${MAULWURF_SECRET_KEY:?MAULWURF_SECRET_KEY required}
+  MAULWURF_ENCRYPTION_KEY: ${MAULWURF_ENCRYPTION_KEY:?MAULWURF_ENCRYPTION_KEY required}
+  MAULWURF_OAUTH_STATE_SECRET: ${MAULWURF_OAUTH_STATE_SECRET:?MAULWURF_OAUTH_STATE_SECRET required}
+  MAULWURF_METRICS_TOKEN: ${MAULWURF_METRICS_TOKEN:?MAULWURF_METRICS_TOKEN required}
+  MAULWURF_GOOGLE_CLIENT_ID: ${MAULWURF_GOOGLE_CLIENT_ID:?MAULWURF_GOOGLE_CLIENT_ID required}
+  MAULWURF_GOOGLE_CLIENT_SECRET: ${MAULWURF_GOOGLE_CLIENT_SECRET:?MAULWURF_GOOGLE_CLIENT_SECRET required}
+  MAULWURF_AUTH_RATE_LIMIT_PER_MINUTE: ${MAULWURF_AUTH_RATE_LIMIT_PER_MINUTE:-30}
+  MAULWURF_INTEGRATION_RATE_LIMIT_PER_MINUTE: ${MAULWURF_INTEGRATION_RATE_LIMIT_PER_MINUTE:-30}
+  MAULWURF_NOTIFICATION_SCHEDULER_ENABLED: ${MAULWURF_NOTIFICATION_SCHEDULER_ENABLED:-false}
+  MAULWURF_NOTIFICATION_DELIVERY_ENABLED: ${MAULWURF_NOTIFICATION_DELIVERY_ENABLED:-false}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-maulwurf}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      POSTGRES_DB: ${POSTGRES_DB:-maulwurf}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-maulwurf} -d ${POSTGRES_DB:-maulwurf}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [data]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD required}
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD required}
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-512mb}
+      - --maxmemory-policy
+      - noeviction
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+    networks: [data]
+    restart: unless-stopped
+
+  migrate:
+    image: ${MAULWURF_REGISTRY:-ghcr.io/nigrumhodo}/maulwurf-api:${MAULWURF_IMAGE_TAG:?MAULWURF_IMAGE_TAG required}
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *api-prod-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks: [data]
+    restart: "no"
+
+  api:
+    image: ${MAULWURF_REGISTRY:-ghcr.io/nigrumhodo}/maulwurf-api:${MAULWURF_IMAGE_TAG:?MAULWURF_IMAGE_TAG required}
+    environment:
+      <<: *api-prod-env
+      MAULWURF_INGEST_URL: http://ingest:8000
+      MAULWURF_INGEST_CREDENTIAL_SECRET: ${MAULWURF_INGEST_CREDENTIAL_SECRET:?MAULWURF_INGEST_CREDENTIAL_SECRET required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    expose: ["8000"]
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys;urllib.request.urlopen('http://127.0.0.1:8000/readyz',timeout=3);sys.exit(0)
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    networks: [edge, data]
+    restart: unless-stopped
+
+  worker:
+    image: ${MAULWURF_REGISTRY:-ghcr.io/nigrumhodo}/maulwurf-api:${MAULWURF_IMAGE_TAG:?MAULWURF_IMAGE_TAG required}
+    command: ["arq", "app.workers.arq_app.WorkerSettings"]
+    environment:
+      <<: *api-prod-env
+      MAULWURF_DATABASE_ROLE: maulwurf_jobs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    healthcheck:
+      <<: *arq-healthcheck
+      test: ["CMD", "arq", "app.workers.arq_app.WorkerSettings", "--check"]
+    networks: [data]
+    restart: unless-stopped
+
+  scheduler:
+    image: ${MAULWURF_REGISTRY:-ghcr.io/nigrumhodo}/maulwurf-api:${MAULWURF_IMAGE_TAG:?MAULWURF_IMAGE_TAG required}
+    command: ["arq", "app.workers.arq_app.SchedulerSettings"]
+    environment:
+      <<: *api-prod-env
+      MAULWURF_DATABASE_ROLE: maulwurf_jobs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    healthcheck:
+      <<: *arq-healthcheck
+      test: ["CMD", "arq", "app.workers.arq_app.SchedulerSettings", "--check"]
+    networks: [data]
+    restart: unless-stopped
+
+  ingest:
+    image: ${MAULWURF_REGISTRY:-ghcr.io/nigrumhodo}/maulwurf-ingest:${MAULWURF_IMAGE_TAG:?MAULWURF_IMAGE_TAG required}
+    user: "10001:10001"
+    init: true
+    read_only: true
+    tmpfs:
+      - /work/tmp:rw,noexec,nosuid,nodev,size=${INGEST_TMPFS_BYTES:-268435456},mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: ${INGEST_MEM_LIMIT:-1g}
+    memswap_limit: ${INGEST_MEM_LIMIT:-1g}
+    mem_swappiness: 0
+    cpus: 2
+    ulimits:
+      core: 0
+      nofile:
+        soft: 1024
+        hard: 1024
+    stop_grace_period: 30s
+    environment:
+      MAULWURF_ENV: prod
+      MAULWURF_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-maulwurf}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres:5432/${POSTGRES_DB:-maulwurf}
+      TMPDIR: /work/tmp
+      INGEST_CREDENTIAL_SECRET: ${MAULWURF_INGEST_CREDENTIAL_SECRET:?MAULWURF_INGEST_CREDENTIAL_SECRET required}
+      INGEST_CREDENTIAL_KID: ${MAULWURF_INGEST_CREDENTIAL_KID:-k1}
+      INGEST_CREDENTIAL_PREVIOUS_SECRET: ${INGEST_CREDENTIAL_PREVIOUS_SECRET:-}
+      INGEST_CREDENTIAL_PREVIOUS_KID: ${INGEST_CREDENTIAL_PREVIOUS_KID:-}
+      INGEST_MAX_UPLOAD_BYTES: ${INGEST_MAX_UPLOAD_BYTES:-209715200}
+      INGEST_FRAGMENT_OVERLAP_S: ${INGEST_FRAGMENT_OVERLAP_S:-0.25}
+      INGEST_FRAGMENT_SECONDS: ${INGEST_FRAGMENT_SECONDS:-30}
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:?NVIDIA_API_KEY required}
+      RIVA_SERVER: ${RIVA_SERVER:?RIVA_SERVER required}
+      RIVA_FUNCTION_ID: ${RIVA_FUNCTION_ID:?RIVA_FUNCTION_ID required}
+      RIVA_USE_SSL: ${RIVA_USE_SSL:-true}
+    deploy:
+      replicas: 1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    expose: ["8000"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys;urllib.request.urlopen('http://127.0.0.1:8000/readyz',timeout=3);sys.exit(0)
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    networks: [data]
+    restart: unless-stopped
+
+  web:
+    image: ${MAULWURF_REGISTRY:-ghcr.io/nigrumhodo}/maulwurf-web:${MAULWURF_IMAGE_TAG:?MAULWURF_IMAGE_TAG required}
+    depends_on:
+      api:
+        condition: service_healthy
+    expose: ["3000"]
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/').then(()=>process.exit(0)).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    networks: [edge]
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8-alpine@sha256:af32e97399febea808609119bb21544d0265c58a02836576e32a2d082c262c17
+    environment:
+      MAULWURF_DOMAIN: ${MAULWURF_DOMAIN:?MAULWURF_DOMAIN required}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    networks: [edge]
+    restart: unless-stopped
+
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v2.55.1@sha256:29b60b2e64b911c3b71982e89d22192256b4d22e95443400e0d1273f0549093b
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ${PROMETHEUS_SECRETS_DIR:-./deploy/secrets}:/etc/prometheus/secrets:ro
+      - promdata:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    networks: [data]
+    restart: unless-stopped
+
+networks:
+  edge:
+  data:
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+  promdata:

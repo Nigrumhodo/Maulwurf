@@ -14,11 +14,12 @@
 	admin off
 
 	# J2.10: no total write deadline (0) because `/audios/*/progress` is SSE and a
-	# finite write timeout would cut long classes. read_body covers the provisional
-	# 15-minute upload window with margin; read_header and idle stay bounded.
+	# finite write timeout would cut long classes. read_body 40m aligns with
+	# docs/eval/ttl-benchmark.md to cover large upload windows with margin;
+	# read_header and idle stay bounded.
 	servers {
 		timeouts {
-			read_body 20m
+			read_body 40m
 			read_header 30s
 			write 0
 			idle 5m

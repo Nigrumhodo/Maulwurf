@@ -1,0 +1,23 @@
+# J4.7 — Prometheus scrape configuration for internal authenticated endpoints.
+# Mount bearer token files (`api_metrics_token`, `ingest_credential_secret`) into
+# `/etc/prometheus/secrets` with mode 0400; `/internal/metrics` never leaves the `data` network.
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: maulwurf-api
+    metrics_path: /internal/metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/api_metrics_token
+    static_configs:
+      - targets: ["api:8000"]
+
+  - job_name: maulwurf-ingest
+    metrics_path: /internal/metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/ingest_credential_secret
+    static_configs:
+      - targets: ["ingest:8000"]

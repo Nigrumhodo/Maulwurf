@@ -18,6 +18,7 @@ y una sesión viva del mismo usuario. Un fallo de arranque vuelve a
 """
 
 import time
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -50,6 +51,7 @@ router = APIRouter(tags=["integrations"])
 
 CALENDAR_CONNECT = "connect"
 CALENDAR_RECONNECT = "reconnect"
+GMAIL_CONNECT = "gmail_connect"
 SETTINGS_PATH = "/settings"
 
 # Closed vocabulary the Settings page renders (D3.7). Unknown codes fall back to `error`.
@@ -65,6 +67,14 @@ _NAVIGATION_REASONS = {
 def _calendar_error_redirect(reason: str) -> RedirectResponse:
     redirect = RedirectResponse(
         f"{SETTINGS_PATH}?calendar=error&reason={reason}", status_code=302
+    )
+    redirect.headers["Cache-Control"] = "no-store"
+    return redirect
+
+
+def _gmail_error_redirect(reason: str) -> RedirectResponse:
+    redirect = RedirectResponse(
+        f"{SETTINGS_PATH}?gmail=error&reason={reason}", status_code=302
     )
     redirect.headers["Cache-Control"] = "no-store"
     return redirect
@@ -134,6 +144,30 @@ async def integrations_status(
     return IntegrationsStatus(google=google)
 
 
+def _build_incremental_redirect(
+    user: User, *, scopes: Sequence[str], mode: str
+) -> RedirectResponse:
+    auth_req = oauth_google.build_incremental_authorization_request(
+        scopes=scopes, login_hint=user.email
+    )
+    token = sign_state(
+        {
+            "state": auth_req.state,
+            "nonce": auth_req.nonce,
+            "code_verifier": auth_req.code_verifier,
+            # Bind the grant to the tenant that started it: a callback answered by another
+            # session (or another browser) must not attach the tokens to this user.
+            "mode": mode,
+            "user_id": str(user.id),
+            "exp": int(time.time()) + OAUTH_STATE_TTL_SECONDS,
+        }
+    )
+    redirect = RedirectResponse(auth_req.url, status_code=302)
+    redirect.headers["Cache-Control"] = "no-store"
+    set_oauth_state_cookie(redirect, token, OAUTH_STATE_TTL_SECONDS)
+    return redirect
+
+
 async def _start_calendar_flow(
     db: DbSession, session: SessionRow, *, reconnect: bool
 ) -> RedirectResponse:
@@ -150,25 +184,20 @@ async def _start_calendar_flow(
         (credential.scopes or []) if credential is not None else [],
         reconnect=reconnect,
     )
-    request = oauth_google.build_incremental_authorization_request(
-        scopes=scopes, login_hint=user.email
+    mode = CALENDAR_RECONNECT if reconnect else CALENDAR_CONNECT
+    return _build_incremental_redirect(user, scopes=scopes, mode=mode)
+
+
+async def _start_gmail_flow(db: DbSession, session: SessionRow) -> RedirectResponse:
+    """Build the incremental OAuth URL requesting only `gmail.send`."""
+    if settings.google_client_id is None or settings.google_client_secret is None:
+        raise google_integration_unavailable()
+    user = await db.get(User, session.user_id)
+    if user is None:
+        raise auth_required()
+    return _build_incremental_redirect(
+        user, scopes=(oauth_google.GMAIL_SEND_SCOPE,), mode=GMAIL_CONNECT
     )
-    token = sign_state(
-        {
-            "state": request.state,
-            "nonce": request.nonce,
-            "code_verifier": request.code_verifier,
-            "mode": CALENDAR_RECONNECT if reconnect else CALENDAR_CONNECT,
-            # Bind the grant to the tenant that started it: a callback answered by another
-            # session (or another browser) must not attach the tokens to this user.
-            "user_id": str(user.id),
-            "exp": int(time.time()) + OAUTH_STATE_TTL_SECONDS,
-        }
-    )
-    redirect = RedirectResponse(request.url, status_code=302)
-    redirect.headers["Cache-Control"] = "no-store"
-    set_oauth_state_cookie(redirect, token, OAUTH_STATE_TTL_SECONDS)
-    return redirect
 
 
 def _reject_cross_site_navigation(request: Request) -> None:
@@ -176,6 +205,24 @@ def _reject_cross_site_navigation(request: Request) -> None:
     fetch_site = request.headers.get("sec-fetch-site", "none").lower()
     if fetch_site not in {"none", "same-origin"}:
         raise ApiError(403, "csrf_invalid", "Navegación de origen cruzado no permitida.")
+
+
+async def _start_oauth_navigation(
+    request: Request,
+    session: CurrentSession,
+    redis: RedisDep,
+    starter: Callable[[], Awaitable[RedirectResponse]],
+    error_redirect: Callable[[str], RedirectResponse],
+) -> RedirectResponse:
+    """Shared GET OAuth navigation guard for browser-initiated incremental consent."""
+    try:
+        _reject_cross_site_navigation(request)
+        await enforce_integration_limit(redis, session.user_id)
+        return await starter()
+    except ApiError as exc:
+        if exc.code == "auth_required":
+            return _login_redirect()
+        return error_redirect(_NAVIGATION_REASONS.get(exc.code, "error"))
 
 
 async def _start_calendar_navigation(
@@ -186,22 +233,14 @@ async def _start_calendar_navigation(
     *,
     reconnect: bool,
 ) -> RedirectResponse:
-    """GET entry point for a real browser navigation (D3.7).
-
-    A `fetch` POST cannot follow the cross-origin `302` to Google and the browser never
-    shows the consent screen, so the UI links here. The signed `state` still binds the
-    grant to this session's `user_id`, and the callback still needs Google's explicit
-    consent plus a live session of the same user. Expected start failures are redirected
-    back to Settings instead of rendering JSON in a navigation.
-    """
-    try:
-        _reject_cross_site_navigation(request)
-        await enforce_integration_limit(redis, session.user_id)
-        return await _start_calendar_flow(db, session, reconnect=reconnect)
-    except ApiError as exc:
-        if exc.code == "auth_required":
-            return _login_redirect()
-        return _calendar_error_redirect(_NAVIGATION_REASONS.get(exc.code, "error"))
+    """GET entry point for a real browser navigation (D3.7)."""
+    return await _start_oauth_navigation(
+        request,
+        session,
+        redis,
+        lambda: _start_calendar_flow(db, session, reconnect=reconnect),
+        _calendar_error_redirect,
+    )
 
 
 @router.get(
@@ -260,3 +299,42 @@ async def google_reconnect(
     db: DbSession, session: MutationSession, _limit: IntegrationRateLimit
 ) -> RedirectResponse:
     return await _start_calendar_flow(db, session, reconnect=True)
+
+
+@router.get(
+    "/integrations/google/gmail/connect",
+    status_code=302,
+    response_model=None,
+    responses={
+        302: {
+            "description": (
+                "Browser navigation: Google gmail.send consent or /settings on failure"
+            )
+        },
+    },
+)
+async def google_gmail_connect_navigation(
+    request: Request, db: DbSession, session: CurrentSession, redis: RedisDep
+) -> RedirectResponse:
+    return await _start_oauth_navigation(
+        request,
+        session,
+        redis,
+        lambda: _start_gmail_flow(db, session),
+        _gmail_error_redirect,
+    )
+
+
+@router.post(
+    "/integrations/google/gmail/connect",
+    status_code=302,
+    response_model=None,
+    responses={
+        429: {"description": "rate_limited when the configured consent limit is exceeded"},
+        503: {"description": "capacity_unavailable: el limitador no está disponible"},
+    },
+)
+async def google_gmail_connect(
+    db: DbSession, session: MutationSession, _limit: IntegrationRateLimit
+) -> RedirectResponse:
+    return await _start_gmail_flow(db, session)

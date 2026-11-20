@@ -59,6 +59,7 @@ router = APIRouter(tags=["auth"])
 CALENDAR_CONNECT = "connect"
 CALENDAR_RECONNECT = "reconnect"
 CALENDAR_MODES = frozenset({CALENDAR_CONNECT, CALENDAR_RECONNECT})
+GMAIL_CONNECT = "gmail_connect"
 SETTINGS_PATH = "/settings"
 
 
@@ -88,6 +89,16 @@ def _login_error(reason: str) -> RedirectResponse:
 
 def _calendar_result(result: str, *, reason: str | None = None) -> RedirectResponse:
     query = f"calendar={result}"
+    if reason is not None:
+        query = f"{query}&reason={reason}"
+    redirect = RedirectResponse(f"{SETTINGS_PATH}?{query}", status_code=302)
+    redirect.headers["Cache-Control"] = "no-store"
+    clear_oauth_state_cookie(redirect)
+    return redirect
+
+
+def _gmail_result(result: str, *, reason: str | None = None) -> RedirectResponse:
+    query = f"gmail={result}"
     if reason is not None:
         query = f"{query}&reason={reason}"
     redirect = RedirectResponse(f"{SETTINGS_PATH}?{query}", status_code=302)
@@ -261,6 +272,73 @@ async def _calendar_callback(
     return _calendar_result("connected")
 
 
+async def _gmail_callback(
+    request: Request,
+    db: DbSession,
+    payload: dict[str, object],
+    *,
+    error: str | None,
+    code: str | None,
+    state: str | None,
+) -> RedirectResponse:
+    """Complete an incremental `gmail.send` grant without touching Calendar settings."""
+    expected_state = payload.get("state")
+    nonce = payload.get("nonce")
+    code_verifier = payload.get("code_verifier")
+    bound_user = payload.get("user_id")
+    mode = payload.get("mode")
+    if (
+        not isinstance(expected_state, str)
+        or not isinstance(nonce, str)
+        or not isinstance(code_verifier, str)
+        or not isinstance(bound_user, str)
+        or not isinstance(state, str)
+        or mode != GMAIL_CONNECT
+        or not _constant_eq(state, expected_state)
+    ):
+        return _gmail_result("error", reason="invalid_state")
+    if error is not None:
+        return _gmail_result("error", reason="access_denied")
+    if code is None:
+        return _gmail_result("error", reason="missing_params")
+
+    session = await sessions.resolve_session(db, request.cookies.get(COOKIE_NAME))
+    if session is None:
+        return _login_error("session_expired")
+    user_id = session.user_id
+    if bound_user != str(user_id):
+        await db.rollback()
+        return _gmail_result("error", reason="state_mismatch")
+    await db.commit()
+
+    try:
+        tokens = await oauth_google.exchange_code(code, code_verifier)
+        id_token = tokens.id_token
+        if not isinstance(id_token, str):
+            raise OAuthError("token_exchange_incomplete")
+        claims = await oauth_google.verify_id_token(id_token, nonce)
+    except OAuthError:
+        return _gmail_result("error", reason="oauth_failed")
+
+    await set_current_user(db, user_id)
+    user = await db.get(User, user_id)
+    if user is None or user.status != "active":
+        await db.rollback()
+        return _login_error("session_expired")
+    if claims.sub != user.google_sub:
+        await db.rollback()
+        return _gmail_result("error", reason="wrong_account")
+    if not oauth_google.gmail_send_granted(oauth_google.granted_scopes(tokens)):
+        await db.rollback()
+        return _gmail_result("error", reason="scope_required")
+
+    await oauth_google.apply_incremental_grant(
+        db, user, tokens, requested_scopes=(oauth_google.GMAIL_SEND_SCOPE,)
+    )
+    await db.commit()
+    return _gmail_result("connected")
+
+
 @router.get(
     "/auth/google/callback",
     response_model=None,
@@ -283,6 +361,11 @@ async def google_callback(
     if mode in CALENDAR_MODES:
         assert payload is not None  # noqa: S101 - `mode` can only come from the payload
         return await _calendar_callback(
+            request, db, payload, error=error, code=code, state=state
+        )
+    if mode == GMAIL_CONNECT:
+        assert payload is not None  # noqa: S101 - `mode` can only come from the payload
+        return await _gmail_callback(
             request, db, payload, error=error, code=code, state=state
         )
     if error is not None:

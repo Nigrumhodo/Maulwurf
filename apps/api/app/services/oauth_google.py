@@ -52,6 +52,7 @@ CALENDAR_SCOPES = (
     "https://www.googleapis.com/auth/calendar.events.readonly",
     "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
 )
+GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
 _CALENDAR_SCOPE_PREFIX = "https://www.googleapis.com/auth/"
 
 # Cookie HttpOnly firmada que custodia state/nonce/code_verifier entre start y callback.
@@ -171,6 +172,11 @@ def scope_granted(granted: Sequence[str], scope: str) -> bool:
 
 def missing_calendar_scopes(granted: Sequence[str]) -> list[str]:
     return [scope for scope in CALENDAR_SCOPES if not scope_granted(granted, scope)]
+
+
+def gmail_send_granted(granted: Sequence[str]) -> bool:
+    """Whether the incremental Gmail send capability scope is granted."""
+    return scope_granted(granted, GMAIL_SEND_SCOPE)
 
 
 class GoogleTokenResponse(BaseModel):
