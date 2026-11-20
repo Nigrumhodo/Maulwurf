@@ -28,6 +28,9 @@ from app.workers.jobs.analyze import analyze as analyze
 from app.workers.jobs.calendar_sync import JOB_TIMEOUT_S as CALENDAR_SYNC_TIMEOUT_S
 from app.workers.jobs.calendar_sync import MAX_TRIES as CALENDAR_SYNC_MAX_TRIES
 from app.workers.jobs.calendar_sync import sync_task_event
+from app.workers.jobs.deliver_notification import JOB_TIMEOUT_S as DELIVERY_TIMEOUT_S
+from app.workers.jobs.deliver_notification import MAX_TRIES as DELIVERY_MAX_TRIES
+from app.workers.jobs.deliver_notification import deliver_notification
 from app.workers.reconciler import reconcile_once
 from app.workers.retry import MAX_TRIES as ANALYSIS_MAX_TRIES
 
@@ -77,21 +80,17 @@ async def dispatch_outbox(ctx: dict[str, Any]) -> None:
 
 
 async def schedule_notifications(ctx: dict[str, Any]) -> None:
-    """Scheduler cron (J4.2): the elected scheduler claims due M8 occurrences.
+    """Scheduler cron (J4.2/J4.1): elect role, claim due M8 occurrences and enqueue jobs.
 
     The lease and the claim share one transaction (the `session_scope` commit), so only the
-    elected role claims and the election is durable before the next tick. A failure is logged
-    by type only; the next minute retries, and an expired delivery lease is closed as
+    elected role claims and the election is durable before `deliver_notification` jobs are
+    enqueued. A failure is logged by type only; an expired delivery lease closes as terminal
     `delivery_unknown` instead of being retried automatically.
 
-    Disabled by default (`MAULWURF_NOTIFICATION_SCHEDULER_ENABLED=false`): J4.1 (Gmail) owns
-    the consumer of `sending`, and claiming before it is deployed would turn due rows into a
-    false, terminal `delivery_unknown` after the delivery lease expires. With either flag
-    off the cron returns before opening a session: it neither elects nor moves any row.
-    `MAULWURF_NOTIFICATION_DELIVERY_ENABLED` is the consumer gate, so the scheduler flag
-    alone cannot leave due rows in `sending`.
+    Disabled by default (`MAULWURF_NOTIFICATION_SCHEDULER_ENABLED=false` and
+    `MAULWURF_NOTIFICATION_DELIVERY_ENABLED=false`): with either gate off the cron returns
+    before opening a session so due rows cannot turn into false `delivery_unknown`.
     """
-    del ctx  # The cron needs no Redis; delivery is J4.1's job.
     if not settings.notification_scheduler_enabled or not settings.notification_delivery_enabled:
         return
     token = bind_cross_tenant()
@@ -107,6 +106,20 @@ async def schedule_notifications(ctx: dict[str, Any]) -> None:
             return
     finally:
         reset_cross_tenant(token)
+    redis = ctx.get("redis")
+    if report.active and report.claimed_ids and redis is not None:
+        for notification_id in report.claimed_ids:
+            try:
+                await redis.enqueue_job(
+                    "deliver_notification",
+                    str(notification_id),
+                    _queue_name=WORKER_QUEUE,
+                )
+            except Exception as exc:
+                # Lease expiry closes unqueued claims to `delivery_unknown`; never retry.
+                logger.warning(
+                    "schedule_notifications.enqueue_failed error=%s", type(exc).__name__
+                )
     if report.active and (report.claimed or report.expired):
         logger.info(
             "schedule_notifications claimed=%d expired=%d",
@@ -195,7 +208,8 @@ async def startup(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    # `index`, `analyze` and Calendar sync have their own retry budgets (J2.2/S3.6/J3.4).
+    # `index`, `analyze` and Calendar sync have their own retry budgets (J2.2/S3.6/J3.4);
+    # `deliver_notification` is strictly one attempt (J4.1/J4.5).
     functions: ClassVar[list[Function | Callable[..., Awaitable[None]]]] = [
         func(index, max_tries=MAX_TRIES, timeout=JOB_TIMEOUT_S),
         func(analyze, max_tries=ANALYSIS_MAX_TRIES, timeout=ANALYZE_TIMEOUT_S),
@@ -203,6 +217,11 @@ class WorkerSettings:
             sync_task_event,
             max_tries=CALENDAR_SYNC_MAX_TRIES,
             timeout=CALENDAR_SYNC_TIMEOUT_S,
+        ),
+        func(
+            deliver_notification,
+            max_tries=DELIVERY_MAX_TRIES,
+            timeout=DELIVERY_TIMEOUT_S,
         ),
     ]
     queue_name = WORKER_QUEUE

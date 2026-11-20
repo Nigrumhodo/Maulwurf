@@ -115,12 +115,13 @@ class ClaimedNotification:
 
 @dataclass(frozen=True)
 class SchedulerReport:
-    """Outcome of one scheduler tick; counts only, never a row payload."""
+    """Outcome of one scheduler tick; counts and claimed IDs only, never a row payload."""
 
     active: bool
     expired: int = 0
     claimed: int = 0
     lease: SchedulerLeaseClaim | None = None
+    claimed_ids: tuple[uuid.UUID, ...] = ()
 
 
 def process_holder() -> str:
@@ -388,4 +389,5 @@ async def run_notification_scheduler(
         expired=expired,
         claimed=len(claimed),
         lease=lease,
+        claimed_ids=tuple(row.id for row in claimed),
     )

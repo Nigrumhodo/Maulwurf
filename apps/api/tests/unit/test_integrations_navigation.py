@@ -49,10 +49,17 @@ def _build_app(user: User, session: Session) -> FastAPI:
     return app
 
 
-@pytest.mark.parametrize("path", ["/integrations/google/connect", "/integrations/google/reconnect"])
+@pytest.mark.parametrize(
+    ("path", "expected_query"),
+    [
+        ("/integrations/google/connect", "calendar=error&reason=csrf_invalid"),
+        ("/integrations/google/reconnect", "calendar=error&reason=csrf_invalid"),
+        ("/integrations/google/gmail/connect", "gmail=error&reason=csrf_invalid"),
+    ],
+)
 @pytest.mark.parametrize("fetch_site", ["cross-site", "Cross-Site", "same-site"])
 async def test_navigation_rejects_cross_site_sec_fetch_site(
-    monkeypatch: pytest.MonkeyPatch, path: str, fetch_site: str
+    monkeypatch: pytest.MonkeyPatch, path: str, expected_query: str, fetch_site: str
 ) -> None:
     user_id = uuid.uuid4()
     user = User(id=user_id, email="student@example.test", google_sub="sub-1", display_name="A")
@@ -75,9 +82,54 @@ async def test_navigation_rejects_cross_site_sec_fetch_site(
         )
 
     assert response.status_code == 302
-    assert response.headers["location"] == "/settings?calendar=error&reason=csrf_invalid"
+    assert response.headers["location"] == f"/settings?{expected_query}"
     assert deps.OAUTH_COOKIE_NAME not in response.cookies
     limit_spy.assert_not_awaited()
+
+
+async def test_gmail_connect_navigation_allows_same_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id = uuid.uuid4()
+    user = User(id=user_id, email="student@example.test", google_sub="sub-1", display_name="A")
+    session = Session(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        token_hash=sessions._sha256("tok"),
+        csrf_hash=sessions._sha256("csrf"),
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    limit_spy = AsyncMock()
+    captured_scopes: list[list[str]] = []
+
+    def fake_build(*, scopes: list[str], login_hint: str) -> oauth_google.AuthorizationRequest:
+        assert login_hint == "student@example.test"
+        captured_scopes.append(list(scopes))
+        return oauth_google.AuthorizationRequest(
+            url="https://accounts.google.com/o/oauth2/v2/auth?state=g1",
+            state="g1",
+            nonce="gn1",
+            code_verifier="gcv1",
+        )
+
+    monkeypatch.setattr(integrations, "enforce_integration_limit", limit_spy)
+    monkeypatch.setattr(settings, "google_client_id", "client-id")
+    monkeypatch.setattr(settings, "google_client_secret", SecretStr("client-secret"))
+    monkeypatch.setattr(oauth_google, "build_incremental_authorization_request", fake_build)
+
+    app = _build_app(user, session)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
+        response = await client.get(
+            "/integrations/google/gmail/connect",
+            headers={"Sec-Fetch-Site": "same-origin"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert response.headers["location"].startswith("https://accounts.google.com/o/oauth2/v2/auth")
+    assert captured_scopes == [[oauth_google.GMAIL_SEND_SCOPE]]
+    assert deps.OAUTH_COOKIE_NAME in response.cookies
+    limit_spy.assert_awaited_once()
 
 
 async def test_connect_navigation_allows_same_origin(monkeypatch: pytest.MonkeyPatch) -> None:

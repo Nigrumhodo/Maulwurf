@@ -30,6 +30,9 @@ from app.workers.index_job import MAX_TRIES, index
 from app.workers.jobs.calendar_sync import JOB_TIMEOUT_S as CALENDAR_SYNC_TIMEOUT_S
 from app.workers.jobs.calendar_sync import MAX_TRIES as CALENDAR_SYNC_MAX_TRIES
 from app.workers.jobs.calendar_sync import sync_task_event
+from app.workers.jobs.deliver_notification import JOB_TIMEOUT_S as DELIVERY_TIMEOUT_S
+from app.workers.jobs.deliver_notification import MAX_TRIES as DELIVERY_MAX_TRIES
+from app.workers.jobs.deliver_notification import deliver_notification
 from app.workers.retry import MAX_TRIES as ANALYSIS_MAX_TRIES
 
 
@@ -54,7 +57,9 @@ def test_health_key_expires_fast_enough_to_detect_a_dead_process() -> None:
 
 
 def test_worker_registers_index_analyze_and_calendar_sync_with_their_budgets() -> None:
-    index_function, analyze_function, calendar_function = WorkerSettings.functions
+    index_function, analyze_function, calendar_function, delivery_function = (
+        WorkerSettings.functions
+    )
     assert isinstance(index_function, Function)
     assert index_function.coroutine is index
     assert index_function.max_tries == MAX_TRIES
@@ -65,6 +70,10 @@ def test_worker_registers_index_analyze_and_calendar_sync_with_their_budgets() -
     assert calendar_function.coroutine is sync_task_event
     assert calendar_function.max_tries == CALENDAR_SYNC_MAX_TRIES
     assert calendar_function.timeout_s == CALENDAR_SYNC_TIMEOUT_S
+    assert isinstance(delivery_function, Function)
+    assert delivery_function.coroutine is deliver_notification
+    assert delivery_function.max_tries == DELIVERY_MAX_TRIES == 1
+    assert delivery_function.timeout_s == DELIVERY_TIMEOUT_S
 
 
 def test_scheduler_runs_the_outbox_notification_digest_reconciler_and_retention_crons() -> None:
@@ -153,6 +162,44 @@ async def test_notification_scheduler_cron_uses_the_cross_tenant_jobs_policy(
     await schedule_notifications({})
 
     assert events == ["bind", ("run", True), True]
+
+
+async def test_notification_scheduler_cron_enqueues_claimed_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import uuid
+
+    nid_1 = uuid.uuid4()
+    nid_2 = uuid.uuid4()
+    enqueued: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    class FakeRedis:
+        async def enqueue_job(
+            self, name: str, *args: object, **kwargs: object
+        ) -> None:
+            enqueued.append((name, args, kwargs))
+
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[object]:
+        yield object()
+
+    async def fake_run(db: object, *, enabled: bool) -> SchedulerReport:
+        del db, enabled
+        return SchedulerReport(active=True, claimed=2, claimed_ids=(nid_1, nid_2))
+
+    monkeypatch.setattr(app_settings, "notification_scheduler_enabled", True)
+    monkeypatch.setattr(app_settings, "notification_delivery_enabled", True)
+    monkeypatch.setattr(arq_app, "bind_cross_tenant", lambda: object())
+    monkeypatch.setattr(arq_app, "reset_cross_tenant", lambda _tok: None)
+    monkeypatch.setattr(arq_app, "session_scope", scope)
+    monkeypatch.setattr(arq_app, "run_notification_scheduler", fake_run)
+
+    await schedule_notifications({"redis": FakeRedis()})
+
+    assert enqueued == [
+        ("deliver_notification", (str(nid_1),), {"_queue_name": arq_app.WORKER_QUEUE}),
+        ("deliver_notification", (str(nid_2),), {"_queue_name": arq_app.WORKER_QUEUE}),
+    ]
 
 
 async def test_notification_scheduler_cron_is_a_no_op_while_disabled(

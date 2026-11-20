@@ -1,0 +1,81 @@
+# J4.7 — Production edge ingress over HTTPS (single origin for web + API).
+{
+	admin off
+
+	servers {
+		timeouts {
+			read_body 40m
+			read_header 30s
+			write 0
+			idle 5m
+		}
+	}
+}
+
+{$MAULWURF_DOMAIN} {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Ephemeral streaming upload: API streams to ingest on the private data network.
+	@upload {
+		method PUT
+		path /audios/*/content
+	}
+	handle @upload {
+		request_body {
+			max_size 220MB
+		}
+		reverse_proxy api:8000
+	}
+
+	# Internal metrics and ingest endpoints never leave the private data network.
+	@internal path /internal/*
+	handle @internal {
+		respond 404
+	}
+
+	@progress path /audios/*/progress
+	handle @progress {
+		request_body {
+			max_size 10MB
+		}
+		reverse_proxy api:8000 {
+			flush_interval -1
+		}
+	}
+
+	@chat_sse path /chat/conversations/*/messages
+	handle @chat_sse {
+		request_body {
+			max_size 10MB
+		}
+		reverse_proxy api:8000 {
+			flush_interval -1
+		}
+	}
+
+	@api path /auth/* /me /me/* /subjects /subjects/* /integrations/* /audios /audios/* /ingestion/* /search /chat/* /calendar /calendar/* /tasks /tasks/* /notifications /notifications/* /healthz /readyz
+	handle @api {
+		request_body {
+			max_size 10MB
+		}
+		reverse_proxy api:8000
+	}
+
+	handle {
+		request_body {
+			max_size 10MB
+		}
+		reverse_proxy web:3000
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from app.services.analysis_windows import DEFAULT_OVERLAP_TOKENS, DEFAULT_TARGET_TOKENS
+from app.services.chunking import tokenizer_is_exact
 from tools.eval.window_cost import (
     DEFAULT_MANIFEST,
     DEFAULT_PROFILE,
@@ -77,7 +78,15 @@ def test_no_overlap_profile_does_not_repeat_tokens() -> None:
         measurement = measure_class(loaded, profile)
 
         assert measurement.overlap_tokens == 0
-        assert measurement.total_tokens == measurement.transcript_tokens
+        if tokenizer_is_exact():
+            assert measurement.total_tokens == measurement.transcript_tokens
+        else:
+            # Offline heuristic fallback applies math.ceil(raw * 1.5) per window split.
+            assert (
+                measurement.transcript_tokens
+                <= measurement.total_tokens
+                <= measurement.transcript_tokens + measurement.windows - 1
+            )
 
 
 def test_larger_windows_reduce_the_number_of_provider_calls() -> None:
