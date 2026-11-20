@@ -76,6 +76,7 @@ export function calendarTargetLabel(google: GoogleStatus): string {
 // values fall back to a generic message instead of echoing the query string.
 const CALENDAR_ERRORS: Record<string, string> = {
   not_configured: "La integración con Google no está configurada en el servidor.",
+  csrf_invalid: "La petición vino de otro sitio; ábrela desde Maulwurf.",
   not_connected: "No hay una integración de Google que reconectar.",
   rate_limited: "Demasiados intentos; espera un momento y vuelve a intentar.",
   capacity_unavailable: "El servicio no está disponible; inténtalo más tarde.",

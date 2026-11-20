@@ -129,6 +129,20 @@ export async function reuploadAudio(audioId: string): Promise<AudioCreated> {
   return (await res.json()) as AudioCreated;
 }
 
+export interface AudioDeleted {
+  audio_id: string;
+  purged: Record<string, number>;
+  notice: string;
+}
+
+/** `DELETE /audios/{id}`: tombstonea la clase y purga derivados; conserva eventos de Google. */
+export async function deleteAudio(audioId: string): Promise<AudioDeleted> {
+  const res = await apiFetch(`/audios/${encodeURIComponent(audioId)}`, {
+    method: "DELETE",
+  });
+  return (await res.json()) as AudioDeleted;
+}
+
 /** Agrupa preservando el orden del servidor (más recientes primero) dentro de cada materia. */
 export function groupBySubject(items: readonly LibraryAudio[]): SubjectGroup[] {
   const groups: SubjectGroup[] = [];

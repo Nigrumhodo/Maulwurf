@@ -347,6 +347,7 @@ export async function sendChatMessage({
   });
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
+  let failed = false;
   try {
     while (!terminal) {
       const { done, value } = await reader.read();
@@ -357,8 +358,11 @@ export async function sendChatMessage({
       parser.push(decoder.decode());
       parser.flush();
     }
+  } catch (error) {
+    failed = true;
+    throw error;
   } finally {
-    if (terminal) {
+    if (terminal || failed) {
       await reader.cancel().catch(() => undefined);
     }
     reader.releaseLock();
@@ -367,6 +371,9 @@ export async function sendChatMessage({
 }
 
 export function chatActionError(error: unknown): string {
+  if (error instanceof Error && error.message === "sse_frame_too_large") {
+    return "la respuesta del chat superó el tamaño máximo de frame SSE.";
+  }
   if (error instanceof ApiHttpError) {
     if (error.status === 429) {
       return `${error.message} Ya hay demasiados streams abiertos; espera un momento.`;

@@ -1,6 +1,6 @@
 // D2.6 — C-S2-DA-05 (soporte unitario): parser SSE incremental del chat.
 import { describe, expect, it } from "vitest";
-import { createSseParser } from "@/lib/stream";
+import { createSseParser, MAX_BUFFER_CHARS } from "@/lib/stream";
 import type { SseFrame } from "@/lib/stream";
 
 function collect(): { frames: SseFrame[]; push: (chunk: string) => void; flush: () => void } {
@@ -40,6 +40,16 @@ describe("createSseParser", () => {
     parser.push("event: done\ndata: {}");
     expect(parser.frames).toEqual([]);
     parser.flush();
+    expect(parser.frames).toEqual([{ event: "done", id: null, data: "{}" }]);
+  });
+
+  it("aborta frames sin separador que superen el límite máximo de buffer", () => {
+    const parser = collect();
+    parser.push("x".repeat(MAX_BUFFER_CHARS));
+    expect(() => parser.push("y")).toThrow("sse_frame_too_large");
+
+    // El buffer quedó limpio tras el error y acepta un frame válido posterior.
+    parser.push("event: done\ndata: {}\n\n");
     expect(parser.frames).toEqual([{ event: "done", id: null, data: "{}" }]);
   });
 });

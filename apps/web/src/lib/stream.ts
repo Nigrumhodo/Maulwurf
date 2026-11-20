@@ -2,6 +2,8 @@
 // porque el envío es un POST con CSRF; además, los frames pueden partirse entre chunks.
 // El parser no interpreta el JSON: solo entrega eventos nombrados con su `id` opaco.
 
+export const MAX_BUFFER_CHARS = 1_000_000;
+
 export interface SseFrame {
   event: string;
   id: string | null;
@@ -58,6 +60,10 @@ export function createSseParser(onFrame: (frame: SseFrame) => void): SseParser {
 
   return {
     push(chunk: string) {
+      if (buffer.length + chunk.length > MAX_BUFFER_CHARS) {
+        buffer = "";
+        throw new Error("sse_frame_too_large");
+      }
       buffer += chunk;
       drain(false);
     },

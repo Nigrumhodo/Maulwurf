@@ -3,6 +3,7 @@ import { parseProgressFrame, streamAudioProgress } from "@/lib/audios";
 import { clearCsrfToken } from "@/lib/csrf";
 import { streamSse } from "@/lib/sse";
 import type { SseFrame } from "@/lib/sse";
+import { MAX_BUFFER_CHARS } from "@/lib/stream";
 
 const encoder = new TextEncoder();
 
@@ -81,6 +82,32 @@ describe("streamSse", () => {
       name: "AbortError",
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("corta el stream si un frame excede MAX_BUFFER_CHARS", async () => {
+    let cancelled = false;
+    const oversized = "data: " + "a".repeat(MAX_BUFFER_CHARS + 16);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(oversized));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(stream, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        }),
+      ),
+    );
+
+    const frames = streamSse("/audios/a1/progress");
+    await expect(frames.next()).rejects.toThrow("sse_frame_too_large");
+    expect(cancelled).toBe(true);
   });
 });
 
