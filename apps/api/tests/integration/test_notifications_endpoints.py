@@ -234,6 +234,31 @@ async def test_patch_updates_only_the_sent_fields_and_persists_them(
     assert row.reminder_offsets_hours == [48, 24, 2]
 
 
+async def test_first_write_partial_patch_refreshes_all_server_defaults(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    actor = await _verified_actor(db_session)
+    assert await db_session.get(CalendarSettings, actor.user_id) is None
+
+    response = await client.patch(
+        PREFERENCES,
+        json={"gmail_opt_in": True},
+        cookies=actor.cookies,
+        headers=actor.headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["gmail_opt_in"] is True
+    assert body["digest_daily_enabled"] is False
+    assert body["digest_daily_time"] == "07:00"
+    assert body["digest_weekly_enabled"] is False
+    assert body["digest_weekday"] == 0
+    assert body["reminder_offsets_hours"] == [48, 24, 2]
+    assert body["reminder_allday_offsets_days"] == [3, 1]
+    assert body["updated_at"] is not None
+
+
 async def test_an_empty_patch_is_a_no_op_and_does_not_create_the_row(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

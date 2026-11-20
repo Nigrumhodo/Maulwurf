@@ -1,0 +1,74 @@
+C-S4-DA-01 — Notification preferences: Gmail opt-in, digest time, visible thresholds
+
+Date: 2026-11-16 (UTC) / local 2026-11-17
+Environment: Windows 11, Node 24.12.0 local (CI Node 22), Docker Compose local stack
+(api, web, postgres, redis, worker, scheduler, caddy), Microsoft Edge headless via
+playwright-core, PostgreSQL 16/pgvector.
+Branch: d4.1 (stacked on frontJJ). PR: #176 (base frontJJ).
+
+1. Web gates
+   cd apps/web
+   npm run typecheck            -> OK
+   npm run lint                 -> OK
+   npx vitest run --maxWorkers=2 --testTimeout=20000
+                                -> 230 passed in 39 files
+   npm run build                -> 411 modules transformed
+
+   Targeted suites:
+   preferences.test.ts                   16 passed
+   notifications-preferences.test.tsx     8 passed
+   settings-page.test.tsx                 5 passed
+
+2. API gates
+   cd apps/api
+   uv run ruff check app/services/notification_center.py   -> OK
+   uv run mypy app/services/notification_center.py         -> OK
+   uv run pytest tests/unit/test_notification_preferences.py tests/unit/test_digests.py -q
+                                                           -> 52 passed
+
+3. Browser C-S4-DA-01 (/settings, local compose)
+   Load:
+   - "notificaciones" card rendered after "perfil".
+   - Gmail opt-in explanation shows what is sent, the recipient and how to turn it off.
+   - daily digest 07:00, weekly Sunday (0), hours [48,24,2], days [3,1].
+   - "enviar prueba" disabled while the opt-in is not saved.
+
+   Edit and save:
+   - opt-in = true, hours threshold 1 = 36, daily time = 08:30, weekday = 3.
+   - PATCH /me/notifications -> 200; notice "preferencias guardadas.".
+   - reload: opt-in true, hours 36, time 08:30, weekday 3 (server response persisted).
+
+   Database after save (settings row for the local test user):
+   gmail_opt_in = t
+   digest_daily_enabled = f
+   digest_daily_time = 08:30:00
+   digest_weekly_enabled = f
+   digest_weekday = 3
+   reminder_offsets_hours = [36, 24, 2]
+   reminder_allday_offsets_days = [3, 1]
+   updated_at = set
+
+   Test send:
+   - "enviar prueba" -> 202
+   - notice: "prueba registrada; Gmail no garantiza exactamente un envío; la entrega
+     puede ser incierta y no se reintenta automáticamente."
+   - notifications row: type = test, status = pending, attempts = 0, sent_at = NULL.
+     This is an auditable occurrence; J4.1 owns the real send and none happened.
+
+   Restore and re-check:
+   - opt-in = false, hours = 48, time = 07:00, weekday = 0; save and reload confirmed.
+   - 0 console errors, 0 page errors.
+
+4. Real-stack bug found and fixed (unblocking A4.2)
+   The first PATCH answered 500 internal_error. The API log and a direct reproduction
+   showed MissingGreenlet at `_preferences_out` reading `updated_at`: the column is an
+   `onupdate` server default and SQLAlchemy expires it after the flush, so the lazy load
+   ran outside greenlet_spawn.
+   Fix: `apps/api/app/services/notification_center.py` now runs
+   `await db.refresh(row, ["updated_at"])` after `await db.flush()`.
+   The existing integration test `test_patch_updates_only_the_sent_fields_and_persists_them`
+   passed before and after because it reuses the test transaction; the local compose
+   request reproduced the failure and the same request now succeeds.
+   API image rebuilt for api/worker/scheduler; the browser save above is the post-fix run.
+
+No real Gmail/Google call, Calendar write, outbox row, provider call, audio or secret.

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Card } from "@/components/ui/Card";
 import { GoogleReconnect } from "@/components/calendar/GoogleReconnect";
+import { NotificationPreferences } from "@/components/settings/NotificationPreferences";
 import { useAuth } from "@/components/auth/AuthProvider";
 import {
   calendarErrorCopy,
@@ -11,7 +12,8 @@ import type { GoogleStatus } from "@/lib/integrations";
 
 // D1.2 — Settings. D3.7 adds the Google Calendar panel and the result of the consent
 // redirect (`/settings?calendar=connected|error&reason=`). Reconnecting only resumes
-// blocked tasks; nothing is confirmed and no event is written from this page.
+// blocked tasks; nothing is confirmed and no event is written from this page. D4.1 adds
+// the M8 notification preferences; saving them never sends mail.
 
 interface CalendarNotice {
   kind: "connected" | "error";
@@ -78,6 +80,8 @@ export function SettingsPage() {
           </dl>
         )}
       </Card>
+
+      <NotificationPreferences />
 
       <Card title="google calendar">
         {notice !== null && (
