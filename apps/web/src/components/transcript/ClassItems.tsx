@@ -74,9 +74,20 @@ export function ClassItems({
                       </time>
                     )}
                   </div>
-                  {evidence !== undefined && (
-                    <TranscriptLink task={task} evidence={evidence} quality={quality} />
-                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {evidence !== undefined && (
+                      <TranscriptLink task={task} evidence={evidence} quality={quality} />
+                    )}
+                    {ACTIVE_STATUSES.has(task.status) && (
+                      <Link
+                        to={`/gestion/tareas?status=all&edit=${encodeURIComponent(task.id)}`}
+                        aria-label={`editar tarea ${task.titulo}`}
+                        className="inline-flex items-center border-2 border-lavender/40 px-2 py-0.5 text-xs text-lavender hover:border-mint hover:text-mint"
+                      >
+                        editar
+                      </Link>
+                    )}
+                  </div>
                 </li>
               );
             })}

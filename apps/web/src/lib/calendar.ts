@@ -1,4 +1,5 @@
-import { apiFetch } from "./api";
+import { ApiHttpError, apiFetch } from "./api";
+import { isRecord } from "./json";
 import type { Task } from "./tasks";
 
 // D3.6 - the calendar mirror is Google truth for Google events; Maulwurf tasks are drawn
@@ -61,6 +62,33 @@ const ACTIVE_TASK_STATUSES = new Set(["pending", "needs_review", "confirmed"]);
 const GOOGLE_COLOR = "#64748b";
 const FALLBACK_SUBJECT_COLOR = "#8b5cf6";
 
+export interface CalendarSettingsData {
+  write_calendar_id: string | null;
+  read_calendar_ids: string[];
+}
+
+export interface GoogleCalendarListItem {
+  id: string;
+  summary: string;
+  primary: boolean;
+  access_role: string | null;
+  is_maulwurf_write: boolean;
+}
+
+export interface GoogleCalendarListResponse {
+  items: GoogleCalendarListItem[];
+  selected_ids: string[];
+}
+
+export interface CalendarSyncResponse {
+  from: string;
+  to: string;
+  calendars: string[];
+  inserted: number;
+  removed: number;
+  last_synced_at: string;
+}
+
 export async function fetchCalendarEvents(
   from: string,
   to: string,
@@ -70,6 +98,72 @@ export async function fetchCalendarEvents(
     cache: "no-store",
   });
   return (await res.json()) as CalendarEventsResponse;
+}
+
+export async function fetchCalendarSettings(): Promise<CalendarSettingsData> {
+  const res = await apiFetch("/calendar/settings", { cache: "no-store" });
+  const body: unknown = await res.json();
+  if (!isRecord(body)) {
+    return { write_calendar_id: null, read_calendar_ids: [] };
+  }
+  const writeId = typeof body.write_calendar_id === "string" ? body.write_calendar_id : null;
+  const readIds = Array.isArray(body.read_calendar_ids)
+    ? body.read_calendar_ids.filter((item): item is string => typeof item === "string")
+    : [];
+  return { write_calendar_id: writeId, read_calendar_ids: readIds };
+}
+
+export async function updateCalendarSettings(
+  readCalendarIds: string[],
+): Promise<CalendarSettingsData> {
+  const res = await apiFetch("/calendar/settings", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ read_calendar_ids: readCalendarIds }),
+  });
+  return (await res.json()) as CalendarSettingsData;
+}
+
+export async function fetchGoogleCalendarList(): Promise<GoogleCalendarListResponse> {
+  const res = await apiFetch("/calendar/calendars", { cache: "no-store" });
+  const body: unknown = await res.json();
+  if (!isRecord(body) || !Array.isArray(body.items)) {
+    return { items: [], selected_ids: [] };
+  }
+  return body as unknown as GoogleCalendarListResponse;
+}
+
+export async function syncCalendarMirror(): Promise<CalendarSyncResponse> {
+  const res = await apiFetch("/calendar/sync", {
+    method: "POST",
+    retries: 0,
+  });
+  return (await res.json()) as CalendarSyncResponse;
+}
+
+export function calendarSyncErrorCopy(err: unknown): string {
+  if (err instanceof ApiHttpError) {
+    const reason = isRecord(err.details) && typeof err.details.reason === "string"
+      ? err.details.reason
+      : null;
+    if (reason === "no_read_calendars") {
+      return "no hay calendarios de lectura seleccionados; elige al menos uno (p. ej. principal) en settings.";
+    }
+    if (reason === "google_not_connected" || reason === "missing_calendar_scopes") {
+      return "conecta o reconecta google calendar en settings antes de sincronizar.";
+    }
+    if (reason === "google_invalid_grant") {
+      return "google revocó el acceso; reconecta google calendar en settings.";
+    }
+    if (reason === "api_not_enabled") {
+      return "la API de Google Calendar está deshabilitada en Google Cloud Console; habilítala en tu proyecto y vuelve a intentar.";
+    }
+    if (reason === "calendar_sync_cooldown") {
+      return "ya sincronizaste hace unos segundos; espera un momento antes de volver a sincronizar.";
+    }
+    return err.message;
+  }
+  return "no se pudo sincronizar Google Calendar.";
 }
 
 export function calendarCoverageLabel(notice: string | null): string {

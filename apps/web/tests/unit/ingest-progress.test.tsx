@@ -4,7 +4,7 @@
 // porcentajes; la limpieza pendiente no es éxito; el terminal cierra el transporte; el
 // sondeo manual usa el detalle sin mejoras inventadas.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { IngestProgress } from "@/components/IngestProgress";
 import type { ProgressEventSource } from "@/lib/sse";
 
@@ -118,7 +118,7 @@ describe("IngestProgress", () => {
     expect(source.closed).toBe(true);
   });
 
-  it("activa el sondeo manual con el detalle no-store y termina sin porcentajes", async () => {
+  it("pasa automáticamente a actualización periódica si falla SSE sin mostrar 'usar sondeo'", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     vi.stubGlobal(
       "fetch",
@@ -140,7 +140,12 @@ describe("IngestProgress", () => {
     render(<IngestProgress audioId="a1" />);
     const source = current();
 
-    fireEvent.click(screen.getByRole("button", { name: "usar sondeo" }));
+    expect(screen.queryByRole("button", { name: /sondeo/i })).toBeNull();
+
+    act(() => {
+      source.emit("error", undefined);
+      source.emit("error", undefined);
+    });
 
     expect(await screen.findByText(/marcó la clase como lista/i)).toBeTruthy();
     expect(calls[0]?.url).toBe("/audios/a1");

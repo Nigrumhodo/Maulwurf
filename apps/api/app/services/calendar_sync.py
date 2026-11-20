@@ -11,7 +11,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -325,4 +326,38 @@ async def refresh_calendar_mirror(
         # refresh is lost: the next attempt must start from J3.3's reconnect.
         await disconnect_google_credential(db, user_id)
         raise CalendarSyncUnavailable("google_invalid_grant") from exc
+
+
+async def read_calendar_settings(
+    db: AsyncSession, *, user_id: uuid.UUID
+) -> tuple[str | None, list[str]]:
+    row = await db.get(CalendarSettings, user_id)
+    if row is None:
+        return None, []
+    return row.calendar_write_calendar_id, list(
+        _normalize_calendars(row.calendar_read_calendar_ids)
+    )
+
+
+async def upsert_read_calendars(
+    db: AsyncSession, *, user_id: uuid.UUID, read_calendar_ids: Iterable[str]
+) -> tuple[str | None, list[str]]:
+    normalized = list(_normalize_calendars(read_calendar_ids))
+    existing = await db.get(CalendarSettings, user_id)
+    write_id = existing.calendar_write_calendar_id if existing is not None else None
+    if write_id is not None:
+        normalized = [cid for cid in normalized if cid != write_id]
+    await db.execute(
+        pg_insert(CalendarSettings)
+        .values(user_id=user_id, calendar_read_calendar_ids=normalized)
+        .on_conflict_do_update(
+            index_elements=["user_id"],
+            set_={
+                "calendar_read_calendar_ids": normalized,
+                "updated_at": func.now(),
+            },
+        )
+    )
+    await db.flush()
+    return write_id, normalized
 

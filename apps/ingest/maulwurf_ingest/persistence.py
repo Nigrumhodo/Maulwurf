@@ -56,6 +56,7 @@ class TranscriptDraft:
     words: tuple[Word, ...]
     model: str
     client_version: str | None = None
+    segments: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -152,10 +153,10 @@ def prepare_transcript(draft: TranscriptDraft) -> PreparedTranscript | None:
         segments, text = timed
         precision = draft.precision
     else:
-        text = draft.text.strip()
-        if not text:
+        untimed = _untimed_segments(draft)
+        if untimed is None:
             return None
-        segments = (SegmentDraft(0, text, 0, len(text), None, None),)
+        segments, text = untimed
         precision = "none"
     return PreparedTranscript(text, precision, segments, quality_warnings(text, draft.words))
 
@@ -188,12 +189,14 @@ def draft_from_job(body: object) -> TranscriptDraft | None:
     model = body.get("model") or ""
     client = body.get("client_version")
     words_raw = body.get("words", [])
+    segments_raw = body.get("segments", [])
     if not isinstance(text, str) or not isinstance(precision, str) or not isinstance(model, str):
         return None
     if client is not None and not isinstance(client, str):
         return None
     words = _words_from_job(words_raw)
-    if words is None:
+    segments = _segments_from_job(segments_raw)
+    if words is None or segments is None:
         return None
     client_version = client if isinstance(client, str) and client.strip() else None
     return TranscriptDraft(
@@ -202,6 +205,7 @@ def draft_from_job(body: object) -> TranscriptDraft | None:
         words=words,
         model=model,
         client_version=client_version,
+        segments=segments,
     )
 
 
@@ -224,6 +228,11 @@ async def commit_transcript(
     if prepared is None:
         return CommitResult(CommitOutcome.NO_USABLE_TEXT)
 
+    measured_duration_s = (
+        duration_s
+        if duration_s is not None and math.isfinite(duration_s) and duration_s >= 0
+        else None
+    )
     document = model_config_document(
         fragment_seconds=fragment_seconds, overlap_s=overlap_s, duration_s=duration_s,
     )
@@ -303,10 +312,12 @@ async def commit_transcript(
             audio_updated = await conn.execute(
                 """
                 UPDATE audios
-                   SET active_transcript_version = $3, updated_at = now()
+                   SET active_transcript_version = $3,
+                       duration_seconds = COALESCE($4, duration_seconds),
+                       updated_at = now()
                  WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
                 """,
-                audio_id, lease.user_id, version,
+                audio_id, lease.user_id, version, measured_duration_s,
             )
             attempt_updated = await conn.execute(
                 """
@@ -426,6 +437,75 @@ def _required_stages(raw: object) -> tuple[str, ...]:
         if isinstance(item, str) and item in _GATED_STAGES:
             seen.setdefault(item, None)
     return tuple(seen)
+
+
+_UNTIMED_SEGMENT_MAX_CHARS = 480
+_SENTENCE_CUTS = frozenset({".", "?", "!", ";", "\n"})
+
+
+def _split_long_block(block: str, max_chars: int = _UNTIMED_SEGMENT_MAX_CHARS) -> list[str]:
+    cleaned = block.strip()
+    if not cleaned:
+        return []
+    if len(cleaned) <= max_chars:
+        return [cleaned]
+    parts: list[str] = []
+    rest = cleaned
+    while len(rest) > max_chars:
+        window = rest[:max_chars]
+        cut = -1
+        for idx in range(len(window) - 1, max_chars // 3, -1):
+            if window[idx] in _SENTENCE_CUTS:
+                cut = idx + 1
+                break
+        if cut == -1:
+            space = window.rfind(" ")
+            cut = space if space > 0 else max_chars
+        head = rest[:cut].strip()
+        if head:
+            parts.append(head)
+        rest = rest[cut:].strip()
+    if rest:
+        parts.append(rest)
+    return parts
+
+
+def _untimed_segments(draft: TranscriptDraft) -> tuple[tuple[SegmentDraft, ...], str] | None:
+    raw_fragments = [piece.strip() for piece in draft.segments if piece.strip()]
+    if raw_fragments:
+        pieces: list[str] = []
+        for fragment in raw_fragments:
+            pieces.extend(_split_long_block(fragment))
+    else:
+        stripped = draft.text.strip()
+        if not stripped:
+            return None
+        if len(stripped) <= _UNTIMED_SEGMENT_MAX_CHARS:
+            return (SegmentDraft(0, stripped, 0, len(stripped), None, None),), stripped
+        pieces = _split_long_block(stripped)
+    if not pieces:
+        return None
+    text = " ".join(pieces)
+    segments: list[SegmentDraft] = []
+    cursor = 0
+    for ordinal, piece in enumerate(pieces):
+        end = cursor + len(piece)
+        if ordinal + 1 < len(pieces):
+            end += 1
+        segments.append(SegmentDraft(ordinal, text[cursor:end], cursor, end, None, None))
+        cursor = end
+    return tuple(segments), text
+
+
+def _segments_from_job(raw: object) -> tuple[str, ...] | None:
+    if not isinstance(raw, list):
+        return None
+    items: list[str] = []
+    for entry in raw:
+        if not isinstance(entry, str):
+            return None
+        items.append(entry)
+    return tuple(items)
 
 
 def _words_from_job(raw: object) -> tuple[Word, ...] | None:

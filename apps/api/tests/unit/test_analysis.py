@@ -282,6 +282,79 @@ async def test_a_resolved_mention_survives_one_window() -> None:
     assert batch.prompt_version == SUMMARY_PROMPT_VERSION
 
 
+async def test_window_extraction_repairs_llm_span_offsets_and_drops_bad_quote() -> None:
+    context = _context()
+    quote = "Monday, September 21"
+    fenced_payload = (
+        "```json\n"
+        + json.dumps(
+            {
+                "items": [
+                    {
+                        "tipo": "examen",
+                        "titulo": "Midterm exam",
+                        "detalle": None,
+                        "due_date": "2026-09-21",
+                        "due_at": None,
+                        "timezone": "America/Mexico_City",
+                        "all_day": True,
+                        "date_status": "resolved",
+                        "confidence_score": 0.9,
+                        "mencion": {"kind": "all_day", "due_date": "2026-09-21"},
+                        "fuente": {
+                            "spans": [
+                                {
+                                    "segment_id": str(SEGMENT),
+                                    "inicio_char": 0,
+                                    "fin_char": 12,
+                                    "cita_textual": quote,
+                                }
+                            ]
+                        },
+                    },
+                    {
+                        "tipo": "lectura",
+                        "titulo": "Invented item",
+                        "detalle": None,
+                        "due_date": None,
+                        "due_at": None,
+                        "timezone": "America/Mexico_City",
+                        "all_day": False,
+                        "date_status": "missing",
+                        "confidence_score": 0.2,
+                        "mencion": {"kind": "absent"},
+                        "fuente": {
+                            "spans": [
+                                {
+                                    "segment_id": str(SEGMENT),
+                                    "inicio_char": 0,
+                                    "fin_char": 10,
+                                    "cita_textual": "not in the segment text",
+                                }
+                            ]
+                        },
+                    },
+                ],
+                "resumen_clase": (
+                    "The class announced one exam. Students should review. Nothing else."
+                ),
+                "temas": ["midterm", "Midterm"],
+            }
+        )
+        + "\n```"
+    )
+    batch = await analyze_transcript(
+        context,
+        _Scripted([fenced_payload]),
+        now=NOW,
+        count_tokens=lambda text: len(text.split()) or 1,
+    )
+    assert len(batch.proposals) == 1
+    span = batch.proposals[0].evidence[0]
+    assert span.quote == quote
+    assert TEXT[span.char_start : span.char_end] == quote
+
+
 async def test_a_summary_that_is_too_short_fails_the_batch() -> None:
     class _Short:
         async def complete(self, *, system: str, user: str) -> str:

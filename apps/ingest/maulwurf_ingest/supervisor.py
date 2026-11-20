@@ -740,13 +740,16 @@ async def _after_transcribing(
 async def finish_transcription(
     pool: asyncpg.Pool, *, lease: leases.Lease, audio: cleanup.AttemptDir,
     config: SupervisorConfig, keeper: _LeaseKeeper, on_child: ChildHook | None = None,
+    duration_s: float | None = None,
 ) -> RunResult:
     """Transcribe a held upload. The attempt is already ``transcribing``.
 
     ``audio`` was created by reception and handed off. This ``async with`` is the
     one that verifies destruction and records it.
     """
-    result = RunResult(Outcome.LEASE_LOST, fencing_token=lease.fencing_token)
+    result = RunResult(
+        Outcome.LEASE_LOST, fencing_token=lease.fencing_token, duration_s=duration_s,
+    )
     workdir = audio.path
     if workdir is None:
         raise RuntimeError("attempt_dir")

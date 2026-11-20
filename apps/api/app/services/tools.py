@@ -61,7 +61,7 @@ TOOL_BUDGET_SECONDS = 15.0
 # context window. The tray itself is not truncated; this is only the tool response.
 PENDING_TASK_LIMIT = 50
 _ALLOWED = frozenset({"get_calendar_events", "get_pending_tasks", "propose_task"})
-_PENDING_STATUSES = ("needs_review", "pending")
+_PENDING_STATUSES = ("needs_review", "pending", "confirmed")
 _STRICT = ConfigDict(extra="forbid")
 
 

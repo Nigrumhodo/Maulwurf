@@ -20,6 +20,7 @@ import {
   pickUploadFile,
   publishedLanguageCodes,
   releaseUploadResources,
+  supportsStreamingFetchBody,
   uploadContent,
   uploadFormError,
   validateFile,
@@ -452,6 +453,123 @@ describe("uploadContent", () => {
     ).resolves.toEqual({ outcome: "duplicate_exact", audioId: "a9" });
   });
 
+  it("usa XMLHttpRequest con File real cuando el navegador no soporta fetch streaming duplex", async () => {
+    setCsrfToken("csrf-xhr");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal(
+      "Request",
+      class FakeFirefoxRequest {
+        headers = new Headers({ "Content-Type": "text/plain;charset=UTF-8" });
+      },
+    );
+
+    class FakeXhr {
+      static last: FakeXhr | null = null;
+      method = "";
+      url = "";
+      withCredentials = false;
+      headers: Record<string, string> = {};
+      sentBody: unknown = null;
+      status = 202;
+      responseText = JSON.stringify({ attempt_id: "at-xhr", status: "received", received_bytes: 4 });
+      responseHeaders: Record<string, string> = { "content-type": "application/json" };
+      aborted = false;
+      upload: { onprogress: ((e: { lengthComputable: boolean; loaded: number; total: number }) => void) | null } = {
+        onprogress: null,
+      };
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      ontimeout: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+
+      open(method: string, url: string) {
+        this.method = method;
+        this.url = url;
+      }
+      setRequestHeader(k: string, v: string) {
+        this.headers[k] = v;
+      }
+      getResponseHeader(name: string) {
+        return this.responseHeaders[name.toLowerCase()] ?? null;
+      }
+      abort() {
+        this.aborted = true;
+      }
+      send(body: unknown) {
+        FakeXhr.last = this;
+        this.sentBody = body;
+        this.upload.onprogress?.({ lengthComputable: true, loaded: 2, total: 4 });
+        this.onload?.();
+      }
+    }
+    vi.stubGlobal("XMLHttpRequest", FakeXhr);
+
+    expect(supportsStreamingFetchBody()).toBe(false);
+    const file = new File([new Uint8Array([1, 2, 3, 4])], "clase.wav", { type: "audio/wav" });
+    const seen: number[] = [];
+    const result = await uploadContent({
+      uploadUrl: "/audios/a1/content?attempt_id=at1",
+      file,
+      onProgress: (p) => seen.push(p.sentBytes),
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(FakeXhr.last?.method).toBe("PUT");
+    expect(FakeXhr.last?.withCredentials).toBe(true);
+    expect(FakeXhr.last?.headers["X-CSRF-Token"]).toBe("csrf-xhr");
+    expect(FakeXhr.last?.sentBody).toBe(file);
+    expect(seen).toEqual([2, 4]);
+    expect(result).toEqual({
+      outcome: "accepted",
+      attemptId: "at-xhr",
+      status: "received",
+      receivedBytes: 4,
+    });
+  });
+
+  it("hace fallback a XMLHttpRequest si fetch lanza TypeError antes de enviar bytes y propaga 415", async () => {
+    setCsrfToken("csrf-fallback");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("ReadableStream body rejected");
+      }),
+    );
+    class ErrorXhr {
+      headers: Record<string, string> = {};
+      status = 415;
+      responseText = JSON.stringify({
+        error: { code: "unsupported_format", message: "La ingesta rechazó el formato del audio." },
+      });
+      upload: { onprogress: ((e: unknown) => void) | null } = { onprogress: null };
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      ontimeout: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+      withCredentials = false;
+      open() {}
+      setRequestHeader(k: string, v: string) {
+        this.headers[k] = v;
+      }
+      getResponseHeader(name: string) {
+        return name.toLowerCase() === "content-type" ? "application/json" : null;
+      }
+      abort() {}
+      send() {
+        this.onload?.();
+      }
+    }
+    vi.stubGlobal("XMLHttpRequest", ErrorXhr);
+
+    await expect(
+      uploadContent({
+        uploadUrl: "/audios/a1/content?attempt_id=at1",
+        file: new File([new Uint8Array([1, 2])], "clase.wav", { type: "audio/wav" }),
+      }),
+    ).rejects.toMatchObject({ status: 415, code: "unsupported_format" });
+  });
+
   it("exige una ruta relativa del mismo origen (rechaza protocol-relative y absolutas)", async () => {
     for (const unsafeUrl of [
       "https://evil.example/upload",
@@ -552,6 +670,14 @@ describe("mapUploadError", () => {
         new ApiHttpError(503, { code: "capacity_unavailable", message: "Ocupado." }),
       ).retry,
     ).toBe(true);
+    expect(
+      mapUploadError(
+        new ApiHttpError(415, { code: "unsupported_format", message: "La ingesta rechazó el formato del audio." }),
+      ),
+    ).toEqual({
+      message: "La ingesta rechazó el formato del audio. Vuelve a reservar e inténtalo de nuevo.",
+      resetReservation: true,
+    });
   });
 });
 

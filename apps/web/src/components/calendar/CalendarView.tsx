@@ -12,7 +12,9 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
   activeTasksWithoutBlock,
   buildCalendarEvents,
+  calendarSyncErrorCopy,
   fetchCalendarEvents,
+  syncCalendarMirror,
   type CalendarEventsResponse,
 } from "@/lib/calendar";
 import { fetchSubjects } from "@/lib/subjects";
@@ -74,7 +76,28 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tasksWarning, setTasksWarning] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+
+  async function handleSyncNow(): Promise<void> {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncNotice(null);
+    setSyncError(null);
+    try {
+      const synced = await syncCalendarMirror();
+      setSyncNotice(
+        `calendario sincronizado (${synced.inserted} actualizados, ${synced.removed} retirados).`,
+      );
+      setReloadKey((value) => value + 1);
+    } catch (err) {
+      setSyncError(calendarSyncErrorCopy(err));
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -165,6 +188,15 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
                 {subject.name}
               </span>
             ))}
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={syncing}
+              onClick={() => void handleSyncNow()}
+            >
+              {syncing ? "sincronizando…" : "sincronizar google"}
+            </Button>
           </div>
           {data !== null && !data.coverage_ok && (
             <Link
@@ -173,10 +205,24 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
             >
               {data.coverage_notice === "never_synced"
                 ? "conectar google calendar"
-                : "revisar la integración de calendar"}
+                : data.coverage_notice === "no_read_calendars"
+                  ? "elegir calendarios de lectura en settings"
+                  : "revisar la integración de calendar"}
             </Link>
           )}
         </div>
+
+        {syncNotice !== null && (
+          <p role="status" className="lowercase text-xs text-mint">
+            &gt; {syncNotice}
+          </p>
+        )}
+
+        {syncError !== null && (
+          <p role="alert" className="lowercase text-xs text-mint">
+            &gt; {syncError}
+          </p>
+        )}
 
         <div className="grid gap-2 text-xs sm:grid-cols-3">
           <div className="flex items-center justify-between border-2 border-lavender/25 px-2 py-1">

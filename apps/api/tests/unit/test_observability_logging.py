@@ -137,6 +137,41 @@ def test_uvicorn_error_logger_scrubs_traceback_before_its_own_handler() -> None:
     assert "RuntimeError" in output
 
 
+def test_uvicorn_access_logger_formats_cleanly_and_redacts_query_secrets() -> None:
+    from uvicorn.logging import AccessFormatter
+
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s'))
+    handler.addFilter(RedactionFilter())
+    logger = logging.getLogger("uvicorn.access")
+    old_handlers = logger.handlers[:]
+    old_filters = logger.filters[:]
+    old_propagate = logger.propagate
+    logger.handlers = [handler]
+    logger.filters = [RedactionFilter()]
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+    try:
+        logger.info(
+            '%s - "%s %s HTTP/%s" %d',
+            "127.0.0.1:51234",
+            "GET",
+            f"/auth/google/callback?api_key={SECRET}&state=ok",
+            "1.1",
+            200,
+        )
+    finally:
+        logger.handlers = old_handlers
+        logger.filters = old_filters
+        logger.propagate = old_propagate
+
+    output = stream.getvalue()
+    assert SECRET not in output
+    assert "api_key=[REDACTED]" in output
+    assert "200" in output
+
+
 @pytest.mark.parametrize(
     ("key", "sensitive"),
     [

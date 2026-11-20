@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ClassSummary } from "@/components/transcript/ClassSummary";
 import type { LibraryAudioDetail } from "@/lib/library";
 import type { ReaderTranscript } from "@/lib/reader";
@@ -70,5 +70,20 @@ describe("ClassSummary", () => {
     );
 
     expect(screen.getByText(/resumen no solicitado/)).toBeTruthy();
+  });
+
+  it("collapses long topic lists behind a toggle", () => {
+    const manyTopics = Array.from({ length: 15 }, (_, index) => `tema ${index + 1}`);
+    render(
+      <ClassSummary
+        detail={{ ...DETAIL, transcript: { ...DETAIL.transcript!, topics: manyTopics } }}
+        transcript={{ ...TRANSCRIPT, topics: manyTopics }}
+      />,
+    );
+
+    expect(screen.getByText("tema 1")).toBeTruthy();
+    expect(screen.queryByText("tema 15")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "ver 3 temas más" }));
+    expect(screen.getByText("tema 15")).toBeTruthy();
   });
 });

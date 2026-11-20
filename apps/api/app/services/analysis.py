@@ -63,7 +63,7 @@ from app.services.date_resolution import (
 )
 from app.services.llm import ChatMessage, LLMProvider
 from app.services.revisions import TERMINAL_TASK_STATUSES, record_pending_revision
-from app.services.summary import SummaryRejected, parse_summary_payload
+from app.services.summary import SummaryRejected, parse_summary_payload, strip_json_fence
 from app.services.task_evidence import persist_task_spans
 from app.services.task_snapshot import ProposalFields as ProposalFields
 from app.services.task_snapshot import needs_review_task
@@ -217,21 +217,125 @@ def mention_from_payload(payload: object) -> DateMention:
     )
 
 
+def _find_all_occurrences(haystack: str, needle: str) -> list[int]:
+    positions: list[int] = []
+    cursor = 0
+    while True:
+        idx = haystack.find(needle, cursor)
+        if idx == -1:
+            return positions
+        positions.append(idx)
+        cursor = idx + 1
+
+
+def _align_item_spans(
+    item: dict[str, object],
+    window_segments: Mapping[UUID, tuple[int, str]],
+) -> bool:
+    """Snap LLM span offsets to exact verbatim quote slices inside the window segments.
+
+    Real LLMs copy `cita_textual` verbatim from the segment but frequently miscount Unicode
+    code-point offsets by a few characters. Snapping never invents or alters a quote: if
+    `cita_textual` does not appear verbatim in the cited window segment, the item is dropped.
+    """
+    fuente = item.get("fuente")
+    if not isinstance(fuente, Mapping):
+        return False
+    raw_spans = fuente.get("spans")
+    if not isinstance(raw_spans, list) or not raw_spans:
+        return False
+
+    repaired: list[tuple[str, int, int, str]] = []
+    for raw_span in raw_spans:
+        if not isinstance(raw_span, Mapping):
+            return False
+        seg_raw = raw_span.get("segment_id")
+        quote = raw_span.get("cita_textual")
+        if not isinstance(quote, str) or not quote.strip():
+            return False
+        try:
+            seg_id = seg_raw if isinstance(seg_raw, UUID) else UUID(str(seg_raw))
+        except (TypeError, ValueError):
+            return False
+        seg_entry = window_segments.get(seg_id)
+        if seg_entry is None:
+            return False
+        local_offset, part_text = seg_entry
+        positions = _find_all_occurrences(part_text, quote)
+        if not positions:
+            return False
+        raw_start = raw_span.get(
+            "inicio_char", raw_span.get("char_start", local_offset)
+        )
+        hinted = (
+            raw_start
+            if isinstance(raw_start, int) and not isinstance(raw_start, bool) and raw_start >= 0
+            else local_offset
+        )
+        rel_hint = max(0, hinted - local_offset)
+        best_pos = min(positions, key=lambda pos: abs(pos - rel_hint))
+        start = local_offset + best_pos
+        end = start + len(quote)
+        repaired.append((str(seg_id), start, end, quote))
+
+    repaired.sort(key=lambda sp: (sp[0], sp[1], sp[2]))
+    non_overlapping: list[dict[str, object]] = []
+    prev_seg = ""
+    prev_end = -1
+    for seg_str, start, end, quote in repaired:
+        if seg_str == prev_seg and start < prev_end:
+            continue
+        prev_seg = seg_str
+        prev_end = end
+        non_overlapping.append(
+            {
+                "segment_id": seg_str,
+                "inicio_char": start,
+                "fin_char": end,
+                "cita_textual": quote,
+            }
+        )
+    if not non_overlapping:
+        return False
+    item["fuente"] = {"spans": non_overlapping}
+    return True
+
+
+def _normalize_window_topics(raw_topics: object) -> list[str]:
+    if not isinstance(raw_topics, list):
+        return []
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for entry in raw_topics:
+        if not isinstance(entry, str):
+            continue
+        topic = entry.strip()
+        if not topic:
+            continue
+        folded = topic.casefold()
+        if folded in seen:
+            continue
+        seen.add(folded)
+        cleaned.append(topic)
+    return cleaned
+
+
 def parse_extraction_payload(
     raw: str,
     *,
     class_date: date,
     class_timezone: str,
     now: datetime,
+    window_segments: Mapping[UUID, tuple[int, str]] | None = None,
 ) -> ParsedExtraction:
     """Replace every model date with `resolve_due` and validate the §M4 object.
 
-    A missing or impossible mention drops that item. A payload that is not one object,
-    or whose remaining items break the schema, raises `AnalysisPayloadError` and must
-    not be persisted.
+    A missing or impossible mention drops that item. When `window_segments` is supplied by
+    `analyze_transcript`, verbatim quote spans are aligned to exact segment offsets and an
+    ungrounded or schema-invalid item drops only that item instead of aborting the class.
     """
     try:
-        payload = json.loads(raw)
+        payload = json.loads(strip_json_fence(raw))
     except json.JSONDecodeError as exc:
         raise AnalysisPayloadError("the extraction payload is not JSON") from exc
     if not isinstance(payload, dict):
@@ -243,6 +347,8 @@ def parse_extraction_payload(
     reasons: list[str | None] = []
     for raw_item in raw_items:
         if not isinstance(raw_item, dict):
+            if window_segments is not None:
+                continue
             raise AnalysisPayloadError("an extraction item is not an object")
         rewritten = _rewrite_item(
             raw_item,
@@ -253,12 +359,25 @@ def parse_extraction_payload(
         if rewritten is None:
             continue
         item, reason = rewritten
+        if window_segments is not None:
+            if not _align_item_spans(item, window_segments):
+                continue
+            try:
+                ProposedItem.model_validate(item)
+            except ValidationError:
+                continue
         kept.append(item)
         reasons.append(reason)
+    raw_summary = payload.get("resumen_clase")
+    raw_topics = payload.get("temas")
+    if window_segments is not None:
+        if not isinstance(raw_summary, str) or not raw_summary.strip():
+            raw_summary = "Fragmento de clase analizado."
+        raw_topics = _normalize_window_topics(raw_topics)
     body = {
         "items": kept,
-        "resumen_clase": payload.get("resumen_clase"),
-        "temas": payload.get("temas"),
+        "resumen_clase": raw_summary,
+        "temas": raw_topics,
     }
     try:
         result = AnalysisResult.model_validate(body)
@@ -330,26 +449,43 @@ async def analyze_transcript(
                 class_date=context.class_date,
                 class_timezone=context.class_timezone,
                 now=now,
+                window_segments={
+                    part.segment_id: (part.local_char_start, part.text)
+                    for part in window.segments
+                },
             )
             notes.append((parsed.result.resumen_clase, tuple(parsed.result.temas)))
             batches.append((window, _accepted(parsed, window, context.view)))
         if not notes:
             raise AnalysisPayloadError("the class produced no summary notes")
         summary_prompts = load_summary_prompts()
+        summary_user_prompt = render_summary_prompt(
+            subject=context.subject,
+            teacher=context.teacher,
+            class_date=context.class_date,
+            class_timezone=context.class_timezone,
+            windows=tuple(notes),
+        )
         raw_summary = await model.complete(
             system=summary_prompts.system,
-            user=render_summary_prompt(
-                subject=context.subject,
-                teacher=context.teacher,
-                class_date=context.class_date,
-                class_timezone=context.class_timezone,
-                windows=tuple(notes),
-            ),
+            user=summary_user_prompt,
         )
-    try:
-        class_summary = parse_summary_payload(raw_summary)
-    except SummaryRejected as exc:
-        raise AnalysisPayloadError("the summary payload does not match the schema") from exc
+        try:
+            class_summary = parse_summary_payload(raw_summary)
+        except SummaryRejected:
+            raw_summary = await model.complete(
+                system=summary_prompts.system,
+                user=(
+                    summary_user_prompt
+                    + "\n\nIMPORTANT: Return ONLY valid JSON {\"resumen_clase\": \"...\", "
+                    "\"temas\": [...]} where \"resumen_clase\" has strictly 3 to 5 sentences "
+                    "ending with periods and \"temas\" has distinct non-empty strings."
+                ),
+            )
+            try:
+                class_summary = parse_summary_payload(raw_summary)
+            except SummaryRejected as exc:
+                raise AnalysisPayloadError("the summary payload does not match the schema") from exc
     aggregated = aggregate_window_citations(batches)
     return AnalysisBatch(
         proposals=tuple(aggregated),

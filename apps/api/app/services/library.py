@@ -10,6 +10,7 @@ pure snapshot/encoding helpers are in `services/progress.py`, and this module im
 """
 
 import asyncio
+import math
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
@@ -189,9 +190,23 @@ async def _runs_by_audio(
     return grouped
 
 
+def _fallback_duration(
+    duration_seconds: float | None, model_config: object
+) -> float | None:
+    if duration_seconds is not None and math.isfinite(duration_seconds) and duration_seconds >= 0:
+        return duration_seconds
+    if isinstance(model_config, dict):
+        raw = model_config.get("duration_s")
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            val = float(raw)
+            if math.isfinite(val) and val >= 0:
+                return val
+    return duration_seconds
+
+
 async def _usable_versions(
     db: AsyncSession, *, user_id: uuid.UUID, audios: list[Audio]
-) -> dict[uuid.UUID, int]:
+) -> tuple[dict[uuid.UUID, int], dict[uuid.UUID, float]]:
     """Active version per audio that still has a LIVE `transcripts` row (fail closed)."""
     pairs = [
         (audio.id, audio.active_transcript_version)
@@ -199,15 +214,23 @@ async def _usable_versions(
         if audio.active_transcript_version is not None
     ]
     if not pairs:
-        return {}
+        return {}, {}
     audio_ids = [audio_id for audio_id, _ in pairs]
     result = await db.execute(
-        select(Transcript.audio_id, Transcript.version).where(
+        select(Transcript.audio_id, Transcript.version, Transcript.model_config).where(
             Transcript.user_id == user_id, Transcript.audio_id.in_(audio_ids)
         )
     )
-    live = {(row[0], row[1]) for row in result.all()}
-    return {audio_id: version for audio_id, version in pairs if (audio_id, version) in live}
+    rows = result.all()
+    live = {(row[0], row[1]) for row in rows}
+    durations: dict[uuid.UUID, float] = {}
+    usable = {audio_id: version for audio_id, version in pairs if (audio_id, version) in live}
+    for row_audio_id, row_version, model_cfg in rows:
+        if usable.get(row_audio_id) == row_version:
+            derived = _fallback_duration(None, model_cfg)
+            if derived is not None:
+                durations[row_audio_id] = derived
+    return usable, durations
 
 
 async def _subjects(
@@ -250,7 +273,9 @@ async def list_audios(
     audio_ids = [audio.id for audio in audios]
     attempts = await _latest_attempts(db, user_id=user_id, audio_ids=audio_ids)
     runs = await _runs_by_audio(db, user_id=user_id, audio_ids=audio_ids)
-    versions = await _usable_versions(db, user_id=user_id, audios=audios)
+    versions, transcript_durations = await _usable_versions(
+        db, user_id=user_id, audios=audios
+    )
     subjects = await _subjects(
         db, user_id=user_id, subject_ids=list({audio.subject_id for audio in audios})
     )
@@ -259,6 +284,11 @@ async def list_audios(
         usable = versions.get(audio.id)
         attempt = attempts.get(audio.id)
         stages = _derive_stages(audio, runs.get(audio.id, []), usable_version=usable)
+        duration_val = (
+            audio.duration_seconds
+            if audio.duration_seconds is not None
+            else transcript_durations.get(audio.id)
+        )
         summaries.append(
             AudioSummary(
                 id=audio.id,
@@ -267,7 +297,7 @@ async def list_audios(
                 class_date=audio.class_date,
                 class_timezone=audio.class_timezone,
                 language_code=audio.language_code,
-                duration_seconds=audio.duration_seconds,
+                duration_seconds=duration_val,
                 created_at=audio.created_at,
                 attempt=_attempt_summary(attempt),
                 stages=stages,
@@ -296,6 +326,7 @@ async def get_audio_detail(
     usable = await runs_service.usable_transcript_version(db, user_id=user_id, audio=audio)
     transcript_info: TranscriptInfo | None = None
     exportable = False
+    effective_duration = audio.duration_seconds
     if usable is not None:
         transcript = (
             await db.execute(
@@ -307,6 +338,7 @@ async def get_audio_detail(
             )
         ).scalar_one_or_none()
         if transcript is not None:
+            effective_duration = _fallback_duration(effective_duration, transcript.model_config)
             transcript_info = TranscriptInfo(
                 version=transcript.version,
                 timestamp_precision=transcript.timestamp_precision,
@@ -320,7 +352,7 @@ async def get_audio_detail(
             exportable = srt_exportable(
                 timestamp_precision=transcript.timestamp_precision,
                 segments=segments,
-                duration_seconds=audio.duration_seconds,
+                duration_seconds=effective_duration,
             )
     runs = await _runs_by_audio(db, user_id=user_id, audio_ids=[audio.id])
     attempt = await runs_service.latest_attempt(db, user_id=user_id, audio_id=audio.id)
@@ -339,7 +371,7 @@ async def get_audio_detail(
         class_date=audio.class_date,
         class_timezone=audio.class_timezone,
         language_code=audio.language_code,
-        duration_seconds=audio.duration_seconds,
+        duration_seconds=effective_duration,
         created_at=audio.created_at,
         attempt=_attempt_summary(attempt),
         stages=stages,

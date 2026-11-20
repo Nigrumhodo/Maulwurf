@@ -104,8 +104,17 @@ class RedactionFilter(logging.Filter):
     """Mask the message, extra fields and traceback before any handler runs."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = scrub_text(record.getMessage())
-        record.args = ()
+        if (
+            record.name == "uvicorn.access"
+            and isinstance(record.args, tuple)
+            and len(record.args) == 5
+        ):
+            record.args = tuple(
+                scrub_text(arg) if isinstance(arg, str) else arg for arg in record.args
+            )
+        else:
+            record.msg = scrub_text(record.getMessage())
+            record.args = ()
         fields = getattr(record, "fields", None)
         if isinstance(fields, Mapping):
             record.fields = _scrub_fields(fields)

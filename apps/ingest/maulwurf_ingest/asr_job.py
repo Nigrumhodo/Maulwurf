@@ -205,6 +205,7 @@ def _from_service(reconciled: ReconciledTranscript) -> dict[str, object]:
         "text": reconciled.text,
         "precision": reconciled.precision,
         "words": [word.as_json() for word in reconciled.words],
+        "segments": list(reconciled.segments),
         "model": MODEL_NAME,
         "client_version": CLIENT_VERSION,
     }
@@ -223,14 +224,20 @@ def _read_stub(workdir: Path) -> dict[str, object]:
     model = loaded.get("model")
     client = loaded.get("client_version")
     words_raw = loaded.get("words", [])
+    segments_raw = loaded.get("segments", [])
     if not isinstance(text, str) or precision not in {"word", "segment", "none"}:
         raise RuntimeError("stub_transcript")
     if model is not None and not isinstance(model, str):
         raise RuntimeError("stub_transcript")
     if client is not None and not isinstance(client, str):
         raise RuntimeError("stub_transcript")
-    if not isinstance(words_raw, list):
+    if not isinstance(words_raw, list) or not isinstance(segments_raw, list):
         raise RuntimeError("stub_transcript")
+    segments: list[str] = []
+    for seg in segments_raw:
+        if not isinstance(seg, str):
+            raise RuntimeError("stub_transcript")
+        segments.append(seg)
     words: list[dict[str, object]] = []
     for item in words_raw:
         word = Word.from_json(item)
@@ -241,6 +248,7 @@ def _read_stub(workdir: Path) -> dict[str, object]:
         "text": text,
         "precision": precision,
         "words": words,
+        "segments": segments,
         "model": model if isinstance(model, str) else None,
         "client_version": client if isinstance(client, str) else None,
     }

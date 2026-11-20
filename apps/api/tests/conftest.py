@@ -16,6 +16,7 @@ for _name in [k for k in os.environ if k.upper().startswith("MAULWURF_")]:
 
 os.environ.update(
     {
+        "_MAULWURF_TEST_NO_DOTENV": "1",
         # A2.16: MAULWURF_ENV is required and has no default. Tests use the lenient local
         # guards unless they pass an explicit environment to Settings.
         "MAULWURF_ENV": "local",

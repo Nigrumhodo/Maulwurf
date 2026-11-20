@@ -75,6 +75,7 @@ NOTIFICATION_ERROR_CODES: Final = (
     "response_lost",
     "provider_unavailable",
     "provider_rejected",
+    "gmail_api_disabled",
     "rate_limited",
     "invalid_grant",
     "gmail_not_opted_in",

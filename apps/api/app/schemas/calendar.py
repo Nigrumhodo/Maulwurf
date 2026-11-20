@@ -99,3 +99,27 @@ class CalendarSyncOut(BaseModel):
     inserted: int
     removed: int
     last_synced_at: datetime
+
+
+class CalendarSettingsOut(BaseModel):
+    write_calendar_id: str | None
+    read_calendar_ids: list[str]
+
+
+class CalendarSettingsUpdateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    read_calendar_ids: list[str] = Field(default_factory=list, max_length=25)
+
+
+class CalendarListItemOut(BaseModel):
+    id: str
+    summary: str
+    primary: bool
+    access_role: str | None = None
+    is_maulwurf_write: bool = False
+
+
+class CalendarListOut(BaseModel):
+    items: list[CalendarListItemOut]
+    selected_ids: list[str]

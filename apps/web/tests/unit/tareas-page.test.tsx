@@ -368,4 +368,198 @@ describe("TareasPage", () => {
     await screen.findByText("Resolver la guía");
     expect(screen.queryByText(/calendar no está listo/)).toBeNull();
   });
+
+  it("opens the editor via ?edit= query parameter and saves changes cleanly", async () => {
+    const initial = task({
+      date_status: "ambiguous",
+      due_date: null,
+      date_text: "el jueves",
+      date_reason: "no se sabe cuál jueves",
+    });
+    const updated = {
+      ...initial,
+      titulo: "Armar grupos heterogéneos",
+      date_status: "resolved" as const,
+      due_date: "2026-11-26",
+      date_text: "2026-11-26",
+      date_reason: null,
+      version: 2,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/subjects") return json({ items: [] });
+      if (url === `/audios/${AUDIO_ID}`) return json(DETAIL);
+      if (url.startsWith("/tasks?")) return json({ items: [initial], next_cursor: null });
+      if (url === `/tasks/${initial.id}` && init?.method === "PATCH") {
+        const parsed = JSON.parse(String(init.body)) as Record<string, unknown>;
+        expect("date_text" in parsed).toBe(false);
+        return json(updated);
+      }
+      if (url === "/integrations/status") {
+        return json({
+          google: {
+            status: "disconnected",
+            scopes: [],
+            calendar_id: null,
+            calendar_write_ready: false,
+            token_expires_at: null,
+            last_refresh_at: null,
+          },
+        });
+      }
+      return json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={[`/gestion/tareas?status=all&edit=${initial.id}`]}>
+        <TareasPage />
+      </MemoryRouter>,
+    );
+
+    const titleInput = (await screen.findByLabelText(/título/)) as HTMLInputElement;
+    fireEvent.change(titleInput, { target: { value: "Armar grupos heterogéneos" } });
+    fireEvent.click(screen.getByRole("button", { name: "guardar cambios" }));
+
+    expect(
+      await screen.findByText(/cambios guardados en «Armar grupos heterogéneos»/),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "guardar cambios" })).toBeNull();
+  });
+
+  it("closes the review modal on confirm and reopens when clicking revisar again", async () => {
+    const initial = task({
+      event_block: {
+        start_at: null,
+        end_at: null,
+        start_date: "2026-11-09",
+        end_date_exclusive: "2026-11-10",
+        duration_default_editable: true,
+      },
+    });
+    const confirmed = {
+      ...initial,
+      status: "confirmed" as const,
+      calendar_sync_status: "synced",
+      version: 2,
+    };
+    let current = initial;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/subjects") return json({ items: [] });
+      if (url === `/audios/${AUDIO_ID}`) return json(DETAIL);
+      if (url.startsWith("/tasks?")) return json({ items: [current], next_cursor: null });
+      if (url === `/tasks/${initial.id}/confirm` && init?.method === "POST") {
+        current = confirmed;
+        return json({ task: confirmed }, 202);
+      }
+      if (url === `/tasks/${initial.id}`) return json(current);
+      if (url === "/integrations/status") {
+        return json({
+          google: {
+            status: "connected",
+            scopes: [],
+            calendar_id: "mw@group.calendar.example",
+            calendar_write_ready: true,
+            token_expires_at: null,
+            last_refresh_at: null,
+          },
+        });
+      }
+      return json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={["/gestion/tareas?status=all"]}>
+        <TareasPage />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Resolver la guía");
+    expect(screen.queryByRole("button", { name: "marcar completada" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "revisar" }));
+    const dialog = await screen.findByRole("dialog", { name: "revisar tarea" });
+    await within(dialog).findByText("Resolver la guía");
+    fireEvent.click(within(dialog).getByRole("button", { name: "confirmar" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "revisar tarea" })).toBeNull(),
+    );
+    expect(await screen.findByText(/Confirmada y sincronizada\./)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "marcar completada" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "revisar" }));
+    expect(await screen.findByRole("dialog", { name: "revisar tarea" })).toBeTruthy();
+  });
+
+  it("creates a manual task from scratch and opens the review modal", async () => {
+    const createdManual: Task = task({
+      id: "999e4567-e89b-12d3-a456-426614174000",
+      audio_id: null,
+      source: "manual",
+      titulo: "Preparar exposición final",
+      due_date: "2026-11-28",
+      event_block: {
+        start_at: null,
+        end_at: null,
+        start_date: "2026-11-28",
+        end_date_exclusive: "2026-11-29",
+        duration_default_editable: true,
+      },
+      sources: [],
+      evidence: [],
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/subjects") {
+        return json({
+          items: [{ id: "s1", name: "cálculo", color: "#000", teacher: null, class_count: 0 }],
+        });
+      }
+      if (url === "/tasks" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        expect(body.source).toBe("manual");
+        expect(body.titulo).toBe("Preparar exposición final");
+        expect(body.due_date).toBe("2026-11-28");
+        return json(createdManual, 201);
+      }
+      if (url === `/tasks/${createdManual.id}`) return json(createdManual);
+      if (url.startsWith("/tasks?")) return json({ items: [], next_cursor: null });
+      if (url === "/integrations/status") {
+        return json({
+          google: {
+            status: "connected",
+            scopes: [],
+            calendar_id: "mw@group.calendar.example",
+            calendar_write_ready: true,
+            token_expires_at: null,
+            last_refresh_at: null,
+          },
+        });
+      }
+      return json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MemoryRouter>
+        <TareasPage />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("no hay tareas en este estado");
+    fireEvent.click(screen.getByRole("button", { name: "+ nueva tarea" }));
+
+    fireEvent.change(screen.getByLabelText(/título/), {
+      target: { value: "Preparar exposición final" },
+    });
+    const dateInputs = screen.getAllByLabelText(/fecha/);
+    fireEvent.change(dateInputs[0]!, { target: { value: "2026-11-28" } });
+    fireEvent.click(screen.getByRole("button", { name: "crear y revisar" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "revisar tarea" });
+    expect(within(dialog).getByText("Preparar exposición final")).toBeTruthy();
+  });
 });

@@ -102,7 +102,7 @@ describe("TranscriptLink", () => {
       timestamp_precision: "none",
     });
 
-    expect(screen.getByRole("link").textContent).toContain("segmento 2");
+    expect(screen.getByRole("link").textContent).toBe("ver segmento 2");
     expect(screen.queryByText("0:05")).toBeNull();
   });
 

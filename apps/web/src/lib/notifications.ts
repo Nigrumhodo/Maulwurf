@@ -178,6 +178,9 @@ export function notificationStatusExplanation(
     case "sent":
       return "aceptada por Gmail para tu correo verificado.";
     case "failed":
+      if (lastErrorCode === "gmail_api_disabled") {
+        return "no se pudo enviar: la API de Gmail está deshabilitada en Google Cloud Console (gmail_api_disabled); habilítala y reenvía manualmente.";
+      }
       return `no se pudo enviar${codeNote}; el sistema no reintenta automáticamente.`;
     case "delivery_unknown":
       return `estado terminal: Gmail no confirma entrega única y se perdió la respuesta o expiró el lease${codeNote}. No se reintenta automáticamente; reenviar crea una nueva ocurrencia y puede duplicar el correo.`;

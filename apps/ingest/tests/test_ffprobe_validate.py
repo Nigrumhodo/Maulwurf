@@ -9,7 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from maulwurf_ingest.audio.validate import decide_probe, probe_file
+from maulwurf_ingest.audio.ffmpeg import DEFAULT_LIMITS
+from maulwurf_ingest.audio.ffmpeg import run as run_ffmpeg
+from maulwurf_ingest.audio.fragmenter import FragmentSpan, fragment_argv
+from maulwurf_ingest.audio.validate import decide_probe, decision_from_payload, probe_file
 
 _FFPROBE = shutil.which("ffprobe")
 _FFMPEG = shutil.which("ffmpeg")
@@ -43,20 +46,46 @@ def test_decision_table_covers_spike_containers() -> None:
     assert unverified.duration_s is None
 
 
+def test_wav_non_mono_or_non_s16_is_normalized() -> None:
+    for codec, channels in (("pcm_s16le", 2), ("pcm_u8", 1), ("pcm_s24le", 2), ("pcm_f32le", 2)):
+        decision = decide_probe(
+            format_name="wav", codec=codec, channels=channels, duration_s=1.5
+        )
+        assert decision.decision == "normalize", (codec, channels)
+        assert decision.reason == "wav", (codec, channels)
+        assert decision.duration_s == 1.5
+
+
+def test_decision_from_payload_falls_back_to_stream_duration() -> None:
+    payload = {
+        "format": {"format_name": "wav"},
+        "streams": [
+            {
+                "codec_type": "audio",
+                "codec_name": "pcm_s24le",
+                "channels": 2,
+                "duration": "2.5",
+            }
+        ],
+    }
+    decision = decision_from_payload(payload)
+    assert decision.decision == "normalize"
+    assert decision.reason == "wav"
+    assert decision.duration_s == 2.5
+
+
 def test_malformed_duration_channels_and_unknown_container_are_rejected() -> None:
     cases = (
         decide_probe(format_name="wav", codec="pcm_s16le", channels=1, duration_s=float("nan")),
         decide_probe(format_name="wav", codec="pcm_s16le", channels=0, duration_s=1.0),
-        decide_probe(format_name="wav", codec="pcm_s16le", channels=2, duration_s=1.0),
-        decide_probe(format_name="wav", codec="pcm_u8", channels=1, duration_s=1.0),
         decide_probe(format_name="matroska", codec="aac", channels=1, duration_s=1.0),
         decide_probe(format_name="amr", codec="amr_nb", channels=1, duration_s=1.0),
     )
     reasons = [item.reason for item in cases]
     assert all(item.decision == "reject" for item in cases)
-    assert reasons[2] == "multi_channel"
-    assert reasons[3] == "not_pcm_s16"
     assert "malformed" in reasons
+    assert reasons[2] == "unexpected_container"
+    assert reasons[3] == "unexpected_container"
 
 
 def _pcm_wav(*, channels: int = 1, seconds: float = 0.2) -> bytes:
@@ -83,7 +112,10 @@ def test_ffprobe_duration_is_not_the_byte_length(tmp_path: Path) -> None:
 
     stereo = tmp_path / "stereo.wav"
     stereo.write_bytes(_pcm_wav(channels=2))
-    assert probe_file(stereo).reason == "multi_channel"
+    stereo_decision = probe_file(stereo)
+    assert stereo_decision.decision == "normalize"
+    assert stereo_decision.reason == "wav"
+    assert stereo_decision.duration_s == pytest.approx(0.2, abs=0.05)
 
     playlist = tmp_path / "list.m3u"
     playlist.write_bytes(b"#EXTM3U\n#EXTINF:1,tone\nhttp://example.invalid/a.mp3\n")
@@ -124,3 +156,22 @@ def test_ffprobe_normalizes_mp3_and_rejects_m4a(tmp_path: Path) -> None:
     if encoded.returncode != 0:
         pytest.skip("ffmpeg no pudo codificar mp3")
     assert probe_file(mp3_path).decision == "normalize"
+
+
+@pytest.mark.skipif(_FFPROBE is None or _FFMPEG is None, reason="ffmpeg/ffprobe no disponible")
+def test_stereo_wav_probes_normalize_and_extracts_mono_s16(tmp_path: Path) -> None:
+    stereo = tmp_path / "stereo.wav"
+    stereo.write_bytes(_pcm_wav(channels=2, seconds=0.4))
+    probed = probe_file(stereo)
+    assert probed.decision == "normalize"
+    assert probed.reason == "wav"
+    assert probed.duration_s == pytest.approx(0.4, abs=0.05)
+
+    out = tmp_path / "mono.wav"
+    run_ffmpeg(
+        fragment_argv(stereo, out, FragmentSpan(0.0, 0.4), limits=DEFAULT_LIMITS),
+        limits=DEFAULT_LIMITS,
+    )
+    normalized = probe_file(out)
+    assert normalized.decision == "accept"
+    assert normalized.reason == "wav_pcm_s16_mono"

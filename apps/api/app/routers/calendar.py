@@ -20,7 +20,7 @@ frozen contract answers `202`; the body carries the covered window and the publi
 counts, and the client re-reads the mirror through `GET /calendar/events`.
 """
 
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Annotated, NoReturn
 
 from fastapi import APIRouter, Query, Response
@@ -37,6 +37,10 @@ from app.schemas.calendar import (
     CalendarConflictsOut,
     CalendarEventOut,
     CalendarEventsOut,
+    CalendarListItemOut,
+    CalendarListOut,
+    CalendarSettingsOut,
+    CalendarSettingsUpdateIn,
     CalendarSyncOut,
     ConflictEventOut,
     DeadlineClashOut,
@@ -44,7 +48,12 @@ from app.schemas.calendar import (
     TimeConflictOut,
 )
 from app.services.calendar_read import CalendarService
-from app.services.calendar_sync import refresh_calendar_mirror
+from app.services.calendar_sync import (
+    _renew_access_token,
+    read_calendar_settings,
+    refresh_calendar_mirror,
+    upsert_read_calendars,
+)
 from app.services.calendar_window import (
     LOCK_RETRY_AFTER_SECONDS,
     CalendarSyncBusy,
@@ -57,12 +66,21 @@ from app.services.conflicts import CalendarConflicts, ConflictService
 from app.services.google_calendar import (
     GoogleCalendarError,
     GoogleCalendarInvalidGrant,
+    GoogleCalendarService,
     GoogleCalendarTransientError,
     disconnect_google_credential,
 )
 from app.services.google_tokens import GoogleTokenTransient, GoogleTokenUnavailable
 
 router = APIRouter(tags=["calendar"])
+
+
+def _is_calendar_api_disabled(exc: BaseException) -> bool:
+    details = getattr(exc, "details", None)
+    return isinstance(details, dict) and details.get("reason") in {
+        "accessNotConfigured",
+        "SERVICE_DISABLED",
+    }
 
 
 def _raise_window_invalid(exc: CalendarWindowInvalid) -> NoReturn:
@@ -272,6 +290,8 @@ async def calendar_sync(
             raise calendar_sync_unavailable("google_not_connected") from exc
         raise google_integration_unavailable() from exc
     except (CalendarSyncError, GoogleCalendarError) as exc:
+        if _is_calendar_api_disabled(exc):
+            raise calendar_sync_unavailable("api_not_enabled") from exc
         # A malformed provider payload or a Calendar permission/not-found answer: the
         # mirror is untouched and the user cannot fix it by retrying the same state.
         raise calendar_sync_unavailable("calendar_read_failed") from exc
@@ -284,3 +304,111 @@ async def calendar_sync(
         removed=result.removed,
         last_synced_at=result.last_synced_at,
     )
+
+
+@router.get(
+    "/calendar/settings",
+    responses={
+        200: {"description": "Current Calendar write target and selected read calendar IDs"},
+        401: {"description": "Sin sesión (auth_required)"},
+    },
+)
+async def get_calendar_settings(
+    response: Response, session: CurrentSession, db: DbSession
+) -> CalendarSettingsOut:
+    response.headers["Cache-Control"] = "no-store"
+    write_id, read_ids = await read_calendar_settings(db, user_id=session.user_id)
+    return CalendarSettingsOut(write_calendar_id=write_id, read_calendar_ids=read_ids)
+
+
+@router.put(
+    "/calendar/settings",
+    responses={
+        200: {"description": "Updated read calendar selection"},
+        401: {"description": "Sin sesión (auth_required)"},
+        403: {"description": "csrf_invalid"},
+        422: {"description": "validation_failed"},
+    },
+)
+async def update_calendar_settings(
+    body: CalendarSettingsUpdateIn,
+    response: Response,
+    session: MutationSession,
+    db: DbSession,
+) -> CalendarSettingsOut:
+    response.headers["Cache-Control"] = "no-store"
+    if any(
+        not isinstance(item, str) or not item.strip() or len(item) > 256
+        for item in body.read_calendar_ids
+    ):
+        raise validation_failed({"read_calendar_ids": "identificador de calendario inválido"})
+    write_id, normalized = await upsert_read_calendars(
+        db, user_id=session.user_id, read_calendar_ids=body.read_calendar_ids
+    )
+    await db.commit()
+    return CalendarSettingsOut(write_calendar_id=write_id, read_calendar_ids=normalized)
+
+
+@router.get(
+    "/calendar/calendars",
+    responses={
+        200: {"description": "Google Calendar list for selecting read calendars"},
+        401: {"description": "Sin sesión (auth_required)"},
+        409: {"description": "calendar_sync_unavailable"},
+        503: {"description": "calendar_sync_temporarily_unavailable"},
+    },
+)
+async def list_google_calendars(
+    response: Response, session: CurrentSession, db: DbSession
+) -> CalendarListOut:
+    response.headers["Cache-Control"] = "no-store"
+    user_id = session.user_id
+    write_id, selected = await read_calendar_settings(db, user_id=user_id)
+    await db.rollback()
+    try:
+        access_token = await _renew_access_token(
+            db, user_id=user_id, now=datetime.now(UTC)
+        )
+        entries = await GoogleCalendarService(access_token=access_token).list_calendars()
+    except CalendarSyncBusy as exc:
+        raise calendar_sync_temporarily_unavailable(
+            retry_after_seconds=LOCK_RETRY_AFTER_SECONDS
+        ) from exc
+    except CalendarSyncUnavailable as exc:
+        if exc.code == "google_invalid_grant":
+            await db.commit()
+        raise calendar_sync_unavailable(exc.code) from exc
+    except GoogleCalendarInvalidGrant as exc:
+        await disconnect_google_credential(db, user_id)
+        await db.commit()
+        raise calendar_sync_unavailable("google_invalid_grant") from exc
+    except (GoogleCalendarTransientError, GoogleTokenTransient) as exc:
+        raise calendar_sync_temporarily_unavailable() from exc
+    except GoogleTokenUnavailable as exc:
+        if exc.code in {"refresh_token_missing"}:
+            raise calendar_sync_unavailable("google_not_connected") from exc
+        raise google_integration_unavailable() from exc
+    except GoogleCalendarError as exc:
+        if _is_calendar_api_disabled(exc):
+            raise calendar_sync_unavailable("api_not_enabled") from exc
+        raise calendar_sync_unavailable("calendar_read_failed") from exc
+
+    items: list[CalendarListItemOut] = []
+    for entry in entries:
+        cal_id = entry.get("id")
+        if not isinstance(cal_id, str) or not cal_id.strip():
+            continue
+        is_primary = bool(entry.get("primary") is True)
+        summary_raw = entry.get("summaryOverride") or entry.get("summary") or cal_id
+        summary = str(summary_raw).strip() or cal_id
+        role_raw = entry.get("accessRole")
+        items.append(
+            CalendarListItemOut(
+                id="primary" if is_primary else cal_id,
+                summary=f"{summary} (principal)" if is_primary else summary,
+                primary=is_primary,
+                access_role=role_raw if isinstance(role_raw, str) else None,
+                is_maulwurf_write=(cal_id == write_id),
+            )
+        )
+    return CalendarListOut(items=items, selected_ids=selected)

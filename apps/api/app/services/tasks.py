@@ -44,6 +44,7 @@ from app.models import (
     TaskRevision,
     TaskSource,
     Transcript,
+    User,
 )
 from app.schemas.analysis import DateStatus
 from app.schemas.tasks import (
@@ -56,6 +57,12 @@ from app.schemas.tasks import (
 from app.services.analysis_windows import EvidenceSpan
 from app.services.oauth_google import missing_calendar_scopes
 from app.services.outbox import SYNC_TASK_EVENT
+from app.services.reminders import (
+    DEFAULT_REMINDER_PREFERENCES,
+    ReminderPreferences,
+    ReminderTask,
+    schedule_task_reminders,
+)
 from app.services.revisions import (
     discard_pending_revisions,
     record_pending_revision,
@@ -618,6 +625,31 @@ async def _ensure_confirmation_outbox(
     raise RuntimeError("sync_task_event could not be created or reused")
 
 
+async def _arm_task_reminders(
+    db: AsyncSession, *, user_id: uuid.UUID, task: Task, now: datetime
+) -> None:
+    """Arm M8 escalating reminders (J4.3) for a confirmed task in the same transaction."""
+    user = await db.get(User, user_id)
+    user_timezone = user.timezone if user is not None and user.timezone else "UTC"
+    settings_row = await db.get(CalendarSettings, user_id)
+    if settings_row is None:
+        prefs = DEFAULT_REMINDER_PREFERENCES
+    else:
+        prefs = ReminderPreferences(
+            reminder_offsets_hours=tuple(int(h) for h in settings_row.reminder_offsets_hours),
+            reminder_allday_offsets_days=tuple(
+                int(d) for d in settings_row.reminder_allday_offsets_days
+            ),
+        )
+    await schedule_task_reminders(
+        db,
+        ReminderTask.from_task(task),
+        user_timezone=user_timezone,
+        preferences=prefs,
+        now=now,
+    )
+
+
 async def confirm_task(
     db: AsyncSession,
     user_id: uuid.UUID,
@@ -656,6 +688,7 @@ async def confirm_task(
     # never resumes a blocked delivery: for the same version, only a Calendar reconnect may
     # move `blocked` back to `pending` (A3.7).
     if revision is None and task.status == "confirmed":
+        await _arm_task_reminders(db, user_id=user_id, task=task, now=now)
         notice = (
             CALENDAR_SYNC_BLOCKED_NOTICE
             if task.calendar_sync_status == "blocked"
@@ -697,6 +730,7 @@ async def confirm_task(
         from_version=old_version,
         to_version=task.version,
     )
+    await _arm_task_reminders(db, user_id=user_id, task=task, now=now)
     if calendar_ready:
         await _ensure_confirmation_outbox(db, user_id=user_id, task=task)
     notice = None if calendar_ready else CALENDAR_SYNC_BLOCKED_NOTICE

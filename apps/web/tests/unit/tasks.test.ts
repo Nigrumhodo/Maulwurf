@@ -15,6 +15,7 @@ import {
   instantToWall,
   patchTask,
   qualitySignals,
+  qualitySummary,
   taskEvidenceHref,
   taskStatusFilters,
   wallTimeToInstant,
@@ -140,6 +141,29 @@ describe("task inbox helpers", () => {
       { code: "low_confidence", label: "baja confianza", count: 2, total: 5 },
     ]);
     expect(qualitySignals(null)).toEqual([]);
+  });
+
+  it("aggregates repeated ASR repetition warnings into one concise signal", () => {
+    const noisy = {
+      transcript: {
+        quality_warnings: [
+          { code: "repetition", count: 5 },
+          { code: "repetition", count: 8 },
+          { code: "repetition", count: 8 },
+        ],
+      },
+    } as unknown as LibraryAudioDetail;
+    const signals = qualitySignals(noisy);
+    expect(signals).toEqual([
+      {
+        code: "repetition",
+        label: "repeticiones",
+        count: 21,
+        total: null,
+        occurrences: 3,
+      },
+    ]);
+    expect(qualitySummary(signals[0]!)).toBe("repeticiones en 3 tramos (21 palabras)");
   });
 
   it("links evidence only through the canonical reader path", () => {

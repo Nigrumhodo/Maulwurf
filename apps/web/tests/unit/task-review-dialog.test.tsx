@@ -222,5 +222,49 @@ describe("TaskReviewDialog", () => {
 
     await waitFor(() => expect(onUpdated).toHaveBeenCalledWith(dismissed));
     expect(await screen.findByText(/El evento de Calendar se conserva/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "completar" })).toBeNull();
+  });
+
+  it("compacts long Google Calendar IDs and fires onActionComplete on confirm", async () => {
+    const onActionComplete = vi.fn();
+    const confirmed: Task = {
+      ...TASK,
+      pending_revision: null,
+      calendar_sync_status: "synced",
+      version: 3,
+    };
+    const longCalId =
+      "c_849b1a251db3441c5c1a748836da21746e5c5551b6ac7108abbec76027910ab0@group.calendar.google.com";
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/tasks/${TASK.id}/confirm`) {
+        return Promise.resolve(json({ task: confirmed }, 202));
+      }
+      if (url === "/integrations/status") {
+        return Promise.resolve(
+          json({ google: { ...GOOGLE.google, calendar_id: longCalId } }),
+        );
+      }
+      if (url === `/tasks/${TASK.id}`) return Promise.resolve(json(TASK));
+      return Promise.reject(new Error(`unexpected ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <TaskReviewDialog
+        task={TASK}
+        onUpdated={vi.fn()}
+        onActionComplete={onActionComplete}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(
+      await screen.findByText("Maulwurf · c_849b1a25…@group.calendar.google.com"),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "confirmar" }));
+    await waitFor(() =>
+      expect(onActionComplete).toHaveBeenCalledWith(confirmed, "Confirmada y sincronizada."),
+    );
   });
 });

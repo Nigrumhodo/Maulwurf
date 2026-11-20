@@ -121,6 +121,42 @@ def test_word_segments_partition_the_text_for_the_chunker() -> None:
         assert segment.text == prepared.text[segment.char_start:segment.char_end]
 
 
+def test_untimed_fragments_partition_the_text_into_multiple_segments() -> None:
+    prepared = prepare_transcript(TranscriptDraft(
+        text="primer tramo segundo tramo tercer tramo",
+        precision="none",
+        words=(),
+        model="whisper-large-v3",
+        segments=("primer tramo", "segundo tramo", "tercer tramo"),
+    ))
+    assert prepared is not None
+    assert prepared.precision == "none"
+    assert len(prepared.segments) == 3
+    assert [seg.ordinal for seg in prepared.segments] == [0, 1, 2]
+    assert "".join(seg.text for seg in prepared.segments) == prepared.text
+    for previous, segment in pairwise(prepared.segments):
+        assert segment.char_start == previous.char_end
+    for segment in prepared.segments:
+        assert segment.t_start is None and segment.t_end is None
+        assert segment.text == prepared.text[segment.char_start:segment.char_end]
+
+
+def test_long_untimed_text_splits_into_contiguous_segments() -> None:
+    sentence = "Definimos los grupos heterogéneos de cuatro estudiantes por carrera. "
+    long_text = (sentence * 12).strip()
+    prepared = prepare_transcript(TranscriptDraft(
+        text=long_text,
+        precision="none",
+        words=(),
+        model="whisper-large-v3",
+    ))
+    assert prepared is not None
+    assert len(prepared.segments) >= 2
+    assert "".join(seg.text for seg in prepared.segments) == prepared.text
+    for previous, segment in pairwise(prepared.segments):
+        assert segment.char_start == previous.char_end
+
+
 def test_fts_config_follows_the_selected_language() -> None:
     assert fts_config_for("es") == "spanish"
     assert fts_config_for("en") == "english"
@@ -212,7 +248,11 @@ async def test_commit_persists_one_transcript_and_a_disabled_outbox(pool: asyncp
     active = await pool.fetchval(
         "SELECT active_transcript_version FROM audios WHERE id = $1", audio_id,
     )
+    stored_duration = await pool.fetchval(
+        "SELECT duration_seconds FROM audios WHERE id = $1", audio_id,
+    )
     assert active == 1
+    assert stored_duration == pytest.approx(12.5)
     attempt_row = await pool.fetchrow(
         "SELECT status, fragments_done FROM ingestion_attempts WHERE id = $1", owned.attempt_id,
     )

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Task } from "@/lib/tasks";
 
 vi.mock("@fullcalendar/react", () => ({
@@ -177,5 +177,36 @@ describe("CalendarView", () => {
 
     expect(await screen.findByText(/solo se muestran eventos de Google/)).toBeTruthy();
     expect(await screen.findByText("Evento Google")).toBeTruthy();
+  });
+
+  it("triggers manual sync via POST /calendar/sync", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/calendar/sync" && init?.method === "POST") {
+        return new Response(
+          JSON.stringify({
+            from: "2026-11-01",
+            to: "2026-12-30",
+            calendars: ["primary"],
+            inserted: 3,
+            removed: 0,
+            last_synced_at: "2026-11-19T12:00:00Z",
+          }),
+          { status: 202, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.startsWith("/calendar/events?")) return json(EVENTS);
+      if (url.startsWith("/tasks?")) return json({ items: [], next_cursor: null });
+      if (url === "/subjects") return json({ items: [] });
+      return json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<CalendarView />);
+
+    const button = await screen.findByRole("button", { name: "sincronizar google" });
+    fireEvent.click(button);
+
+    expect(await screen.findByText(/calendario sincronizado/i)).toBeTruthy();
   });
 });

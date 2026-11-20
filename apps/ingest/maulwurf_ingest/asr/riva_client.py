@@ -210,7 +210,7 @@ class GrpcRivaTransport:
             language_code=language_code,
             max_alternatives=1,
             profanity_filter=False,
-            enable_automatic_punctuation=False,
+            enable_automatic_punctuation=True,
             verbatim_transcripts=True,
             enable_word_time_offsets=True,
         )

@@ -32,7 +32,7 @@ from app.services.chat_prompt import (
     PreparedStream,
     _LLMEvent,
 )
-from app.services.chat_tools import TOOL_PROTOCOL, execute_tool, parse_tool_call
+from app.services.chat_tools import TOOL_PROTOCOL, execute_tool, extract_tool_call
 from app.services.citations import (
     CitationBuffer,
     CitationRef,
@@ -58,6 +58,34 @@ from app.services.tools import MAX_TOOL_ROUNDS, TOOL_BUDGET_SECONDS
 
 logger = logging.getLogger(__name__)
 
+_PREAMBLE_HOLD_CHARS = 220
+
+
+def _merge_tool_protocol(messages: Sequence[ChatMessage]) -> list[ChatMessage]:
+    if messages and messages[0].role == "system":
+        merged = ChatMessage(
+            role="system",
+            content=f"{messages[0].content}\n\n{TOOL_PROTOCOL}",
+        )
+        return [merged, *messages[1:]]
+    return [ChatMessage(role="system", content=TOOL_PROTOCOL), *messages]
+
+
+def _safe_prose_cut(buffer: str, *, flushed_any: bool) -> int:
+    """Number of leading characters in `buffer` guaranteed not to be part of a tool call."""
+    fence_idx = buffer.find("`")
+    brace_idx = buffer.find("{")
+    candidates = [idx for idx in (fence_idx, brace_idx) if idx != -1]
+    if candidates:
+        earliest = min(candidates)
+        # If an unclosed brace/fence is already closed and is NOT a tool call, advance past it
+        # only when braces are balanced and no trailing fence remains.
+        if earliest == brace_idx and buffer.count("{") <= buffer.count("}") and fence_idx == -1:
+            return len(buffer) if (flushed_any or len(buffer) >= _PREAMBLE_HOLD_CHARS) else 0
+        return earliest if (flushed_any or earliest >= _PREAMBLE_HOLD_CHARS) else 0
+    if not flushed_any and len(buffer) < _PREAMBLE_HOLD_CHARS:
+        return 0
+    return len(buffer)
 # In-process wake-up. The database status is authoritative.
 _CANCEL_EVENTS: dict[uuid.UUID, asyncio.Event] = {}
 
@@ -326,10 +354,7 @@ class ChatTurnStream:
         queue: asyncio.Queue[_LLMEvent],
     ) -> None:
         assert self._llm is not None  # noqa: S101 - guarded by `_live_events`
-        messages = [
-            ChatMessage(role="system", content=TOOL_PROTOCOL),
-            *prepared.messages,
-        ]
+        messages = _merge_tool_protocol(prepared.messages)
         rounds = 0
         started = time.monotonic()
         budget_exhausted = False
@@ -340,22 +365,13 @@ class ChatTurnStream:
                         await queue.put(_LLMEvent(kind="delta", text=delta))
                     break
                 buffer = ""
-                decided = False
+                flushed_any = False
                 tool_executed = False
                 async for delta in self._llm.stream(messages, max_tokens=max_tokens):
-                    if decided:
-                        await queue.put(_LLMEvent(kind="delta", text=delta))
-                        continue
                     buffer += delta
-                    stripped = buffer.lstrip()
-                    if stripped and not stripped.startswith("{"):
-                        await queue.put(_LLMEvent(kind="delta", text=buffer))
-                        buffer = ""
-                        decided = True
-                        continue
-                    call = parse_tool_call(buffer)
-                    if call is not None:
-                        decided = True
+                    extracted = extract_tool_call(buffer)
+                    if extracted is not None:
+                        _prefix, call = extracted
                         tool_executed = True
                         record = await execute_tool(
                             self._session_factory,
@@ -363,14 +379,69 @@ class ChatTurnStream:
                             call=call,
                         )
                         await queue.put(_LLMEvent(kind="tool", tool=record))
+                        if flushed_any:
+                            await queue.put(_LLMEvent(kind="delta", text="\n\n"))
+                        messages.append(
+                            ChatMessage(
+                                role="assistant",
+                                content=json.dumps(
+                                    {"tool": call.name, "arguments": dict(call.arguments)},
+                                    ensure_ascii=False,
+                                ),
+                            )
+                        )
                         messages.append(
                             ChatMessage(
                                 role="user",
-                                content="Tool result: "
-                                + json.dumps(record.payload, ensure_ascii=False),
+                                content=(
+                                    "Tool result: "
+                                    + json.dumps(record.payload, ensure_ascii=False)
+                                    + "\n\nRespond now in the student's language using "
+                                    "this data without outputting JSON."
+                                ),
                             )
                         )
                         break
+                    cut = _safe_prose_cut(buffer, flushed_any=flushed_any)
+                    if cut > 0:
+                        await queue.put(_LLMEvent(kind="delta", text=buffer[:cut]))
+                        buffer = buffer[cut:]
+                        flushed_any = True
+                if not tool_executed and buffer:
+                    extracted = extract_tool_call(buffer)
+                    if extracted is not None:
+                        _prefix, call = extracted
+                        tool_executed = True
+                        record = await execute_tool(
+                            self._session_factory,
+                            user_id=prepared.user_id,
+                            call=call,
+                        )
+                        await queue.put(_LLMEvent(kind="tool", tool=record))
+                        if flushed_any:
+                            await queue.put(_LLMEvent(kind="delta", text="\n\n"))
+                        messages.append(
+                            ChatMessage(
+                                role="assistant",
+                                content=json.dumps(
+                                    {"tool": call.name, "arguments": dict(call.arguments)},
+                                    ensure_ascii=False,
+                                ),
+                            )
+                        )
+                        messages.append(
+                            ChatMessage(
+                                role="user",
+                                content=(
+                                    "Tool result: "
+                                    + json.dumps(record.payload, ensure_ascii=False)
+                                    + "\n\nRespond now in the student's language using "
+                                    "this data without outputting JSON."
+                                ),
+                            )
+                        )
+                    else:
+                        await queue.put(_LLMEvent(kind="delta", text=buffer))
                 if tool_executed:
                     rounds += 1
                     if (
@@ -388,8 +459,6 @@ class ChatTurnStream:
                             )
                         )
                     continue
-                if not decided and buffer:
-                    await queue.put(_LLMEvent(kind="delta", text=buffer))
                 break
             await queue.put(_LLMEvent(kind="end"))
         except LLMError as exc:

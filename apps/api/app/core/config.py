@@ -422,4 +422,8 @@ class Settings(BaseSettings):
         return self
 
 
-settings = Settings()
+settings = (
+    Settings(_env_file=None)
+    if os.environ.get("_MAULWURF_TEST_NO_DOTENV") == "1"
+    else Settings()
+)

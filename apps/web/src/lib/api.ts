@@ -271,12 +271,16 @@ export async function apiFetch(path: string, init: ApiRequestInit = {}): Promise
   if (res.ok) return res;
 
   const error = new ApiHttpError(res.status, await readErrorBody(res));
+  return handleApiHttpError(error);
+}
 
-  if (res.status === 401) {
+/** Aplica los interceptores compartidos de 401/403 y relanza el `ApiHttpError`. */
+export function handleApiHttpError(error: ApiHttpError): never {
+  if (error.status === 401) {
     clearCsrfToken();
     if (handlers.onUnauthorized) handlers.onUnauthorized();
     else redirectToLogin();
-  } else if (res.status === 403) {
+  } else if (error.status === 403) {
     // The screen that issued the call renders this error. A second toast would repeat it.
     handlers.onForbidden?.(error);
   }

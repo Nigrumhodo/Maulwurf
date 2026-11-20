@@ -337,6 +337,7 @@ async def create_reservation(
         class_date=class_date,
         class_timezone=class_timezone,
         language_code=language_code,
+        required_stages=list(settings.ingestion_capabilities.required_stages),
     )
     db.add(audio)
     await db.flush()

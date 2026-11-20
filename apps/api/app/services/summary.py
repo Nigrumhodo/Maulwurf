@@ -20,6 +20,7 @@ from prompts.registry import SUMMARY_PROMPT_VERSION, load_summary_prompts
 # "3.5" and "..." therefore stay inside a sentence. "Dr." and "e.g." still break when a
 # space follows: the v1 check stays deterministic and does not keep an abbreviation list.
 _SENTENCE_BREAK = re.compile(r"[.!?]+(?=\s|$)")
+_CODE_FENCE = re.compile(r"^\s*```(?:json)?\s*\n?(.*?)\n?\s*```\s*$", re.DOTALL | re.IGNORECASE)
 _SECRETS = (
     re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"),
     re.compile(r"Bearer\s+\S+", re.IGNORECASE),
@@ -81,10 +82,16 @@ def sentence_count(text: str) -> int:
     return len(parts)
 
 
+def strip_json_fence(raw: str) -> str:
+    """Unwrap a single surrounding Markdown JSON fence when a provider emits one."""
+    match = _CODE_FENCE.match(raw)
+    return match.group(1).strip() if match is not None else raw
+
+
 def parse_summary_payload(raw: str) -> ClassSummary:
     """Accept only the v1 object. Extra fields, a bad length, or a secret raise."""
     try:
-        payload = json.loads(raw)
+        payload = json.loads(strip_json_fence(raw))
     except json.JSONDecodeError as exc:
         raise SummaryRejected("the summary payload is not JSON") from exc
     if not isinstance(payload, dict) or set(payload) != {"resumen_clase", "temas"}:

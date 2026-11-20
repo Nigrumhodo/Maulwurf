@@ -68,12 +68,21 @@ export function syncStatusDescription(status: string): string | null {
   }
 }
 
+function compactCalendarId(calendarId: string): string {
+  if (calendarId.length <= 36) return calendarId;
+  const atIndex = calendarId.indexOf("@");
+  if (atIndex > 12) {
+    return `${calendarId.slice(0, 10)}…${calendarId.slice(atIndex)}`;
+  }
+  return `${calendarId.slice(0, 28)}…`;
+}
+
 export function calendarTargetLabel(google: GoogleStatus): string {
   if (google.calendar_write_ready && google.calendar_id !== null) {
-    return `Maulwurf · ${google.calendar_id}`;
+    return `Maulwurf · ${compactCalendarId(google.calendar_id)}`;
   }
   if (google.calendar_id !== null) {
-    return `Maulwurf · ${google.calendar_id} (no listo; quedará bloqueada)`;
+    return `Maulwurf · ${compactCalendarId(google.calendar_id)} (no listo; quedará bloqueada)`;
   }
   return "sin calendario conectado; la tarea quedará bloqueada";
 }
@@ -94,6 +103,8 @@ const CALENDAR_ERRORS: Record<string, string> = {
   wrong_account: "La cuenta de Google no coincide con tu sesión.",
   scope_required: "Faltan permisos de Calendar; la integración no se guardó.",
   invalid_grant: "Google revocó el acceso; reconecta la integración.",
+  api_not_enabled:
+    "La API de Google Calendar está deshabilitada en Google Cloud Console; habilítala en tu proyecto y vuelve a intentar.",
   calendar_unavailable: "Google Calendar no respondió; inténtalo más tarde.",
   calendar_error: "Google Calendar devolvió un error al preparar el calendario.",
 };

@@ -1,6 +1,6 @@
 """D3.8: the chat tool protocol parser is strict and fails closed."""
 
-from app.services.chat_tools import TOOL_PROTOCOL, parse_tool_call
+from app.services.chat_tools import TOOL_PROTOCOL, extract_tool_call, parse_tool_call
 
 
 def test_parse_tool_call_accepts_one_json_object() -> None:
@@ -34,3 +34,23 @@ def test_protocol_lists_only_the_read_only_allowlist() -> None:
     assert "get_pending_tasks" in TOOL_PROTOCOL
     assert "propose_task" in TOOL_PROTOCOL
     assert "never writes to Calendar" in TOOL_PROTOCOL
+
+
+def test_extract_tool_call_handles_preamble_and_markdown_fences() -> None:
+    preamble = (
+        "Voy a revisar tus tareas pendientes.\n\n"
+        '{"tool": "get_pending_tasks", "arguments": {}}'
+    )
+    extracted = extract_tool_call(preamble)
+    assert extracted is not None
+    prefix, call = extracted
+    assert "Voy a revisar" in prefix
+    assert call.name == "get_pending_tasks"
+    assert call.arguments == {}
+
+    fenced = 'Voy a revisar.\n\n```json\n{"tool": "get_pending_tasks", "arguments": {}}\n```'
+    fenced_extracted = extract_tool_call(fenced)
+    assert fenced_extracted is not None
+    assert fenced_extracted[1].name == "get_pending_tasks"
+
+    assert extract_tool_call("El conjunto {1, 2, 3} no es una tool.") is None

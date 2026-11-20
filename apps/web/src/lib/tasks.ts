@@ -107,6 +107,7 @@ export interface TaskQualitySignal {
   label: string;
   count: number | null;
   total: number | null;
+  occurrences?: number;
 }
 
 export interface TaskQualityState {
@@ -159,7 +160,10 @@ export function taskSchedule(task: Task): string {
 
 export function qualitySignals(detail: LibraryAudioDetail | null): TaskQualitySignal[] {
   const warnings = detail?.transcript?.quality_warnings ?? [];
-  const signals: TaskQualitySignal[] = [];
+  const grouped = new Map<
+    TaskQualitySignal["code"],
+    { count: number | null; total: number | null; occurrences: number }
+  >();
   for (const raw of warnings) {
     const code = raw.code;
     if (code !== "repetition" && code !== "empty_segments" && code !== "low_confidence") {
@@ -167,12 +171,52 @@ export function qualitySignals(detail: LibraryAudioDetail | null): TaskQualitySi
     }
     const count = typeof raw.count === "number" ? raw.count : null;
     const total = typeof raw.total === "number" ? raw.total : null;
-    signals.push({ code, label: QUALITY_LABELS[code], count, total });
+    const existing = grouped.get(code);
+    if (existing === undefined) {
+      grouped.set(code, { count, total, occurrences: 1 });
+    } else {
+      existing.occurrences += 1;
+      if (count !== null) {
+        existing.count = (existing.count ?? 0) + count;
+      }
+      if (total !== null) {
+        existing.total = (existing.total ?? 0) + total;
+      }
+    }
+  }
+  const signals: TaskQualitySignal[] = [];
+  for (const [code, entry] of grouped.entries()) {
+    signals.push(
+      entry.occurrences > 1
+        ? {
+            code,
+            label: QUALITY_LABELS[code],
+            count: entry.count,
+            total: entry.total,
+            occurrences: entry.occurrences,
+          }
+        : {
+            code,
+            label: QUALITY_LABELS[code],
+            count: entry.count,
+            total: entry.total,
+          },
+    );
   }
   return signals;
 }
 
 export function qualitySummary(signal: TaskQualitySignal): string {
+  if ((signal.occurrences ?? 1) > 1) {
+    if (signal.code === "repetition") {
+      return signal.count === null
+        ? `${signal.label} (${signal.occurrences} tramos)`
+        : `${signal.label} en ${signal.occurrences} tramos (${signal.count} palabras)`;
+    }
+    return signal.count === null
+      ? `${signal.label} (${signal.occurrences} avisos)`
+      : `${signal.label} en ${signal.occurrences} tramos (${signal.count})`;
+  }
   const counts =
     signal.count === null
       ? ""
@@ -254,6 +298,7 @@ export interface TaskEventBlockPatch {
 
 export interface TaskPatch {
   version: number;
+  tipo?: string;
   titulo?: string;
   detalle?: string | null;
   due_date?: string | null;
@@ -261,9 +306,32 @@ export interface TaskPatch {
   timezone?: string;
   all_day?: boolean;
   date_status?: TaskDateStatus;
-  date_text?: string | null;
   date_reason?: string | null;
   event_block?: TaskEventBlockPatch | null;
+}
+
+export interface TaskCreateInput {
+  source: "manual";
+  tipo: string;
+  titulo: string;
+  detalle?: string | null;
+  subject_id?: string | null;
+  due_date?: string | null;
+  due_at?: string | null;
+  timezone: string;
+  all_day: boolean;
+  date_status: TaskDateStatus;
+  event_block?: TaskEventBlockPatch | null;
+}
+
+export async function createTask(input: TaskCreateInput): Promise<Task> {
+  const res = await apiFetch("/tasks", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+    retries: 0,
+  });
+  return (await res.json()) as Task;
 }
 
 export interface TaskUpdate {

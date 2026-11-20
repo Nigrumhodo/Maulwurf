@@ -110,11 +110,9 @@ def decide_probe(
     if names & _UNVERIFIED_FORMATS:
         return ProbeDecision("reject", "unverified_container")
     if "wav" in names:
-        if codec != "pcm_s16le":
-            return ProbeDecision("reject", "not_pcm_s16")
-        if channels != 1:
-            return ProbeDecision("reject", "multi_channel")
-        return ProbeDecision("accept", "wav_pcm_s16_mono", duration_s)
+        if codec == "pcm_s16le" and channels == 1:
+            return ProbeDecision("accept", "wav_pcm_s16_mono", duration_s)
+        return ProbeDecision("normalize", "wav", duration_s)
     if "matroska" in names and "webm" not in names:
         return ProbeDecision("reject", "unexpected_container")
     normalized = _normalize_reason(names, codec)
@@ -124,7 +122,7 @@ def decide_probe(
 
 
 def decision_from_payload(payload: object) -> ProbeDecision:
-    """Read container, codec, channels, and `format.duration` from ffprobe JSON."""
+    """Read container, codec, channels, and duration from ffprobe JSON."""
     if not isinstance(payload, dict):
         return ProbeDecision("reject", "malformed")
     format_info = payload.get("format")
@@ -132,8 +130,7 @@ def decision_from_payload(payload: object) -> ProbeDecision:
     if not isinstance(format_info, dict) or not isinstance(streams, list):
         return ProbeDecision("reject", "malformed")
     format_name = format_info.get("format_name")
-    duration_s = _as_float(format_info.get("duration"))
-    if not isinstance(format_name, str) or duration_s is None:
+    if not isinstance(format_name, str):
         return ProbeDecision("reject", "malformed")
     audio: dict[object, object] | None = None
     for stream in streams:
@@ -145,6 +142,11 @@ def decision_from_payload(payload: object) -> ProbeDecision:
     codec = audio.get("codec_name")
     channels = audio.get("channels")
     if not isinstance(codec, str) or not isinstance(channels, int) or isinstance(channels, bool):
+        return ProbeDecision("reject", "malformed")
+    duration_s = _as_float(format_info.get("duration"))
+    if duration_s is None:
+        duration_s = _as_float(audio.get("duration"))
+    if duration_s is None:
         return ProbeDecision("reject", "malformed")
     return decide_probe(
         format_name=format_name, codec=codec, channels=channels, duration_s=duration_s

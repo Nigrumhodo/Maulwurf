@@ -16,9 +16,10 @@ export interface TaskCardProps {
   quality: TaskQualityState | null;
   onEdit?: () => void;
   onReview?: () => void;
+  onComplete?: () => void;
 }
 
-export function TaskCard({ task, quality, onEdit, onReview }: TaskCardProps) {
+export function TaskCard({ task, quality, onEdit, onReview, onComplete }: TaskCardProps) {
   const due = formatTaskDue(task);
   const hasQualityWarning =
     quality !== null && (quality.unavailable || quality.signals.length > 0);
@@ -101,11 +102,11 @@ export function TaskCard({ task, quality, onEdit, onReview }: TaskCardProps) {
         </ul>
       )}
 
-      {(onEdit !== undefined || onReview !== undefined) &&
+      {(onEdit !== undefined || onReview !== undefined || onComplete !== undefined) &&
         (task.status === "needs_review" ||
           task.status === "pending" ||
           task.status === "confirmed") && (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {onReview !== undefined && (
               <Button type="button" size="sm" variant="primary" onClick={onReview}>
                 revisar
@@ -114,6 +115,17 @@ export function TaskCard({ task, quality, onEdit, onReview }: TaskCardProps) {
             {onEdit !== undefined && (
               <Button type="button" size="sm" variant="secondary" onClick={onEdit}>
                 editar
+              </Button>
+            )}
+            {onComplete !== undefined && task.status === "confirmed" && (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="ml-auto border-2 border-lavender/35 text-lavender/80 hover:border-mint hover:text-mint"
+                onClick={onComplete}
+              >
+                marcar completada
               </Button>
             )}
           </div>

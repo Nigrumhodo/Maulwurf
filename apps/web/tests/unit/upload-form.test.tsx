@@ -189,7 +189,10 @@ describe("UploadForm · cancelar subida (U-S2-DA-02)", () => {
   it("no crea object URLs de audio al seleccionar o cancelar", async () => {
     const createObjectURL = vi.fn();
     const revokeObjectURL = vi.fn();
-    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    const StubUrl = class extends URL {};
+    StubUrl.createObjectURL = createObjectURL;
+    StubUrl.revokeObjectURL = revokeObjectURL;
+    vi.stubGlobal("URL", StubUrl);
 
     await reserveClass();
     pickFile();

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { DateInput } from "@/components/ui/DateInput";
@@ -17,6 +17,16 @@ import type { Task, TaskEventBlockPatch, TaskPatch, TaskUpdate } from "@/lib/tas
 
 type DueMode = "missing" | "all_day" | "timed";
 type EventMode = "none" | "all_day" | "timed";
+
+const ACTIVITY_TYPES = [
+  "tarea",
+  "entrega",
+  "examen",
+  "lectura",
+  "proyecto",
+  "recordatorio",
+  "recomendacion",
+] as const;
 
 function dueModeOf(task: Task): DueMode {
   if (task.date_status !== "resolved") return "missing";
@@ -73,6 +83,8 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
   const initialDueMode = dueModeOf(task);
   const initialEventMode = eventModeOf(task);
 
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [tipo, setTipo] = useState(task.tipo);
   const [titulo, setTitulo] = useState(task.titulo);
   const [detalle, setDetalle] = useState(task.detalle ?? "");
   const [dueMode, setDueMode] = useState<DueMode>(initialDueMode);
@@ -96,6 +108,14 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedRevision, setSavedRevision] = useState<string | null>(null);
+  const [savedDirect, setSavedDirect] = useState(false);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (el !== null && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, []);
 
   const eventEnd = useMemo(() => {
     if (eventMode !== "timed") return null;
@@ -169,6 +189,7 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
 
     return {
       version: task.version,
+      ...(tipo !== task.tipo ? { tipo } : {}),
       titulo: titulo.trim(),
       detalle: detalle.trim() === "" ? null : detalle,
       date_status: dueMode === "missing" ? "missing" : "resolved",
@@ -176,8 +197,7 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
       due_at: resolvedDue.due_at,
       timezone,
       all_day: resolvedDue.all_day,
-      date_text: dueMode === "missing" ? null : task.date_text,
-      date_reason: dueMode === "missing" ? null : task.date_reason,
+      date_reason: null,
       event_block: eventBlock,
     };
   }
@@ -190,9 +210,11 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
     }
     setBusy(true);
     setError(null);
+    setSavedDirect(false);
     try {
       const update = await patchTask(task.id, patch);
       setSavedRevision(update.revision_id);
+      setSavedDirect(update.revision_id === null);
       onSaved(update);
     } catch (cause) {
       setError(fieldError(cause));
@@ -202,15 +224,32 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
   }
 
   return (
-    <Card title="editar tarea" variant="accent">
-      <div className="flex flex-col gap-4">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Input
-            label="título"
-            value={titulo}
-            maxLength={200}
-            onChange={(event) => setTitulo(event.target.value)}
-          />
+    <div ref={containerRef}>
+      <Card title="editar tarea" variant="accent">
+        <div className="flex flex-col gap-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Input
+              label="título"
+              value={titulo}
+              maxLength={200}
+              onChange={(event) => setTitulo(event.target.value)}
+            />
+            <label className="capitalize font-pixel flex flex-col gap-1">
+              <span className="text-mint">&gt; tipo</span>
+              <select
+                aria-label="tipo de actividad"
+                value={tipo}
+                onChange={(event) => setTipo(event.target.value)}
+                className={selectClass}
+              >
+                {ACTIVITY_TYPES.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <label className="capitalize font-pixel flex flex-col gap-1">
             <span className="text-mint">&gt; detalle</span>
             <textarea
@@ -222,7 +261,6 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
               className="min-h-20 resize-none bg-surface text-lavender border-2 border-lavender px-3 py-2 caret-mint focus:border-mint focus:outline-none"
             />
           </label>
-        </div>
 
         <fieldset className="flex flex-col gap-3 border-2 border-lavender/30 p-3">
           <legend className="capitalize px-1 text-mint">fecha de vencimiento</legend>
@@ -354,6 +392,11 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
             &gt; cambio pendiente de confirmación; la tarea activa no se modificó.
           </p>
         )}
+        {savedDirect && (
+          <p role="status" className="border-2 border-mint px-3 py-2 text-mint">
+            &gt; cambios guardados.
+          </p>
+        )}
 
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" disabled={busy} onClick={() => void handleSubmit()}>
@@ -365,5 +408,6 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
         </div>
       </div>
     </Card>
+    </div>
   );
 }

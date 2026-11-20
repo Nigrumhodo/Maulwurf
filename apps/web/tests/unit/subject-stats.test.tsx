@@ -92,14 +92,17 @@ afterEach(() => {
 
 describe("SubjectStats (D4.4)", () => {
   it("computes total and per-subject metadata counts without rounding drift", () => {
-    const result = computeSubjectStats(SUBJECTS, AUDIOS, TASKS);
+    const completedTask: Task = { ...TASKS[0]!, id: "t-2", status: "completed" };
+    const result = computeSubjectStats(SUBJECTS, AUDIOS, [...TASKS, completedTask]);
     expect(result.subjectCount).toBe(2);
     expect(result.classCount).toBe(2);
     expect(result.readyClassCount).toBe(1);
     expect(result.transcribedMinutes).toBe(46);
     expect(result.confirmedTaskCount).toBe(1);
+    expect(result.completedTaskCount).toBe(1);
     expect(result.pendingTaskCount).toBe(0);
-    expect(result.subjects[0].transcribedMinutes).toBe(46);
+    expect(result.subjects[0]?.transcribedMinutes).toBe(46);
+    expect(result.subjects[0]?.completedTasks).toBe(1);
   });
 
   it("renders metadata-only metrics with zero audio elements", async () => {

@@ -73,11 +73,16 @@ describe("TaskEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "guardar cambios" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as Record<
+      string,
+      unknown
+    > & {
       due_date: string;
       event_block: { start_at: string; end_at: string };
     };
     expect(body.due_date).toBe("2026-11-09");
+    expect("date_text" in body).toBe(false);
+    expect(body.date_reason).toBeNull();
     expect(body.event_block.start_at).toBe("2026-11-10T15:00:00.000Z");
     expect(body.event_block.end_at).toBe("2026-11-10T15:45:00.000Z");
     expect(onSaved).toHaveBeenCalledOnce();

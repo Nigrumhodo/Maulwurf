@@ -99,7 +99,7 @@ export function IngestProgress({ audioId }: IngestProgressProps) {
         <span className="font-pixel text-mint">&gt; progreso de la clase</span>
         {aggregate !== null && <StatusBadge status={aggregate} />}
         <span className="text-lavender/50">
-          {transport === "sse" ? "eventos en vivo" : "sondeo (fallback)"}
+          {transport === "sse" ? "en tiempo real" : "actualización automática"}
         </span>
       </div>
 
@@ -166,16 +166,7 @@ export function IngestProgress({ audioId }: IngestProgressProps) {
 
       {state.terminal === null && (
         <div className="flex flex-wrap items-center gap-2">
-          {transport === "sse" ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={() => sourceRef.current?.usePolling()}
-            >
-              usar sondeo
-            </Button>
-          ) : (
+          {transport === "polling" && (
             <Button
               type="button"
               size="sm"

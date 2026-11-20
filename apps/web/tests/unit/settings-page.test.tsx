@@ -187,4 +187,13 @@ describe("SettingsPage", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("No se concedió el permiso gmail.send.");
   });
+
+  it("explains disabled Google Calendar API reason clearly", async () => {
+    installFetch(google());
+
+    renderPage("/settings?calendar=error&reason=api_not_enabled");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Google Cloud Console");
+  });
 });

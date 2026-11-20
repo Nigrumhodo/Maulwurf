@@ -79,17 +79,20 @@ class ReconciledTranscript:
     text: str
     words: tuple[Word, ...]
     precision: str
+    segments: tuple[str, ...] = ()
 
 
 def reconcile(fragments: Sequence[FragmentTranscript]) -> ReconciledTranscript:
     """Une fragmentos en orden. La precisión es `word` solo si todo el texto tiene palabras."""
     pieces: list[str] = []
+    fragment_pieces: list[str] = []
     kept: list[Word] = []
     saw_text_only = False
     previous_end: float | None = None
     for fragment in fragments:
         overlap_s = 0.0 if previous_end is None else max(0.0, previous_end - fragment.start_s)
         if fragment.words:
+            frag_words: list[str] = []
             for word in fragment.words:
                 start_s = global_time_s(fragment.start_s, word.start_s, overlap_s)
                 end_s = global_time_s(fragment.start_s, word.end_s, overlap_s)
@@ -98,18 +101,24 @@ def reconcile(fragments: Sequence[FragmentTranscript]) -> ReconciledTranscript:
                 if _duplicate(kept, word.text, start_s, end_s, previous_end):
                     continue
                 kept.append(Word(word.text, start_s, end_s, word.confidence))
-                pieces.append(word.text.strip())
+                token = word.text.strip()
+                pieces.append(token)
+                frag_words.append(token)
+            if frag_words:
+                fragment_pieces.append(" ".join(frag_words))
         else:
-            saw_text_only = True
             incoming = fragment.text.strip()
-            covered = previous_end is not None and fragment.start_s < previous_end - _EPS_S
-            if covered:
-                incoming = _strip_repeated_prefix(" ".join(pieces), incoming)
             if incoming:
-                pieces.append(incoming)
+                saw_text_only = True
+                covered = previous_end is not None and fragment.start_s < previous_end - _EPS_S
+                if covered:
+                    incoming = _strip_repeated_prefix(" ".join(pieces), incoming)
+                if incoming:
+                    pieces.append(incoming)
+                    fragment_pieces.append(incoming)
         previous_end = fragment.end_s
     precision = "word" if kept and not saw_text_only else "none"
-    return ReconciledTranscript(" ".join(pieces), tuple(kept), precision)
+    return ReconciledTranscript(" ".join(pieces), tuple(kept), precision, tuple(fragment_pieces))
 
 
 def _duplicate(

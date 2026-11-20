@@ -14,6 +14,7 @@ export interface SubjectBreakdownItem {
   transcribedMinutes: number;
   pendingTasks: number;
   confirmedTasks: number;
+  completedTasks: number;
 }
 
 export interface GlobalSubjectStats {
@@ -23,6 +24,7 @@ export interface GlobalSubjectStats {
   transcribedMinutes: number;
   pendingTaskCount: number;
   confirmedTaskCount: number;
+  completedTaskCount: number;
   subjects: SubjectBreakdownItem[];
 }
 
@@ -43,6 +45,7 @@ export function computeSubjectStats(
       transcribedMinutes: 0,
       pendingTasks: 0,
       confirmedTasks: 0,
+      completedTasks: 0,
     });
   }
 
@@ -60,6 +63,7 @@ export function computeSubjectStats(
       transcribedMinutes: 0,
       pendingTasks: 0,
       confirmedTasks: 0,
+      completedTasks: 0,
     };
     existing.totalClasses += 1;
     if (audio.aggregate_status === "ready") {
@@ -85,18 +89,22 @@ export function computeSubjectStats(
 
   let pendingTaskCount = 0;
   let confirmedTaskCount = 0;
+  let completedTaskCount = 0;
 
   for (const task of Array.isArray(tasks) ? tasks : []) {
     const isPending = task.status === "pending" || task.status === "needs_review";
     const isConfirmed = task.status === "confirmed";
+    const isCompleted = task.status === "completed";
     if (isPending) pendingTaskCount += 1;
     if (isConfirmed) confirmedTaskCount += 1;
+    if (isCompleted) completedTaskCount += 1;
 
     if (task.subject !== null) {
       const entry = map.get(task.subject.id);
       if (entry !== undefined) {
         if (isPending) entry.pendingTasks += 1;
         if (isConfirmed) entry.confirmedTasks += 1;
+        if (isCompleted) entry.completedTasks += 1;
       }
     }
   }
@@ -108,6 +116,7 @@ export function computeSubjectStats(
     transcribedMinutes: Math.round(totalSeconds / 60),
     pendingTaskCount,
     confirmedTaskCount,
+    completedTaskCount,
     subjects: [...map.values()],
   };
 }

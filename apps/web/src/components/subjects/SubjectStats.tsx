@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { fetchAudios } from "@/lib/audios";
 import type { AudioListItemOut } from "@/lib/audios";
@@ -24,32 +25,37 @@ export function SubjectStats({ subjects: initialSubjects }: SubjectStatsProps) {
     if (initialSubjects !== undefined) setSubjects(initialSubjects);
   }, [initialSubjects]);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      setLoading(true);
-      const [subjectsRes, audiosRes, tasksRes] = await Promise.allSettled([
-        initialSubjects !== undefined ? Promise.resolve(initialSubjects) : fetchSubjects(),
-        fetchAudios(),
-        fetchTaskPage({ limit: 100 }),
-      ]);
-      if (cancelled) return;
-      if (subjectsRes.status === "fulfilled" && Array.isArray(subjectsRes.value)) {
-        setSubjects(subjectsRes.value);
-      }
-      if (audiosRes.status === "fulfilled" && Array.isArray(audiosRes.value)) {
-        setAudios(audiosRes.value);
-      }
-      if (tasksRes.status === "fulfilled" && Array.isArray(tasksRes.value?.items)) {
-        setTasks(tasksRes.value.items);
-      }
-      setLoading(false);
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [subjectsRes, audiosRes, tasksRes] = await Promise.allSettled([
+      initialSubjects !== undefined ? Promise.resolve(initialSubjects) : fetchSubjects(),
+      fetchAudios(),
+      fetchTaskPage({ status: "all", limit: 200 }),
+    ]);
+    if (subjectsRes.status === "fulfilled" && Array.isArray(subjectsRes.value)) {
+      setSubjects(subjectsRes.value);
     }
-    void load();
-    return () => {
-      cancelled = true;
-    };
+    if (audiosRes.status === "fulfilled" && Array.isArray(audiosRes.value)) {
+      setAudios(audiosRes.value);
+    }
+    if (tasksRes.status === "fulfilled" && Array.isArray(tasksRes.value?.items)) {
+      setTasks(tasksRes.value.items);
+    }
+    setLoading(false);
   }, [initialSubjects]);
+
+  useEffect(() => {
+    void load();
+    function onVisible() {
+      if (document.visibilityState === "visible") {
+        void load();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [load]);
 
   const stats = computeSubjectStats(subjects, audios, tasks);
 
@@ -57,9 +63,20 @@ export function SubjectStats({ subjects: initialSubjects }: SubjectStatsProps) {
     <Card
       title="estadísticas por materia"
       footer={
-        <span className="text-xs text-lavender/70">
-          solo metadatos y texto · audio original no conservado (g1)
-        </span>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs text-lavender/70">
+            solo metadatos y texto · audio original no conservado (g1)
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={loading}
+            onClick={() => void load()}
+          >
+            {loading ? "actualizando…" : "actualizar"}
+          </Button>
+        </div>
       }
     >
       {loading && stats.subjectCount === 0 && stats.classCount === 0 ? (
@@ -86,6 +103,11 @@ export function SubjectStats({ subjects: initialSubjects }: SubjectStatsProps) {
               <p className="text-2xl text-mint">
                 {stats.confirmedTaskCount} / {stats.pendingTaskCount}
               </p>
+              {stats.completedTaskCount > 0 && (
+                <p className="text-xs text-lavender/70">
+                  {stats.completedTaskCount} completada(s)
+                </p>
+              )}
             </div>
           </div>
 
@@ -103,10 +125,12 @@ export function SubjectStats({ subjects: initialSubjects }: SubjectStatsProps) {
                       style={{ backgroundColor: item.color }}
                     />
                     <span className="font-bold text-mint">{item.name}</span>
-                  </span>
+                  </span>{" "}
                   <span className="text-lavender/80">
                     {item.readyClasses}/{item.totalClasses} clases listas · {item.transcribedMinutes}{" "}
-                    min · {item.confirmedTasks} confirmadas / {item.pendingTasks} pendientes
+                    min · {item.confirmedTasks} confirmadas
+                    {item.completedTasks > 0 ? ` · ${item.completedTasks} completadas` : ""} /{" "}
+                    {item.pendingTasks} pendientes
                   </span>
                 </li>
               ))}

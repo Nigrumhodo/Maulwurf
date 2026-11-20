@@ -110,3 +110,18 @@ def test_text_outside_the_overlap_is_not_stripped() -> None:
     )
     assert result.text == "hoy repasamos derivadas derivadas parciales"
     assert result.precision == "none"
+    assert result.segments == ("hoy repasamos derivadas", "derivadas parciales")
+
+
+def test_silent_fragment_does_not_drop_word_precision() -> None:
+    result = reconcile(
+        (
+            FragmentTranscript(0.0, 2.0, words=(_word("hoy", 0.2, 0.6),)),
+            FragmentTranscript(2.0, 5.0, text="   ", words=()),
+            FragmentTranscript(5.0, 7.0, words=(_word("seguimos", 0.4, 1.1),)),
+        )
+    )
+    assert result.precision == "word"
+    assert [word.text for word in result.words] == ["hoy", "seguimos"]
+    assert result.words[1].start_s == 5.4
+    assert result.segments == ("hoy", "seguimos")

@@ -32,7 +32,7 @@ export function TranscriptLink({ task, evidence, quality }: TranscriptLinkProps)
       aria-label={`ver segmento ${evidence.ordinal} en la clase`}
       title="abrir este segmento en la clase"
     >
-      <span aria-hidden="true">ver</span>
+      <span aria-hidden="true">ver</span>{" "}
       <span className="normal-case">{label}</span>
     </Link>
   );

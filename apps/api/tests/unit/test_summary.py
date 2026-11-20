@@ -79,6 +79,13 @@ def test_a_recorded_summary_has_four_sentences_and_distinct_topics() -> None:
     assert parsed.prompt_version == "v1"
 
 
+def test_fenced_json_summary_is_accepted() -> None:
+    parsed = parse_summary_payload(f"```json\n{_VALID}\n```")
+
+    assert sentence_count(parsed.text) == 4
+    assert parsed.topics == ("integration", "midterm")
+
+
 @pytest.mark.parametrize(
     "raw",
     [

@@ -9,7 +9,6 @@ import {
 } from "@/lib/integrations";
 import type { GoogleStatus } from "@/lib/integrations";
 import {
-  completeTask,
   confirmTask,
   dismissTask,
   effectiveTask,
@@ -27,6 +26,8 @@ import type { Task } from "@/lib/tasks";
 export interface TaskReviewDialogProps {
   task: Task;
   onUpdated: (task: Task) => void;
+  onActionComplete?: (task: Task, notice: string) => void;
+  onEdit?: (task: Task) => void;
   onClose: () => void;
 }
 
@@ -55,13 +56,31 @@ function noticeFor(task: Task): string {
   return "Tarea confirmada.";
 }
 
-export function TaskReviewDialog({ task, onUpdated, onClose }: TaskReviewDialogProps) {
+export function TaskReviewDialog({
+  task,
+  onUpdated,
+  onActionComplete,
+  onEdit,
+  onClose,
+}: TaskReviewDialogProps) {
   const [currentTask, setCurrentTask] = useState(task);
   const [google, setGoogle] = useState<GoogleStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !busy) {
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [busy, onClose]);
 
   useEffect(() => {
     let cancelled = false;
@@ -100,7 +119,6 @@ export function TaskReviewDialog({ task, onUpdated, onClose }: TaskReviewDialogP
       currentTask.status === "needs_review" ||
       (currentTask.status === "confirmed" && hasPendingRevision));
   const canDismiss = !closed;
-  const canComplete = currentTask.status === "confirmed";
 
   async function refreshAfterConflict(): Promise<void> {
     try {
@@ -124,9 +142,11 @@ export function TaskReviewDialog({ task, onUpdated, onClose }: TaskReviewDialogP
         currentTask.version,
         currentTask.pending_revision?.id ?? null,
       );
+      const message = noticeFor(result.task);
       setCurrentTask(result.task);
       onUpdated(result.task);
-      setNotice(noticeFor(result.task));
+      setNotice(message);
+      onActionComplete?.(result.task, message);
     } catch (cause) {
       if (cause instanceof ApiHttpError && cause.status === 409) {
         setError("La tarea cambió; se actualizó la vista. Revisa el preview antes de confirmar.");
@@ -139,22 +159,20 @@ export function TaskReviewDialog({ task, onUpdated, onClose }: TaskReviewDialogP
     }
   }
 
-  async function handleClose(action: "dismiss" | "complete"): Promise<void> {
+  async function handleDismiss(): Promise<void> {
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
-      const result =
-        action === "dismiss"
-          ? await dismissTask(currentTask.id, currentTask.version)
-          : await completeTask(currentTask.id, currentTask.version);
-      setCurrentTask(result.task);
-      onUpdated(result.task);
-      setNotice(
+      const result = await dismissTask(currentTask.id, currentTask.version);
+      const message =
         result.notice === "calendar_event_kept"
           ? `${noticeFor(result.task)} El evento de Calendar se conserva.`
-          : noticeFor(result.task),
-      );
+          : noticeFor(result.task);
+      setCurrentTask(result.task);
+      onUpdated(result.task);
+      setNotice(message);
+      onActionComplete?.(result.task, message);
     } catch (cause) {
       if (cause instanceof ApiHttpError && cause.status === 409) {
         setError("La tarea cambió; se actualizó la vista. Revisa antes de continuar.");
@@ -168,124 +186,157 @@ export function TaskReviewDialog({ task, onUpdated, onClose }: TaskReviewDialogP
   }
 
   return (
-    <Card
-      title="revisar tarea"
-      variant="accent"
-      role="dialog"
-      aria-modal="true"
-      aria-label="revisar tarea"
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-pure-black/60 p-4"
+      onClick={(event) => {
+        if (event.target === event.currentTarget && !busy) {
+          onClose();
+        }
+      }}
     >
-      <div className="flex flex-col gap-4">
-        {loading ? (
-          <p className="capitalize text-lavender/60">&gt; comprobando la tarea y el calendario…</p>
-        ) : null}
+      <Card
+        title="revisar tarea"
+        variant="accent"
+        role="dialog"
+        aria-modal="true"
+        aria-label="revisar tarea"
+        onClose={busy ? undefined : onClose}
+        className="max-h-[90vh] w-full max-w-2xl overflow-y-auto"
+      >
+        <div className="min-w-0 flex flex-col gap-4">
+          {loading ? (
+            <p className="capitalize text-lavender/60">&gt; comprobando la tarea y el calendario…</p>
+          ) : null}
 
-        <div className="flex flex-wrap items-center gap-2">
-          <StatusBadge status={currentTask.status} />
-          <StatusBadge status={currentTask.calendar_sync_status} />
-          {hasPendingRevision && (
-            <span className="capitalize border-2 border-mint px-2 py-0.5 text-mint">
-              se confirmará el cambio pendiente
-            </span>
-          )}
-        </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge status={currentTask.status} />
+            <StatusBadge status={currentTask.calendar_sync_status} />
+            {hasPendingRevision && (
+              <span className="capitalize border-2 border-mint px-2 py-0.5 text-mint">
+                se confirmará el cambio pendiente
+              </span>
+            )}
+          </div>
 
-        <section aria-label="qué se escribirá" className="flex flex-col gap-2">
-          <h2 className="capitalize text-mint">qué se escribirá</h2>
-          <dl className="grid gap-2 sm:grid-cols-2">
-            <div>
-              <dt className="capitalize text-xs text-lavender/60">título</dt>
-              <dd className="normal-case text-lavender">{effective.titulo}</dd>
-            </div>
-            <div>
-              <dt className="capitalize text-xs text-lavender/60">tipo</dt>
-              <dd className="normal-case text-lavender">{effective.tipo}</dd>
-            </div>
-            <div>
-              <dt className="capitalize text-xs text-lavender/60">vencimiento</dt>
-              <dd className="normal-case text-lavender">
-                {due ?? (effective.date_status === "resolved" ? "fecha inválida" : "sin fecha resuelta")}
-              </dd>
-            </div>
-            <div>
-              <dt className="capitalize text-xs text-lavender/60">zona horaria</dt>
-              <dd className="normal-case text-lavender">{effective.timezone}</dd>
-            </div>
-            <div>
-              <dt className="capitalize text-xs text-lavender/60">agenda</dt>
-              <dd className="normal-case text-lavender">
-                {eventModeLabel(effective)}
-                {block !== null ? ` · ${block}` : ""}
-              </dd>
-            </div>
-            <div>
-              <dt className="capitalize text-xs text-lavender/60">calendario destino</dt>
-              <dd className="normal-case text-lavender">
-                {google === null ? "no se pudo comprobar el calendario" : calendarTargetLabel(google)}
-              </dd>
-            </div>
-          </dl>
-          {effective.detalle !== null && effective.detalle.trim() !== "" && (
-            <p className="normal-case text-lavender/80">{effective.detalle}</p>
-          )}
-          {hasPendingRevision && (
-            <p className="capitalize text-xs text-lavender/60">
-              el preview usa los campos de la revisión pendiente, no solo los activos.
+          <section aria-label="qué se escribirá" className="min-w-0 flex flex-col gap-2">
+            <h2 className="capitalize text-mint">qué se escribirá</h2>
+            <dl className="grid gap-3 sm:grid-cols-2">
+              <div className="min-w-0">
+                <dt className="capitalize text-xs text-lavender/60">título</dt>
+                <dd className="normal-case wrap-anywhere break-words text-lavender">
+                  {effective.titulo}
+                </dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="capitalize text-xs text-lavender/60">tipo</dt>
+                <dd className="normal-case wrap-anywhere break-words text-lavender">
+                  {effective.tipo}
+                </dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="capitalize text-xs text-lavender/60">vencimiento</dt>
+                <dd className="normal-case wrap-anywhere break-words text-lavender">
+                  {due ??
+                    (effective.date_status === "resolved"
+                      ? "fecha inválida"
+                      : "sin fecha resuelta")}
+                </dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="capitalize text-xs text-lavender/60">zona horaria</dt>
+                <dd className="normal-case wrap-anywhere break-words text-lavender">
+                  {effective.timezone}
+                </dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="capitalize text-xs text-lavender/60">agenda</dt>
+                <dd className="normal-case wrap-anywhere break-words text-lavender">
+                  {eventModeLabel(effective)}
+                  {block !== null ? ` · ${block}` : ""}
+                </dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="capitalize text-xs text-lavender/60">calendario destino</dt>
+                <dd
+                  className="normal-case wrap-anywhere break-words text-lavender"
+                  title={google?.calendar_id ?? undefined}
+                >
+                  {google === null
+                    ? "no se pudo comprobar el calendario"
+                    : calendarTargetLabel(google)}
+                </dd>
+              </div>
+            </dl>
+            {effective.detalle !== null && effective.detalle.trim() !== "" && (
+              <p className="normal-case wrap-anywhere break-words text-lavender/80">
+                {effective.detalle}
+              </p>
+            )}
+            {hasPendingRevision && (
+              <p className="capitalize text-xs text-lavender/60">
+                el preview usa los campos de la revisión pendiente, no solo los activos.
+              </p>
+            )}
+            {!closed && effective.date_status !== "resolved" && (
+              <p className="normal-case text-xs text-mint">
+                &gt; para confirmar esta tarea, primero edítala para definir una fecha resuelta y un
+                bloque de agenda.
+              </p>
+            )}
+          </section>
+
+          {notice !== null && (
+            <p role="status" className="capitalize border-2 border-mint px-3 py-2 text-mint">
+              {notice}
             </p>
           )}
-        </section>
+          {error !== null && (
+            <p role="alert" className="wrap-anywhere break-words border-2 border-mint px-3 py-2 text-mint">
+              {error}
+            </p>
+          )}
 
-        {notice !== null && (
-          <p role="status" className="capitalize border-2 border-mint px-3 py-2 text-mint">
-            {notice}
-          </p>
-        )}
-        {error !== null && (
-          <p role="alert" className="border-2 border-mint px-3 py-2 text-mint">
-            {error}
-          </p>
-        )}
-
-        <div className="flex flex-wrap gap-2">
-          {!closed && (
-            <Button
-              type="button"
-              size="sm"
-              variant="primary"
-              disabled={busy || loading || !canConfirm}
-              onClick={() => void handleConfirm()}
-            >
-              confirmar
+          <div className="flex flex-wrap items-center gap-2">
+            {!closed && (
+              <Button
+                type="button"
+                size="sm"
+                variant="primary"
+                disabled={busy || loading || !canConfirm}
+                onClick={() => void handleConfirm()}
+              >
+                confirmar
+              </Button>
+            )}
+            {!closed && onEdit !== undefined && (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                disabled={busy || loading}
+                onClick={() => onEdit(currentTask)}
+              >
+                editar
+              </Button>
+            )}
+            {canDismiss && (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                disabled={busy || loading}
+                onClick={() => void handleDismiss()}
+              >
+                descartar
+              </Button>
+            )}
+            <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={onClose}>
+              cerrar
             </Button>
-          )}
-          {canDismiss && (
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={busy || loading}
-              onClick={() => void handleClose("dismiss")}
-            >
-              descartar
-            </Button>
-          )}
-          {canComplete && (
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={busy || loading}
-              onClick={() => void handleClose("complete")}
-            >
-              completar
-            </Button>
-          )}
-          <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={onClose}>
-            cerrar
-          </Button>
+          </div>
         </div>
-      </div>
-    </Card>
+      </Card>
+    </div>
   );
 }
 

@@ -261,11 +261,18 @@ async def _calendar_callback(
         return _calendar_result("error", reason="invalid_grant")
     except GoogleCalendarError as exc:
         # Type-only logging: no calendar IDs, payloads or tokens.
+        provider_reason = exc.details.get("reason")
         logger.warning(
-            "calendar.connect_failed code=%s transient=%s", exc.code, exc.transient
+            "calendar.connect_failed code=%s reason=%s transient=%s",
+            exc.code,
+            provider_reason if isinstance(provider_reason, str) else "none",
+            exc.transient,
         )
         await db.rollback()
-        reason = "calendar_unavailable" if exc.transient else "calendar_error"
+        if provider_reason in {"accessNotConfigured", "SERVICE_DISABLED"}:
+            reason = "api_not_enabled"
+        else:
+            reason = "calendar_unavailable" if exc.transient else "calendar_error"
         return _calendar_result("error", reason=reason)
 
     await db.commit()

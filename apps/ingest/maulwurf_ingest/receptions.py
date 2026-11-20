@@ -448,6 +448,10 @@ async def put_receive(attempt_id: uuid.UUID, request: Request) -> JSONResponse:
             decision = await asyncio.to_thread(probe_file, hold.workdir / "original")
             if decision.decision == "reject" or decision.duration_s is None:
                 failure = decision.reason if decision.reason in CATALOG else "supervisor_error"
+                logger.info(
+                    "reception.rejected attempt_id=%s reason=%s received_bytes=%s",
+                    attempt_id, failure, received.received_bytes,
+                )
             else:
                 hold.sha256 = received.sha256
                 hold.received_bytes = received.received_bytes
@@ -548,7 +552,7 @@ async def post_admit(attempt_id: uuid.UUID, request: Request) -> JSONResponse:
         try:
             await finish_transcription(
                 pool, lease=hold.lease, audio=hold.audio, config=_asr_config(request),
-                keeper=hold.keeper,
+                keeper=hold.keeper, duration_s=hold.duration_s,
             )
         finally:
             _holds.pop(attempt_id, None)

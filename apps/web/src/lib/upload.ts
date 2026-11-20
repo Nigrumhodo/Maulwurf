@@ -1,6 +1,15 @@
-import { ApiHttpError, apiFetch } from "./api";
+import {
+  ApiHttpError,
+  CSRF_HEADER,
+  abortError,
+  apiFetch,
+  apiUrl,
+  handleApiHttpError,
+  parseErrorEnvelope,
+} from "./api";
 import type { ApiRequestInit, DuplicateVariantDetails } from "./api";
 import type { IngestionCapabilities } from "./capabilities";
+import { getCsrfToken } from "./csrf";
 import { isRecord, readJson } from "./json";
 import { LANGUAGES } from "./languages";
 
@@ -367,6 +376,149 @@ function isSameOriginPath(url: string): boolean {
   return url.startsWith("/") && !url.startsWith("//") && !url.startsWith("/\\");
 }
 
+function parseResponsePayload(raw: string): Record<string, unknown> {
+  if (raw === "") return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function toUploadResult(status: number, payload: Record<string, unknown>): UploadResult {
+  if (status === 200) {
+    return { outcome: "duplicate_exact", audioId: stringOrNull(payload.audio_id) };
+  }
+  return {
+    outcome: "accepted",
+    attemptId: stringOrNull(payload.attempt_id),
+    status: stringOrNull(payload.status),
+    receivedBytes: typeof payload.received_bytes === "number" ? payload.received_bytes : null,
+  };
+}
+
+/**
+ * Detecta soporte real de `ReadableStream` como cuerpo de `fetch` (`duplex: "half"`).
+ * Firefox y Safari ignoran `duplex` y serializan el stream a `"[object ReadableStream]"`.
+ */
+export function supportsStreamingFetchBody(): boolean {
+  if (typeof Request === "undefined" || typeof ReadableStream === "undefined") {
+    return false;
+  }
+  try {
+    let duplexAccessed = false;
+    const req = new Request("https://localhost/", {
+      body: new ReadableStream(),
+      method: "POST",
+      get duplex() {
+        duplexAccessed = true;
+        return "half";
+      },
+    } as RequestInit);
+    return duplexAccessed && !req.headers.has("Content-Type");
+  } catch {
+    return false;
+  }
+}
+
+function uploadWithXhr({
+  uploadUrl,
+  file,
+  signal,
+  onProgress,
+}: UploadContentOptions): Promise<UploadResult> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError(signal));
+      return;
+    }
+    const xhr = new XMLHttpRequest();
+    let settled = false;
+
+    const cleanup = () => {
+      signal?.removeEventListener("abort", onAbort);
+    };
+
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      xhr.abort();
+      reject(signal === undefined ? new DOMException("The operation was aborted.", "AbortError") : abortError(signal));
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    xhr.open("PUT", apiUrl(uploadUrl), true);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    const csrfToken = getCsrfToken();
+    if (csrfToken !== null) {
+      xhr.setRequestHeader(CSRF_HEADER, csrfToken);
+    }
+
+    xhr.upload.onprogress = (event) => {
+      if (settled || onProgress === undefined) return;
+      const totalBytes =
+        event.lengthComputable && event.total > 0 ? event.total : file.size;
+      onProgress({ sentBytes: Math.min(event.loaded, totalBytes), totalBytes });
+    };
+
+    xhr.onload = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.({ sentBytes: file.size, totalBytes: file.size });
+        resolve(toUploadResult(xhr.status, parseResponsePayload(xhr.responseText)));
+        return;
+      }
+      let envelope = null;
+      const contentType = xhr.getResponseHeader("content-type") ?? "";
+      if (contentType.includes("application/json")) {
+        try {
+          envelope = parseErrorEnvelope(JSON.parse(xhr.responseText));
+        } catch {
+          envelope = null;
+        }
+      }
+      try {
+        handleApiHttpError(new ApiHttpError(xhr.status, envelope));
+      } catch (err) {
+        reject(err);
+      }
+    };
+
+    xhr.onerror = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new TypeError("NetworkError during audio upload"));
+    };
+
+    xhr.ontimeout = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new TypeError("Timeout during audio upload"));
+    };
+
+    xhr.onabort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(
+        signal === undefined
+          ? new DOMException("The operation was aborted.", "AbortError")
+          : abortError(signal),
+      );
+    };
+
+    xhr.send(file);
+  });
+}
+
 /**
  * `PUT` en streaming a la URL relativa de la reserva. `retries: 0` es deliberado: un
  * stream ya consumido no puede reintentarse; el usuario reintenta con una reserva nueva o
@@ -381,29 +533,38 @@ export async function uploadContent({
   if (!isSameOriginPath(uploadUrl)) {
     throw new Error(`La URL de subida debe ser una ruta relativa del mismo origen: ${uploadUrl}`);
   }
-  // `duplex: "half"` es obligatorio en Chromium para un cuerpo en streaming; aún no está
-  // en la definición de `RequestInit` del lib.dom de TypeScript.
+  if (!supportsStreamingFetchBody()) {
+    return uploadWithXhr({ uploadUrl, file, signal, onProgress });
+  }
+  let bytesSent = 0;
   const init = {
     method: "PUT",
     headers: { "content-type": file.type || "application/octet-stream" },
-    body: createProgressStream(file, onProgress ?? (() => {})) as unknown as BodyInit,
+    body: createProgressStream(file, (progress) => {
+      bytesSent = progress.sentBytes;
+      onProgress?.(progress);
+    }) as unknown as BodyInit,
     signal,
     retries: 0,
     duplex: "half",
   } as ApiRequestInit & { duplex: "half" };
 
-  const res = await apiFetch(uploadUrl, init);
-  const raw = await readJson(res);
-  const payload = isRecord(raw) ? raw : {};
-  if (res.status === 200) {
-    return { outcome: "duplicate_exact", audioId: stringOrNull(payload.audio_id) };
+  try {
+    const res = await apiFetch(uploadUrl, init);
+    const raw = await readJson(res);
+    const payload = isRecord(raw) ? raw : {};
+    return toUploadResult(res.status, payload);
+  } catch (error) {
+    if (
+      error instanceof TypeError &&
+      bytesSent <= UPLOAD_CHUNK_BYTES &&
+      !signal?.aborted &&
+      typeof XMLHttpRequest !== "undefined"
+    ) {
+      return uploadWithXhr({ uploadUrl, file, signal, onProgress });
+    }
+    throw error;
   }
-  return {
-    outcome: "accepted",
-    attemptId: stringOrNull(payload.attempt_id),
-    status: stringOrNull(payload.status),
-    receivedBytes: typeof payload.received_bytes === "number" ? payload.received_bytes : null,
-  };
 }
 
 /** Cancela el intento; un `409`/`404` significa que ya no queda nada que cancelar. */
@@ -478,7 +639,10 @@ export function mapUploadError(error: ApiHttpError): UploadErrorView {
     return { message: error.message };
   }
   if (error.status === 415) {
-    return { message: error.message };
+    return {
+      message: `${error.message} Vuelve a reservar e inténtalo de nuevo.`,
+      resetReservation: true,
+    };
   }
   return { message: error.message, retry: true };
 }

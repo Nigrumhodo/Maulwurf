@@ -8,9 +8,16 @@ export interface TaskInboxProps {
   qualityByAudio: Record<string, TaskQualityState>;
   onEdit?: (task: Task) => void;
   onReview?: (task: Task) => void;
+  onComplete?: (task: Task) => void;
 }
 
-export function TaskInbox({ tasks, qualityByAudio, onEdit, onReview }: TaskInboxProps) {
+export function TaskInbox({
+  tasks,
+  qualityByAudio,
+  onEdit,
+  onReview,
+  onComplete,
+}: TaskInboxProps) {
   return (
     <ul aria-label="tareas para revisar" className="flex flex-col gap-3">
       {tasks.map((task) => (
@@ -20,6 +27,7 @@ export function TaskInbox({ tasks, qualityByAudio, onEdit, onReview }: TaskInbox
           quality={task.audio_id === null ? null : (qualityByAudio[task.audio_id] ?? null)}
           onEdit={onEdit === undefined ? undefined : () => onEdit(task)}
           onReview={onReview === undefined ? undefined : () => onReview(task)}
+          onComplete={onComplete === undefined ? undefined : () => onComplete(task)}
         />
       ))}
     </ul>
