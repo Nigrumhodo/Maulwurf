@@ -452,13 +452,19 @@ describe("uploadContent", () => {
     ).resolves.toEqual({ outcome: "duplicate_exact", audioId: "a9" });
   });
 
-  it("exige una URL relativa (mismo origen)", async () => {
-    await expect(
-      uploadContent({
-        uploadUrl: "https://evil.example/upload",
-        file: new File([new Uint8Array([1])], "clase.wav", { type: "audio/wav" }),
-      }),
-    ).rejects.toThrow("relativa");
+  it("exige una ruta relativa del mismo origen (rechaza protocol-relative y absolutas)", async () => {
+    for (const unsafeUrl of [
+      "https://evil.example/upload",
+      "//evil.example/upload",
+      "/\\evil.example/upload",
+    ]) {
+      await expect(
+        uploadContent({
+          uploadUrl: unsafeUrl,
+          file: new File([new Uint8Array([1])], "clase.wav", { type: "audio/wav" }),
+        }),
+      ).rejects.toThrow("mismo origen");
+    }
   });
 });
 

@@ -363,6 +363,10 @@ function stringOrNull(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function isSameOriginPath(url: string): boolean {
+  return url.startsWith("/") && !url.startsWith("//") && !url.startsWith("/\\");
+}
+
 /**
  * `PUT` en streaming a la URL relativa de la reserva. `retries: 0` es deliberado: un
  * stream ya consumido no puede reintentarse; el usuario reintenta con una reserva nueva o
@@ -374,8 +378,8 @@ export async function uploadContent({
   signal,
   onProgress,
 }: UploadContentOptions): Promise<UploadResult> {
-  if (!uploadUrl.startsWith("/")) {
-    throw new Error(`La URL de subida debe ser relativa: ${uploadUrl}`);
+  if (!isSameOriginPath(uploadUrl)) {
+    throw new Error(`La URL de subida debe ser una ruta relativa del mismo origen: ${uploadUrl}`);
   }
   // `duplex: "half"` es obligatorio en Chromium para un cuerpo en streaming; aún no está
   // en la definición de `RequestInit` del lib.dom de TypeScript.
