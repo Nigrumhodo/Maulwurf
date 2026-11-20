@@ -11,6 +11,7 @@ import html
 from dataclasses import dataclass
 from datetime import date, datetime
 from email.message import EmailMessage
+from email.utils import parseaddr
 from typing import Final
 
 from app.models.notification import DIGEST_TYPES, REMINDER_TYPES
@@ -68,7 +69,11 @@ def build_mime_message(
 ) -> RenderedEmail:
     """Encode an RFC 2822 multipart/alternative message as base64url for Gmail."""
     safe_recipient = _require_safe_header_text(recipient, field="recipient")
-    if "@" not in safe_recipient:
+    _, parsed_addr = parseaddr(safe_recipient)
+    if not parsed_addr or parsed_addr != safe_recipient or "@" not in parsed_addr:
+        raise NotificationDeliveryRejected(TEMPLATE_INVALID)
+    local_part, _, domain_part = parsed_addr.partition("@")
+    if not local_part or not domain_part or "." not in domain_part:
         raise NotificationDeliveryRejected(TEMPLATE_INVALID)
     safe_subject = _require_safe_header_text(subject, field="subject")
     if not text_body.strip() or not html_body.strip():

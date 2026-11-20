@@ -18,15 +18,18 @@ x-api-prod-env: &api-prod-env
   MAULWURF_ENV: prod
   MAULWURF_DATABASE_ROLE: maulwurf_app
   MAULWURF_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-maulwurf}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres:5432/${POSTGRES_DB:-maulwurf}
-  MAULWURF_REDIS_URL: redis://redis:6379/0
+  MAULWURF_REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD required}@redis:6379/0
   MAULWURF_PUBLIC_ORIGIN: https://${MAULWURF_DOMAIN:?MAULWURF_DOMAIN required}
   MAULWURF_SECRET_KEY: ${MAULWURF_SECRET_KEY:?MAULWURF_SECRET_KEY required}
   MAULWURF_ENCRYPTION_KEY: ${MAULWURF_ENCRYPTION_KEY:?MAULWURF_ENCRYPTION_KEY required}
+  MAULWURF_OAUTH_STATE_SECRET: ${MAULWURF_OAUTH_STATE_SECRET:?MAULWURF_OAUTH_STATE_SECRET required}
   MAULWURF_METRICS_TOKEN: ${MAULWURF_METRICS_TOKEN:?MAULWURF_METRICS_TOKEN required}
   MAULWURF_GOOGLE_CLIENT_ID: ${MAULWURF_GOOGLE_CLIENT_ID:?MAULWURF_GOOGLE_CLIENT_ID required}
   MAULWURF_GOOGLE_CLIENT_SECRET: ${MAULWURF_GOOGLE_CLIENT_SECRET:?MAULWURF_GOOGLE_CLIENT_SECRET required}
-  MAULWURF_NOTIFICATION_SCHEDULER_ENABLED: ${MAULWURF_NOTIFICATION_SCHEDULER_ENABLED:-true}
-  MAULWURF_NOTIFICATION_DELIVERY_ENABLED: ${MAULWURF_NOTIFICATION_DELIVERY_ENABLED:-true}
+  MAULWURF_AUTH_RATE_LIMIT_PER_MINUTE: ${MAULWURF_AUTH_RATE_LIMIT_PER_MINUTE:-30}
+  MAULWURF_INTEGRATION_RATE_LIMIT_PER_MINUTE: ${MAULWURF_INTEGRATION_RATE_LIMIT_PER_MINUTE:-30}
+  MAULWURF_NOTIFICATION_SCHEDULER_ENABLED: ${MAULWURF_NOTIFICATION_SCHEDULER_ENABLED:-false}
+  MAULWURF_NOTIFICATION_DELIVERY_ENABLED: ${MAULWURF_NOTIFICATION_DELIVERY_ENABLED:-false}
 
 services:
   postgres:
@@ -47,8 +50,12 @@ services:
 
   redis:
     image: redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD required}
     command:
       - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD required}
       - --save
       - ""
       - --appendonly
@@ -58,7 +65,7 @@ services:
       - --maxmemory-policy
       - noeviction
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping"]
       interval: 5s
       timeout: 2s
       retries: 20
@@ -69,8 +76,7 @@ services:
     image: ${MAULWURF_REGISTRY:-ghcr.io/nigrumhodo}/maulwurf-api:${MAULWURF_IMAGE_TAG:?MAULWURF_IMAGE_TAG required}
     command: ["alembic", "upgrade", "head"]
     environment:
-      MAULWURF_ENV: prod
-      MAULWURF_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-maulwurf}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres:5432/${POSTGRES_DB:-maulwurf}
+      <<: *api-prod-env
     depends_on:
       postgres:
         condition: service_healthy

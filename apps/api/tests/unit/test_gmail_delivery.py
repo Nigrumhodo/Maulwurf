@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import crypto
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.models import (
     CalendarSettings,
     GoogleCredential,
@@ -31,6 +31,8 @@ from app.services.notifications import NotificationDeliveryAmbiguous, Notificati
 from app.services.oauth_google import GMAIL_SEND_SCOPE
 from app.services.scheduler_lease import SCHEDULER_ROLE
 from app.workers.jobs.deliver_notification import MAX_TRIES, deliver_notification
+
+_FAKE_ACCESS = "fixture-" + "access-token-0001"
 
 
 def _decode_raw(raw_b64url: str) -> str:
@@ -153,7 +155,7 @@ def _seed(
     )
     pref = CalendarSettings(user_id=user_id, gmail_opt_in=opt_in)
     enc_access, ver = crypto.encrypt(
-        "ya29.fake-access-token", user_id=user_id, field="google_credentials.access_token"
+        _FAKE_ACCESS, user_id=user_id, field="google_credentials.access_token"
     )
     credential = GoogleCredential(
         user_id=user_id,
@@ -238,7 +240,7 @@ async def test_gmail_sender_succeeds_with_single_post_and_no_retries(
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append((request.method, str(request.url)))
-        assert request.headers["authorization"] == "Bearer ya29.fake-access-token"
+        assert request.headers["authorization"] == f"Bearer {_FAKE_ACCESS}"
         return httpx.Response(200, json={"id": "gmail-msg-123"})
 
     sender = GmailNotificationSender(
@@ -417,3 +419,37 @@ async def test_settle_delivery_records_sent_from_gmail_sender(
     assert report.provider_message_id == "gm-99"
     assert notification.status == "sent"
     assert notification.provider_message_id == "gm-99"
+
+
+@pytest.mark.parametrize(
+    "bad_recipient",
+    [
+        "Ana <ana@example.test>",
+        "ana@example.test, b@example.test",
+        "@example.test",
+        "ana@localhost",
+        "ana",
+    ],
+)
+def test_render_notification_email_rejects_malformed_recipients(bad_recipient: str) -> None:
+    with pytest.raises(NotificationDeliveryRejected) as exc:
+        render_notification_email(recipient=bad_recipient, notification_type="test")
+    assert exc.value.error_code == "template_invalid"
+
+
+def test_prod_settings_keep_notifications_disabled_by_default() -> None:
+    prod = Settings(
+        _env_file=None,
+        env="prod",
+        database_url=cast(Any, "postgresql+asyncpg://mw:pw@postgres:5432/maulwurf"),
+        redis_url=cast(Any, "redis://:redis-pass@redis:6379/0"),
+        public_origin=cast(Any, "https://app.example.test"),
+        secret_key=cast(Any, "prod-secret-key-0123456789abcdef01"),
+        encryption_key=cast(Any, "prod-encrypt-key-0123456789abcdef0"),
+        oauth_state_secret=cast(Any, "prod-oauth-state-0123456789abcdef0"),
+        metrics_token=cast(Any, "prod-metrics-tok-0123456789abcdef0"),
+        auth_rate_limit_per_minute=30,
+        integration_rate_limit_per_minute=30,
+    )
+    assert prod.notification_scheduler_enabled is False
+    assert prod.notification_delivery_enabled is False

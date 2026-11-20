@@ -24,11 +24,15 @@ orquestador o en un archivo `.env.prod` fuera del control de versiones (`chmod 6
 | `MAULWURF_DOMAIN` | Dominio público HTTPS (`Caddyfile.prod`) | Sin esquema (`app.ejemplo.com`) |
 | `MAULWURF_IMAGE_TAG` | Tag inmutable / digest de release | Prohibido `:latest` |
 | `POSTGRES_PASSWORD` | Credencial Postgres owner | Distinta en prod respecto a local |
-| `MAULWURF_SECRET_KEY` | Firma HMAC de sesiones y states OAuth | >= 32 bytes aleatorios |
-| `MAULWURF_ENCRYPTION_KEY` | Cifrado AES-GCM de tokens OAuth | 32 bytes (`base64`) |
+| `REDIS_PASSWORD` | Autenticación Redis (`--requirepass`) | Obligatoria; compartida por `redis`, `api`, `worker` y `scheduler` |
+| `MAULWURF_SECRET_KEY` | Firma HMAC de sesiones | >= 32 bytes aleatorios, distinto al resto |
+| `MAULWURF_ENCRYPTION_KEY` | Cifrado AES-GCM de tokens OAuth | 32 bytes (`base64`), distinto al resto |
+| `MAULWURF_OAUTH_STATE_SECRET` | Firma de states OAuth | >= 32 bytes aleatorios, distinto al resto |
 | `MAULWURF_INGEST_CREDENTIAL_SECRET` | Secreto compartido `api <-> ingest` + `/internal/metrics` de `ingest` | Independiente de `SECRET_KEY` |
-| `MAULWURF_METRICS_TOKEN` | Bearer de `GET /internal/metrics` en `api` | Independiente del resto |
+| `MAULWURF_METRICS_TOKEN` | Bearer de `GET /internal/metrics` en `api` | >= 32 bytes, independiente del resto |
 | `MAULWURF_GOOGLE_CLIENT_ID` / `_SECRET` | OAuth 2.0 web | Redirect URI: `https://$MAULWURF_DOMAIN/auth/google/callback` |
+| `MAULWURF_AUTH_RATE_LIMIT_PER_MINUTE` / `MAULWURF_INTEGRATION_RATE_LIMIT_PER_MINUTE` | Límites por minuto en `/auth/*` e `/integrations/*` | Por defecto `30` en `docker-compose.prod.yml` |
+| `MAULWURF_NOTIFICATION_SCHEDULER_ENABLED` / `_DELIVERY_ENABLED` | Activación M8 Gmail/agenda | Por defecto `false` (activación explícita tras validar opt-in y DNS/OAuth) |
 | `NVIDIA_API_KEY` / `RIVA_SERVER` / `RIVA_FUNCTION_ID` | Solo contenedor `ingest` | Nunca expuestas a `web` ni a logs |
 
 Si habilitas el perfil `--profile observability`, coloca los tokens en dos ficheros de solo
