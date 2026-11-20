@@ -241,9 +241,10 @@ Gmail).
 
 **Endpoints:** `GET /auth/google/start`, `GET /auth/google/callback`, `POST /auth/logout`,
 `GET /me`, `PATCH /me`, `GET /integrations/status`, `POST /integrations/google/connect`,
-`POST /integrations/google/reconnect`, and the browser-navigation variants
-`GET /integrations/google/connect|reconnect` (same signed state and rate limit; a `fetch`
-`POST` cannot follow the cross-origin `302` to Google or render the consent screen).
+`POST /integrations/google/reconnect`, `POST /integrations/google/gmail/connect` (plus
+browser-navigation variants `GET /integrations/google/connect|reconnect|gmail/connect`
+using the same signed state and rate limit; a `fetch` `POST` cannot follow the
+cross-origin `302` to Google or render the consent screen).
 
 ---
 
@@ -824,10 +825,13 @@ never changes a `delivery_unknown` delivery to `pending`.
 
 - F1: `AudioUploadForm`, library, `TranscriptReader`, ingestion/index status, and chat.
 - F2: `TaskInbox`, `CalendarView`, conflicts, sync status, and reconnection.
-- F3: delivery/notification panel, final preferences, `SubjectStats`, and Ctrl+K. A "complete
-  dashboard" means the sum of these capabilities; it does not pull Gmail forward to F2.
-- Next routes: `/` (public landing without session and dashboard with session),
-  `/biblioteca`, `/biblioteca/[audio_id]`, `/chat`, `/materias`, `/settings`.
+- F3: `DeliveryPanel`, `NotificationPreferences`, `AccountDeletionPanel`, `SubjectStats`,
+  and global `CommandPalette` (Ctrl+K / Cmd+K). A "complete dashboard" means the sum of
+  these capabilities; it does not pull Gmail forward to F2.
+- Delivered SPA routes (`apps/web/src/App.tsx`): `/` (public `LandingPage` without session,
+  authenticated dashboard inside `AppLayout`), `/login`, `/register`, `/welcome`, `/chat`,
+  `/biblioteca`, `/biblioteca/:audioId`, `/settings`, and `/gestion/*` (`overview`, `subir`,
+  `materias`, `tareas`, `agenda`).
 
 ---
 
@@ -1198,8 +1202,10 @@ The ER is a summary; it does not replace the migrations. Additional minimum cont
 
 Services: `web`, `api`, `ingest` (FastAPI, supervisor, ffmpeg, and the Riva client),
 `worker` (ARQ), `scheduler` (single ARQ cron role + reconciliation/outbox), `postgres`
-(`pgvector/pgvector:pg16`, pinned version), `redis`, `caddy`. **No MinIO/S3 and no audio
-volume**. API and ingestion share auth code, not temporaries.
+(`pgvector/pgvector:pg16`, pinned version), `redis` (with `--requirepass` in production),
+`caddy` (`read_body 40m`, upload ceiling `220MB`), plus the single-job `migrate` profile in
+`infra/docker-compose.prod.yml`. **No MinIO/S3 and no audio volume**. API and ingestion
+share auth code, not temporaries.
 
 Persistence for PostgreSQL and, if configured, Redis with IDs/status only. Ingestion with
 per-instance `tmpfs`, read-only root, non-root user, resource limits, no swap/core dumps. On

@@ -1,6 +1,9 @@
 # Maulwurf — Implementation and validation plan
 
-> Status: normative plan pending execution. Revision: 2026-09-19.
+> Status: normative contracts reconciled with delivered `F1 + F2 + F3` codebase (`2026-11-19`,
+> 22 Alembic migrations `0001`–`0022`, PRs `#175`–`#178` merged into `develop`); external cloud/host
+> gates (`D2`, `D3-Audio`, `D3-Text`, `D4`, `D6`, live `G4`/`G6`, `J3.1`, `J3.9`, `J4.9`,
+> `J4.10`, `D4.7`/`A4.8`/`S4.6`, and `L4.2` peer review signature) remain explicitly OPEN.
 > Functional and technical contracts: [ESPECIFICACION.md](ESPECIFICACION.md). This plan
 > defines dependencies, deliverables, and exit gates; it does not replace those contracts.
 
