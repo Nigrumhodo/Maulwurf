@@ -11,11 +11,12 @@ reference-environment status is stated per document instead of being implied.
 | [`provider-down.md`](provider-down.md) | Riva, LLM, embeddings, Calendar and Gmail outages | J4.8 |
 | [`tokens.md`](tokens.md) | Revoked, leaked or rotated credentials; dual-key ingest rotation | J4.8 |
 | [`account-deletion.md`](account-deletion.md) | `DELETE /me`, status, resume, residual work and retention | J4.8 |
+| [`deploy.md`](deploy.md) | Reference production Compose (`infra/docker-compose.prod.yml`), single-job Alembic migration, healthchecks, and rollback procedure | J4.7 |
 
-Deployment runbook (J4.7, `docs/runbooks/deploy.md`) is still pending; it owns the
-reference host, versioned images, the single Alembic job and rollback. Until it exists, the
-J4.8 drills run against local PostgreSQL/compose where possible and the reference-host step
-is recorded as **NOT RUN**.
+> **Note on live-host drills:** [`deploy.md`](deploy.md) and `infra/docker-compose.prod.yml`
+> are merged on `develop`, while live reference-host rehearsals (`D4.7` / `A4.8` / `S4.6`)
+> and target-host runbook drills (`C-S4-JF-10` on the provisioned ARM VPS) remain recorded
+> as **NOT RUN** until external credentials and host access are executed.
 
 The executable evidence for C-S4-JF-10 is in
 [`docs/sprints/artifacts/J4.8/`](../sprints/artifacts/J4.8/). The monitoring wiring lives in

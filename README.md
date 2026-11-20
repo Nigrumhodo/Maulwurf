@@ -1,383 +1,135 @@
+<div align="center">
+
+<img src="apps/web/public/icon.svg" alt="Maulwurf emblem" width="84" height="84" />
+
 # Maulwurf
 
-> A privacy-first study assistant that turns class recordings into searchable knowledge and
-> reviewable study actions.
+**Privacy-first academic companion that turns class recordings into queryable knowledge, grounded study citations, human-confirmed Google Calendar events, and opt-in reminders — without storing audio.**
 
-*Maulwurf* means “mole” in German: the project is intended to dig through class recordings
-and build connections between notes, a calendar, and reminders.
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](apps/api/app/main.py)
+[![FastAPI + ARQ](https://img.shields.io/badge/Backend-FastAPI%20%2B%20ARQ-009688?logo=fastapi&logoColor=white)](apps/api/app/main.py)
+[![React 19 + Vite](https://img.shields.io/badge/Frontend-React%2019%20%2B%20Vite-61DAFB?logo=react&logoColor=111)](apps/web/src/App.tsx)
+[![PostgreSQL 16 + pgvector](https://img.shields.io/badge/Database-PostgreSQL%2016%20%2B%20pgvector-336791?logo=postgresql&logoColor=white)](apps/api/alembic/versions/0001_core_schema_s1.py)
+[![Redis 7.4](https://img.shields.io/badge/Queue-Redis%207.4-DC382D?logo=redis&logoColor=white)](infra/docker-compose.yml)
+[![Caddy 2.8](https://img.shields.io/badge/Ingress-Caddy%202.8-1F88C0?logo=caddy&logoColor=white)](infra/Caddyfile)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+[![Quality CI](https://img.shields.io/badge/Quality%20CI-17%20Checks-2EA043)](#verification--ci-gates)
 
-> **Project status — S1 and S2 are on `develop`; S3/S4 code is partial and not an end-to-end class.**
-> The repository contains the monorepo, a local Docker Compose stack (8 services), and
-> nineteen Alembic migrations (`0001`–`0019`): opaque sessions with CSRF (A1.4), Google
-> login (A1.3), subject CRUD (A1.6), streaming upload with SHA-256 and dedupe (A2.3/A2.4),
-> hybrid search (L2.3/L2.4/A2.11), chat SSE with validated citations (L2.5/L2.6), a hardened
-> ingestion package (S2.1–S2.13), ARQ dispatch, indexing and reconciliation (J2.1–J2.4),
-> the upload form (D2.1; the browser still sends no bytes, D2.2), an analyze job with
-> reviewable tasks and a versioned class summary (L3.x), Calendar connect/sync code (J3.x),
-> notification rows and account deletion (A4.x), unit and integration suites, and the
-> quality CI workflow (J1.4/J2.9). There is still **no end-to-end class** on the default
-> stack: the ingest sink answers `503` until `MAULWURF_INGEST_URL` and the ingest
-> credential are set, real-text indexing stays closed while D3-Texto is open, and
-> Calendar/Gmail writes stay behind explicit confirmation. Real recordings stay gated by
-> the open F0 decisions (D2/D6 `pending`, D3-Audio/D4 `blocked`). See
-> [docs/RUNBOOK-dev.md](docs/RUNBOOK-dev.md) for the gates and the synthetic e2e overlay.
-> Planned services and roadmap gates must not be read as a finished product.
+[Architecture](#-architecture--data-flow) · [Privacy & Guarantees](#-privacy--reliability-guarantees) · [Feature Matrix](#-delivered-features-vs-open-external-gates) · [Quick Start](#-3-step-quick-start) · [Documentation Hub](#-documentation--runbooks)
 
-## Product vision
+</div>
 
-Students often record classes but rarely revisit hours of audio. Important information—exam
-dates, assignments, readings, and recommendations—remains buried in those recordings. Maulwurf
-is designed to turn that information into durable text, searchable evidence, and actions that a
-student can review before anything is written to an external service.
+---
 
-The planned flow is:
+> [!NOTE]
+> **Project Status (`2026-11-19`, `develop` branch):** The full **F1 + F2 + F3** codebase is implemented across `apps/api`, `apps/ingest`, `apps/web`, **22** sequential Alembic migrations (`apps/api/alembic/versions/0001_core_schema_s1.py` through `apps/api/alembic/versions/0022_s3_chat_tool_calls.py`), and `infra/docker-compose.prod.yml`.
 
-```text
-Class audio
-    → ephemeral transcription
-    → searchable transcript
-    → hybrid search and cited RAG chat
-    → structured activity proposals
-    → human review
-    → Google Calendar
-    → optional Gmail reminders
-```
+> [!IMPORTANT]
+> **External & Human Gates Still Open:** While software implementation and automated test suites are complete and passing, final live-provider and host operational sign-offs remain explicitly open until live accounts and the ARM reference host are provisioned: external F0 decisions (`D2`, `D3-Audio`, `D3-Text`, `D4`, `D6`), live Google OAuth/Calendar/Gmail tests (`J3.1`, `J3.9`, `J4.9` / `P-S4-JF-07`), live NVIDIA Riva stress (`J4.10`), live human multilingual `G4`/`G6` evaluations (`L2.7`, `L4.1`), 2x live staging rehearsals + rollback drill (`D4.7`, `A4.8`, `S4.6`), and independent peer signature on `docs/reviews/security-cross-review.md` (`L4.2`).
 
-### Design principles
+---
 
-- **Audio is input; text is the durable source.** The planned system does not provide audio
-  playback, audio downloads, durable audio archives, or retranscription without a new upload.
-  Citations open transcript segments; timestamps are shown only when the ASR provider supplies
-  validated timing data.
-- **From consultation to action.** In addition to chat and search, the system proposes exams,
-  assignments, readings, and follow-up activities.
-- **Human confirmation is mandatory.** No task—whether extracted from a transcript or proposed
-  in chat—may write to Google Calendar without explicit user confirmation. Chat tools cannot
-  write Calendar or send mail directly.
-- **Providers are behind adapters.** Transcription, language models, and embeddings are
-  isolated behind interfaces. Replacing a provider requires capability and contract tests;
-  changing an embedding model or dimension requires a new index generation and reindexing.
-- **Privacy is designed in.** Maulwurf is not currently a 100% local product. Audio is sent to
-  the selected cloud ASR provider, so provider retention and data-processing terms must be
-  reviewed before real recordings are used.
-- **Language is explicit.** The user must select and consent to the audio language before
-  uploading bytes. Automatic language detection, silent fallback to `multi`, and ASR
-  translation are not part of the MVP/v1 contract.
+## Architecture & Data Flow
 
-## Planned capabilities
-
-The functional specification currently includes the following planned capabilities:
-
-- Upload a class recording together with its subject, class date, class timezone, and selected
-  audio language.
-- Validate and normalize supported audio formats, transcribe them with NVIDIA Riva, and retain
-  the transcript and its segments rather than the source audio.
-- Search across subjects with PostgreSQL full-text search and pgvector, using hybrid retrieval.
-- Chat with citations that link to validated transcript evidence.
-- Extract assignments, exams, deliveries, readings, reminders, projects, and recommendations
-  into reviewable structured proposals.
-- Read authorized Google Calendar events as context and create a secondary Maulwurf calendar
-  only after explicit confirmation.
-- Optionally send Gmail reminders and daily or weekly digests after the integration is enabled.
-- Show processing progress and separate the status of transcription, indexing, and analysis.
-
-### Out of scope for now
-
-The following are explicitly outside the current MVP/v1 scope:
-
-- Speaker diarization, video ingestion, link or bot ingestion, and collaboration.
-- Audio playback, audio download, durable audio storage, and retranscription after ephemeral
-  audio has been lost.
-- Automatic language detection, ASR translation, and a fully local deployment.
-- Native mobile applications. An installable PWA may be considered later, without caching
-  private audio or private application data.
-
-## Proposed architecture
-
-The following architecture is the target design from the specification. S1 and part of S2
-provide its foundation as local Compose services (`web`, `api`, `ingest`, `worker`,
-`scheduler`, `postgres`, `redis`, `caddy`), but the end-to-end flow below is not implemented
-yet.
+Maulwurf enforces a strict separation between **ephemeral binary audio** (streamed in RAM / `tmpfs` and verified deleted before publishing downstream jobs) and **durable structured text knowledge** (PostgreSQL + `pgvector` + FTS).
 
 ```mermaid
-flowchart TD
-    U[Student] --> WEB[React SPA, Vite]
-    WEB -->|Same-origin REST and SSE| API[FastAPI API]
-    API -->|Backend-owned OAuth and session| GO[Google OAuth]
-    API --> PG[(PostgreSQL + pgvector)]
-    WEB -->|Upload proxy without disk buffering| ING[FastAPI ingestion]
-    ING -->|Ephemeral ASR files only| RAM[tmpfs]
-    ING -->|gRPC over TLS| RIVA[NVIDIA Riva Whisper large-v3]
-    ING -->|Transcript and outbox, never audio| PG
-    PG --> OUT[Outbox dispatcher]
-    OUT -->|IDs and safe configuration only| REDIS[(Redis)]
-    REDIS --> WORK[ARQ worker]
-    WORK --> PG
-    WORK --> MODELS[LLM and embedding adapters]
-    WORK --> CAL[Google Calendar API]
-    WORK --> MAIL[Gmail API]
+flowchart LR
+    U[Browser SPA / PWA] -->|1. Select Language + Upload PUT| C[Caddy Ingress]
+    C -->|2. Stream bytes / no disk cache| API[FastAPI API]
+    API -->|3. Internal RAM / tmpfs stream| ING[Ingest Service + ffmpeg]
+    ING -->|4. gRPC TLS| RIVA[NVIDIA Riva Whisper]
+    RIVA -->|5. Segments & timestamps| ING
+    ING -->|6. Verify absence in /tmpfs & /proc| DEL{G1 Cleanup Verified?}
+    DEL -->|Yes -> Publish durable text| DB[(PostgreSQL 16 + pgvector + RLS)]
+    DEL -->|Failed -> Close admission| LOCK[Admission Halt + Alert]
+    DB --> SSE[SSE Progress / Chat Streams]
+    SSE --> U
+    DB --> ARQ[ARQ Workers & Single-Role Scheduler]
+    ARQ -->|7. Human-confirmed outbox only| GCAL[Google Calendar API]
+    ARQ -->|8. Opt-in verified account only| GMAIL[Gmail API gmail.send]
 ```
 
-### Proposed technology stack
+<details>
+<summary><strong>View System Context, Container & Process Diagrams</strong></summary>
 
-| Layer | Planned choice | Purpose |
-| --- | --- | --- |
-| Frontend | Vite, React, React Router, TypeScript, Tailwind ([ADR-0007](docs/adr/ADR-0007-web-stack.md)) | Web UI and optional PWA path |
-| Backend | FastAPI, Pydantic v2, SQLAlchemy 2 async | API, authentication, and orchestration |
-| Database | PostgreSQL 16 | Tenant data, transcripts, outbox, and metadata |
-| Vector search | pgvector with cosine HNSW indexes | Versioned semantic retrieval |
-| Full-text search | PostgreSQL full-text search | Lexical retrieval by language |
-| Jobs | ARQ with Redis | Durable text-processing and integration jobs |
-| Transcription | NVIDIA Riva, Whisper large-v3, `nvidia-riva-client` | Explicit-language ASR over gRPC/TLS |
-| Conversion | `ffmpeg` and `ffprobe` in the ingestion service | Validation and ephemeral normalization |
-| LLM | `gpt-4o-mini` through LiteLLM, provisional | Structured extraction and chat |
-| Embeddings | `text-embedding-3-small`, 1536 dimensions, provisional | Semantic search |
-| Authentication | Google OAuth managed by FastAPI and an opaque cookie session | Backend-owned identity and tokens |
-| Durable audio storage | None | Source audio must remain ephemeral |
-| Mail | Gmail API, opt-in | Reminders and digests |
+<br/>
 
-## Planned processing contract
+| System Context (`arq-01`) | Container Topology (`arq-02`) | Process Map (`proc-00`) |
+| :---: | :---: | :---: |
+| <img src="docs/diagrams/arq-01-contexto.svg" alt="Maulwurf System Context Diagram" width="280"/> | <img src="docs/diagrams/arq-02-contenedores.svg" alt="Maulwurf Containers Diagram" width="280"/> | <img src="docs/diagrams/proc-00-mapa.svg" alt="Maulwurf End-to-End Process Map" width="280"/> |
 
-The intended end-to-end behavior is:
+All architecture and flow diagrams live under [`docs/ARCH.md`](docs/ARCH.md) and [`docs/diagrams/`](docs/diagrams/arq-05-zonas-de-confianza.svg).
 
-1. The user selects a subject, class date, class timezone, and audio language, and accepts the
-   applicable cloud-processing and privacy notice before uploading data.
-2. The API creates an ingestion attempt and reserves bounded capacity. The binary upload is
-   authenticated and proxied without persistent-disk buffering.
-3. The ingestion service validates the stream, computes a SHA-256 hash, checks limits, and uses
-   `ffprobe`/`ffmpeg` to normalize audio inside private `tmpfs` storage. The actual Riva payload
-   format and limits must be established by provider testing; the system must not assume a
-   fixed ten-minute fragment size.
-4. Audio is sent to Riva in bounded, sequential fragments with backpressure. The application
-   must not retain the original, converted files, fragments, or audio payloads in object
-   storage, Redis, logs, traces, caches, or backups.
-5. The complete transcript and segments are committed atomically. All temporary audio is
-   closed and removed in a `finally` path, and cleanup is independently verified before text
-   processing is dispatched.
-6. Indexing and LLM analysis run as independent stages over persisted text. A valid index may
-   support chat even if analysis fails, and valid extracted tasks may remain reviewable even if
-   indexing fails.
-7. The user reviews textual evidence, dates, timezone, and proposed Calendar details. Only an
-   explicit confirmation creates a durable Calendar write through an idempotent worker.
-8. Optional Gmail notifications use the same outbox and worker model. Ambiguous delivery is
-   surfaced as `delivery_unknown` rather than retried blindly.
+</details>
 
-If ephemeral audio is lost before a complete transcript is committed, the user must upload it
-again. Indexing, analysis, and external-integration jobs may be retried from persisted text and
-IDs; ASR may not be retried from a vanished temporary path.
+---
 
-Timestamps are never invented from an LLM response or distributed proportionally across text.
-SRT export is available only when the stored timing information is valid. If Riva returns text
-without usable offsets, citations remain textual and timestamp precision is recorded as `none`.
+## Privacy & Reliability Guarantees
 
-## Privacy and security requirements
+| Guarantee | Mechanism | Primary Code & Verification |
+|---|---|---|
+| **G1 — Zero Persistent Audio** | Audio stays strictly in memory/`tmpfs`; absence verification gates admission; browser has zero `<audio>` players or IndexedDB caches | `apps/api/app/services/uploads.py`, `apps/api/app/services/orphan_sweep.py`, `apps/web/tests/unit/g1-privacy.test.ts`, `docs/reviews/g1-client.md` |
+| **Mandatory Pre-Upload Language** | Explicit language selection required before bytes stream; UI capabilities synced to validated backend limits | `apps/api/app/routers/ingestion.py`, `apps/api/app/services/limits.py`, `apps/web/src/components/upload/UploadForm.tsx` |
+| **Stage State Isolation** | Upload, ASR, cleanup verification, indexation, LLM analysis, task review, Calendar sync, and notifications use decoupled state machines | `apps/api/app/services/state_machine.py`, `apps/api/app/services/index_job.py`, `apps/api/app/services/analysis.py` |
+| **Human-Confirmed Calendar** | Extracted dates become reviewable proposals with verbatim spans (`segment N` fallback); Calendar writes happen only after confirmation | `apps/api/app/services/evidence.py`, `apps/api/app/services/task_lifecycle.py`, `apps/api/app/services/calendar_sync.py` |
+| **Uncertainty-First Gmail & Digests** | Incremental `gmail.send` opt-in, fixed verified recipient (`parseaddr` checked), escaped HTML/text templates, no blind retries on `delivery_unknown` | `apps/api/app/services/gmail.py`, `apps/api/app/services/gmail_templates.py`, `apps/web/src/components/settings/DeliveryPanel.tsx` |
+| **Structural `no-store` & PWA Exclusions** | Private API routes set `Cache-Control: no-store`; Service Worker caches only static shell and excludes all 15 private/stream prefixes | `apps/web/src/lib/api.ts`, `apps/web/public/sw.js`, `apps/web/tests/unit/pwa-sw.test.ts` |
+| **Traceable Account Deletion (`DELETE /me`)** | Tombstone transaction revokes sessions, restricts session to observable/resumable deletion status, defaults `delete_maulwurf_events=false` | `apps/api/app/services/deletion.py`, `apps/web/src/components/settings/AccountDeletionPanel.tsx` |
 
-These requirements are part of the documented product contract, not evidence that the controls
-are already implemented:
+---
 
-- **No durable audio in Maulwurf infrastructure.** Ingestion is intended to use bounded private
-  `tmpfs`, a read-only root filesystem, no persistent swap, and no persistent core dumps or
-  memory snapshots. Cleanup must cover original files, converted files, fragments, and buffers.
-- **Cloud processing is explicit.** Local deletion does not guarantee deletion by NVIDIA, an LLM
-  provider, Google, or the user's device. Provider retention, regional processing,
-  subprocessors, and consent for third-party voices must be reviewed before real classes are
-  accepted.
-- **Secrets stay server-side.** `NVIDIA_API_KEY`, Google OAuth credentials, and refresh tokens
-  must never be committed, sent by the browser, placed in prompts, or written to logs. Google
-  refresh tokens are planned to be encrypted with AES-GCM and key-versioned.
-- **Tenant isolation is mandatory.** Authenticated backend state, not a user payload or LLM
-  output, determines the user identity for API requests, SSE streams, tools, and jobs.
-- **Private content is not observability data.** Audio, complete transcripts, prompts,
-  credentials, and personally identifiable information must not be written to logs, traces,
-  Sentry, caches, Redis values, or CI artifacts.
-- **External side effects are controlled.** Calendar writes require human confirmation. Gmail is
-  opt-in. Provider tests and real-class processing require authorized credentials, consent, and
-  approved test data.
+## Delivered Features vs. Open External Gates
 
-## Roadmap
+| Area / Phase | Delivered in Codebase (`develop`) | Open External / Human Gates |
+|---|---|---|
+| **F1 — Ingestion & Knowledge** | Google OAuth CSRF sessions, subjects CRUD, pre-upload language form, streaming binary PUT (`infra/Caddyfile` `max_size 220MB` / `read_body 40m`), real-time SSE progress, library & synced `TranscriptReader` + `.txt`/`.srt` export, hybrid pgvector + FTS search, streaming RAG chat with citations & read tools | Live NVIDIA Riva allowlist/ceiling confirmation (`D2`, `D3-Audio`, `D4`, `J4.10`); live `G4` multilingual retrieval eval (`L2.7`) |
+| **F2 — Tasks & Google Calendar** | Versioned task extraction runs, provenance span reconstruction, task inbox/edit/human confirmation, atomic outbox writes, Google Calendar sync & conflict detection, reconnection prompts | Live Google OAuth verification & Calendar integration test (`D6`, `J3.1`, `J3.9`); live `G6` human faithfulness eval (`L4.1`) |
+| **F3 — Notifications, UX & Prod Stack** | Public landing (`/`), notification preferences (`PATCH /me/notifications`), failed delivery panel (`DeliveryPanel` + manual duplicate-ack resend), `gmail.send` incremental opt-in, daily/weekly digests, global `Ctrl+K` (`CommandPalette`), metadata-only `SubjectStats`, PWA offline shell (`sw.js`), `DELETE /me` resume flow, `infra/docker-compose.prod.yml` | Live `P-S4-JF-07` Gmail send (`J4.9`); 2x live ARM reference-host rehearsals + rollback drill (`D4.7`, `A4.8`, `S4.6`); peer signature on `docs/reviews/security-cross-review.md` (`L4.2`) |
 
-No phase below is complete. F0 has partial spike evidence, but its decisions remain open; F1
-is partially implemented (ingestion, API, search and chat pieces) without a browser
-end-to-end flow; F2–F4 have not started. The detailed plan defines the evidence and
-acceptance gates for each phase; the table describes scope and exit conditions, not
-completion.
+---
 
-| Phase | Planned scope | Exit condition |
-| --- | --- | --- |
-| **F0 — Feasibility and foundation** | Validate Riva languages, formats, limits, timestamps, privacy, ephemeral ingestion, auth, schema, and CI foundations | Provider contract and capacity are documented; cleanup and recovery are demonstrated; real ingestion remains blocked until this gate passes |
-| **F1 — Knowledge** | Ephemeral ingestion, transcript library, hybrid index, transcript reader, and cited chat | End-to-end processing works for the tested class duration and published limits without retaining audio |
-| **F2 — Action** | Versioned extraction, review inbox, Google Calendar synchronization, agenda context, and read-only chat tools | A reviewed task creates one idempotent event only after confirmation, including date, timezone, DST, and retry cases |
-| **F3 — Reminders** | Opt-in Gmail, reminders, digests, complete dashboard, and global search | Dedupe, local-time/DST behavior, and uncertain delivery are tested with an authorized real message |
-| **F4 — Exploratory backlog** | Quizzes, study plans, exports, briefings, and other future ideas | Independent prioritization; not part of the MVP or v1 commitment |
+## 3-Step Quick Start
 
-The project does not maintain schedule estimates until the capacity spike and team decisions are
-complete.
+### 1. Boot the Local Compose Stack
 
-## Repository status and layout
-
-### Current repository
-
-```text
-.
-├── .github/workflows/             # quality.yml (CI) and the external QA webhook
-├── apps/
-│   ├── api/                       # FastAPI: routers, core, models, services, workers, alembic
-│   ├── ingest/                    # Ingestion: reception, admission, lease, cleanup, ASR client
-│   └── web/                       # React SPA (Vite): login, subjects, library, upload, chat
-├── docs/                          # Specification, plans, ADRs, F0 spike, runbook, sprints
-├── infra/                         # docker-compose.yml (8 services) and Caddyfile
-├── scripts/                       # CI guards, docs checks, provider/, e2e/, load/ helpers
-├── AGENTS.md                      # Repository guidance for coding agents
-├── LICENSE                        # GNU AGPL v3
-├── README.md
-└── requirements-riva.txt          # Pinned Riva client dependency
-```
-
-## Local setup
-
-The local development stack (Compose, tests, lint and migrations) is documented step by step
-in [docs/RUNBOOK-dev.md](docs/RUNBOOK-dev.md). Quick start:
+Configure environment variables and Google OAuth credentials following [`docs/RUNBOOK-dev.md`](docs/RUNBOOK-dev.md), then launch the 8-service development topology (`caddy`, `web`, `api`, `ingest`, `worker`, `scheduler`, `postgres`, `redis`):
 
 ```bash
-cp .env.example .env   # complete the MAULWURF_* secrets
-cd infra && docker compose --env-file ../.env up -d --build --wait
+docker compose -f infra/docker-compose.yml up --build
 ```
 
-If ports 80/443 are taken, set `CADDY_HTTPS_PORT` in `.env`. To try the Google login you need a test OAuth client; the steps and the exact redirect
-URI are in the [runbook](docs/RUNBOOK-dev.md#google-login-a13).
+### 2. Verification & CI Gates
 
-The pinned Riva client can also be installed standalone for provider work (authorized key and
-test audio required; never a real class recording):
+Run the full automated verification suites locally across backend, ingestion, frontend, infrastructure linters, and documentation/secret scanners:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements-riva.txt
+# API static checks & unit suite
+cd apps/api && .venv/bin/ruff check . && .venv/bin/mypy . && .venv/bin/pytest tests/unit -q
+
+# Ingest static checks & unit suite
+cd ../ingest && .venv/bin/ruff check . && .venv/bin/mypy . && .venv/bin/pytest -q
+
+# Web lint, TypeScript, Vitest & Vite bundle
+cd ../web && npm run lint && npm run typecheck && npx vitest run && npm run build
+
+# Repository-wide edge, env, reference, and secret checks
+cd ../..
+python3 scripts/ci/check_caddy_limits.py
+python3 scripts/ci/check_compose_ingest_env.py
+python3 scripts/docs/check_refs.py
+bash scripts/ci/check_no_secrets.sh
 ```
 
-The direct dependency is `nvidia-riva-client==2.27.0`. The documented validation environment
-also resolved `grpcio==1.84.0`, `grpcio-tools==1.81.1`, `protobuf==6.33.5`, and
-`websockets==15.0.1`. Application runtimes are pinned in [docs/VERSIONES.md](docs/VERSIONES.md)
-(Python 3.12, Node 22).
+### 3. Reference Production Deployment
 
-### Current development commands
+For single-host ARM/Linux deployment with immutable image tags, single-job Alembic migrations (`migrate` profile), Redis password enforcement (`--requirepass`), and production Caddy TLS/limits (`infra/deploy/Caddyfile.prod`), follow [`docs/runbooks/deploy.md`](docs/runbooks/deploy.md) using [`infra/docker-compose.prod.yml`](infra/docker-compose.prod.yml).
 
-See [docs/RUNBOOK-dev.md](docs/RUNBOOK-dev.md) for the reproducible commands. Summary:
+---
 
-| Activity | Current status |
-| --- | --- |
-| Install dependencies | `uv sync --extra dev` per Python app; `npm ci` in `apps/web` |
-| Run the stack | `docker compose up -d --build --wait` in `infra/` (8 services) |
-| Tests | pytest (api/ingest: unit + integration suites); Vitest (web: unit tests) |
-| Lint and formatting | Ruff (Python) and ESLint (web), configured |
-| Type checking | mypy strict (Python) and `tsc --noEmit` (web), configured |
-| Documentation references | `python3 scripts/docs/check_refs.py` (docs, README and AGENTS paths) |
-| Migrations | Nineteen revisions (`0001`–`0019`); the `api` container runs `alembic upgrade head` on boot (runbook §5) |
-| Deployment | No deployment manifests exist yet (S4/J4.x) |
+## Documentation & Runbooks
 
-CI is defined in `.github/workflows/quality.yml` (lint, types, unit and integration tests,
-secret/license scans, image builds and the documentation reference check); provider-contract
-tests remain protected and manual or scheduled, and mocks do not establish provider support
-or retention behavior.
-
-## NVIDIA Riva integration reference
-
-The planned ASR integration uses the official NVIDIA Riva Python client over gRPC/TLS. The
-application contract currently documents these target parameters:
-
-| Parameter | Planned value or rule |
-| --- | --- |
-| Server | `grpc.nvcf.nvidia.com:443` |
-| Transport | TLS (`--use-ssl`) |
-| NVIDIA function | `b702f636-f60c-4a3d-a6f4-f3568c13bd7d` |
-| Client package | `nvidia-riva-client` |
-| Model | Whisper large-v3, subject to endpoint validation |
-| Authorization | Backend-only `Bearer $NVIDIA_API_KEY` metadata |
-| Operation | Transcription, not `task:translate` |
-| Language | Explicit user-selected code from a tested allowlist |
-| Initial normalization target | Mono, signed 16-bit PCM WAV; sample rate remains subject to testing |
-
-The following is an **external NVIDIA reference command**, not a Maulwurf application command. It
-requires a separately cloned `python-clients` repository, an authorized API key, and an
-authorized input file:
-
-```bash
-.venv/bin/python python-clients/scripts/asr/transcribe_file_offline.py \
-    --server grpc.nvcf.nvidia.com:443 \
-    --use-ssl \
-    --metadata function-id b702f636-f60c-4a3d-a6f4-f3568c13bd7d \
-    --metadata authorization "Bearer $NVIDIA_API_KEY" \
-    --max-message-length 1073741824 \
-    --language-code en \
-    --input-file /path/to/audio.wav
-```
-
-Important limitations of this reference:
-
-- The client-side `--max-message-length` maximum is 1 GiB; that does not prove the NVIDIA
-  endpoint accepts a 1 GiB request. Server limits, protobuf overhead, quotas, deadlines,
-  duration, format, sample rate, and memory may impose lower limits.
-- The audited offline script reads the complete input file into memory and does not fragment a
-  large recording. It is therefore not the planned bounded ingestion implementation.
-- The example's `en` language, formats, timestamps, and limits do not prove support for every
-  language or class recording. F0 must test the deployed endpoint before publishing capabilities.
-- No transcription request against NVIDIA has been executed from this repository because no API
-  key or authorized test audio is configured. Effective languages, quotas, deadlines, payload
-  limits, and timestamp behavior remain unverified.
-
-Never commit `NVIDIA_API_KEY`, send it from the browser, or use private class recordings in an
-unapproved provider test.
-
-## Testing strategy
-
-The test layers are:
-
-1. **Unit tests:** dates and DST, Unicode character offsets, ASR fragment reconciliation,
-   evidence spans, chunking, RRF retrieval, state transitions, idempotency, deduplication, and
-   reminder scheduling.
-2. **Local integration tests:** real PostgreSQL/pgvector, Redis, `ffmpeg`/`ffprobe`, proxy,
-   authentication, CSRF, outbox, leases, fencing, cleanup, and restart paths.
-3. **Provider-contract tests:** protected authorized accounts for NVIDIA Riva, the selected
-   LLM/embedding providers, and Google. These tests record observed capabilities and limits.
-4. **End-to-end and load tests:** browser through proxy, services, database, and providers,
-   including upload, cleanup, indexing, cited chat, human review, Calendar, and notifications.
-5. **Build and delivery checks:** migrations, restore testing, lint, type checks, test suites,
-   E2E, and builds for the planned API, ingestion, and web applications.
-
-Synthetic audio for ASR tests must be generated in RAM at execution time and must never be
-versioned or retained as a CI artifact. Persist only non-sensitive metrics and expected text.
-
-## Capacity and cost notes
-
-There is no validated monthly budget or production capacity yet. Costs depend on NVIDIA Riva
-usage, LLM and embedding tokens, retries, `ffmpeg` CPU, RAM/tmpfs slots, PostgreSQL/pgvector,
-Redis, backups, TLS, and network transfer. Avoid treating the provisional 200 MiB / 3 hour
-input target as an approved production limit until F0 benchmarks it.
-
-Not storing audio durably removes audio-storage cost, but it does not remove memory,
-transcoding, provider, network, or cloud data-processing costs. Before real usage, the project
-must establish quotas, rate limits, alerts, retention policies, and provider terms.
-
-## Further documentation
-
-- [Functional and technical specification](docs/ESPECIFICACION.md)
-- [System architecture](docs/ARCH.md) — context, containers, components and trust zones, with
-  implementation status
-- [Process diagrams](docs/PROCESOS.md) — upload, transcription, search, chat, Calendar, reminders,
-  deletion and team workflow
-- [Development runbook](docs/RUNBOOK-dev.md) — local stack, healthchecks, tests, lint, migrations
-- [Implementation and validation plan](docs/PLAN_IMPLEMENTACION.md)
-- [Team sprint plan (S1–S4)](docs/PLAN_SPRINTS.md) — open weekly backlogs with ticket
-  dependencies and a Definition of Done per sprint; only the active sprint is claimable, and
-  ownership lives in [docs/sprints/CLAIMS.md](docs/sprints/CLAIMS.md) (per-sprint specs in
-  [docs/plan/S1.md](docs/plan/S1.md)–[docs/plan/S4.md](docs/plan/S4.md)).
-- [Test catalog by sprint (layers, gates G1–G8)](docs/PLAN_TESTS.md)
-- [NVIDIA Riva client audit](docs/NVIDIA_RIVA.md)
-- [Pinned Riva dependency](requirements-riva.txt)
-- [Repository agent guidance](AGENTS.md)
-- [License](LICENSE)
-
-## License
-
-Maulwurf is distributed under the [GNU Affero General Public License, version 3](LICENSE).
-If you run a modified version as a network service, you must offer its source code to the
-users who interact with it (AGPL-3.0 §13).
+- **Contracts & Planning:** [`docs/ESPECIFICACION.md`](docs/ESPECIFICACION.md) · [`docs/PLAN_IMPLEMENTACION.md`](docs/PLAN_IMPLEMENTACION.md) · [`docs/DISENO_BD_API_SPRINTS.md`](docs/DISENO_BD_API_SPRINTS.md) · [`docs/PLAN_SPRINTS.md`](docs/PLAN_SPRINTS.md) · [`docs/PLAN_TESTS.md`](docs/PLAN_TESTS.md)
+- **Sprint & Governance Records:** [`docs/plan/S4.md`](docs/plan/S4.md) · [`docs/plan/F4-backlog.md`](docs/plan/F4-backlog.md) · [`docs/sprints/CLAIMS.md`](docs/sprints/CLAIMS.md) · [`docs/sprints/README.md`](docs/sprints/README.md)
+- **Closure Reviews & Demo Script:** [`docs/reviews/consistency-checklist.md`](docs/reviews/consistency-checklist.md) · [`docs/reviews/g1-client.md`](docs/reviews/g1-client.md) · [`docs/reviews/security-cross-review.md`](docs/reviews/security-cross-review.md) · [`docs/demo/guion.md`](docs/demo/guion.md)
+- **Operations & Runbooks:** [`docs/RUNBOOK-dev.md`](docs/RUNBOOK-dev.md) · [`docs/runbooks/README.md`](docs/runbooks/README.md) · [`docs/runbooks/deploy.md`](docs/runbooks/deploy.md) · [`docs/runbooks/cleanup.md`](docs/runbooks/cleanup.md) · [`docs/runbooks/restore.md`](docs/runbooks/restore.md) · [`docs/runbooks/account-deletion.md`](docs/runbooks/account-deletion.md) · [`docs/runbooks/provider-down.md`](docs/runbooks/provider-down.md) · [`docs/runbooks/tokens.md`](docs/runbooks/tokens.md) · [`docs/runbooks/budget-alerts.md`](docs/runbooks/budget-alerts.md)

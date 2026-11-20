@@ -1816,6 +1816,7 @@ no new endpoints in the MVP.
 | `/tasks*` (M4) | — | — | ✓ | — |
 | `/calendar/*` (M5) | — | — | ✓ | — |
 | `/integrations/google/connect\|reconnect` | — | — | ✓ | — |
+| `GET\|POST /integrations/google/gmail/connect` | — | — | — | ✓ |
 | `GET/PATCH /me/notifications`, `POST /notifications/test`, `GET /notifications`, `POST /notifications/{id}/resend` | — | — | — | ✓ |
 | `DELETE /me`, `GET /me/deletion/{id}`, `POST /me/deletion/{id}/resume` | — | — | — | ✓ |
 
