@@ -5,6 +5,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useToast } from "@/components/ui/ToastProvider";
 import { SubjectForm } from "@/components/subjects/SubjectForm";
+import { SubjectStats } from "@/components/subjects/SubjectStats";
 import { apiFetch, ApiHttpError } from "@/lib/api";
 import { createSubject, fetchSubjects, updateSubject } from "@/lib/subjects";
 import type { Subject, SubjectDraft } from "@/lib/subjects";
@@ -174,6 +175,8 @@ export function MateriasPage() {
           </ul>
         )}
       </Card>
+
+      <SubjectStats subjects={subjects} />
 
       <ConfirmDialog
         open={activeAudios !== null}

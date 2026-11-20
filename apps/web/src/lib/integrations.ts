@@ -26,6 +26,12 @@ export async function fetchIntegrationsStatus(): Promise<IntegrationsStatus> {
 // cross-origin 302 to Google nor render the consent screen.
 export const GOOGLE_CONNECT_PATH = "/integrations/google/connect";
 export const GOOGLE_RECONNECT_PATH = "/integrations/google/reconnect";
+export const GOOGLE_GMAIL_CONNECT_PATH = "/integrations/google/gmail/connect";
+export const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
+
+export function hasGmailSendScope(google: GoogleStatus | null): boolean {
+  return google !== null && google.scopes.includes(GMAIL_SEND_SCOPE);
+}
 
 export function googleConnectHref(google: GoogleStatus | null): string {
   if (google === null) return GOOGLE_CONNECT_PATH;
@@ -95,4 +101,24 @@ const CALENDAR_ERRORS: Record<string, string> = {
 export function calendarErrorCopy(reason: string | null): string {
   if (reason === null) return "No se pudo conectar Google Calendar.";
   return CALENDAR_ERRORS[reason] ?? "No se pudo conectar Google Calendar.";
+}
+
+const GMAIL_ERRORS: Record<string, string> = {
+  not_configured: "La integración con Gmail no está configurada en el servidor.",
+  csrf_invalid: "La petición vino de otro sitio; ábrela desde Maulwurf.",
+  rate_limited: "Demasiados intentos; espera un momento y vuelve a intentar.",
+  capacity_unavailable: "El servicio no está disponible; inténtalo más tarde.",
+  invalid_state: "La sesión de consentimiento expiró; vuelve a intentarlo.",
+  access_denied: "No autorizaste el permiso opcional gmail.send.",
+  missing_params: "Google no devolvió los datos esperados.",
+  state_mismatch: "El consentimiento pertenece a otra sesión.",
+  oauth_failed: "Google rechazó el intercambio de tokens.",
+  wrong_account: "La cuenta de Google no coincide con tu sesión actual.",
+  scope_required: "No se concedió el permiso gmail.send.",
+  invalid_grant: "Google revocó el acceso; vuelve a conectar.",
+};
+
+export function gmailErrorCopy(reason: string | null): string {
+  if (reason === null) return "No se pudo conectar el permiso de Gmail.";
+  return GMAIL_ERRORS[reason] ?? "No se pudo conectar el permiso de Gmail.";
 }

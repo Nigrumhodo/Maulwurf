@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, useSearchParams } from "react-router-dom";
 import { SettingsPage } from "@/pages/SettingsPage";
 import type { GoogleStatus } from "@/lib/integrations";
@@ -49,10 +49,22 @@ function preferences(): NotificationPreferences {
 }
 
 function installFetch(status: GoogleStatus) {
-  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    const method = (init?.method ?? "GET").toUpperCase();
     if (url === "/integrations/status") return json({ google: status });
     if (url === "/me/notifications") return json(preferences());
+    if (url.startsWith("/notifications?")) return json({ items: [], next_cursor: null });
+    if (url === "/me" && method === "PATCH") {
+      const parsed = JSON.parse(String(init?.body ?? "{}")) as { timezone?: string };
+      return json({
+        id: "u-1",
+        email: "ana@example.test",
+        display_name: null,
+        timezone: parsed.timezone ?? "America/Bogota",
+        csrf_token: "tok-a",
+      });
+    }
     return json({});
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -126,7 +138,9 @@ describe("SettingsPage", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input) === "/me/notifications") return json(preferences());
+        const url = String(input);
+        if (url === "/me/notifications") return json(preferences());
+        if (url.startsWith("/notifications?")) return json({ items: [], next_cursor: null });
         return json({ error: { code: "internal_error" } }, 500);
       }),
     );
@@ -135,5 +149,42 @@ describe("SettingsPage", () => {
 
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(screen.getByText(/no se pudo comprobar el estado de Google Calendar/)).toBeTruthy();
+  });
+
+  it("handles gmail consent notice and updates timezone via PATCH /me without display_name", async () => {
+    const fetchMock = installFetch(
+      google({
+        status: "connected",
+        scopes: ["https://www.googleapis.com/auth/gmail.send"],
+      }),
+    );
+
+    renderPage("/settings?gmail=connected");
+
+    expect(await screen.findByText(/permiso gmail\.send conectado/i)).toBeTruthy();
+    expect(await screen.findByText("permiso gmail.send concedido")).toBeTruthy();
+
+    const select = screen.getByLabelText(/cambiar zona horaria/i);
+    fireEvent.change(select, { target: { value: "Europe/Madrid" } });
+    fireEvent.click(screen.getByRole("button", { name: "guardar zona" }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/zona horaria actualizada/i)).toBeTruthy(),
+    );
+
+    const patchCall = fetchMock.mock.calls.find(
+      ([url, init]) => String(url) === "/me" && init?.method === "PATCH",
+    );
+    expect(patchCall).toBeDefined();
+    expect(JSON.parse(String(patchCall?.[1]?.body))).toEqual({ timezone: "Europe/Madrid" });
+  });
+
+  it("explains failed gmail consent with a closed reason", async () => {
+    installFetch(google());
+
+    renderPage("/settings?gmail=error&reason=scope_required");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("No se concedió el permiso gmail.send.");
   });
 });

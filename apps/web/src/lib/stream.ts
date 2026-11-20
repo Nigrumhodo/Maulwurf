@@ -40,9 +40,26 @@ function parseFrame(raw: string): SseFrame | null {
 /** Parser tolerante a LF/CRLF, comentarios de heartbeat y frames incompletos. */
 export function createSseParser(onFrame: (frame: SseFrame) => void): SseParser {
   let buffer = "";
+  let pendingCR = false;
+
+  function normalizeChunk(chunk: string): string {
+    let normalized = chunk.replace(/\r\n/g, "\n");
+    if (pendingCR) {
+      if (normalized.startsWith("\n")) {
+        pendingCR = false;
+      } else if (normalized !== "") {
+        normalized = `\r${normalized}`;
+        pendingCR = false;
+      }
+    }
+    if (normalized.endsWith("\r")) {
+      normalized = normalized.slice(0, -1);
+      pendingCR = true;
+    }
+    return normalized;
+  }
 
   function drain(final: boolean): void {
-    buffer = buffer.replace(/\r\n/g, "\n");
     let boundary = buffer.indexOf("\n\n");
     while (boundary !== -1) {
       const raw = buffer.slice(0, boundary);
@@ -60,14 +77,21 @@ export function createSseParser(onFrame: (frame: SseFrame) => void): SseParser {
 
   return {
     push(chunk: string) {
-      if (buffer.length + chunk.length > MAX_BUFFER_CHARS) {
+      const normalized = normalizeChunk(chunk);
+      const pendingLen = pendingCR ? 1 : 0;
+      if (buffer.length + pendingLen + normalized.length > MAX_BUFFER_CHARS) {
         buffer = "";
+        pendingCR = false;
         throw new Error("sse_frame_too_large");
       }
-      buffer += chunk;
+      buffer += normalized;
       drain(false);
     },
     flush() {
+      if (pendingCR) {
+        buffer += "\r";
+        pendingCR = false;
+      }
       drain(true);
     },
   };
