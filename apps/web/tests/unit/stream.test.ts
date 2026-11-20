@@ -27,6 +27,17 @@ describe("createSseParser", () => {
     expect(parser.frames).toEqual([{ event: "snapshot", id: "0", data: "{}" }]);
   });
 
+  it("normaliza CRLF partido justo entre \\r y \\n sin corromper \\r solitarios", () => {
+    const parser = collect();
+    parser.push("event: delta\r");
+    parser.push("\nid: 1\r\ndata: hola\r");
+    parser.push("mundo\r\n\r");
+    parser.push("\n");
+    expect(parser.frames).toEqual([
+      { event: "delta", id: "1", data: "hola\rmundo" },
+    ]);
+  });
+
   it("une datos multilínea y conserva el id opaco", () => {
     const parser = collect();
     parser.push("event: delta\nid: 0007\ndata: linea 1\ndata: linea 2\n\n");

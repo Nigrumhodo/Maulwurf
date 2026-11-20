@@ -1,11 +1,11 @@
 import { Link } from "react-router-dom";
 import { GESTION_MODULES } from "@/components/layout/gestionNav";
+import { SubjectStats } from "@/components/subjects/SubjectStats";
 import { buttonClasses } from "@/components/ui/buttonStyles";
 
-// D- (Gestión) — Hub index. Technical subheader with quick actions, then one panel
-// per module (materias & tareas · biblioteca & ingesta · terminal ia & agenda) and
-// a status footer. Deliberately no pixel book shelf: the "tomos" shelf is deferred
-// until a proper book image replaces the placeholder spines.
+// D- (Gestión) — Hub index. Technical subheader with quick actions, one panel per module
+// (materias & tareas · biblioteca & ingesta · terminal ia & agenda), metadata-only stats,
+// and status footer.
 export function GestionOverview() {
   return (
     <div className="flex flex-col gap-4">
@@ -16,7 +16,7 @@ export function GestionOverview() {
               &gt;
             </span>
             <h1 className="capitalize text-xl text-mint">gestión // panel académico</h1>
-            <span className="lowercase border-2 border-mint px-1.5 py-0.5 text-mint">[demo]</span>
+            <span className="lowercase border-2 border-mint px-1.5 py-0.5 text-mint">[activo]</span>
           </div>
           <div className="flex items-center gap-2">
             <Link to="/gestion/materias" className={buttonClasses("primary", "sm")}>
@@ -29,7 +29,7 @@ export function GestionOverview() {
         </div>
         <div className="lowercase flex flex-wrap items-center justify-between gap-2 pt-2 text-lavender/60">
           <span>// elige un módulo o accede directo desde el menú lateral</span>
-          <span>rack_id: shelf_bay_01 // bus_clock: 66mhz</span>
+          <span>módulos de texto, ingesta efímera y agenda</span>
         </div>
       </section>
 
@@ -70,6 +70,8 @@ export function GestionOverview() {
           </section>
         ))}
       </div>
+
+      <SubjectStats />
 
       <footer className="lowercase flex flex-wrap items-center justify-between gap-2 border-2 border-pure-black bg-surface px-3 py-2 text-lavender/60">
         <span>audio no conservado · cifrado aes-gcm · solo texto persistido</span>

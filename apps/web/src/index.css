@@ -199,6 +199,11 @@
     background-color: var(--color-mint);
     color: var(--color-on-accent);
   }
+
+  :focus-visible {
+    outline: 2px solid var(--color-mint);
+    outline-offset: 2px;
+  }
 }
 
 @layer utilities {
@@ -258,6 +263,10 @@
   .eq-bar {
     transform-origin: center;
     animation: eq 1.4s ease-in-out infinite;
+  }
+
+  .panel-enter {
+    animation: fade-in 0.25s ease-out both;
   }
 
   /* Rejilla de puntos retro para fondos tipo "hardware" (cassette/VU). */
@@ -413,12 +422,15 @@
   .animate-caret,
   .animate-blink,
   .animate-flicker,
+  .animate-fade-in,
   .animate-reel,
+  .panel-enter,
   .glitch-hover:hover,
   .glitch-once,
   .marquee,
   .eq-bar,
   .sprite-anim {
     animation: none !important;
+    transition: none !important;
   }
 }

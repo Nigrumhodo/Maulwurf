@@ -16,7 +16,7 @@ export function WelcomePage() {
       <div className="lowercase text-center">
         <p className="text-xl text-lavender">&gt; acceso concedido</p>
         <h1 className="mt-4 text-4xl text-mint">
-          <Typewriter text="uff te logueaste crack en grande" speed={50} />
+          <Typewriter text="sesión iniciada correctamente" speed={50} />
         </h1>
         <p className="mt-6 text-lg text-lavender">
           <FlickerText mode="flicker">bienvenido a maulwurf</FlickerText>

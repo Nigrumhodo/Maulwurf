@@ -14,7 +14,7 @@ function navClass({ isActive }: { isActive: boolean }): string {
 // botón "gestión" (hub académico con menú lateral) centrados y, a la derecha,
 // ajustes, toggle de tema + "salir". El menú desplegable "académico" pasó a ser
 // la página `/gestion` con su propia navegación colapsable.
-export function Header() {
+export function Header({ onOpenSearch }: { onOpenSearch?: () => void } = {}) {
   const { logout } = useAuth();
 
   return (
@@ -52,6 +52,17 @@ export function Header() {
         </div>
 
         <div className="flex items-center justify-end gap-2">
+          {onOpenSearch !== undefined && (
+            <button
+              type="button"
+              onClick={onOpenSearch}
+              aria-label="buscar con ctrl+k"
+              className="lowercase font-pixel hidden items-center gap-1.5 border-2 border-pure-black px-2.5 py-1 text-lavender hover:border-mint hover:text-mint md:inline-flex"
+            >
+              <span>buscar</span>
+              <kbd className="border border-lavender/40 px-1 text-xs text-mint">ctrl+k</kbd>
+            </button>
+          )}
           <NavLink to="/settings" className={navClass}>
             ajustes
           </NavLink>
