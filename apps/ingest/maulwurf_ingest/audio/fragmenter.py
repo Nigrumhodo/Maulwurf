@@ -61,7 +61,8 @@ def plan_fragments(
         if window_end >= duration_s - _PROGRESS_S:
             end = duration_s
         else:
-            cut = _cut_in_silence(silences, start, window_end)
+            min_cut = start + max(cap * 0.5, overlap + min(1.0, cap * 0.5))
+            cut = _cut_in_silence(silences, min_cut, window_end)
             end = window_end if cut is None else cut
         if end <= start + _PROGRESS_S:
             end = min(duration_s, start + cap)
@@ -127,6 +128,47 @@ def fragment_argv(
     return bounded_argv(operation, output=str(dest), limits=limits)
 
 
+def resilient_fragment_argv(
+    source: Path,
+    dest: Path,
+    span: FragmentSpan,
+    *,
+    limits: FfmpegLimits,
+    realtime: bool = False,
+) -> list[str]:
+    """Fallback extraction tolerant of corrupt frames or imperfect seek tables in M4A/MP3/VBR."""
+    duration_s = span.end_s - span.start_s
+    pre_seek = max(0.0, span.start_s - 2.0)
+    post_seek = span.start_s - pre_seek
+    operation: list[str] = ["-re"] if realtime else []
+    operation.extend(
+        [
+            "-err_detect",
+            "ignore_err",
+            "-fflags",
+            "+discardcorrupt+genpts",
+            "-ss",
+            f"{pre_seek:.6f}",
+            "-i",
+            str(source),
+            "-ss",
+            f"{post_seek:.6f}",
+            "-t",
+            f"{duration_s:.6f}",
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            str(CANDIDATE_SAMPLE_RATE_HZ),
+            "-c:a",
+            "pcm_s16le",
+            "-f",
+            "wav",
+        ]
+    )
+    return bounded_argv(operation, output=str(dest), limits=limits)
+
+
 def wav_duration_s(path: Path) -> float:
     with wave.open(str(path), "rb") as reader:
         rate = reader.getframerate()
@@ -144,18 +186,25 @@ def _overlap(overlap_s: float, cap_s: float) -> float:
 
 
 def _cut_in_silence(
-    silences: Sequence[tuple[float, float]], start: float, window_end: float
+    silences: Sequence[tuple[float, float]], min_cut: float, window_end: float
 ) -> float | None:
-    """Punto medio del silencio más tardío que cabe en la ventana."""
+    """Punto medio del silencio más tardío en `[min_cut, window_end)`.
+
+    Exigir `min_cut` (al menos la mitad de la ventana y más allá del solape previo)
+    impide cortar repetidamente dentro del mismo silencio (paradoja de Zenón) y evita
+    micro-fragmentos de milisegundos que fallan en ffmpeg o disparan alucinaciones ASR.
+    """
+    if min_cut >= window_end - _PROGRESS_S:
+        return None
     best: float | None = None
     for raw_start, raw_end in silences:
-        if raw_end <= raw_start:
+        if raw_end <= raw_start or raw_end <= min_cut or raw_start >= window_end:
             continue
-        left = max(raw_start, start)
+        left = max(raw_start, min_cut)
         right = min(raw_end, window_end)
         if right - left < _PROGRESS_S:
             continue
         midpoint = (left + right) / 2
-        if start + _PROGRESS_S < midpoint < window_end and (best is None or midpoint > best):
+        if min_cut <= midpoint < window_end and (best is None or midpoint > best):
             best = midpoint
     return best

@@ -63,3 +63,22 @@ def test_detected_silence_is_where_the_plan_cuts(tmp_path: Path) -> None:
     assert len(spans) >= 2
     assert gap_start - 0.2 <= spans[0].end_s <= gap_end + 0.2
     assert spans[1].start_s < spans[0].end_s
+
+
+def test_long_silence_never_causes_zeno_micro_fragments() -> None:
+    spans = plan_fragments(60.0, [(20.0, 25.0)], max_fragment_s=30.0, overlap_s=0.25)
+    assert len(spans) == 3
+    assert all(span.end_s - span.start_s >= 5.0 for span in spans)
+    assert spans[0].end_s == pytest.approx(22.5)
+    assert spans[1].start_s == pytest.approx(22.25)
+    assert spans[1].end_s == pytest.approx(52.25)
+
+
+def test_long_lecture_with_many_silences_stays_linear_and_bounded() -> None:
+    # Simulates a 102-minute class (6163 s) with a 6-second silence every 90 seconds.
+    silences = [(float(t), float(t + 6)) for t in range(30, 6100, 90)]
+    spans = plan_fragments(6163.57, silences, max_fragment_s=30.0, overlap_s=0.25)
+    assert 205 <= len(spans) <= 320
+    # Every non-final fragment advances by at least half the 30 s window.
+    assert all(span.end_s - span.start_s >= 15.0 for span in spans[:-1])
+    assert all(span.end_s - span.start_s <= 30.0 + 1e-6 for span in spans)

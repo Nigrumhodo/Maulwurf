@@ -25,6 +25,7 @@ from maulwurf_ingest.audio.fragmenter import (
     effective_fragment_seconds,
     fragment_argv,
     plan_fragments,
+    resilient_fragment_argv,
     wav_duration_s,
 )
 from maulwurf_ingest.audio.reconcile import (
@@ -135,10 +136,19 @@ def _extract(
     duration_s = span.end_s - span.start_s
     ensure_pcm_fits(duration_s, limits.output_bytes)
     try:
-        run_ffmpeg(
-            fragment_argv(source, dest, span, limits=limits, realtime=realtime),
-            limits=limits,
-        )
+        try:
+            run_ffmpeg(
+                fragment_argv(source, dest, span, limits=limits, realtime=realtime),
+                limits=limits,
+            )
+        except RuntimeError as exc:
+            if str(exc) != "ffmpeg_failed":
+                raise
+            dest.unlink(missing_ok=True)
+            run_ffmpeg(
+                resilient_fragment_argv(source, dest, span, limits=limits, realtime=realtime),
+                limits=limits,
+            )
         actual_s = wav_duration_s(dest)
         if is_last:
             if actual_s <= _TAIL_MIN_AUDIO_S:
