@@ -9,6 +9,7 @@ la política G1 de audio efímero (`tmpfs` no ejecutable sin volumen persistente
 ## 1. Artefactos de despliegue
 
 - Compose de producción: `infra/docker-compose.prod.yml`
+- Plantilla de variables de producción: `infra/deploy/.env.prod.example`
 - Edge TLS / reverse proxy: `infra/deploy/Caddyfile.prod`
 - Scraper interno de métricas (perfil opcional `observability`): `infra/deploy/prometheus.yml`
 
@@ -45,10 +46,17 @@ lectura (`chmod 400`) dentro de `PROMETHEUS_SECRETS_DIR`:
 
 ## 3. Secuencia de despliegue
 
-### 3.1 Migraciones previas (`migrate`)
+### 3.1 Construcción local (x86_64 o ARM64) o pull desde registry + migraciones (`migrate`)
 
 `api`, `worker`, `scheduler` e `ingest` declaran `depends_on.migrate: condition: service_completed_successfully`.
-Para mayor trazabilidad en un rollout:
+Si construyes directamente en el servidor (p. ej. VPS `linux/arm64` con `MAULWURF_REGISTRY=local` y `MAULWURF_IMAGE_TAG=<sha-corto>`):
+
+```bash
+docker compose -f infra/docker-compose.prod.yml --env-file .env.prod build
+docker compose -f infra/docker-compose.prod.yml --env-file .env.prod run --rm migrate
+```
+
+Si usas imágenes ya publicadas en un registry privado/GHCR:
 
 ```bash
 docker compose -f infra/docker-compose.prod.yml --env-file .env.prod pull
