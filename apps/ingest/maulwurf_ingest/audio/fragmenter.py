@@ -76,7 +76,7 @@ def plan_fragments(
 def detect_silences(path: Path, *, limits: FfmpegLimits) -> list[tuple[float, float]]:
     """Lee silencedetect. El stderr se parsea en memoria y no se registra."""
     argv = bounded_argv(
-        ["-i", str(path), "-af", "silencedetect=noise=-40dB:d=0.3", "-f", "null"],
+        ["-i", str(path), "-vn", "-af", "silencedetect=noise=-40dB:d=0.3", "-f", "null"],
         output="-",
         limits=limits,
         loglevel="info",
@@ -113,6 +113,7 @@ def fragment_argv(
             str(source),
             "-t",
             f"{duration_s:.6f}",
+            "-vn",
             "-ac",
             "1",
             "-ar",

@@ -26,6 +26,9 @@ def test_decision_table_covers_spike_containers() -> None:
 
     for format_name, codec, reason in (
         ("mp3", "mp3", "mp3"),
+        ("mov,mp4,m4a,3gp,3g2,mj2", "aac", "m4a"),
+        ("mov,mp4,m4a,3gp,3g2,mj2", "alac", "m4a"),
+        ("aac", "aac", "m4a"),
         ("ogg", "vorbis", "ogg"),
         ("ogg", "opus", "opus"),
         ("flac", "flac", "flac"),
@@ -39,7 +42,7 @@ def test_decision_table_covers_spike_containers() -> None:
         assert decision.duration_s == 2.0
 
     unverified = decide_probe(
-        format_name="mov,mp4,m4a,3gp,3g2,mj2", codec="aac", channels=2, duration_s=3.0
+        format_name="mov,mp4,m4a,3gp,3g2,mj2", codec="amr_wb", channels=1, duration_s=3.0
     )
     assert unverified.decision == "reject"
     assert unverified.reason == "unverified_container"
@@ -131,7 +134,7 @@ def test_ffprobe_duration_is_not_the_byte_length(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(_FFPROBE is None or _FFMPEG is None, reason="ffmpeg/ffprobe no disponible")
-def test_ffprobe_normalizes_mp3_and_rejects_m4a(tmp_path: Path) -> None:
+def test_ffprobe_normalizes_mp3_and_m4a(tmp_path: Path) -> None:
     import subprocess
 
     wav_path = tmp_path / "tone.wav"
@@ -156,6 +159,39 @@ def test_ffprobe_normalizes_mp3_and_rejects_m4a(tmp_path: Path) -> None:
     if encoded.returncode != 0:
         pytest.skip("ffmpeg no pudo codificar mp3")
     assert probe_file(mp3_path).decision == "normalize"
+
+    m4a_path = tmp_path / "tone.m4a"
+    encoded_m4a = subprocess.run(  # noqa: S603 — argv lista, sin shell
+        [
+            _FFMPEG,
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(wav_path),
+            "-c:a",
+            "aac",
+            str(m4a_path),
+        ],
+        check=False,
+        capture_output=True,
+        timeout=30,
+    )
+    assert encoded_m4a.returncode == 0
+    probed_m4a = probe_file(m4a_path)
+    assert probed_m4a.decision == "normalize"
+    assert probed_m4a.reason == "m4a"
+    assert probed_m4a.duration_s is not None and probed_m4a.duration_s > 0
+
+    out = tmp_path / "from_m4a.wav"
+    run_ffmpeg(
+        fragment_argv(m4a_path, out, FragmentSpan(0.0, 0.35), limits=DEFAULT_LIMITS),
+        limits=DEFAULT_LIMITS,
+    )
+    normalized = probe_file(out)
+    assert normalized.decision == "accept"
+    assert normalized.reason == "wav_pcm_s16_mono"
 
 
 @pytest.mark.skipif(_FFPROBE is None or _FFMPEG is None, reason="ffmpeg/ffprobe no disponible")

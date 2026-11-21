@@ -23,10 +23,13 @@ from maulwurf_ingest.audio.ffmpeg import DEFAULT_LIMITS, _limit_child
 _URL_PREFIXES = (b"http://", b"https://")
 _PROBE_TIMEOUT_S = 30.0
 _PREFIX_BYTES = 64
-# Containers the spike normalized. m4a stays out: S1.A4 left it NO VERIFICADO.
+# Containers normalized to 16 kHz mono PCM s16le WAV via bounded ffmpeg.
 ACCEPT_CONTAINERS = ("wav",)
-NORMALIZE_CONTAINERS = ("mp3", "ogg", "opus", "flac", "webm")
-_UNVERIFIED_FORMATS = frozenset({"mov", "mp4", "m4a", "3gp", "3g2", "mj2"})
+NORMALIZE_CONTAINERS = ("mp3", "m4a", "ogg", "opus", "flac", "webm")
+_M4A_FORMATS = frozenset({"mov", "mp4", "m4a", "3gp", "3g2", "mj2"})
+_M4A_AUDIO_CODECS = frozenset(
+    {"aac", "alac", "mp3", "opus", "flac", "pcm_s16le", "pcm_s16be"}
+)
 
 
 @dataclass(frozen=True)
@@ -107,7 +110,9 @@ def decide_probe(
         or duration_s <= 0
     ):
         return ProbeDecision("reject", "malformed")
-    if names & _UNVERIFIED_FORMATS:
+    if names & _M4A_FORMATS:
+        if codec in _M4A_AUDIO_CODECS:
+            return ProbeDecision("normalize", "m4a", duration_s)
         return ProbeDecision("reject", "unverified_container")
     if "wav" in names:
         if codec == "pcm_s16le" and channels == 1:
@@ -249,6 +254,8 @@ def _kill_probe(proc: subprocess.Popen[bytes]) -> None:
 def _normalize_reason(names: set[str], codec: str) -> str | None:
     if "webm" in names:
         return "webm"
+    if codec == "aac" and "aac" in names:
+        return "m4a"
     if codec == "mp3" or "mp3" in names:
         return "mp3"
     if codec == "opus" or "opus" in names:

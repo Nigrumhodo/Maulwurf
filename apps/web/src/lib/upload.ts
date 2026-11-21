@@ -235,7 +235,9 @@ const MIME_FORMATS: Record<string, string> = {
   "audio/x-flac": "flac",
   "audio/ogg": "ogg",
   "audio/mp4": "m4a",
+  "audio/m4a": "m4a",
   "audio/x-m4a": "m4a",
+  "audio/aac": "m4a",
   "audio/webm": "webm",
 };
 

@@ -35,9 +35,9 @@ def test_unapproved_limits_stay_unpublished() -> None:
     assert payload["max_upload_bytes"] is None
     assert payload["max_duration_seconds"] is None
     assert payload["languages"] == ["es", "en", "fr"]
-    assert "m4a" not in formats
+    assert "m4a" in formats
     assert "wav" in formats
-    assert {"mp3", "ogg", "opus", "flac", "webm"} <= set(formats)
+    assert {"mp3", "m4a", "ogg", "opus", "flac", "webm"} <= set(formats)
     asr = payload["asr"]
     assert isinstance(asr, dict)
     assert asr["timestamp_precision"] is None
