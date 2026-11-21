@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time
@@ -40,7 +41,6 @@ from app.services.analysis_validation import (
     validate_analysis,
 )
 from app.services.analysis_windows import (
-    DEFAULT_TARGET_TOKENS,
     AggregatedProposal,
     AnalysisWindow,
     EvidenceKey,
@@ -63,7 +63,12 @@ from app.services.date_resolution import (
 )
 from app.services.llm import ChatMessage, LLMProvider
 from app.services.revisions import TERMINAL_TASK_STATUSES, record_pending_revision
-from app.services.summary import SummaryRejected, parse_summary_payload, strip_json_fence
+from app.services.summary import (
+    SummaryRejected,
+    parse_summary_payload,
+    sentence_count,
+    strip_json_fence,
+)
 from app.services.task_evidence import persist_task_spans
 from app.services.task_snapshot import ProposalFields as ProposalFields
 from app.services.task_snapshot import needs_review_task
@@ -81,8 +86,15 @@ logger = logging.getLogger(__name__)
 # record the run as failed before ARQ cancels the job.
 ANALYSIS_DEADLINE_S = 540.0
 
-# Provisional output budget until a measured extraction profile replaces it.
-EXTRACTION_MAX_TOKENS = 2048
+# Production window profile for long real lectures (up to ~3 h / 50k+ tokens within 24 windows).
+# Tests that pass explicit `target_tokens` / `overlap_tokens` override these directly.
+ANALYSIS_WINDOW_TARGET_TOKENS = 3200
+ANALYSIS_WINDOW_OVERLAP_TOKENS = 200
+
+# Output budget per extraction window.
+EXTRACTION_MAX_TOKENS = 4096
+_EMBEDDED_JSON_FENCE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?\s*```", re.DOTALL | re.IGNORECASE)
+_SENTENCE_SPLIT = re.compile(r"([.!?]+(?=\s|$))")
 _OTHER_RUN = UUID("00000000-0000-4000-8000-000000000001")
 _PROTECTED_STATUSES = frozenset({"confirmed", "dismissed", "completed"})
 
@@ -388,6 +400,83 @@ def parse_extraction_payload(
     return ParsedExtraction(result=result, reasons=tuple(reasons))
 
 
+def _extract_json_text(raw: str) -> str:
+    """Extract one JSON object even when a real LLM wraps it in prose or a Markdown fence."""
+    stripped = strip_json_fence(raw).strip()
+    try:
+        parsed = json.loads(stripped)
+        if isinstance(parsed, dict):
+            return stripped
+    except json.JSONDecodeError:
+        pass
+    for match in _EMBEDDED_JSON_FENCE.finditer(raw):
+        candidate = match.group(1).strip()
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return candidate
+        except json.JSONDecodeError:
+            continue
+    decoder = json.JSONDecoder()
+    pos = 0
+    while True:
+        brace = raw.find("{", pos)
+        if brace == -1:
+            return stripped
+        try:
+            obj, end = decoder.raw_decode(raw, brace)
+        except json.JSONDecodeError:
+            pos = brace + 1
+            continue
+        if isinstance(obj, dict):
+            return raw[brace:end]
+        pos = brace + 1
+
+
+def _trim_to_max_sentences(text: str, max_sentences: int = 5) -> str:
+    """Trim an overly long LLM summary cleanly to `max_sentences` complete sentences."""
+    cleaned = text.strip()
+    if sentence_count(cleaned) <= max_sentences:
+        return cleaned
+    parts = _SENTENCE_SPLIT.split(cleaned)
+    collected: list[str] = []
+    sentences = 0
+    idx = 0
+    while idx < len(parts) and sentences < max_sentences:
+        chunk = parts[idx]
+        punct = parts[idx + 1] if idx + 1 < len(parts) else ""
+        if chunk.strip():
+            collected.append(chunk + punct)
+            sentences += 1
+        idx += 2
+    return "".join(collected).strip()
+
+
+def _sanitize_summary_raw(raw: str, *, trim_sentences: bool = False) -> str:
+    """Repair benign LLM formatting slips before strict `parse_summary_payload` checks.
+
+    Never bypasses secret detection or minimum sentence checks: `< 3` sentences or any
+    secret still fails `parse_summary_payload` as required by the v1 contract.
+    """
+    extracted = _extract_json_text(raw)
+    try:
+        payload = json.loads(extracted)
+    except json.JSONDecodeError:
+        return extracted
+    if not isinstance(payload, dict):
+        return extracted
+    text = payload.get("resumen_clase")
+    topics = payload.get("temas")
+    if not isinstance(text, str) or not isinstance(topics, list):
+        return extracted
+    cleaned_text = _trim_to_max_sentences(text, 5) if trim_sentences else text.strip()
+    cleaned_topics = _normalize_window_topics(topics)
+    return json.dumps(
+        {"resumen_clase": cleaned_text, "temas": cleaned_topics},
+        ensure_ascii=False,
+    )
+
+
 async def analyze_transcript(
     context: ClassContext,
     model: ExtractionModel,
@@ -409,14 +498,22 @@ async def analyze_transcript(
     cap = live_settings.analysis_max_windows if max_windows is None else max_windows
     if cap < 1:
         raise ValueError("max_windows must be >= 1")
-    window_target = DEFAULT_TARGET_TOKENS if target_tokens is None else target_tokens
+    window_target = (
+        ANALYSIS_WINDOW_TARGET_TOKENS if target_tokens is None else target_tokens
+    )
+    window_overlap = (
+        min(ANALYSIS_WINDOW_OVERLAP_TOKENS, max(0, window_target - 1))
+        if overlap_tokens is None
+        else overlap_tokens
+    )
     try:
         plan = plan_windows(
             transcript_text=context.transcript_text,
             segments=context.segments,
             count_tokens=count_tokens,
             max_total_tokens=cap * window_target,
-            **_window_sizes(target_tokens, overlap_tokens),
+            target_tokens=window_target,
+            overlap_tokens=window_overlap,
         )
     except ValueError as exc:
         raise AnalysisPayloadError("the transcript exceeds the analysis window budget") from exc
@@ -428,34 +525,53 @@ async def analyze_transcript(
     batches: list[tuple[AnalysisWindow, list[WindowBatch]]] = []
     notes: list[tuple[str, tuple[str, ...]]] = []
     async with asyncio.timeout(deadline):
-        for window in plan.windows:
+        for window_index, window in enumerate(plan.windows):
             if not window.segments:
                 continue
-            raw = await model.complete(
-                system=prompts.system,
-                user=render_window_prompt(
-                    subject=context.subject,
-                    teacher=context.teacher,
-                    class_date=context.class_date,
-                    class_timezone=context.class_timezone,
-                    segments=tuple(
-                        (part.segment_id, part.text, part.local_char_start)
-                        for part in window.segments
-                    ),
-                ),
-            )
-            parsed = parse_extraction_payload(
-                raw,
+            window_user_prompt = render_window_prompt(
+                subject=context.subject,
+                teacher=context.teacher,
                 class_date=context.class_date,
                 class_timezone=context.class_timezone,
-                now=now,
-                window_segments={
-                    part.segment_id: (part.local_char_start, part.text)
+                segments=tuple(
+                    (part.segment_id, part.text, part.local_char_start)
                     for part in window.segments
-                },
+                ),
             )
+            window_segments = {
+                part.segment_id: (part.local_char_start, part.text)
+                for part in window.segments
+            }
+            raw = await model.complete(system=prompts.system, user=window_user_prompt)
+            try:
+                parsed = parse_extraction_payload(
+                    _extract_json_text(raw),
+                    class_date=context.class_date,
+                    class_timezone=context.class_timezone,
+                    now=now,
+                    window_segments=window_segments,
+                )
+            except AnalysisPayloadError:
+                raw_retry = await model.complete(
+                    system=prompts.system,
+                    user=(
+                        window_user_prompt
+                        + "\n\nIMPORTANT: Return ONLY one valid JSON object with keys "
+                        '"items", "resumen_clase", and "temas", with no extra prose.'
+                    ),
+                )
+                parsed = parse_extraction_payload(
+                    _extract_json_text(raw_retry),
+                    class_date=context.class_date,
+                    class_timezone=context.class_timezone,
+                    now=now,
+                    window_segments=window_segments,
+                )
             notes.append((parsed.result.resumen_clase, tuple(parsed.result.temas)))
             batches.append((window, _accepted(parsed, window, context.view)))
+            logger.info(
+                "analyze.window done=%d total=%d", window_index + 1, plan.window_count
+            )
         if not notes:
             raise AnalysisPayloadError("the class produced no summary notes")
         summary_prompts = load_summary_prompts()
@@ -471,7 +587,9 @@ async def analyze_transcript(
             user=summary_user_prompt,
         )
         try:
-            class_summary = parse_summary_payload(raw_summary)
+            class_summary = parse_summary_payload(
+                _sanitize_summary_raw(raw_summary, trim_sentences=False)
+            )
         except SummaryRejected:
             raw_summary = await model.complete(
                 system=summary_prompts.system,
@@ -483,7 +601,9 @@ async def analyze_transcript(
                 ),
             )
             try:
-                class_summary = parse_summary_payload(raw_summary)
+                class_summary = parse_summary_payload(
+                    _sanitize_summary_raw(raw_summary, trim_sentences=True)
+                )
             except SummaryRejected as exc:
                 raise AnalysisPayloadError("the summary payload does not match the schema") from exc
     aggregated = aggregate_window_citations(batches)
@@ -672,17 +792,6 @@ async def apply_task_writes(
                 run_id=run_id,
                 evidence_validated=True,
             )
-
-
-def _window_sizes(
-    target_tokens: int | None, overlap_tokens: int | None
-) -> dict[str, int]:
-    sizes: dict[str, int] = {}
-    if target_tokens is not None:
-        sizes["target_tokens"] = target_tokens
-    if overlap_tokens is not None:
-        sizes["overlap_tokens"] = overlap_tokens
-    return sizes
 
 
 def _accepted(

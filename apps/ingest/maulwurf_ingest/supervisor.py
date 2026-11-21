@@ -284,20 +284,112 @@ _CHILD_CODES = frozenset({
 })
 
 
+def _child_error_info(stderr: bytes | None) -> tuple[str | None, str | None]:
+    """Read the last closed error code + safe detail from stderr JSON-lines."""
+    if not stderr:
+        return None, None
+    found_code: str | None = None
+    found_detail: str | None = None
+    for raw_line in stderr.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            parsed: object = json.loads(line.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        code = parsed.get("error")
+        if isinstance(code, str) and code in _CHILD_CODES:
+            found_code = code
+            detail = parsed.get("detail")
+            found_detail = detail if isinstance(detail, str) and len(detail) <= 64 else None
+    return found_code, found_detail
+
+
 def _child_code(stderr: bytes | None) -> str | None:
     """Read one error code. Anything else, including transcript text, is dropped."""
-    if not stderr:
-        return None
+    code, _ = _child_error_info(stderr)
+    return code
+
+
+def _progress_from_line(raw_line: bytes) -> tuple[int, int] | None:
     try:
-        parsed: object = json.loads(stderr.decode("utf-8"))
+        parsed: object = json.loads(raw_line.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError):
         return None
     if not isinstance(parsed, dict):
         return None
-    code = parsed.get("error")
-    if isinstance(code, str) and code in _CHILD_CODES:
-        return code
-    return None
+    progress = parsed.get("progress")
+    if not isinstance(progress, dict):
+        return None
+    done = progress.get("done")
+    total = progress.get("total")
+    if (
+        isinstance(done, bool)
+        or isinstance(total, bool)
+        or not isinstance(done, int)
+        or not isinstance(total, int)
+        or done < 0
+        or total <= 0
+    ):
+        return None
+    return done, total
+
+
+async def _drain_stderr(
+    stream: asyncio.StreamReader | None,
+    pool: asyncpg.Pool | None,
+    lease: leases.Lease | None,
+) -> bytes:
+    """Consume child stderr lines live, forwarding numeric fragment progress to PostgreSQL."""
+    if stream is None:
+        return b""
+    chunks: list[bytes] = []
+    while True:
+        line = await stream.readline()
+        if not line:
+            break
+        chunks.append(line)
+        progress = _progress_from_line(line)
+        if progress is None or pool is None or lease is None:
+            continue
+        done, total = progress
+        try:
+            await leases.update_progress(pool, lease, fragments_done=done, fragments_total=total)
+        except Exception as exc:  # noqa: BLE001 — progress updates must never abort ASR
+            logger.warning(
+                "supervisor.progress_update_failed attempt_id=%s error=%s",
+                lease.attempt_id, type(exc).__name__,
+            )
+        if done in {0, 1, total} or done % 10 == 0:
+            logger.info(
+                "supervisor.asr_progress attempt_id=%s done=%d total=%d",
+                lease.attempt_id, done, total,
+            )
+    return b"".join(chunks)
+
+
+async def _collect_child(
+    proc: asyncio.subprocess.Process,
+    pool: asyncpg.Pool | None,
+    lease: leases.Lease | None,
+) -> tuple[bytes, bytes]:
+    stdout_task = asyncio.create_task(
+        proc.stdout.read() if proc.stdout is not None else asyncio.sleep(0, result=b"")
+    )
+    stderr_task = asyncio.create_task(_drain_stderr(proc.stderr, pool, lease))
+    try:
+        stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
+        await proc.wait()
+        return stdout, stderr
+    except asyncio.CancelledError:
+        stdout_task.cancel()
+        stderr_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+        raise
 
 
 def _signal_group(pid: int, sig: int) -> None:
@@ -331,6 +423,7 @@ async def _attempt_language(pool: asyncpg.Pool, lease: leases.Lease) -> str | No
 async def _run_asr(
     workdir: Path, config: SupervisorConfig, keeper: _LeaseKeeper, on_child: ChildHook | None,
     job: _Job, *, language: str | None,
+    pool: asyncpg.Pool | None = None, lease: leases.Lease | None = None,
 ) -> tuple[Outcome | None, dict[str, object] | None, str | None]:
     """Run the ASR child. A lost lease sends SIGTERM so the child can cancel the RPC."""
     argv = [sys.executable, "-m", "maulwurf_ingest.asr_job", str(workdir),
@@ -354,7 +447,7 @@ async def _run_asr(
     if on_child is not None and proc.pid is not None:
         on_child(proc.pid, workdir)
 
-    output = asyncio.create_task(proc.communicate())
+    output = asyncio.create_task(_collect_child(proc, pool, lease))
     lost = asyncio.create_task(keeper.lost.wait())
     done: set[asyncio.Task[object]] = set()
     try:
@@ -367,6 +460,7 @@ async def _run_asr(
         with contextlib.suppress(asyncio.CancelledError):
             await lost
     pid = proc.pid
+    attempt_ref = lease.attempt_id if lease is not None else None
     if output not in done:
         if lost in done and pid is not None:
             _signal_group(pid, signal.SIGTERM)
@@ -377,17 +471,30 @@ async def _run_asr(
         elif pid is not None:
             cleanup.kill_group(pid, job.starttime)
         stdout, stderr = await output
-        code = _child_code(stderr)
+        code, detail = _child_error_info(stderr)
         if lost in done:
+            logger.warning(
+                "supervisor.asr_stopped attempt_id=%s reason=lease_lost code=%s detail=%s",
+                attempt_ref, code, detail,
+            )
             return Outcome.LEASE_LOST, None, code
+        logger.warning(
+            "supervisor.asr_stopped attempt_id=%s reason=timeout code=%s detail=%s",
+            attempt_ref, code, detail,
+        )
         return Outcome.TIMEOUT, None, code
 
     stdout, stderr = output.result()
     if proc.returncode != 0:
-        code = _child_code(stderr) or "asr_failed"
-        if code == "rpc_cancelled":
-            return Outcome.LEASE_LOST, None, code
-        return Outcome.ASR_FAILED, None, code
+        code, detail = _child_error_info(stderr)
+        resolved = code or "asr_failed"
+        logger.warning(
+            "supervisor.asr_failed attempt_id=%s code=%s detail=%s rc=%s",
+            attempt_ref, resolved, detail, proc.returncode,
+        )
+        if resolved == "rpc_cancelled":
+            return Outcome.LEASE_LOST, None, resolved
+        return Outcome.ASR_FAILED, None, resolved
     return None, _job_payload(stdout), None
 
 
@@ -678,7 +785,7 @@ async def _after_transcribing(
                 workdir / SCRIPTED_NAME, config.scripted_transport.encode("utf-8"),
             )
     failure, payload, child = await _run_asr(
-        workdir, config, keeper, on_child, job, language=language,
+        workdir, config, keeper, on_child, job, language=language, pool=pool, lease=lease,
     )
     if child is not None:
         result.child_error = child

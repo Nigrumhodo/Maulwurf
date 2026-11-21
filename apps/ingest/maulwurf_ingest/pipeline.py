@@ -7,6 +7,7 @@ siguiente: en disco quedan el original y, como mucho, un fragmento.
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +51,13 @@ class PipelineResult:
 
 
 Transcribe = Callable[[Path], FragmentWords]
+ProgressCallback = Callable[[int, int], None]
+
+# Margin below output_bytes proving `-fs` did not truncate the final fragment.
+_TAIL_FS_MARGIN_BYTES = 65_536
+# Maximum VBR/M4A container duration overshoot tolerated on the final fragment at EOF.
+_TAIL_EOF_TOLERANCE_S = 5.0
+_TAIL_MIN_AUDIO_S = 0.05
 
 
 def process(
@@ -61,37 +69,58 @@ def process(
     transcribe: Transcribe,
     limits: FfmpegLimits = DEFAULT_LIMITS,
     realtime: bool = False,
+    on_progress: ProgressCallback | None = None,
 ) -> PipelineResult:
     """Planifica, extrae y reconcilia. `transcribe` ve un solo `frag-*.wav`."""
     duration_s = probe_file(source).duration_s
     if duration_s is None:
         raise RuntimeError("normalization_duration_unknown")
     cap = effective_fragment_seconds(fragment_seconds)
+    try:
+        silences = detect_silences(source, limits=limits)
+    except (RuntimeError, subprocess.TimeoutExpired):
+        # Silence detection is only a cut-boundary hint; fall back to fixed spans instead of
+        # failing an entire class upload on a long/unusual container.
+        silences = []
     spans = plan_fragments(
         duration_s,
-        detect_silences(source, limits=limits),
+        silences,
         max_fragment_s=cap,
         overlap_s=overlap_s,
     )
     if not spans:
         raise RuntimeError("no_fragments")
+    total = len(spans)
+    if on_progress is not None:
+        on_progress(0, total)
     transcripts: list[FragmentTranscript] = []
+    processed_count = 0
     active: Path | None = None
     try:
         for index, span in enumerate(spans):
+            is_last = index == total - 1 and total > 1
             dest = workdir / f"frag-{index:04d}.wav"
-            _extract(source, dest, span, limits=limits, realtime=realtime)
+            extracted = _extract(
+                source, dest, span, limits=limits, realtime=realtime, is_last=is_last
+            )
+            if not extracted:
+                if on_progress is not None:
+                    on_progress(index + 1, total)
+                continue
             active = dest
             heard = transcribe(dest)
+            processed_count += 1
             transcripts.append(
                 FragmentTranscript(span.start_s, span.end_s, heard.text, heard.words)
             )
             dest.unlink(missing_ok=True)
             active = None
+            if on_progress is not None:
+                on_progress(index + 1, total)
     finally:
         if active is not None:
             active.unlink(missing_ok=True)
-    return PipelineResult(len(spans), reconcile(transcripts))
+    return PipelineResult(processed_count, reconcile(transcripts))
 
 
 def _extract(
@@ -101,7 +130,8 @@ def _extract(
     *,
     limits: FfmpegLimits,
     realtime: bool,
-) -> None:
+    is_last: bool = False,
+) -> bool:
     duration_s = span.end_s - span.start_s
     ensure_pcm_fits(duration_s, limits.output_bytes)
     try:
@@ -109,7 +139,16 @@ def _extract(
             fragment_argv(source, dest, span, limits=limits, realtime=realtime),
             limits=limits,
         )
-        ensure_conversion_complete(duration_s, wav_duration_s(dest))
+        actual_s = wav_duration_s(dest)
+        if is_last:
+            if actual_s <= _TAIL_MIN_AUDIO_S:
+                dest.unlink(missing_ok=True)
+                return False
+            not_fs_cut = dest.stat().st_size < max(0, limits.output_bytes - _TAIL_FS_MARGIN_BYTES)
+            if not_fs_cut and actual_s + _TAIL_EOF_TOLERANCE_S >= duration_s:
+                return True
+        ensure_conversion_complete(duration_s, actual_s)
+        return True
     except Exception:
         dest.unlink(missing_ok=True)
         raise

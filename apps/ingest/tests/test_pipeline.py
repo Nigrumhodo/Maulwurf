@@ -80,3 +80,46 @@ def test_extract_duration_matches_the_span(tmp_path: Path) -> None:
     _extract(source, dest, FragmentSpan(1.0, 2.5), limits=DEFAULT_LIMITS, realtime=False)
     assert wav_duration_s(dest) == pytest.approx(1.5, abs=0.05)
     assert dest.stat().st_size < source.stat().st_size
+
+
+@pytest.mark.skipif(_FFMPEG is None or _FFPROBE is None, reason="ffmpeg o ffprobe no disponible")
+def test_pipeline_reports_progress_and_survives_silencedetect_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from maulwurf_ingest import pipeline as pipeline_mod
+
+    source = tmp_path / "original"
+    _tone(source, 4.0)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "detect_silences",
+        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("ffmpeg_failed")),
+    )
+    ticks: list[tuple[int, int]] = []
+    result = process(
+        source,
+        tmp_path,
+        fragment_seconds=1.5,
+        overlap_s=0.25,
+        transcribe=lambda _path: FragmentWords(text="hola"),
+        limits=DEFAULT_LIMITS,
+        on_progress=lambda done, total: ticks.append((done, total)),
+    )
+    assert result.fragments >= 2
+    assert ticks[0] == (0, result.fragments)
+    assert ticks[-1] == (result.fragments, result.fragments)
+
+
+@pytest.mark.skipif(_FFMPEG is None, reason="ffmpeg no disponible")
+def test_final_fragment_tolerates_container_eof_duration_overshoot(tmp_path: Path) -> None:
+    from maulwurf_ingest.pipeline import _extract
+
+    source = tmp_path / "original"
+    _tone(source, 3.0)
+    dest = tmp_path / "tail.wav"
+    # Simulates an M4A/VBR header claiming 5.0 s while audio ends at 3.0 s.
+    extracted = _extract(
+        source, dest, FragmentSpan(1.0, 5.0), limits=DEFAULT_LIMITS, realtime=False, is_last=True,
+    )
+    assert extracted is True
+    assert dest.exists()

@@ -36,6 +36,7 @@ from app.core.db import (
 )
 from app.models import Audio, ProcessingRun, Segment, Subject, Transcript, User
 from app.services.analysis import (
+    AnalysisPayloadError,
     ClassContext,
     ExtractionModel,
     StreamingExtractionModel,
@@ -55,9 +56,9 @@ from app.services.index_job import (
     finish_run,
     require_run_fence,
 )
-from app.services.llm import HttpChatProvider
+from app.services.llm import HttpChatProvider, LLMError
 from app.services.runs import latest_attempt, run_spec
-from app.services.summary import assign_class_summary
+from app.services.summary import SummaryRejected, assign_class_summary
 from app.workers.retry import retry_decision
 
 logger = logging.getLogger(__name__)
@@ -104,23 +105,44 @@ async def analyze(ctx: dict[str, Any], audio_id: str) -> None:
         )
     except Exception as exc:
         decision = retry_decision(exc, job_try=job_try)
+        detail = _safe_log_detail(exc)
         if decision.retries and decision.delay_seconds is not None:
             logger.warning(
-                "analyze.retry_scheduled audio_id=%s attempt=%d error=%s delay=%.2f",
+                "analyze.retry_scheduled audio_id=%s attempt=%d error=%s code=%s "
+                "detail=%s delay=%.2f",
                 audio_id,
                 job_try,
                 type(exc).__name__,
+                decision.error_code,
+                detail,
                 decision.delay_seconds,
             )
             raise Retry(defer=decision.delay_seconds) from exc
         logger.warning(
-            "analyze.failed audio_id=%s attempt=%d error=%s",
+            "analyze.failed audio_id=%s attempt=%d error=%s code=%s detail=%s",
             audio_id,
             job_try,
             type(exc).__name__,
+            decision.error_code,
+            detail,
         )
     finally:
         clear_user()
+
+
+def _safe_log_detail(exc: BaseException) -> str:
+    """Non-PII diagnostic detail for logs (never transcript text, prompts, or secrets)."""
+    if isinstance(exc, (AnalysisPayloadError, SummaryRejected)):
+        return exc.message
+    if isinstance(exc, LLMError):
+        pairs = (
+            ("status", exc.details.get("status")),
+            ("reason", exc.details.get("reason")),
+            ("error", exc.details.get("error")),
+        )
+        parts = [f"{key}={value}" for key, value in pairs if value is not None]
+        return ",".join(parts) or exc.code
+    return "-"
 
 
 async def run_analyze(

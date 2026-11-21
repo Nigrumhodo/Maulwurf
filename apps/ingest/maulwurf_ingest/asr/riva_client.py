@@ -25,6 +25,8 @@ from maulwurf_ingest.logs import RedactionFilter
 MAX_ATTEMPTS = 3
 # Presupuesto entre llamadas. No es una cuota medida de Riva.
 _BACKOFF_BASE_S = 0.2
+_DEFAULT_MAX_BACKOFF_S = 15.0
+_DEFAULT_PER_CALL_TIMEOUT_S = 90.0
 _MS_TO_S = 0.001
 _TRANSIENT = frozenset({"UNAVAILABLE", "DEADLINE_EXCEEDED", "RESOURCE_EXHAUSTED"})
 _AUTH = frozenset({"UNAUTHENTICATED", "PERMISSION_DENIED"})
@@ -32,6 +34,16 @@ _INVALID = frozenset({"INVALID_ARGUMENT"})
 _DEFAULT_SERVER = "grpc.nvcf.nvidia.com:443"
 _DEFAULT_FUNCTION_ID = "b702f636-f60c-4a3d-a6f4-f3568c13bd7d"
 _CLIENT_MAX_MESSAGE_LENGTH = 1_073_741_824
+_HTTP2_RESET_MARKERS = (
+    "rst_stream",
+    "goaway",
+    "socket closed",
+    "broken pipe",
+    "connection reset",
+    "transport closing",
+    "unexpected eof",
+    "recvmsg",
+)
 
 
 def silence_grpc_metadata_trace() -> None:
@@ -51,9 +63,19 @@ def silence_grpc_metadata_trace() -> None:
 class AsrReupload(RuntimeError):
     """El plazo o los reintentos se agotaron. Hay que volver a subir el audio."""
 
+    def __init__(
+        self, message: str = "requires_reupload", *, cause_code: str | None = None
+    ) -> None:
+        super().__init__(message)
+        self.cause_code = cause_code
+
 
 class AsrRejected(RuntimeError):
     """Auth, idioma o formato. No es transitorio."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.cause_code = message
 
 
 class TransportError(Exception):
@@ -98,36 +120,42 @@ class NvidiaRivaTranscriptionService:
         clock: Callable[[], float] = time.monotonic,
         jitter: Callable[[], float] = _unit_interval,
         cancel: threading.Event | None = None,
+        max_attempts: int = MAX_ATTEMPTS,
+        backoff_base_s: float = _BACKOFF_BASE_S,
+        max_backoff_s: float = _DEFAULT_MAX_BACKOFF_S,
     ) -> None:
         self._transport = transport
         self._sleep = sleeper
         self._clock = clock
         self._jitter = jitter
         self._cancel = threading.Event() if cancel is None else cancel
+        self._max_attempts = max(1, max_attempts)
+        self._backoff_base_s = backoff_base_s
+        self._max_backoff_s = max_backoff_s
         self._call_lock = threading.Lock()
         self._inflight: RecognizeCall | None = None
 
     def transcribe(self, wav: bytes, *, language_code: str, deadline_s: float) -> Transcript:
         _reject_language(language_code)
         if not math.isfinite(deadline_s) or deadline_s <= 0:
-            raise AsrReupload("requires_reupload")
+            raise AsrReupload("requires_reupload", cause_code="DEADLINE_EXCEEDED")
         deadline = self._clock() + deadline_s
-        for attempt in range(1, MAX_ATTEMPTS + 1):
+        for attempt in range(1, self._max_attempts + 1):
             self._ensure_running(deadline)
             remaining = deadline - self._clock()
             call = self._transport.start(wav, language_code=language_code, deadline_s=remaining)
             with self._call_lock:
                 if self._cancel.is_set():
                     call.cancel()
-                    raise AsrReupload("requires_reupload")
+                    raise AsrReupload("requires_reupload", cause_code="CANCELLED")
                 self._inflight = call
             try:
                 try:
                     return call.result(timeout=remaining)
                 except TransportError as exc:
                     self._raise_terminal(exc)
-                    if attempt >= MAX_ATTEMPTS or not self._pause(attempt, deadline):
-                        raise AsrReupload("requires_reupload") from exc
+                    if attempt >= self._max_attempts or not self._pause(attempt, deadline):
+                        raise AsrReupload("requires_reupload", cause_code=exc.code) from exc
             finally:
                 with self._call_lock:
                     if self._inflight is call:
@@ -159,14 +187,19 @@ class NvidiaRivaTranscriptionService:
 
     def _raise_terminal(self, exc: TransportError) -> None:
         if exc.code == "CANCELLED":
-            raise AsrReupload("requires_reupload") from exc
+            raise AsrReupload("requires_reupload", cause_code=exc.code) from exc
         if exc.code in _AUTH or exc.code in _INVALID:
             raise AsrRejected(exc.code) from exc
         if exc.code not in _TRANSIENT:
-            raise AsrReupload("requires_reupload") from exc
+            raise AsrReupload("requires_reupload", cause_code=exc.code) from exc
 
     def _pause(self, attempt: int, deadline: float) -> bool:
-        delay = _backoff(attempt, self._jitter)
+        delay = _backoff(
+            attempt,
+            self._jitter,
+            base_s=self._backoff_base_s,
+            max_s=self._max_backoff_s,
+        )
         if self._cancel.is_set() or self._clock() + delay >= deadline:
             return False
         self._sleep(delay)
@@ -180,8 +213,14 @@ def _reject_language(language_code: str) -> None:
         raise AsrRejected("invalid_language")
 
 
-def _backoff(attempt: int, jitter: Callable[[], float]) -> float:
-    base = _BACKOFF_BASE_S * float(1 << (attempt - 1))
+def _backoff(
+    attempt: int,
+    jitter: Callable[[], float],
+    *,
+    base_s: float = _BACKOFF_BASE_S,
+    max_s: float = _DEFAULT_MAX_BACKOFF_S,
+) -> float:
+    base = min(base_s * float(1 << (attempt - 1)), max_s)
     drawn = jitter()
     if drawn < 0.0:
         drawn = 0.0
@@ -193,10 +232,18 @@ def _backoff(attempt: int, jitter: Callable[[], float]) -> float:
 class GrpcRivaTransport:
     """Un canal TLS para todo el transporte. Las pruebas no lo abren contra NVIDIA."""
 
-    def __init__(self, *, api_key: str, server: str, function_id: str) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        server: str,
+        function_id: str,
+        per_call_timeout_s: float = _DEFAULT_PER_CALL_TIMEOUT_S,
+    ) -> None:
         self._api_key = api_key
         self._server = server
         self._function_id = function_id
+        self._per_call_timeout_s = per_call_timeout_s
         self._auth: object | None = None
         self._asr: object | None = None
 
@@ -215,7 +262,8 @@ class GrpcRivaTransport:
             enable_word_time_offsets=True,
         )
         call = self._service().offline_recognize(wav, config, future=True)  # type: ignore[attr-defined]
-        return _GrpcCall(call, deadline_s)
+        per_call = min(deadline_s, self._per_call_timeout_s)
+        return _GrpcCall(call, per_call, on_transient_error=self.close)
 
     def close(self) -> None:
         auth = self._auth
@@ -240,6 +288,10 @@ class GrpcRivaTransport:
             options=[
                 ("grpc.max_send_message_length", _CLIENT_MAX_MESSAGE_LENGTH),
                 ("grpc.max_receive_message_length", _CLIENT_MAX_MESSAGE_LENGTH),
+                ("grpc.keepalive_time_ms", 30_000),
+                ("grpc.keepalive_timeout_ms", 10_000),
+                ("grpc.keepalive_permit_without_calls", 1),
+                ("grpc.http2.max_pings_without_data", 0),
             ],
         )
         try:
@@ -253,11 +305,22 @@ class GrpcRivaTransport:
 
 
 class _GrpcCall:
-    """Una llamada. No cierra el canal: lo reutiliza el transporte."""
+    """Una llamada. Reutiliza el canal, pero lo reinicia ante errores transitorios de transporte."""
 
-    def __init__(self, call: object, deadline_s: float) -> None:
+    def __init__(
+        self,
+        call: object,
+        deadline_s: float,
+        *,
+        on_transient_error: Callable[[], None] | None = None,
+    ) -> None:
         self._call = call
         self._deadline_s = deadline_s
+        self._on_transient_error = on_transient_error
+
+    def _reset_transport(self) -> None:
+        if self._on_transient_error is not None:
+            self._on_transient_error()
 
     def result(self, timeout: float) -> Transcript:
         import grpc
@@ -267,12 +330,20 @@ class _GrpcCall:
             response = self._call.result(timeout=wait_s)  # type: ignore[attr-defined]
         except grpc.FutureTimeoutError:
             self.cancel()
+            self._reset_transport()
             raise TransportError("DEADLINE_EXCEEDED") from None
         except grpc.FutureCancelledError:
             raise TransportError("CANCELLED") from None
         except grpc.RpcError as exc:
-            raise TransportError(_status_name(exc)) from None
+            code = _status_name(exc)
+            if code == "ABORTED" or (code in {"INTERNAL", "UNKNOWN"} and _is_http2_reset(exc)):
+                code = "UNAVAILABLE"
+            if code in _TRANSIENT:
+                self._reset_transport()
+            raise TransportError(code) from None
         except TimeoutError:
+            self.cancel()
+            self._reset_transport()
             raise TransportError("DEADLINE_EXCEEDED") from None
         else:
             return _transcript_from(response)
@@ -301,6 +372,20 @@ def _close_channel(auth: object) -> None:
     close = getattr(channel, "close", None)
     if callable(close):
         close()
+
+
+def _is_http2_reset(exc: BaseException) -> bool:
+    details = getattr(exc, "details", None)
+    if not callable(details):
+        return False
+    try:
+        text = details()
+    except Exception:
+        return False
+    if not isinstance(text, str):
+        return False
+    lowered = text.casefold()
+    return any(marker in lowered for marker in _HTTP2_RESET_MARKERS)
 
 
 def _status_name(exc: BaseException) -> str:

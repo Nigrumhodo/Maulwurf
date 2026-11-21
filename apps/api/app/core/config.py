@@ -188,7 +188,7 @@ class Settings(BaseSettings):
     # windows (and therefore how many tokens) one class may send. It does not bound wall
     # time: each call can take llm_timeout_seconds, so analyze_transcript enforces its own
     # deadline below the 600 s job timeout.
-    analysis_max_windows: int = Field(default=24, ge=1, le=64)
+    analysis_max_windows: int = Field(default=24, ge=1, le=128)
     # D3-Texto: models/providers whose decision is closed (ESPECIFICACION §12). Empty by
     # default — fail closed: with the decision open only synthetic or redacted text is
     # indexed (S2.md §0.6, rule 6). Only the lead's recorded closure fills it in.

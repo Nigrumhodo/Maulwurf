@@ -55,6 +55,31 @@ CLIENT_VERSION = "2.27.0"
 _STDERR_CODES = frozenset({
     "rpc_cancelled", "asr_rejected", "requires_reupload", "asr_failed",
 })
+_SAFE_DETAILS = frozenset({
+    "ffmpeg_failed",
+    "ffmpeg_unavailable",
+    "normalization_duration_unknown",
+    "normalization_output_overflow",
+    "normalization_truncated",
+    "no_fragments",
+    "riva_unconfigured",
+    "riva_tls_required",
+    "invalid_language",
+    "UNAVAILABLE",
+    "DEADLINE_EXCEEDED",
+    "RESOURCE_EXHAUSTED",
+    "UNAUTHENTICATED",
+    "PERMISSION_DENIED",
+    "INVALID_ARGUMENT",
+    "CANCELLED",
+    "INTERNAL",
+    "UNKNOWN",
+    "TimeoutExpired",
+    "OSError",
+    "WaveError",
+})
+_PROD_RIVA_MAX_ATTEMPTS = 6
+_PROD_RIVA_BACKOFF_BASE_S = 1.0
 
 
 class JobResult(TypedDict):
@@ -64,9 +89,10 @@ class JobResult(TypedDict):
 
 
 class _JobError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, detail: str | None = None) -> None:
         super().__init__(code)
         self.code = code if code in _STDERR_CODES else "requires_reupload"
+        self.detail = detail if detail in _SAFE_DETAILS else None
 
 
 def run(
@@ -153,11 +179,19 @@ async def _run_service(
         if existing is not None:
             return existing
         chosen = transport
+        production_riva = chosen is None and not scripted
         if chosen is None and scripted:
             chosen = load_scripted(workdir, SCRIPTED_NAME)
         if chosen is None:
             chosen = riva_transport_from_env()
-        created = NvidiaRivaTranscriptionService(chosen)
+        if production_riva:
+            created = NvidiaRivaTranscriptionService(
+                chosen,
+                max_attempts=_PROD_RIVA_MAX_ATTEMPTS,
+                backoff_base_s=_PROD_RIVA_BACKOFF_BASE_S,
+            )
+        else:
+            created = NvidiaRivaTranscriptionService(chosen)
         service_box["service"] = created
         return created
 
@@ -173,17 +207,22 @@ async def _run_service(
         )
         try:
             transcript = future.result()
-        except AsrRejected:
-            raise _JobError("asr_rejected") from None
-        except AsrReupload:
+        except AsrRejected as exc:
+            raise _JobError("asr_rejected", detail=exc.cause_code) from None
+        except AsrReupload as exc:
             if cancelled.is_set():
-                raise _JobError("rpc_cancelled") from None
-            raise _JobError("requires_reupload") from None
+                raise _JobError("rpc_cancelled", detail="CANCELLED") from None
+            raise _JobError("requires_reupload", detail=exc.cause_code) from None
         return FragmentWords(text=transcript.text, words=transcript.words)
+
+    def _emit_progress(done: int, total: int) -> None:
+        # Only numeric progress counts; never paths or transcript text.
+        print(json.dumps({"progress": {"done": done, "total": total}}), file=sys.stderr, flush=True)
 
     outcome = await asyncio.to_thread(
         process, workdir / ORIGINAL, workdir, fragment_seconds=float(fragment_seconds),
         overlap_s=settings.fragment_overlap_s, transcribe=_hear, limits=limits, realtime=realtime,
+        on_progress=_emit_progress if transport is None else None,
     )
     return {
         "fragments": outcome.fragments,
@@ -260,6 +299,19 @@ def _stderr_code(exc: BaseException) -> str:
     return "requires_reupload"
 
 
+def _stderr_detail(exc: BaseException) -> str | None:
+    if isinstance(exc, _JobError):
+        return exc.detail
+    if isinstance(exc, subprocess.TimeoutExpired):
+        return "TimeoutExpired"
+    if isinstance(exc, wave.Error):
+        return "WaveError"
+    if isinstance(exc, OSError):
+        return "OSError"
+    token = str(exc).strip()
+    return token if token in _SAFE_DETAILS else None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("workdir", type=Path)
@@ -281,11 +333,19 @@ def main(argv: list[str] | None = None) -> int:
             scripted=args.scripted_transport,
         )
     except (RuntimeError, OSError, wave.Error, subprocess.TimeoutExpired) as exc:
-        # A code only. The message can carry a path or, worse, a transcript.
-        print(json.dumps({"error": _stderr_code(exc)}), file=sys.stderr)
+        # A closed code + closed detail token only. Never a path or transcript text.
+        payload: dict[str, object] = {"error": _stderr_code(exc)}
+        detail = _stderr_detail(exc)
+        if detail is not None:
+            payload["detail"] = detail
+        print(json.dumps(payload), file=sys.stderr, flush=True)
         return 2
     if not result["fragments"]:
-        print(json.dumps({"error": "asr_failed"}), file=sys.stderr)
+        print(
+            json.dumps({"error": "asr_failed", "detail": "no_fragments"}),
+            file=sys.stderr,
+            flush=True,
+        )
         return 2
     print(json.dumps(result))
     return 0

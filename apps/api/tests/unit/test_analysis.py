@@ -435,3 +435,67 @@ def test_new_evidence_inserts_one_needs_review_proposal() -> None:
     assert writes[0].kind is WriteKind.INSERT
     assert writes[0].task_id is None
     assert proposal.value.item.date_status is DateStatus.RESOLVED
+
+
+async def test_long_lecture_fits_default_analysis_window_budget() -> None:
+    # Simulates a ~2h / 32k-token university class (like 514 ASR segments).
+    long_context = _context(segments=500)
+
+    class _EmptyWindows:
+        def __init__(self) -> None:
+            self.window_calls = 0
+
+        async def complete(self, *, system: str, user: str) -> str:
+            if system == load_summary_prompts().system:
+                return _SUMMARY
+            self.window_calls += 1
+            return (
+                '{"items":[],"resumen_clase":"Window summary. Second sentence. Third sentence.",'
+                '"temas":["romanticismo"]}'
+            )
+
+    model = _EmptyWindows()
+    batch = await analyze_transcript(
+        long_context,
+        model,
+        now=NOW,
+        # ~64 tokens per segment * 500 = ~32,000 tokens (> old 19,200 cap).
+        count_tokens=lambda text: max(1, len(text.split()) * 8),
+    )
+    assert model.window_calls >= 10
+    assert model.window_calls <= 24
+    assert batch.summary.startswith("The class announced one exam.")
+
+
+async def test_window_prose_wrapper_retry_and_overlong_summary_recover_cleanly() -> None:
+    context = _context()
+    window_replies = [
+        "not valid json at all",
+        "Claro, aquí está el JSON:\n```json\n" + _payload(SEGMENT, TEXT) + "\n```\nListo.",
+    ]
+    summary_replies = [
+        (
+            'Aquí tienes el resumen: {"resumen_clase":"Uno. Dos. Tres. Cuatro. Cinco. Seis.",'
+            '"temas":["Midterm","midterm",""],"extra":"ignored"}'
+        ),
+        (
+            '{"resumen_clase":"Uno. Dos. Tres. Cuatro. Cinco. Seis.",'
+            '"temas":["Midterm","midterm",""],"extra":"ignored"}'
+        ),
+    ]
+
+    class _Chatty:
+        async def complete(self, *, system: str, user: str) -> str:
+            if system == load_summary_prompts().system:
+                return summary_replies.pop(0)
+            return window_replies.pop(0)
+
+    batch = await analyze_transcript(
+        context,
+        _Chatty(),
+        now=NOW,
+        count_tokens=lambda text: len(text.split()) or 1,
+    )
+    assert len(batch.proposals) == 1
+    assert batch.summary == "Uno. Dos. Tres. Cuatro. Cinco."
+    assert batch.topics == ("Midterm",)

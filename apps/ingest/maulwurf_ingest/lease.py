@@ -112,6 +112,23 @@ async def heartbeat(pool: asyncpg.Pool, lease: Lease) -> bool:
     return bool(status == "UPDATE 1")
 
 
+async def update_progress(
+    pool: asyncpg.Pool, lease: Lease, *, fragments_done: int, fragments_total: int,
+) -> bool:
+    """Publish measured fragment counts while ``transcribing`` under the active lease."""
+    status = await rls.execute(
+        pool, lease.user_id,
+        """
+        UPDATE ingestion_attempts
+           SET fragments_done = $4, fragments_total = $5, updated_at = now()
+         WHERE id = $1 AND user_id = $2 AND fencing_token = $3
+           AND status = 'transcribing' AND lease_expires_at > now()
+        """,
+        lease.attempt_id, lease.user_id, lease.fencing_token, fragments_done, fragments_total,
+    )
+    return bool(status == "UPDATE 1")
+
+
 async def transition(
     pool: asyncpg.Pool, lease: Lease, *, from_status: str, to_status: str,
     error_code: str | None = None, fragments_done: int | None = None,

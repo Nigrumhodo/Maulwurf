@@ -22,11 +22,13 @@ CANDIDATE_SAMPLE_RATE_HZ = 16_000
 # Techo de salida por invocación: el tmpfs provisional del slot (F0.2), no un
 # máximo de Riva. El timeout de pared conserva el de S1.B3.
 _OUTPUT_BYTES = 256 * 1024 * 1024
-_CPU_SECONDS = 120
-# 512 MiB deja a ffmpeg sin poder mapear sus buffers (ENOMEM) en un WAV corto.
-_ADDRESS_SPACE_BYTES = 2 * 1024 * 1024 * 1024
-_TIME_LIMIT_S = 120
+_CPU_SECONDS = 300
+# ARM64/multi-core libavcodec + glibc arenas can reserve >2 GiB VA with minimal RSS;
+# physical RAM stays bounded by Docker mem_limit/memswap_limit.
+_ADDRESS_SPACE_BYTES = 4 * 1024 * 1024 * 1024
+_TIME_LIMIT_S = 300
 _WALL_TIMEOUT_S = 600.0
+_FFMPEG_THREADS = 2
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,8 @@ def bounded_argv(
         "-hide_banner",
         "-loglevel",
         loglevel,
+        "-threads",
+        str(_FFMPEG_THREADS),
         "-protocol_whitelist",
         PROTOCOL_WHITELIST,
         "-timelimit",

@@ -396,3 +396,28 @@ class _Start:
         call = started(wav, language_code=language_code, deadline_s=deadline_s)
         assert isinstance(call, _Call)
         return call
+
+
+def test_configurable_retry_budget_caps_backoff_and_records_cause_code() -> None:
+    script = _Script([TransportError("UNAVAILABLE")] * 6)
+    sleeps: list[float] = []
+    clock = _Clock()
+
+    def _sleep(delay: float) -> None:
+        sleeps.append(delay)
+        clock.now += delay
+
+    service = NvidiaRivaTranscriptionService(
+        script,
+        sleeper=_sleep,
+        clock=clock,
+        jitter=lambda: 0.0,
+        max_attempts=6,
+        backoff_base_s=1.0,
+        max_backoff_s=10.0,
+    )
+    with pytest.raises(AsrReupload, match="requires_reupload") as caught:
+        service.transcribe(_WAV, language_code="es", deadline_s=120.0)
+    assert caught.value.cause_code == "UNAVAILABLE"
+    assert len(script.calls) == 6
+    assert sleeps == [1.0, 2.0, 4.0, 8.0, 10.0]
