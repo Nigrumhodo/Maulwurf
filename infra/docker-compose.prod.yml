@@ -119,7 +119,16 @@ services:
       context: ../apps/api
       dockerfile: Dockerfile
     image: ${MAULWURF_REGISTRY:-ghcr.io/nigrumhodo}/maulwurf-api:${MAULWURF_IMAGE_TAG:?MAULWURF_IMAGE_TAG required}
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - 172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.1,fc00::/7,::1
     environment:
       <<: *api-prod-env
       MAULWURF_INGEST_URL: http://ingest:8000

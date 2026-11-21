@@ -6,6 +6,7 @@ from importlib.metadata import PackageNotFoundError, version
 from fastapi import FastAPI
 
 from app.core.cache_control import NoStoreMiddleware
+from app.core.config import settings
 from app.core.db import engine
 from app.core.errors import install_error_handlers
 from app.core.logging import configure_logging
@@ -45,7 +46,15 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await engine.dispose()
 
 
-app = FastAPI(title="Maulwurf API", version=__version__, lifespan=lifespan)
+_expose_docs = settings.env == "local"
+app = FastAPI(
+    title="Maulwurf API",
+    version=__version__,
+    lifespan=lifespan,
+    docs_url="/docs" if _expose_docs else None,
+    redoc_url="/redoc" if _expose_docs else None,
+    openapi_url="/openapi.json" if _expose_docs else None,
+)
 install_error_handlers(app)
 app.add_middleware(RequestIdMiddleware)
 # Added last so it is the outermost user middleware: it sees redirects, SSE starts and the

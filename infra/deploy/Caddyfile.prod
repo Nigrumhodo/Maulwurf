@@ -3,6 +3,7 @@
 	admin off
 
 	servers {
+		trusted_proxies static private_ranges
 		timeouts {
 			read_body 40m
 			read_header 30s
@@ -19,6 +20,14 @@
 		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		-Server
+	}
+
+	# Drop automated vulnerability/CMS scanner probes at the edge with 404.
+	@scanner_probes {
+		path /.env /.env.* /.git /.git/* /.aws/* /.htaccess /.htpasswd /docs /redoc /openapi.json /wp-login.php /wp-admin /wp-admin/* /wp-content/* /wp-includes/* /xmlrpc.php /phpmyadmin /phpmyadmin/* /pma /pma/* /admin.php /config.php /phpinfo.php *.php *.asp *.aspx *.jsp *.bak *.sql
+	}
+	handle @scanner_probes {
+		respond 404
 	}
 
 	# Ephemeral streaming upload: API streams to ingest on the private data network.

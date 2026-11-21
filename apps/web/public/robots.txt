@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /auth/
+Disallow: /biblioteca
+Disallow: /chat
+Disallow: /gestion
+Disallow: /settings
+Disallow: /calendario

@@ -30,6 +30,6 @@ export default defineConfig({
     // `dist/public` para el cliente y `dist/server` para el servidor (tsconfig.server.json),
     // de modo que `node dist/server/index.js` sirve estáticos sin colisionar salidas.
     outDir: "dist/public",
-    sourcemap: true,
+    sourcemap: false,
   },
 });
