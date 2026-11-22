@@ -149,7 +149,7 @@ export interface AudioCreated {
   outcome: string;
 }
 
-function isAudioCreated(value: unknown): value is AudioCreated {
+export function isAudioCreated(value: unknown): value is AudioCreated {
   if (!isRecord(value)) return false;
   return (
     typeof value.audio_id === "string" &&
@@ -545,7 +545,7 @@ export async function uploadContent({
     body: createProgressStream(file, (progress) => {
       bytesSent = progress.sentBytes;
       onProgress?.(progress);
-    }) as unknown as BodyInit,
+    }),
     signal,
     retries: 0,
     duplex: "half",
@@ -647,18 +647,4 @@ export function mapUploadError(error: ApiHttpError): UploadErrorView {
     };
   }
   return { message: error.message, retry: true };
-}
-
-/**
- * Libera una URL de objeto si el flujo llegara a crear una (hoy no hay vista previa). El
- * `File` se suelta en el componente; el binario nunca se persiste en el navegador (D2.8).
- */
-export function releaseUploadResources(objectUrl: string | null): void {
-  if (
-    objectUrl !== null &&
-    typeof URL !== "undefined" &&
-    typeof URL.revokeObjectURL === "function"
-  ) {
-    URL.revokeObjectURL(objectUrl);
-  }
 }

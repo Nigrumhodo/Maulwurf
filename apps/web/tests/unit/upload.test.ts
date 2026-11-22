@@ -19,7 +19,6 @@ import {
   mapUploadError,
   pickUploadFile,
   publishedLanguageCodes,
-  releaseUploadResources,
   supportsStreamingFetchBody,
   uploadContent,
   uploadFormError,
@@ -678,18 +677,5 @@ describe("mapUploadError", () => {
       message: "La ingesta rechazó el formato del audio. Vuelve a reservar e inténtalo de nuevo.",
       resetReservation: true,
     });
-  });
-});
-
-describe("releaseUploadResources", () => {
-  it("revoca la URL de objeto si existiera y tolera null", () => {
-    const revoke = vi.fn();
-    vi.stubGlobal("URL", { revokeObjectURL: revoke });
-
-    releaseUploadResources("blob:preview");
-    releaseUploadResources(null);
-
-    expect(revoke).toHaveBeenCalledTimes(1);
-    expect(revoke).toHaveBeenCalledWith("blob:preview");
   });
 });
