@@ -7,8 +7,9 @@ A task with a resolved date gets one `notifications` occurrence per enabled thre
 
 The all-day reminder uses the user's current IANA zone (`users.timezone`), not the task's
 class-timezone snapshot: the snapshot resolves the extracted date, while the delivery has to
-follow the person's local clock. A timed reminder already carries its instant, so only the
-local day recorded in `occurrence` needs the user's zone.
+follow the person's local clock. A timed reminder already carries its instant; the local day
+recorded in `occurrence` uses the task's own timezone snapshot (user zone only as fallback)
+so changing `users.timezone` cannot fork the dedupe key.
 
 An undated task (`date_status=missing|ambiguous`) gets no reminders, and a task that is not
 `confirmed` is not schedulable: completing or dismissing it must never arm a message. The
@@ -131,6 +132,9 @@ class ReminderTask:
     due_date: date | None
     due_at: datetime | None
     due_version: int
+    # Class-timezone snapshot; keeps a timed occurrence's local day stable when the user's
+    # `users.timezone` changes, so the dedupe key cannot fork for the same threshold.
+    timezone: str | None = None
 
     @classmethod
     def from_task(cls, task: TaskLike) -> Self:
@@ -143,6 +147,7 @@ class ReminderTask:
             due_date=task.due_date,
             due_at=task.due_at,
             due_version=task.due_version,
+            timezone=getattr(task, "timezone", None),
         )
 
 
@@ -353,10 +358,19 @@ def plan_task_reminders(
                     task,
                     type_=type_,
                     scheduled_at=scheduled_at,
-                    occurrence=scheduled_at.astimezone(zone).date(),
+                    occurrence=scheduled_at.astimezone(_occurrence_zone(task, zone)).date(),
                 )
             )
     return tuple(occurrences)
+
+
+def _occurrence_zone(task: ReminderTask, fallback: ZoneInfo) -> ZoneInfo:
+    if not task.timezone:
+        return fallback
+    try:
+        return ZoneInfo(task.timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        return fallback
 
 
 def _occurrence(

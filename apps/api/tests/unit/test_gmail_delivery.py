@@ -368,6 +368,20 @@ async def test_gmail_sender_handles_invalid_grant_on_token_refresh(
     assert exc.value.error_code == "invalid_grant"
 
 
+def _digest_content(type_: str, local_date: date) -> Any:
+    from app.services.conflicts import ConflictReport
+    from app.services.digests import DigestContent
+
+    return DigestContent(
+        type=type_,
+        local_date=local_date,
+        window_start=local_date,
+        window_end=local_date + timedelta(days=1),
+        upcoming_tasks=(),
+        conflicts=ConflictReport(time_conflicts=(), deadline_clashes=()),
+    )
+
+
 async def test_deliver_notification_worker_settles_without_logging_pii(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -375,6 +389,10 @@ async def test_deliver_notification_worker_settles_without_logging_pii(
     monkeypatch.setattr(settings, "notification_scheduler_enabled", True)
     _, notification, _, _, session = _seed(type_="digest_daily")
 
+    async def _empty_digest(*_: Any, **kwargs: Any) -> Any:
+        return _digest_content(kwargs["type_"], kwargs["local_date"])
+
+    monkeypatch.setattr(gmail_service, "build_digest_content", _empty_digest)
     scope = _scope(session)
     sender = GmailNotificationSender(
         session_factory=scope,
