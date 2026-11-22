@@ -30,7 +30,7 @@ export function Clock() {
   }, []);
 
   return (
-    <div className="lowercase font-pixel select-none text-lavender">
+    <div className="hidden whitespace-nowrap lg:block lowercase font-pixel select-none text-lavender">
       {DAYS[now.getDay()]} {pad(now.getDate())} {MONTHS[now.getMonth()]}
       <span className="text-mint"> · </span>
       {pad(now.getHours())}:{pad(now.getMinutes())}
