@@ -79,7 +79,7 @@ export function IngestProgress({ audioId }: IngestProgressProps) {
           {aggregate !== null && <StatusBadge status={aggregate} />}
         </div>
         {state.error.detail !== null && (
-          <p className="text-lavender/70">&gt; detalle: {state.error.detail}</p>
+          <p className="text-lavender/80">&gt; detalle: {state.error.detail}</p>
         )}
         <p className="text-lavender/60">
           &gt; la clase no se muestra como lista. Revisa la etapa o vuelve a subir el audio.
@@ -98,7 +98,7 @@ export function IngestProgress({ audioId }: IngestProgressProps) {
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-pixel text-mint">&gt; progreso de la clase</span>
         {aggregate !== null && <StatusBadge status={aggregate} />}
-        <span className="text-lavender/50">
+        <span className="text-lavender/60">
           {transport === "sse" ? "en tiempo real" : "actualización automática"}
         </span>
       </div>
@@ -115,7 +115,7 @@ export function IngestProgress({ audioId }: IngestProgressProps) {
         </p>
       ) : (
         <>
-          <div className="flex flex-wrap items-center gap-2 text-lavender/70">
+          <div className="flex flex-wrap items-center gap-2 text-lavender/80">
             {hasAttemptData ? (
               <>
                 <span>intento:</span>
@@ -123,10 +123,10 @@ export function IngestProgress({ audioId }: IngestProgressProps) {
                   snapshot.attempt.status !== null ? (
                     <StatusBadge status={snapshot.attempt.status} />
                   ) : (
-                    <span className="text-lavender/50">sin estado</span>
+                    <span className="text-lavender/60">sin estado</span>
                   )
                 ) : (
-                  <span className="text-lavender/50">cerrado · revisa el agregado</span>
+                  <span className="text-lavender/60">cerrado · revisa el agregado</span>
                 )}
                 <span>·</span>
                 <span>recibidos {formatBytes(received)}</span>
@@ -138,11 +138,11 @@ export function IngestProgress({ audioId }: IngestProgressProps) {
                 )}
               </>
             ) : (
-              <span className="text-lavender/50">&gt; aún no hay datos del intento.</span>
+              <span className="text-lavender/60">&gt; aún no hay datos del intento.</span>
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 text-lavender/70">
+          <div className="flex flex-wrap items-center gap-2 text-lavender/80">
             <span>index:</span>
             <StatusBadge status={snapshot.stages.index} />
             <span>análisis:</span>
@@ -176,7 +176,7 @@ export function IngestProgress({ audioId }: IngestProgressProps) {
               reintentar eventos
             </Button>
           )}
-          <span className="text-lavender/50">&gt; cerrar la vista no cancela la ingesta.</span>
+          <span className="text-lavender/60">&gt; cerrar la vista no cancela la ingesta.</span>
         </div>
       )}
     </div>

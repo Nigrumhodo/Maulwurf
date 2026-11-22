@@ -2,6 +2,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { GoogleButton } from "@/components/auth/GoogleButton";
 import { Typewriter } from "@/components/motion/Typewriter";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 // D1.3 — Mapeo de errores del callback OAuth a mensajes accionables. Las razones
 // las define el backend en `routers/auth.py`; aquí solo se traducen para el usuario.
@@ -14,6 +15,7 @@ const ERROR_MESSAGES: Record<string, string> = {
 };
 
 export function LoginPage() {
+  useDocumentTitle("login");
   const [searchParams] = useSearchParams();
   const error = searchParams.get("error");
   const message = error ? (ERROR_MESSAGES[error] ?? "el login con google falló.") : null;

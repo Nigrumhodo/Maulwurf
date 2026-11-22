@@ -3,8 +3,10 @@ import { Typewriter } from "@/components/motion/Typewriter";
 import { FlickerText } from "@/components/motion/FlickerText";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { buttonClasses } from "@/components/ui/buttonStyles";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 export function WelcomePage() {
+  useDocumentTitle("bienvenida");
   return (
     <div className="relative z-10 flex min-h-screen flex-col items-center justify-center px-4 py-10">
       <div className="crt-overlay" aria-hidden="true" />

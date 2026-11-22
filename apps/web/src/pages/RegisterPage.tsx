@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { GoogleButton } from "@/components/auth/GoogleButton";
 import { Typewriter } from "@/components/motion/Typewriter";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 const steps = [
   { n: "01", label: "conecta tu cuenta de google" },
@@ -10,6 +11,7 @@ const steps = [
 ];
 
 export function RegisterPage() {
+  useDocumentTitle("crear cuenta");
   return (
     <AuthShell title="registro">
       <div className="lowercase">

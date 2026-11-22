@@ -138,7 +138,7 @@ export function DeliveryPanel() {
   return (
     <Card title="entregas de correo">
       <div className="lowercase flex flex-col gap-4">
-        <p className="text-lavender/70">
+        <p className="text-lavender/80">
           gmail no ofrece garantía de entrega única: si una respuesta se pierde o expira el lease,
           la fila queda en <strong>delivery_unknown</strong> (estado terminal, sin reintento
           automático).
@@ -209,7 +209,7 @@ export function DeliveryPanel() {
                     <span className="font-bold text-mint">{notificationTypeLabel(item.type)}</span>
                     <StatusBadge status={item.status} />
                     {item.occurrence_seq > 0 && (
-                      <span className="border border-lavender/40 px-1.5 text-xs text-lavender/70">
+                      <span className="border border-lavender/40 px-1.5 text-xs text-lavender/80">
                         sec #{item.occurrence_seq}
                       </span>
                     )}
@@ -223,7 +223,7 @@ export function DeliveryPanel() {
                   {notificationStatusExplanation(item.status, item.last_error_code)}
                 </p>
 
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-lavender/50">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-lavender/60">
                   <span>
                     {item.sent_at !== null
                       ? `enviado: ${formatStamp(item.sent_at)}`

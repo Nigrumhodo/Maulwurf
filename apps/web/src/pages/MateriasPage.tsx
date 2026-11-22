@@ -9,6 +9,7 @@ import { SubjectStats } from "@/components/subjects/SubjectStats";
 import { apiFetch, ApiHttpError } from "@/lib/api";
 import { createSubject, fetchSubjects, updateSubject } from "@/lib/subjects";
 import type { Subject, SubjectDraft } from "@/lib/subjects";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 // D1.6 — CRUD de materias contra la API real (A1.6 / M2a §3.4): lista del tenant,
 // alta, edición y borrado. Borrar una materia con clases activas muestra el
@@ -17,6 +18,7 @@ import type { Subject, SubjectDraft } from "@/lib/subjects";
 type FormState = { mode: "create" } | { mode: "edit"; subject: Subject } | null;
 
 export function MateriasPage() {
+  useDocumentTitle("materias");
   const { toast } = useToast();
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [loading, setLoading] = useState(true);

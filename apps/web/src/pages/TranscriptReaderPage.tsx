@@ -16,6 +16,7 @@ import { fetchTranscriptReader } from "@/lib/reader";
 import type { ReaderTranscript } from "@/lib/reader";
 import { fetchTaskPage, qualitySignals } from "@/lib/tasks";
 import type { Task, TaskQualityState } from "@/lib/tasks";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 // D3.5 - the class page is the reader plus persisted metadata: stages, summary/topics,
 // ASR warnings, detected items and the explicit analysis backfill/reanalysis action. It
@@ -26,6 +27,7 @@ function messageFor(error: unknown, fallback: string): string {
 }
 
 export function TranscriptReaderPage() {
+  useDocumentTitle("clase");
   const { audioId = "" } = useParams();
   const [searchParams] = useSearchParams();
   const [detail, setDetail] = useState<LibraryAudioDetail | null>(null);

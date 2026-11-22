@@ -62,7 +62,7 @@ export function ClassItems({
               return (
                 <li
                   key={task.id}
-                  className="flex flex-col gap-1 border-2 border-lavender/25 px-3 py-2"
+                  className="flex flex-col gap-1 border-2 border-lavender/30 px-3 py-2"
                 >
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="normal-case text-lavender">{task.titulo}</span>

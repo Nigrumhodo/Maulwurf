@@ -66,7 +66,7 @@ export function AudioUploadPanel({
 
       {uploading && progress !== null && (
         <div className="flex flex-col gap-1">
-          <p className="text-lavender/70">
+          <p className="text-lavender/80">
             &gt; enviando {formatBytes(progress.sentBytes)} de {formatBytes(progress.totalBytes)}
           </p>
           <div
@@ -79,7 +79,7 @@ export function AudioUploadPanel({
           >
             <div className="h-full bg-mint" style={{ width: `${percent}%` }} />
           </div>
-          <p className="text-lavender/50">&gt; progreso real de bytes enviados</p>
+          <p className="text-lavender/60">&gt; progreso real de bytes enviados</p>
         </div>
       )}
 

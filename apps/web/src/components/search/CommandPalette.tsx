@@ -13,12 +13,13 @@ interface QuickRouteItem {
 }
 
 const QUICK_ROUTES: QuickRouteItem[] = [
-  { id: "route-home", label: "inicio · dashboard", to: "/", hint: "resumen y estado" },
   { id: "route-upload", label: "subir clase", to: "/gestion/subir", hint: "ingesta efímera" },
-  { id: "route-library", label: "biblioteca de clases", to: "/gestion/biblioteca", hint: "transcripciones" },
-  { id: "route-chat", label: "chat rag citado", to: "/gestion/chat", hint: "preguntas con evidencia" },
+  { id: "route-home", label: "inicio", to: "/", hint: "dashboard · resumen y estado" },
+  { id: "route-gestion", label: "gestión", to: "/gestion", hint: "hub de materias, tareas y biblioteca" },
+  { id: "route-library", label: "biblioteca", to: "/gestion/biblioteca", hint: "transcripciones de clases" },
+  { id: "route-chat", label: "chat", to: "/gestion/chat", hint: "rag citado · preguntas con evidencia" },
   { id: "route-subjects", label: "materias", to: "/gestion/materias", hint: "crud y estadísticas" },
-  { id: "route-tasks", label: "tareas por confirmar", to: "/gestion/tareas", hint: "bandeja m4" },
+  { id: "route-tasks", label: "tareas", to: "/gestion/tareas", hint: "tareas por confirmar · bandeja m4" },
   { id: "route-agenda", label: "agenda", to: "/gestion/agenda", hint: "calendario integrado" },
   { id: "route-settings", label: "ajustes", to: "/settings", hint: "zona horaria, gmail y cuenta" },
 ];
@@ -163,7 +164,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             type="button"
             onClick={() => onOpenChange(false)}
             aria-label="cerrar paleta"
-            className="border-2 border-on-accent/40 px-1.5 leading-none hover:bg-on-accent hover:text-mint"
+            className="inline-flex min-h-8 min-w-8 items-center justify-center border-2 border-on-accent/40 px-1.5 leading-none hover:bg-on-accent hover:text-mint"
           >
             esc
           </button>

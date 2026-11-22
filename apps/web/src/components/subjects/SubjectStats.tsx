@@ -84,21 +84,21 @@ export function SubjectStats({ subjects: initialSubjects }: SubjectStatsProps) {
       ) : (
         <div className="lowercase flex flex-col gap-4">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div className="border-2 border-pure-black bg-dark p-2">
+            <div className="border-2 border-lavender/30 bg-dark p-2">
               <p className="text-sm text-lavender/80">materias</p>
               <p className="text-2xl text-mint">{stats.subjectCount}</p>
             </div>
-            <div className="border-2 border-pure-black bg-dark p-2">
+            <div className="border-2 border-lavender/30 bg-dark p-2">
               <p className="text-sm text-lavender/80">clases listas / total</p>
               <p className="text-2xl text-mint">
                 {stats.readyClassCount} / {stats.classCount}
               </p>
             </div>
-            <div className="border-2 border-pure-black bg-dark p-2">
+            <div className="border-2 border-lavender/30 bg-dark p-2">
               <p className="text-sm text-lavender/80">duración transcrita</p>
               <p className="text-2xl text-mint">{stats.transcribedMinutes} min</p>
             </div>
-            <div className="border-2 border-pure-black bg-dark p-2">
+            <div className="border-2 border-lavender/30 bg-dark p-2">
               <p className="text-sm text-lavender/80">tareas confirmadas / por revisar</p>
               <p className="text-2xl text-mint">
                 {stats.confirmedTaskCount} / {stats.pendingTaskCount}
@@ -116,7 +116,7 @@ export function SubjectStats({ subjects: initialSubjects }: SubjectStatsProps) {
               {stats.subjects.map((item) => (
                 <li
                   key={item.id}
-                  className="flex flex-wrap items-center justify-between gap-2 border-2 border-pure-black bg-dark px-3 py-2 text-sm text-lavender"
+                  className="flex flex-wrap items-center justify-between gap-2 border-2 border-lavender/30 bg-dark px-3 py-2 text-sm text-lavender"
                 >
                   <span className="inline-flex items-center gap-2">
                     <span

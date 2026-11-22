@@ -1,10 +1,12 @@
 import { Link } from "react-router-dom";
 import { SubjectStats } from "@/components/subjects/SubjectStats";
 import { buttonClasses } from "@/components/ui/buttonStyles";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 // D- (Gestión) — Hub index: page header with the core action (subir clase) and
 // metadata-only stats. Navigation lives in the sidebar only, so no module cards here.
 export function GestionOverview() {
+  useDocumentTitle("gestión");
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-wrap items-start justify-between gap-4">

@@ -27,6 +27,7 @@ import {
   hasGmailSendScope,
 } from "@/lib/integrations";
 import type { GoogleStatus } from "@/lib/integrations";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 // D1.2 / D3.7 / D4.1 / D4.2 — Settings: editable timezone (`PATCH /me`), notification
 // preferences, Google Calendar + optional Gmail `gmail.send` connection, M8 delivery history
@@ -38,6 +39,7 @@ interface RedirectNotice {
 }
 
 export function SettingsPage() {
+  useDocumentTitle("ajustes");
   const { user, retrySession } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [calendarNotice, setCalendarNotice] = useState<RedirectNotice | null>(null);

@@ -353,7 +353,7 @@ export function TaskCreateForm({
                   setDurationMinutes(Math.max(1, Number(event.target.value) || 1));
                 }}
               />
-              <p className="self-end text-sm text-lavender/70">
+              <p className="self-end text-sm text-lavender/80">
                 fin calculado:{" "}
                 {eventEnd === null
                   ? "pendiente de fecha"
