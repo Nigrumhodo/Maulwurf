@@ -92,7 +92,8 @@ describe("biblioteca y radar", () => {
 
     expect((await screen.findAllByText(/cálculo i/)).length).toBeGreaterThan(0);
     expect(screen.getAllByText("clase 03").length).toBeGreaterThan(0);
-    expect(screen.getByText("verified")).toBeDefined();
+    expect(screen.queryByText("verified")).toBeNull();
+    expect(screen.getByText("not_requested")).toBeDefined();
     expect(screen.getAllByText("ready").length).toBeGreaterThan(0);
     expect(screen.queryByText(/98%/)).toBeNull();
     expect(screen.queryByText(/72%/)).toBeNull();

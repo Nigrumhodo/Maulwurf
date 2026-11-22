@@ -23,6 +23,8 @@ export interface AudioCardProps {
   onDelete: () => void;
 }
 
+const SETTLED_STATUSES = new Set(["done", "verified", "succeeded"]);
+
 export function AudioCard({
   audio,
   expanded,
@@ -46,12 +48,22 @@ export function AudioCard({
       ? `reintentar ${stageLabel(retryStages[0])}`
       : "reintentar etapas fallidas";
 
+  const pendingStages = [
+    { label: "audio", status: audio.attempt?.status ?? null, missing: "sin intento" },
+    { label: "limpieza", status: audio.attempt?.cleanup_status ?? null, missing: "sin intento" },
+    { label: "index", status: audio.stages.index ?? null, missing: "sin estado" },
+    { label: "análisis", status: audio.stages.analyze ?? null, missing: "sin estado" },
+  ].filter((stage) => stage.status === null || !SETTLED_STATUSES.has(stage.status));
+  const title = audioLabel(audio);
+
   return (
-    <li className="lowercase flex flex-col gap-2 border-2 border-pure-black px-3 py-2">
+    <li className="lowercase flex flex-col gap-2 py-3">
       <div className="flex flex-wrap items-start gap-2">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-lavender">{audioLabel(audio)}</p>
-          <p className="text-lavender/50">
+          <p className="truncate text-lavender" title={title}>
+            {title}
+          </p>
+          <p className="text-lavender/60">
             <time dateTime={audio.class_date}>{audio.class_date}</time> · {audio.language_code} ·{" "}
             {audio.class_timezone}
           </p>
@@ -59,32 +71,22 @@ export function AudioCard({
         <StatusBadge status={audio.aggregate_status} />
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 text-lavender/60">
-        <span>audio:</span>
-        {audio.attempt !== null ? (
-          <StatusBadge status={audio.attempt.status} />
-        ) : (
-          <span className="text-lavender/50">sin intento</span>
-        )}
-        <span>limpieza:</span>
-        {audio.attempt !== null ? (
-          <StatusBadge status={audio.attempt.cleanup_status} />
-        ) : (
-          <span className="text-lavender/50">sin intento</span>
-        )}
-        <span>index:</span>
-        {audio.stages.index !== undefined ? (
-          <StatusBadge status={audio.stages.index} />
-        ) : (
-          <span className="text-lavender/50">sin estado</span>
-        )}
-        <span>análisis:</span>
-        {audio.stages.analyze !== undefined ? (
-          <StatusBadge status={audio.stages.analyze} />
-        ) : (
-          <span className="text-lavender/50">sin estado</span>
-        )}
-      </div>
+      {pendingStages.length === 0 ? (
+        <p className="text-sm text-lavender/60">todo ok</p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2 text-lavender/60">
+          {pendingStages.map((stage) => (
+            <span key={stage.label} className="flex items-center gap-1">
+              <span>{stage.label}:</span>
+              {stage.status !== null ? (
+                <StatusBadge status={stage.status} />
+              ) : (
+                <span className="text-lavender/60">{stage.missing}</span>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
 
       {cleanupPending && (
         <p role="status" className="border-2 border-mint px-2 py-1 text-mint">
@@ -121,6 +123,15 @@ export function AudioCard({
             className={buttonClasses("secondary", "sm")}
           >
             abrir transcripción
+          </Link>
+        )}
+
+        {hasReader && (
+          <Link
+            to={`/gestion/chat?mode=class&audio_id=${encodeURIComponent(audio.id)}`}
+            className={buttonClasses("ghost", "sm")}
+          >
+            chat
           </Link>
         )}
 
