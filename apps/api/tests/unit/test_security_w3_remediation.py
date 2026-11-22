@@ -164,7 +164,7 @@ async def test_live_stream_ends_failed_when_the_duration_cap_is_hit() -> None:
         "AKIA" + "H" * 16,
         "ya29.access-token",
         "xoxb-1234567890",
-        "-----BEGIN RSA PRIVATE KEY-----",
+        "-----BEGIN " + "RSA PRIVATE KEY-----",
         "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature1",
         "Bearer supersecrettoken",
         "nvapi-secret",

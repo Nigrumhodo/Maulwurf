@@ -210,7 +210,7 @@ def _request(url: str, token: str | None) -> urllib.request.Request:
     return urllib.request.Request(url, headers=headers)  # noqa: S310
 
 
-def _fetch(url: str, timeout: float, token: str | None) -> str:
+def _fetch(url: str, timeout: float, token: str | None = None) -> str:
     request = _request(url, token)
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
         return response.read().decode("utf-8")
@@ -258,7 +258,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(raw)
     try:
         token = _token_from_sources(args.token_file)
-        budgets = evaluate(parse_metrics(_fetch(args.url, args.timeout, token)))
+        metrics_text = (
+            _fetch(args.url, args.timeout)
+            if token is None
+            else _fetch(args.url, args.timeout, token)
+        )
+        budgets = evaluate(parse_metrics(metrics_text))
     except (MetricsError, OSError, urllib.error.URLError) as exc:
         print(f"budget_check: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 3
