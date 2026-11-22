@@ -230,11 +230,9 @@ async def reserve_slot(db: AsyncSession) -> None:
         # Sin capacidad publicada por el spike no hay cupo que respetar (D4 sigue blocked).
         return
     await _lock_capacity(db, _CAPACITY_GLOBAL_KEY)
-    active = await db.scalar(
-        select(func.count())
-        .select_from(IngestionAttempt)
-        .where(IngestionAttempt.status.in_(ACTIVE_INGESTION_STATES))
-    )
+    # `maulwurf_app` only sees its own attempts under RLS; the SECURITY DEFINER function
+    # (migration 0024) returns the instance-wide count without exposing any row.
+    active = await db.scalar(select(func.public.count_active_ingestion_attempts()))
     if (active or 0) >= limit:
         raise ApiError(
             503,
@@ -484,6 +482,8 @@ class TombstoneResult:
     chunks_deleted: int
     segments_deleted: int
     transcripts_deleted: int
+    # Streams the tombstone stopped; signalled only once the purge is committed.
+    stopped_message_ids: tuple[uuid.UUID, ...] = ()
 
 
 async def tombstone_audio(
@@ -650,6 +650,22 @@ async def tombstone_audio(
     ]
     if cited_message_ids:
         conditions.append(Message.id.in_(cited_message_ids))
+    # A live stream still holds the deleted text in memory and its checkpoint/finalize writes
+    # are guarded by status. `failed` is the only status none of them rewrites: `cancelled`
+    # still receives the preserved partial. Rows already `cancelled` are included because
+    # their stream may not have finalized yet. The caller signals these ids after commit.
+    halted_streams = await db.execute(
+        update(Message)
+        .where(
+            Message.user_id == user_id,
+            or_(*conditions),
+            Message.status.in_(("streaming", "cancelled")),
+        )
+        .execution_options(synchronize_session=False)
+        .values(status="failed")
+        .returning(Message.id)
+    )
+    stopped_message_ids = tuple(halted_streams.scalars().all())
     messages = await db.execute(
         update(Message)
         .where(Message.user_id == user_id, or_(*conditions))
@@ -700,6 +716,7 @@ async def tombstone_audio(
         chunks_deleted=_rowcount(chunks) or 0,
         segments_deleted=_rowcount(segments) or 0,
         transcripts_deleted=_rowcount(transcripts) or 0,
+        stopped_message_ids=stopped_message_ids,
     )
 
 

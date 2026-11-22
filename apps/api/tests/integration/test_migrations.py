@@ -399,9 +399,10 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     revision = ScriptDirectory.from_config(cfg).get_revision(_head(empty_schema))
     assert revision is not None
     parent = revision.down_revision
-    assert parent == "0022"  # this chain is linear
+    assert parent == "0023"  # this chain is linear
     command.upgrade(cfg, "head")
 
+    # `0024` only adds the capacity-count function and its owner policy (no table change);
     # `0023` only adds the tenant-bound `jobs_tenant` RLS policy on `google_credentials`;
     # `0022` only adds `messages.tool_calls` (no table removal); `0021` only adds the A3.3
     # task/revision indexes (no table or column change);
@@ -420,6 +421,9 @@ def test_downgrade_and_upgrade_again(empty_schema: str) -> None:
     # `settings`; `0005` only changes roles, policies and RLS flags; `0003` only backfills
     # `chunks.tsv` (data, not schema) and `0004` only adds the run fencing token, so the
     # steps back stay on the previous schemas and only remove those additions.
+    command.downgrade(cfg, "-1")
+    assert _state(empty_schema) == (J42_TABLES, ["0023"])
+
     command.downgrade(cfg, "-1")
     assert _state(empty_schema) == (J42_TABLES, ["0022"])
 

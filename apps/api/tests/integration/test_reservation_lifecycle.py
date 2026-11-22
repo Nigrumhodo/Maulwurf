@@ -26,7 +26,7 @@ from typing import Any
 import pytest
 from alembic.config import Config
 from httpx import ASGITransport, AsyncClient, Response
-from sqlalchemy import make_url, select, text, update
+from sqlalchemy import event, make_url, select, text, update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from alembic import command
+from app.core import db as core_db
 from app.core.config import settings
 from app.core.db import get_session
 from app.main import app
@@ -290,6 +291,7 @@ async def _attempt(
 
 async def test_twenty_concurrent_posts_respect_both_published_limits(
     client: AsyncClient,
+    engine: AsyncEngine,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -308,7 +310,13 @@ async def test_twenty_concurrent_posts_respect_both_published_limits(
         for actor, subject_id in [(alice, alice_subject)] * 10
         + [(bob, bob_subject)] * 10
     ]
-    responses = await asyncio.gather(*requests)
+    # The requests run as the API's runtime role, so RLS applies exactly as in production:
+    # a tenant-scoped slot count would let 3 + 3 reservations through a cap of 5.
+    event.listen(engine.sync_engine, "begin", core_db._apply_tenant_settings)
+    try:
+        responses = await asyncio.gather(*requests)
+    finally:
+        event.remove(engine.sync_engine, "begin", core_db._apply_tenant_settings)
 
     codes = [response.status_code for response in responses]
     assert codes.count(201) == 5  # exactly the published global capacity

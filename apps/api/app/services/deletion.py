@@ -58,6 +58,7 @@ from app.models import (
     IngestionAttempt,
     Message,
     MessageSource,
+    Notification,
     OutboxEvent,
     ProcessingRun,
     Segment,
@@ -665,6 +666,8 @@ async def _purge_user_data(
         MessageSource,
         Message,
         Conversation,
+        # Digest and test rows have no task, so the task cascade alone would keep them.
+        Notification,
         TaskRevision,
         TaskEvidence,
         TaskSource,
