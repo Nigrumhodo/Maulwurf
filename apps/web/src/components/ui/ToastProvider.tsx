@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ReactNode } from "react";
 import { Toast } from "./Toast";
 import type { ToastItem, ToastTone } from "./Toast";
@@ -25,6 +33,15 @@ export function useToast(): ToastContextValue {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const idRef = useRef(0);
+  const timersRef = useRef(new Set<ReturnType<typeof setTimeout>>());
+
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      for (const handle of timers) clearTimeout(handle);
+      timers.clear();
+    };
+  }, []);
 
   const dismiss = useCallback((id: number) => {
     setToasts((current) => current.filter((item) => item.id !== id));
@@ -34,7 +51,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     (message: string, tone: ToastTone = "info") => {
       const id = ++idRef.current;
       setToasts((current) => [...current, { id, message, tone }]);
-      setTimeout(() => dismiss(id), AUTO_DISMISS_MS);
+      const handle = setTimeout(() => {
+        timersRef.current.delete(handle);
+        dismiss(id);
+      }, AUTO_DISMISS_MS);
+      timersRef.current.add(handle);
     },
     [dismiss],
   );

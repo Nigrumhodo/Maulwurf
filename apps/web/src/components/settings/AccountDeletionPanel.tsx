@@ -31,13 +31,9 @@ export function AccountDeletionPanel() {
     if (confirmWord.trim().toUpperCase() !== "ELIMINAR") return;
     setBusy(true);
     setError(null);
+    let accepted: Awaited<ReturnType<typeof requestAccountDeletion>>;
     try {
-      const accepted = await requestAccountDeletion(deleteEvents);
-      setOperationId(accepted.deletion_operation_id);
-      setDialogOpen(false);
-      setConfirmWord("");
-      const status = await fetchDeletionStatus(accepted.deletion_operation_id);
-      setOperation(status);
+      accepted = await requestAccountDeletion(deleteEvents);
     } catch (err) {
       setError(
         err instanceof ApiHttpError
@@ -45,6 +41,16 @@ export function AccountDeletionPanel() {
           : "no se pudo iniciar el borrado de cuenta.",
       );
       setDialogOpen(false);
+      setBusy(false);
+      return;
+    }
+    setOperationId(accepted.deletion_operation_id);
+    setDialogOpen(false);
+    setConfirmWord("");
+    try {
+      setOperation(await fetchDeletionStatus(accepted.deletion_operation_id));
+    } catch {
+      setError("el borrado se inició, pero no se pudo consultar el estado; actualízalo.");
     } finally {
       setBusy(false);
     }
