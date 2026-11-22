@@ -1,5 +1,5 @@
-// Wave 3 interface stub: layouts mount <WavesBackground /> as the first child of their root.
-// The pixel-art asset, styles and theme behaviour land in the background worker's branch.
+// Decorative pixel-art waves layer, fixed to the bottom of the viewport and hidden in the light
+// theme. Layouts mount it as the first child of their root; it is static and never interactive.
 export function WavesBackground() {
   return <div className="waves-bg" aria-hidden="true" />;
 }
