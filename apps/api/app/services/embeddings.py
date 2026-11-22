@@ -31,6 +31,7 @@ import logging
 import math
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, Literal, Protocol
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -43,6 +44,30 @@ from app.services.http_retry import unit_interval as _unit_interval
 logger = logging.getLogger(__name__)
 
 EMBEDDINGS_PATH = "embeddings"
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+_LOCAL_STUB_HOSTS = frozenset({"provider-double", "e2e-provider"})
+_LOCAL_ENVS = frozenset({"local", "ci"})
+
+
+def _require_tls_base_url(base_url: str, *, env: str, allow_insecure: bool) -> None:
+    """Reject cleartext embedding URLs outside loopback and local stubs.
+
+    The API key travels in the Authorization header. `http://` is only tolerated for
+    loopback and the e2e doubles, and only while the process itself is local or CI.
+    """
+    if allow_insecure:
+        return
+    parsed = urlsplit(base_url.strip())
+    scheme = parsed.scheme.lower()
+    if scheme == "https":
+        return
+    host = (parsed.hostname or "").lower()
+    if scheme == "http" and env in _LOCAL_ENVS and host in _LOOPBACK_HOSTS | _LOCAL_STUB_HOSTS:
+        return
+    raise EmbeddingProviderError(
+        "El proveedor de embeddings exige HTTPS fuera de un host local de prueba.",
+        details={"reason": "insecure_base_url"},
+    )
 EmbeddingInputType = Literal["query", "passage"]
 # Backoff base with a 2^(attempt-1) factor plus multiplicative jitter. `Retry-After` is capped
 # too: a huge header must not block the job indefinitely.
@@ -138,7 +163,14 @@ class HttpEmbeddingProvider:
         transport: httpx.AsyncBaseTransport | None = None,
         sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
         jitter: Callable[[], float] = _unit_interval,
+        allow_insecure: bool = False,
+        env: str | None = None,
     ) -> None:
+        _require_tls_base_url(
+            base_url,
+            env=live_settings.env if env is None else env,
+            allow_insecure=allow_insecure,
+        )
         self._endpoint = f"{base_url.rstrip('/')}/{EMBEDDINGS_PATH}"
         self._api_key = api_key
         self._model = model
@@ -173,6 +205,7 @@ class HttpEmbeddingProvider:
             max_retries=settings.embedding_max_retries,
             timeout_seconds=settings.embedding_timeout_seconds,
             max_concurrency=settings.embedding_max_concurrency,
+            env=settings.env,
             **overrides,
         )
 

@@ -125,7 +125,8 @@ class _ProposeArgs(BaseModel):
     titulo: str = Field(min_length=1, max_length=200)
     tipo: ActivityType
     detalle: str | None = Field(default=None, max_length=2000)
-    timezone: str
+    # Model output. Bound it before ZoneInfo work; the public task schema uses 64.
+    timezone: str = Field(min_length=1, max_length=64)
     mencion: dict[str, Any]
     sources: list[_SourceArg] = Field(default_factory=list)
 
@@ -336,6 +337,17 @@ class ToolOrchestrator:
                 "evidence_rejected", "the cited evidence does not match the class"
             ) from exc
         item = extracted.result.items[0]
+        existing = await self._duplicate_proposal(
+            user_id=user_id,
+            titulo=item.titulo,
+            tipo=str(item.tipo),
+            due_date=item.due_date,
+            due_at=item.due_at,
+            audio_id=audio_id,
+            subject_id=audio.subject_id,
+        )
+        if existing is not None:
+            return _proposal_payload(existing, evidence="corpus")
         task = needs_review_task(
             user_id=user_id,
             audio_id=audio_id,
@@ -403,6 +415,17 @@ class ToolOrchestrator:
             )
         except DateResolutionError as exc:
             raise ToolError("mention_invalid", "the date mention is not usable") from exc
+        existing = await self._duplicate_proposal(
+            user_id=user_id,
+            titulo=parsed.titulo,
+            tipo=parsed.tipo,
+            due_date=resolved.due_date,
+            due_at=resolved.due_at,
+            audio_id=None,
+            subject_id=None,
+        )
+        if existing is not None:
+            return _proposal_payload(existing, evidence="general_suggestion")
         task = needs_review_task(
             user_id=user_id,
             source="chat",
@@ -424,6 +447,56 @@ class ToolOrchestrator:
         self._db.add(task)
         await self._db.flush()
         return _proposal_payload(task, evidence="general_suggestion")
+
+    async def _duplicate_proposal(
+        self,
+        *,
+        user_id: UUID,
+        titulo: str,
+        tipo: str,
+        due_date: date | None,
+        due_at: datetime | None,
+        audio_id: UUID | None,
+        subject_id: UUID | None,
+    ) -> Task | None:
+        """Return a pending identical proposal instead of inserting another row.
+
+        Identity is the tenant, the activity type, and a whitespace-folded title, plus
+        either the same class or the same subject and due instant. Confirmed and
+        dismissed rows are a different decision and are not reused.
+        """
+        filters: list[Any] = [
+            Task.user_id == user_id,
+            Task.status == "needs_review",
+            Task.tipo == tipo,
+        ]
+        if audio_id is not None:
+            filters.append(Task.audio_id == audio_id)
+        else:
+            filters.append(Task.audio_id.is_(None))
+            filters.append(
+                Task.subject_id.is_(None)
+                if subject_id is None
+                else Task.subject_id == subject_id
+            )
+            filters.append(
+                Task.due_date.is_(None) if due_date is None else Task.due_date == due_date
+            )
+            filters.append(Task.due_at.is_(None) if due_at is None else Task.due_at == due_at)
+        rows = (
+            await self._db.scalars(
+                select(Task).where(*filters).order_by(Task.created_at.desc()).limit(50)
+            )
+        ).all()
+        wanted = _normalize_title(titulo)
+        for task in rows:
+            if _normalize_title(task.titulo) == wanted:
+                return task
+        return None
+
+
+def _normalize_title(title: str) -> str:
+    return " ".join(title.casefold().split())
 
 
 def _proposal_payload(

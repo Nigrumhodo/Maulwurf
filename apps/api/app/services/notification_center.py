@@ -30,8 +30,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import validation_failed
+from app.core.errors import ApiError, validation_failed
 from app.models import CalendarSettings, Notification, User
+from app.services.limits import NOTIFICATION_SEND_LIMIT_PER_MINUTE
 from app.services.notifications import (
     dedupe_key,
     ensure_resendable,
@@ -253,7 +254,22 @@ async def _next_sequence(
         else Notification.occurrence == occurrence,
     )
     current = await db.scalar(query)
-    return next_occurrence_sequence(None if current is None else int(current))
+    sequence = next_occurrence_sequence(None if current is None else int(current))
+    # The Redis window stops a burst across replicas. This cap stays even if Redis is
+    # bypassed: one identity cannot grow an unbounded chain of manual sends in a day.
+    if sequence > NOTIFICATION_SEND_LIMIT_PER_MINUTE:
+        raise ApiError(
+            429,
+            "rate_limited",
+            "Demasiadas solicitudes; inténtalo más tarde.",
+            {
+                "limit": NOTIFICATION_SEND_LIMIT_PER_MINUTE,
+                "scope": "notifications",
+                "reason": "notification_send_cap",
+            },
+            headers={"Retry-After": "60"},
+        )
+    return sequence
 
 
 async def create_test_occurrence(

@@ -25,6 +25,8 @@ import logging
 import math
 import time
 import uuid
+from collections.abc import Awaitable
+from typing import cast
 
 from fastapi import Request
 from redis.asyncio import Redis
@@ -39,6 +41,23 @@ ENDPOINT_WINDOW_SECONDS = 60
 KEY_PREFIX = "mw:limits"
 AUTH_SCOPE = "auth"
 INTEGRATION_SCOPE = "integrations"
+CHAT_SCOPE = "chat"
+NOTIFICATION_SCOPE = "notifications"
+# Settings has no chat or notification field (that module is owned elsewhere).
+# Chat turns reuse the published search ceiling. Manual Gmail sends use the same
+# numeric default, so this file does not invent a second budget.
+NOTIFICATION_SEND_LIMIT_PER_MINUTE = 30
+
+# KEYS[1] = window counter. ARGV[1] = maximum, ARGV[2] = TTL seconds.
+# INCR and EXPIRE are one script so two API replicas cannot both pass a stale read.
+_WINDOW_SCRIPT = """
+local current = redis.call('INCR', KEYS[1])
+redis.call('EXPIRE', KEYS[1], ARGV[2])
+if current > tonumber(ARGV[1]) then
+    return 0
+end
+return 1
+"""
 
 
 def _now() -> float:
@@ -134,6 +153,86 @@ async def enforce_auth_limit(
     )
 
 
+async def enforce_lua_window(
+    client: Redis,
+    *,
+    scope: str,
+    identity: str,
+    limit: int,
+    window_seconds: int = ENDPOINT_WINDOW_SECONDS,
+    now: float | None = None,
+) -> None:
+    """Same fixed window as `enforce_fixed_window`, applied by one Lua script."""
+    if limit < 1:
+        raise ValueError("limit debe ser >= 1")
+    if window_seconds < 1:
+        raise ValueError("window_seconds debe ser >= 1")
+    clock = _now() if now is None else now
+    window = int(clock // window_seconds)
+    key = window_key(scope, identity, window)
+    try:
+        allowed = await cast(
+            Awaitable[int | str | bytes],
+            client.eval(_WINDOW_SCRIPT, 1, key, str(limit), str(window_seconds + 1)),
+        )
+    except RedisError as exc:
+        logger.warning("rate_limit.unavailable scope=%s error=%s", scope, type(exc).__name__)
+        raise ApiError(
+            503,
+            "capacity_unavailable",
+            "El limitador de peticiones no está disponible; inténtalo más tarde.",
+            {"reason": f"{scope}_rate_limit_unavailable"},
+            headers={"Retry-After": str(window_seconds)},
+        ) from exc
+    if int(allowed) != 1:
+        raise ApiError(
+            429,
+            "rate_limited",
+            "Demasiadas solicitudes; inténtalo más tarde.",
+            {"limit": limit, "window_seconds": window_seconds, "scope": scope},
+            headers={"Retry-After": str(retry_after(clock, window_seconds))},
+        )
+
+
+def chat_turns_per_minute() -> int:
+    """Per-user chat turns allowed in one minute.
+
+    Settings has no chat-specific field. The published search ceiling is the
+    conservative number already configured for a provider call per request.
+    """
+    return settings.search_rate_limit_per_minute
+
+
+async def enforce_chat_turn_limit(
+    client: Redis, user_id: uuid.UUID, *, now: float | None = None
+) -> None:
+    """Limit chat turns per user per minute. Concurrency stays a separate control."""
+    await enforce_lua_window(
+        client,
+        scope=CHAT_SCOPE,
+        identity=str(user_id),
+        limit=chat_turns_per_minute(),
+        now=now,
+    )
+
+
+async def enforce_notification_send_limit(
+    client: Redis,
+    user_id: uuid.UUID,
+    *,
+    limit: int = NOTIFICATION_SEND_LIMIT_PER_MINUTE,
+    now: float | None = None,
+) -> None:
+    """Cluster-wide cap on manual Gmail test sends and resends."""
+    await enforce_lua_window(
+        client,
+        scope=NOTIFICATION_SCOPE,
+        identity=str(user_id),
+        limit=limit,
+        now=now,
+    )
+
+
 async def enforce_integration_limit(
     client: Redis, user_id: uuid.UUID, *, now: float | None = None
 ) -> None:
@@ -152,12 +251,19 @@ async def enforce_integration_limit(
 
 __all__ = [
     "AUTH_SCOPE",
+    "CHAT_SCOPE",
     "ENDPOINT_WINDOW_SECONDS",
     "INTEGRATION_SCOPE",
+    "NOTIFICATION_SCOPE",
+    "NOTIFICATION_SEND_LIMIT_PER_MINUTE",
+    "chat_turns_per_minute",
     "client_identity",
     "enforce_auth_limit",
+    "enforce_chat_turn_limit",
     "enforce_fixed_window",
     "enforce_integration_limit",
+    "enforce_lua_window",
+    "enforce_notification_send_limit",
     "retry_after",
     "window_key",
 ]

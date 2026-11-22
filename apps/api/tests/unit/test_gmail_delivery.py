@@ -322,6 +322,7 @@ async def test_gmail_sender_maps_5xx_timeouts_and_lost_id_to_ambiguous(
         ({"verified": False}, "recipient_unverified"),
         ({"scopes": ["openid", "email"]}, "provider_rejected"),
         ({"claimed_fence": 2, "live_fence": 3}, "provider_rejected"),
+        ({"claimed_fence": None, "live_fence": 3}, "provider_rejected"),
         ({"task_status": "needs_review"}, "provider_rejected"),
         ({"task_due_version": 2}, "provider_rejected"),
     ],
