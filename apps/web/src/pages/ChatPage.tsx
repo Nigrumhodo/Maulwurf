@@ -22,7 +22,7 @@ export function ChatPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-1">
         <h1 className="capitalize text-2xl text-mint">chat</h1>
-        <p className="lowercase text-lavender/60">
+        <p className="max-w-prose lowercase text-base text-lavender/80">
           &gt; pregunta sobre todas tus clases, una materia o una clase concreta. Las respuestas
           se apoyan en fragmentos de la biblioteca.
         </p>

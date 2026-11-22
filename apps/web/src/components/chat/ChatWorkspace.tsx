@@ -478,7 +478,7 @@ export function ChatWorkspace({
   const sidebar = !generalOnly ? (
     <Card title="conversaciones">
       <div className="lowercase flex flex-col gap-3">
-        <div className="flex flex-col gap-2 border-2 border-lavender/30 px-3 py-2">
+        <div className="flex flex-col gap-2 border-b-2 border-lavender/30 pb-3">
           <p className="text-mint">&gt; nueva conversación</p>
           <select
             aria-label="alcance de la conversación"
@@ -487,7 +487,7 @@ export function ChatWorkspace({
               setScopeMode(event.target.value as ChatMode);
               setNotice(null);
             }}
-            className="bg-surface text-lavender border-2 border-lavender px-2 py-1"
+            className="min-h-10 bg-surface text-lavender border-2 border-lavender px-2 py-1"
           >
             <option value="all">todas las clases</option>
             <option value="subject">una materia</option>
@@ -498,7 +498,7 @@ export function ChatWorkspace({
               aria-label="materia de la conversación"
               value={scopeSubjectId}
               onChange={(event) => setScopeSubjectId(event.target.value)}
-              className="bg-surface text-lavender border-2 border-lavender px-2 py-1"
+              className="min-h-10 bg-surface text-lavender border-2 border-lavender px-2 py-1"
             >
               <option value="">selecciona materia</option>
               {subjects.map((subject) => (
@@ -513,7 +513,7 @@ export function ChatWorkspace({
               aria-label="clase de la conversación"
               value={scopeAudioId}
               onChange={(event) => setScopeAudioId(event.target.value)}
-              className="bg-surface text-lavender border-2 border-lavender px-2 py-1"
+              className="min-h-10 bg-surface text-lavender border-2 border-lavender px-2 py-1"
             >
               <option value="">selecciona clase</option>
               {audios.map((audio) => (
@@ -526,6 +526,7 @@ export function ChatWorkspace({
           <Button
             type="button"
             size="sm"
+            variant="secondary"
             disabled={creating}
             onClick={() => void openNewConversation()}
           >
@@ -534,9 +535,9 @@ export function ChatWorkspace({
         </div>
 
         {loadingConversations ? (
-          <p className="text-lavender/60">cargando conversaciones…</p>
+          <p className="text-lavender/80">cargando conversaciones…</p>
         ) : conversations.length === 0 ? (
-          <p className="text-lavender/60">aún no hay conversaciones.</p>
+          <p className="text-lavender/80">aún no hay conversaciones.</p>
         ) : (
           <ul className="flex flex-col gap-1">
             {conversations.map((conversation) => (
@@ -551,7 +552,7 @@ export function ChatWorkspace({
                   }`}
                 >
                   <span className="block truncate">{conversationLabel(conversation)}</span>
-                  <span className="block text-xs text-lavender/50">
+                  <span className="block text-sm text-lavender/60">
                     {conversation.mode === "all" ? "general" : modeLabel(conversation.mode)}
                   </span>
                 </button>
@@ -559,7 +560,7 @@ export function ChatWorkspace({
                   type="button"
                   aria-label={`borrar conversación ${conversationLabel(conversation)}`}
                   onClick={() => setDeleteTarget(conversation)}
-                  className="border-2 border-lavender/30 px-2 text-mint hover:border-mint"
+                  className="min-h-8 border-2 border-lavender/30 px-2 text-mint hover:border-mint"
                 >
                   ×
                 </button>
@@ -588,7 +589,7 @@ export function ChatWorkspace({
                 ? conversationLabel(selectedConversation)
                 : "nueva conversación"}
           </p>
-          <p className="text-lavender/50">
+          <p className="text-lavender/60">
             {generalOnly ? "preguntas generales sobre tus apuntes" : "conversación con evidencia"}
           </p>
         </div>
@@ -620,9 +621,9 @@ export function ChatWorkspace({
 
       <div ref={listRef} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
         {loadingHistory ? (
-          <p className="text-lavender/60">cargando mensajes…</p>
+          <p className="text-lavender/80">cargando mensajes…</p>
         ) : messages.length === 0 ? (
-          <p className="text-lavender/60">
+          <p className="text-lavender/80">
             &gt;{" "}
             {conversationId === null
               ? "escribe una pregunta para abrir la conversación."
@@ -648,7 +649,7 @@ export function ChatWorkspace({
                   message.role === "user" ? "self-end items-end" : "self-start items-start"
                 }`}
               >
-                <div className="flex items-center gap-2 text-xs text-lavender/50">
+                <div className="flex items-center gap-2 text-sm text-lavender/60">
                   <span>{message.role === "user" ? "tú" : "asistente"}</span>
                   {message.role === "assistant" && <StatusBadge status={message.status} />}
                 </div>
@@ -710,7 +711,7 @@ export function ChatWorkspace({
           className="min-h-16 w-full resize-none border-2 border-lavender bg-surface px-3 py-2 font-pixel text-lavender caret-mint placeholder:text-lavender/40 focus:border-mint focus:outline-none disabled:opacity-50"
         />
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs text-lavender/50">{draft.length}/{MAX_CHAT_CHARS}</span>
+          <span className="text-sm text-lavender/60">{draft.length}/{MAX_CHAT_CHARS}</span>
           <div className="flex items-center gap-2">
             {streaming && (
               <Button type="button" size="sm" variant="danger" onClick={() => void handleCancel()}>

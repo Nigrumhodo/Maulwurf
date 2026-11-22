@@ -18,19 +18,17 @@ export function CalendarFreshness({
 }: CalendarFreshnessProps) {
   const warning = stale || !coverageOk;
   return (
-    <div className="flex flex-col gap-1 text-xs">
-      <p className="lowercase text-lavender/60">
+    <p className="lowercase text-sm text-lavender/80">
+      <span>
         última sincronización:{" "}
         <span className="text-lavender">{formatLastSyncedAt(lastSyncedAt)}</span>
-      </p>
-      <p
-        role={warning ? "status" : undefined}
-        className={warning ? "lowercase text-mint" : "lowercase text-lavender/50"}
-      >
+      </span>
+      {" · "}
+      <span role={warning ? "status" : undefined} className={warning ? "text-mint" : undefined}>
         {warning ? "cobertura parcial: " : "cobertura: "}
         {calendarCoverageLabel(coverageNotice)}
         {stale ? " · datos desactualizados" : ""}
-      </p>
-    </div>
+      </span>
+    </p>
   );
 }
