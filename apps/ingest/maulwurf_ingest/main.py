@@ -10,6 +10,7 @@ fallo impide servir, así un contenedor mal configurado no llega a aceptar audio
 """
 import asyncio
 import contextlib
+import hashlib
 import hmac
 import logging
 import os
@@ -249,30 +250,54 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
-def _metrics_bearer_ok(authorization: str | None) -> bool:
-    """True only when the header carries the ingest credential.
+def metrics_token_for(secret: str) -> str:
+    """Separate digest for `/internal/metrics`. Not the signing secret."""
+    return hmac.new(
+        secret.encode(), b"maulwurf-ingest/metrics/v1", hashlib.sha256,
+    ).hexdigest()
 
-    The credential is already required before the process accepts audio. Reusing it
-    here means a future public ingress cannot read capacity metrics anonymously.
-    """
-    secret = settings.credential_secret
-    if secret is None or not secret.strip():
+
+def _same_secret(presented: str, expected: str) -> bool:
+    if len(presented) != len(expected):
         return False
+    return hmac.compare_digest(presented.encode(), expected.encode())
+
+
+def _metrics_bearer_ok(authorization: str | None) -> bool:
+    """True only for the metrics token, never for the HMAC signing secret.
+
+    When ``INGEST_METRICS_TOKEN`` is set, that value is the only accepted bearer.
+    Otherwise the route derives ``HMAC(secret, "maulwurf-ingest/metrics/v1")`` and
+    still rejects the signing secret presented in clear, so a metrics scraper
+    cannot mint ``receive``/``admit``/``discard`` tokens.
+    """
     if authorization is None or not authorization.startswith("Bearer "):
         return False
-    presented = authorization.removeprefix("Bearer ")
-    return hmac.compare_digest(presented.encode(), secret.encode())
+    presented = authorization.removeprefix("Bearer ").strip()
+    if not presented:
+        return False
+    secret = settings.credential_secret
+    # The root secret is never a metrics credential, even if it was copied into
+    # INGEST_METRICS_TOKEN by mistake.
+    if secret is not None and secret.strip() and _same_secret(presented, secret):
+        return False
+    configured = settings.metrics_token
+    if configured is not None and configured.strip():
+        return _same_secret(presented, configured.strip())
+    if secret is None or not secret.strip():
+        return False
+    return _same_secret(presented, metrics_token_for(secret))
 
 
 @app.get("/internal/metrics", response_class=PlainTextResponse)
 async def internal_metrics(authorization: str | None = Header(default=None)) -> PlainTextResponse:
-    """Instance metrics. Callers must present the ingest credential as a bearer."""
+    """Instance metrics. Callers must present the metrics bearer, not the signing secret."""
     if not _metrics_bearer_ok(authorization):
         raise HTTPException(status_code=401, detail="auth_required")
     samples = metrics.collect_samples(
         tmp_dir=tempfile.gettempdir(),
         slots_in_use=receptions.slots_in_use(),
-        slots_total=receptions.ACTIVE_SLOTS,
+        slots_total=receptions.active_slot_count(),
         admission_open=admission.uploads_admitted(),
     )
     return PlainTextResponse(render(samples), media_type=PROMETHEUS_CONTENT_TYPE)

@@ -25,6 +25,13 @@ class PayloadTooLarge(Exception):
         super().__init__("payload_too_large")
 
 
+class ReceptionTimeout(Exception):
+    """The client stopped delivering bytes before the reception budget ended."""
+
+    def __init__(self) -> None:
+        super().__init__("reception_timeout")
+
+
 @dataclass(frozen=True)
 class ReceiveResult:
     path: Path
@@ -43,20 +50,66 @@ async def iter_bytes(data: bytes, chunk_size: int = _CHUNK_BYTES) -> AsyncIterat
         yield data[offset : offset + chunk_size]
 
 
+def _read_budget(
+    loop: asyncio.AbstractEventLoop,
+    deadline: float | None,
+    chunk_timeout_s: float | None,
+) -> float | None:
+    """Seconds allowed for the next chunk, or None when neither budget is set."""
+    remaining: float | None = None
+    if deadline is not None:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return 0.0
+    if chunk_timeout_s is None:
+        return remaining
+    if remaining is None:
+        return chunk_timeout_s
+    return min(remaining, chunk_timeout_s)
+
+
 async def receive(
     chunks: AsyncIterator[bytes],
     dest: Path,
     *,
     max_bytes: int,
+    chunk_timeout_s: float | None = None,
+    wall_timeout_s: float | None = None,
 ) -> ReceiveResult:
-    """Escribe `dest` con O_EXCL y 0600. Corta y borra si `max_bytes` se supera."""
+    """Escribe `dest` con O_EXCL y 0600. Corta y borra si `max_bytes` se supera.
+
+    `chunk_timeout_s` bounds the idle gap between body chunks. `wall_timeout_s`
+    bounds the whole read. Either one raises `ReceptionTimeout` and unlinks `dest`,
+    so a slow client cannot keep the attempt directory or the admission slot.
+    """
     if max_bytes < 1:
         raise ValueError("max_bytes must be positive")
+    if chunk_timeout_s is not None and chunk_timeout_s <= 0:
+        raise ValueError("chunk_timeout_s must be positive")
+    if wall_timeout_s is not None and wall_timeout_s <= 0:
+        raise ValueError("wall_timeout_s must be positive")
     digest = hashlib.sha256()
     total = 0
     handle = await asyncio.to_thread(_open_private, dest)
+    loop = asyncio.get_running_loop()
+    deadline = None if wall_timeout_s is None else loop.time() + wall_timeout_s
+    iterator = chunks.__aiter__()
     try:
-        async for chunk in chunks:
+        while True:
+            budget = _read_budget(loop, deadline, chunk_timeout_s)
+            if budget is not None and budget <= 0:
+                raise ReceptionTimeout()
+            try:
+                if budget is None:
+                    chunk = await anext(iterator)
+                else:
+                    # One deadline per read: the idle gap and the remaining wall budget.
+                    async with asyncio.timeout(budget):
+                        chunk = await anext(iterator)
+            except StopAsyncIteration:
+                break
+            except TimeoutError:
+                raise ReceptionTimeout() from None
             if not isinstance(chunk, bytes):
                 raise TypeError("chunk must be bytes")
             if not chunk:
