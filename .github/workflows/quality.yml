@@ -261,7 +261,7 @@ jobs:
       - name: License report
         run: bash scripts/ci/license_report.sh ${{ matrix.app }} reports/licenses
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: licenses-${{ matrix.app }}
           path: reports/licenses/
