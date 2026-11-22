@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { CitationList } from "@/components/chat/Citation";
 import { MarkdownBody } from "@/components/chat/MarkdownBody";
@@ -170,6 +169,8 @@ export function ChatWorkspace({
   const [draft, setDraft] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ChatConversation | null>(null);
+  // Below lg only one pane is visible; both stay mounted so state and the stream survive a toggle.
+  const [showList, setShowList] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const assistantIdRef = useRef<string | null>(null);
@@ -300,6 +301,7 @@ export function ChatWorkspace({
       skipNextHistoryRef.current = created.id;
       setConversations((current) => [created, ...current]);
       setConversationId(created.id);
+      setShowList(false);
       setMessages([]);
       setHistoryCursor(null);
       return created.id;
@@ -468,6 +470,7 @@ export function ChatWorkspace({
   }
 
   function selectConversation(id: string) {
+    setShowList(false);
     if (id === conversationId) return;
     setConversationId(id);
     setMessages([]);
@@ -476,8 +479,9 @@ export function ChatWorkspace({
   }
 
   const sidebar = !generalOnly ? (
-    <Card title="conversaciones">
+    <section aria-label="conversaciones" className="min-w-0">
       <div className="lowercase flex flex-col gap-3">
+        <h2 className="capitalize text-lg text-mint">conversaciones</h2>
         <div className="flex flex-col gap-2 border-b-2 border-lavender/30 pb-3">
           <p className="text-mint">&gt; nueva conversación</p>
           <select
@@ -574,7 +578,7 @@ export function ChatWorkspace({
           </Button>
         )}
       </div>
-    </Card>
+    </section>
   ) : null;
 
   const chatBody = (
@@ -736,9 +740,25 @@ export function ChatWorkspace({
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
-      {sidebar}
-      <Card title="conversación">{chatBody}</Card>
+    <div className="grid lg:grid-cols-[18rem_minmax(0,1fr)]">
+      <div className="flex items-center gap-2 border-b-2 border-lavender/30 p-3 lg:hidden">
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          aria-expanded={showList}
+          onClick={() => setShowList((open) => !open)}
+        >
+          {showList ? "◂ volver a la conversación" : "▸ ver conversaciones"}
+        </Button>
+      </div>
+      <div className={`p-4 ${showList ? "block" : "hidden"} lg:block`}>{sidebar}</div>
+      <section
+        aria-label="conversación"
+        className={`min-w-0 p-4 lg:border-l-2 lg:border-lavender/30 ${showList ? "hidden" : "block"} lg:block`}
+      >
+        {chatBody}
+      </section>
       <ConfirmDialog
         open={deleteTarget !== null}
         title="borrar conversación"

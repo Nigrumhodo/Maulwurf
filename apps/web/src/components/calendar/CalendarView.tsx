@@ -7,7 +7,6 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { CalendarFreshness } from "@/components/calendar/CalendarFreshness";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
   activeTasksWithoutBlock,
@@ -165,7 +164,7 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
   const withoutBlock = useMemo(() => activeTasksWithoutBlock(tasks), [tasks]);
 
   return (
-    <Card title={compact ? "agenda" : "calendario"}>
+    <section aria-label={compact ? "agenda" : "calendario"}>
       <div className="flex flex-col gap-3">
         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
           <CalendarFreshness
@@ -277,18 +276,18 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
         </div>
 
         {withoutBlock.length > 0 && (
-          <section className="flex flex-col gap-2">
+          <section className="flex flex-col gap-2 border-t-2 border-lavender/30 pt-4">
             <h3 className="capitalize text-lg text-mint">tareas sin bloque de agenda</h3>
             <p className="lowercase text-base text-lavender/80">
               no se dibujan en el calendario porque no tienen un bloque confirmado.
             </p>
-            <ul className="flex flex-col">
+            <ul className="flex flex-col divide-y-2 divide-lavender/20">
               {withoutBlock.map((task) => {
                 const due = formatTaskDue(task);
                 return (
                   <li
                     key={task.id}
-                    className="flex flex-col gap-1 border-b border-lavender/15 py-2 last:border-b-0"
+                    className="flex flex-col gap-1 py-2"
                   >
                     <span className="normal-case text-base text-lavender">{task.titulo}</span>
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
@@ -310,6 +309,6 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
           </section>
         )}
       </div>
-    </Card>
+    </section>
   );
 }
