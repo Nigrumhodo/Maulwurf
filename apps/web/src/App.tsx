@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { AuthProvider, RequireAuth, useAuth } from "@/components/auth/AuthProvider";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { GestionLayout } from "@/components/layout/GestionLayout";
@@ -57,6 +57,13 @@ function HomeRoute() {
   );
 }
 
+// A12 — Legacy `/biblioteca/:audioId` deep links keep their query string (e.g. `?segment=`).
+function RedirectBibliotecaDetail() {
+  const { audioId = "" } = useParams();
+  const { search } = useLocation();
+  return <Navigate to={`/gestion/biblioteca/${encodeURIComponent(audioId)}${search}`} replace />;
+}
+
 // D1.2/D1.3/D1.8 — Enrutado. `/` muestra la landing pública cuando no hay sesión
 // autenticada y el dashboard dentro de AppLayout cuando sí existe sesión.
 export function App() {
@@ -84,7 +91,7 @@ export function App() {
             </Route>
 
             <Route path="/biblioteca" element={<Navigate to="/gestion/biblioteca" replace />} />
-            <Route path="/biblioteca/:audioId" element={<TranscriptReaderPage />} />
+            <Route path="/biblioteca/:audioId" element={<RedirectBibliotecaDetail />} />
             <Route path="/chat" element={<Navigate to="/gestion/chat" replace />} />
             <Route path="/materias" element={<Navigate to="/gestion/materias" replace />} />
           </Route>
