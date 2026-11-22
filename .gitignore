@@ -16,8 +16,15 @@ npm-debug.log*
 *.tsbuildinfo
 .eslintcache
 
-# --- Entornos y secretos (NUNCA commitear) ---
+# --- Environment files and production secrets (never commit) ---
+# `.env.*` covers `.env.prod` in any directory. The two templates stay tracked.
 .env
+.env.*
+!.env.example
+!infra/deploy/.env.prod.example
+infra/deploy/.env.prod
+infra/deploy/secrets/
+infra/deploy/**/*.token
 .env.local
 .env.*.local
 .env.plane.local

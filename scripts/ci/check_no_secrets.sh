@@ -8,14 +8,37 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 allowlist="scripts/ci/secret_scan_allowlist"
-rule_names=(nvidia-api-key google-oauth-client-secret aws-access-key-id private-key-block bearer-token)
+rule_names=(
+  nvidia-api-key
+  google-oauth-client-secret
+  google-api-key
+  aws-access-key-id
+  private-key-block
+  bearer-token
+  openai-style-key
+  github-token
+  github-fine-grained-token
+)
 declare -A rule_patterns=(
   [nvidia-api-key]='nvapi-[A-Za-z0-9_-]{40,}'
   [google-oauth-client-secret]='GOCSPX-[A-Za-z0-9_-]{20,}'
+  [google-api-key]='AIza[0-9A-Za-z_-]{35}'
   [aws-access-key-id]='AKIA[0-9A-Z]{16}'
   [private-key-block]='-----BEGIN ([A-Z]+ )*PRIVATE KEY( BLOCK)?-----'
   [bearer-token]='[Bb]earer [A-Za-z0-9._~+/-]{20,}=*'
+  [openai-style-key]='sk-[A-Za-z0-9]{20,}'
+  [github-token]='ghp_[A-Za-z0-9]{36}'
+  [github-fine-grained-token]='github_pat_[A-Za-z0-9_]{22,}'
 )
+
+is_tracked_secret_path() {
+  local path=$1
+  local base
+  base="$(basename "$path")"
+  [[ "$base" == ".env.prod" ]] && return 0
+  [[ "$path" == infra/deploy/secrets/* ]] && return 0
+  return 1
+}
 
 is_allowlisted() {
   local rule=$1 path=$2
@@ -31,6 +54,10 @@ findings=0
 scanned=0
 while IFS= read -r -d '' file; do
   scanned=$((scanned + 1))
+  if is_tracked_secret_path "$file"; then
+    echo "secret-scan: rule=tracked-secret-file file=$file lines=1" >&2
+    findings=$((findings + 1))
+  fi
   for rule in "${rule_names[@]}"; do
     is_allowlisted "$rule" "$file" && continue
     lines=$(grep -nIE -e "${rule_patterns[$rule]}" -- "$file" | cut -d: -f1 | paste -sd, -) || true

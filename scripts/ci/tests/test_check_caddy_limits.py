@@ -89,6 +89,23 @@ class RoutePathTest(unittest.TestCase):
         report = caddy.check(caddy.DEFAULT_CADDYFILE)
         self.assertGreater(report.proxy_handle_count, 0)
 
+    def test_the_production_caddyfile_passes(self) -> None:
+        report = caddy.check(caddy.DEFAULT_PROD_CADDYFILE, "prod")
+        self.assertGreater(report.proxy_handle_count, 0)
+
+    def test_private_ranges_fail_the_production_profile(self) -> None:
+        text = caddy.DEFAULT_PROD_CADDYFILE.read_text(encoding="utf-8")
+        text = text.replace(
+            "{$CADDY_TRUSTED_PROXIES:127.0.0.1/32}",
+            "private_ranges",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "Caddyfile.prod"
+            path.write_text(text, encoding="utf-8")
+            with self.assertRaises(caddy.CheckError) as raised:
+                caddy.check(path, "prod")
+        self.assertIn("private_ranges", str(raised.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
