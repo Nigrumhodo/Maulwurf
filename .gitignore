@@ -66,6 +66,7 @@ pgdata/
 Thumbs.db
 .idea/
 .vscode/
+.claude/
 A2.3_CONTEXT.md
 A2.4_CONTEXT.md
 docs/context/
