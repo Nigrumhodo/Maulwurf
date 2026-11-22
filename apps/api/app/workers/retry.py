@@ -39,7 +39,7 @@ _SAFE_ERROR_CODES: Final = frozenset(
     }
 )
 # serialization_failure, deadlock_detected: PostgreSQL asks the client to run the work again.
-_RETRYABLE_SQLSTATES: Final = frozenset({"40001", "40P01"})
+RETRYABLE_SQLSTATES: Final = frozenset({"40001", "40P01"})
 # invalid_password: repeating the same credentials can never succeed.
 _PERMANENT_SQLSTATES: Final = frozenset({"28P01"})
 # 408/429 plus every 5xx are worth another attempt; the remaining 4xx (bad key, missing
@@ -84,10 +84,10 @@ def classify_analysis_error(exc: BaseException) -> ErrorKind:
     if isinstance(exc, TimeoutError | ConnectionError):
         return ErrorKind.TRANSIENT
     if isinstance(exc, DBAPIError):
-        sqlstate = _sqlstate(exc)
+        sqlstate = sqlstate_of(exc)
         if sqlstate in _PERMANENT_SQLSTATES:
             return ErrorKind.PERMANENT
-        if isinstance(exc, OperationalError) or sqlstate in _RETRYABLE_SQLSTATES:
+        if isinstance(exc, OperationalError) or sqlstate in RETRYABLE_SQLSTATES:
             return ErrorKind.TRANSIENT
     return ErrorKind.PERMANENT
 
@@ -128,7 +128,7 @@ def _error_code(exc: BaseException) -> str:
     return code if isinstance(code, str) and code in _SAFE_ERROR_CODES else UNEXPECTED_CODE
 
 
-def _sqlstate(exc: DBAPIError) -> str | None:
+def sqlstate_of(exc: DBAPIError) -> str | None:
     # The driver error may sit under SQLAlchemy's adapter; read the code from the first
     # layer that carries one. Only the code is read, never the message (it can echo data).
     candidate: Any = exc.orig

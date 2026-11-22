@@ -53,7 +53,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, TenantOwned, created_at, updated_at, uuid_pk
+from app.models.base import Base, TenantOwned, created_at, sql_in, updated_at, uuid_pk
 
 # Closed vocabularies of DISENO §2.8 / M4. They are the source of truth for the CHECKs and
 # for the services that validate requests; `scheduled` is intentionally absent.
@@ -78,11 +78,6 @@ ACTIVITY_TYPES: Final = (
 )
 REVISION_TYPES: Final = ("reanalysis", "edit_of_confirmed")
 REVISION_STATUSES: Final = ("pending_confirmation", "activated", "discarded")
-
-
-def _in(column: str, values: tuple[str, ...]) -> str:
-    quoted = ", ".join(f"'{value}'" for value in values)
-    return f"{column} IN ({quoted})"
 
 
 def _date_contract() -> str:
@@ -121,12 +116,12 @@ class Task(TenantOwned, Base):
         # gone; `task_sources` and `task_revisions` do cascade from the task itself.
         ForeignKeyConstraint(["user_id", "audio_id"], ["audios.user_id", "audios.id"]),
         ForeignKeyConstraint(["user_id", "subject_id"], ["subjects.user_id", "subjects.id"]),
-        CheckConstraint(_in("source", TASK_ORIGINS), name="source"),
-        CheckConstraint(_in("tipo", ACTIVITY_TYPES), name="tipo"),
-        CheckConstraint(_in("date_status", DATE_STATUSES), name="date_status"),
-        CheckConstraint(_in("status", TASK_STATUSES), name="status"),
+        CheckConstraint(sql_in("source", TASK_ORIGINS), name="source"),
+        CheckConstraint(sql_in("tipo", ACTIVITY_TYPES), name="tipo"),
+        CheckConstraint(sql_in("date_status", DATE_STATUSES), name="date_status"),
+        CheckConstraint(sql_in("status", TASK_STATUSES), name="status"),
         CheckConstraint(
-            _in("calendar_sync_status", CALENDAR_SYNC_STATUSES), name="calendar_sync_status"
+            sql_in("calendar_sync_status", CALENDAR_SYNC_STATUSES), name="calendar_sync_status"
         ),
         CheckConstraint(
             "confidence_score >= 0 AND confidence_score <= 1", name="confidence_range"
@@ -357,8 +352,8 @@ class TaskRevision(TenantOwned, Base):
             ["user_id", "run_id"], ["processing_runs.user_id", "processing_runs.id"]
         ),
         UniqueConstraint("task_id", "base_task_version", "revision_type", "run_id"),
-        CheckConstraint(_in("revision_type", REVISION_TYPES), name="revision_type"),
-        CheckConstraint(_in("status", REVISION_STATUSES), name="status"),
+        CheckConstraint(sql_in("revision_type", REVISION_TYPES), name="revision_type"),
+        CheckConstraint(sql_in("status", REVISION_STATUSES), name="status"),
         CheckConstraint("base_task_version >= 1", name="base_task_version"),
         # `proposed_fields` is the map of candidate fields; a JSON scalar/null would be a
         # revision with nothing to promote (SQLAlchemy serializes a Python None as JSON
