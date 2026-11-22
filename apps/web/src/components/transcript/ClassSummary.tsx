@@ -42,15 +42,15 @@ export function ClassSummary({ detail, transcript }: ClassSummaryProps) {
     <Card title="resumen y calidad">
       <div className="lowercase flex flex-col gap-3">
         {summary.text !== null ? (
-          <p className="normal-case leading-relaxed text-lavender">{summary.text}</p>
+          <p className="normal-case text-base leading-relaxed text-lavender">{summary.text}</p>
         ) : (
-          <p className="text-lavender/60">
+          <p className="text-base text-lavender/60">
             &gt; {summary.note ?? "resumen no disponible"}
           </p>
         )}
 
         {transcript.analysis_version !== null && (
-          <p className="text-xs text-lavender/60">
+          <p className="text-sm text-lavender/60">
             análisis v{transcript.analysis_version}
           </p>
         )}
@@ -61,7 +61,7 @@ export function ClassSummary({ detail, transcript }: ClassSummaryProps) {
               {visibleTopics.map((topic) => (
                 <li
                   key={topic}
-                  className="normal-case border-2 border-lavender/40 px-2 py-0.5 text-lavender/70"
+                  className="normal-case border-2 border-lavender/40 px-2 py-0.5 text-base text-lavender/80"
                 >
                   {topic}
                 </li>
@@ -88,7 +88,7 @@ export function ClassSummary({ detail, transcript }: ClassSummaryProps) {
             {warnings.map((signal) => qualitySummary(signal)).join(" · ")}
           </p>
         ) : (
-          <p className="text-lavender/50">
+          <p className="text-base text-lavender/60">
             sin señales de calidad ASR registradas.
           </p>
         )}
