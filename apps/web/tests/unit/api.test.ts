@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiHttpError,
   apiFetch,
+  apiUrl,
   bootstrapCsrf,
   configureApiHandlers,
   parseRetryAfter,
@@ -285,6 +286,48 @@ describe("interceptor 429", () => {
       code: "rate_limited",
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("apiUrl mismo origen", () => {
+  it("acepta rutas relativas que empiezan con un solo slash", () => {
+    expect(apiUrl("/subjects")).toBe("/subjects");
+    expect(apiUrl("/")).toBe("/");
+    expect(apiUrl("/audios/a1/content?attempt_id=at1")).toBe(
+      "/audios/a1/content?attempt_id=at1",
+    );
+  });
+
+  it("rechaza protocol-relative, esquemas externos y backslash", () => {
+    const rejected = [
+      "//evil.example/x",
+      "///evil.example/x",
+      "/\\evil.example/x",
+      "/foo\\bar",
+      "\\\\evil.example\\x",
+      "http://evil.example/x",
+      "https://evil.example/x",
+      "http:/evil.example/x",
+      "javascript:alert(1)",
+      "data:text/html,hi",
+      "mailto:a@b.c",
+      "subjects",
+      "",
+    ];
+    for (const path of rejected) {
+      expect(() => apiUrl(path), path).toThrow("mismo origen");
+    }
+  });
+
+  it("apiFetch no llama a fetch si la ruta sale del origen", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(apiFetch("//evil.example/x")).rejects.toThrow("mismo origen");
+    await expect(apiFetch("https://evil.example/x")).rejects.toThrow("mismo origen");
+    await expect(apiFetch("javascript:alert(1)")).rejects.toThrow("mismo origen");
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

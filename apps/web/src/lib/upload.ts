@@ -5,6 +5,7 @@ import {
   apiFetch,
   apiUrl,
   handleApiHttpError,
+  isSameOriginApiPath,
   parseErrorEnvelope,
 } from "./api";
 import type { ApiRequestInit, DuplicateVariantDetails } from "./api";
@@ -374,10 +375,6 @@ function stringOrNull(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
-function isSameOriginPath(url: string): boolean {
-  return url.startsWith("/") && !url.startsWith("//") && !url.startsWith("/\\");
-}
-
 function parseResponsePayload(raw: string): Record<string, unknown> {
   if (raw === "") return {};
   try {
@@ -532,7 +529,7 @@ export async function uploadContent({
   signal,
   onProgress,
 }: UploadContentOptions): Promise<UploadResult> {
-  if (!isSameOriginPath(uploadUrl)) {
+  if (!isSameOriginApiPath(uploadUrl)) {
     throw new Error(`La URL de subida debe ser una ruta relativa del mismo origen: ${uploadUrl}`);
   }
   if (!supportsStreamingFetchBody()) {

@@ -62,4 +62,18 @@ describe("Client G1 privacy invariants (D4.8)", () => {
     expect(swSource).toContain('"/notifications"');
     expect(swSource).toContain("no-store");
   });
+
+  it("does not contact Google Fonts from the shell, CSS, or CSP", () => {
+    const files = [
+      path.resolve(HERE, "../../index.html"),
+      path.resolve(HERE, "../../src/index.css"),
+      path.resolve(HERE, "../../src/server/index.ts"),
+      path.resolve(HERE, "../../src/server/security.ts"),
+    ];
+    for (const file of files) {
+      const content = fs.readFileSync(file, "utf8");
+      expect(content, file).not.toContain("fonts.googleapis.com");
+      expect(content, file).not.toContain("fonts.gstatic.com");
+    }
+  });
 });
