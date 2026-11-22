@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "0.12.18"
           enable-cache: true
@@ -57,7 +57,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "0.12.18"
           enable-cache: true
@@ -161,7 +161,7 @@ jobs:
           check maxmemory 268435456
           check maxmemory-policy noeviction
           check appendonly no
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "0.12.18"
           enable-cache: true
@@ -246,7 +246,7 @@ jobs:
         with:
           persist-credentials: false
       - if: matrix.app != 'web'
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           version: "0.12.18"
           enable-cache: true
