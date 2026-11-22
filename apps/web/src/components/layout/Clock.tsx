@@ -21,7 +21,7 @@ function pad(n: number): string {
 }
 
 /** Fecha y hora retro, actualizada cada minuto (sin segundos). */
-export function Clock() {
+export function Clock({ className = "" }: { className?: string } = {}) {
   const [now, setNow] = useState(() => new Date());
 
   useEffect(() => {
@@ -30,7 +30,7 @@ export function Clock() {
   }, []);
 
   return (
-    <div className="hidden whitespace-nowrap lg:block lowercase font-pixel select-none text-lavender">
+    <div className={`lowercase whitespace-nowrap font-pixel select-none text-lavender/80 ${className}`}>
       {DAYS[now.getDay()]} {pad(now.getDate())} {MONTHS[now.getMonth()]}
       <span className="text-mint"> · </span>
       {pad(now.getHours())}:{pad(now.getMinutes())}
