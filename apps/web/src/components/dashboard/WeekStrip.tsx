@@ -39,15 +39,9 @@ export function WeekStrip() {
   const weekday = new Intl.DateTimeFormat("es", { weekday: "short" });
 
   return (
-    <section
-      aria-label="días de la semana actual"
-      className="border-2 border-pure-black bg-surface shadow-block"
-    >
-      <div className="flex items-center justify-between border-b-2 border-pure-black bg-mint px-3 py-2 text-on-accent">
-        <span className="capitalize font-bold">semana actual</span>
-        <span className="lowercase text-xs">{monthLabel}</span>
-      </div>
-      <ol className="grid grid-cols-7 gap-1 p-2">
+    <section aria-label="días de la semana actual" className="flex flex-col gap-2">
+      <p className="lowercase text-base text-lavender/60">{monthLabel}</p>
+      <ol className="grid grid-cols-7 gap-1">
         {days.map((day) => {
           const active = sameLocalDay(day, today);
           return (
@@ -60,7 +54,7 @@ export function WeekStrip() {
                   : "border-lavender/25 text-lavender/80"
               }`}
             >
-              <span className="lowercase text-xs">{weekday.format(day)}</span>
+              <span className="lowercase text-base">{weekday.format(day)}</span>
               <span className="text-lg">{day.getDate()}</span>
             </li>
           );
