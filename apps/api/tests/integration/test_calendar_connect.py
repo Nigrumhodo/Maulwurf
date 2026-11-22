@@ -963,8 +963,9 @@ async def test_reconnect_resumes_only_current_blocked_tasks(
 
     assert response.headers["location"] == "/settings?calendar=connected"
     assert await _task_sync(db_session, blocked) == "pending"
-    # Resume never guesses the write target; the Calendar worker records it on success.
-    assert await _task_calendar(db_session, blocked) is None
+    # A task without a target takes the bound write calendar, or the worker would block it
+    # again with `calendar_missing` (thermos G1).
+    assert await _task_calendar(db_session, blocked) == MAULWURF_ID
     assert await _task_sync(db_session, dismissed) == "blocked"
     assert await _task_sync(db_session, completed) == "blocked"
     assert await _task_sync(db_session, unconfirmed) == "blocked"
@@ -999,8 +1000,8 @@ async def test_first_connect_also_resumes_blocked_tasks(
         "/settings?calendar=connected"
     )
     assert await _task_sync(db_session, blocked) == "pending"
-    # The worker, not the reconnect, binds the remote calendar id.
-    assert await _task_calendar(db_session, blocked) is None
+    # Confirmed before any connection: the first connect supplies the write calendar.
+    assert await _task_calendar(db_session, blocked) == MAULWURF_ID
     events = await _sync_events(db_session, actor)
     assert len(events) == 1
     assert events[0]["resource_id"] == blocked
@@ -1060,6 +1061,80 @@ async def test_second_reconnect_reuses_the_live_outbox_and_starts_a_new_cycle_af
         "pending"
     ]
     assert await _task_sync(db_session, blocked) == "pending"
+
+
+async def test_a_reconnect_after_a_dispatched_event_starts_a_new_cycle(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    tasks_table: None,
+) -> None:
+    """Thermos G1: a `dispatched` row is never published again, so it must not be reused."""
+    actor = await make_actor(db_session)
+    await _seed_credential(
+        db_session, actor, scopes=["openid", *CALENDAR_SCOPES], status="disconnected"
+    )
+    blocked = await _insert_task(db_session, actor, status="confirmed", sync="blocked", version=2)
+    _fake_google(monkeypatch, sub=actor.google_sub, scope=" ".join(CALENDAR_SCOPES))
+    _use_calendar(monkeypatch, _calendar_handler())
+
+    _, state, cookie = await _start(client, actor, RECONNECT)
+    assert (await _callback(client, actor, state, cookie)).headers["location"] == (
+        "/settings?calendar=connected"
+    )
+    [first] = await _sync_events(db_session, actor)
+
+    # The job ran (the outbox row stays `dispatched`) and blocked the same version again.
+    await db_session.execute(
+        text("UPDATE outbox_events SET status = 'dispatched' WHERE id = :id"),
+        {"id": first["id"]},
+    )
+    await db_session.execute(
+        text("UPDATE tasks SET calendar_sync_status = 'blocked' WHERE id = :id"),
+        {"id": blocked},
+    )
+    await db_session.flush()
+    _, state, cookie = await _start(client, actor, RECONNECT)
+    assert (await _callback(client, actor, state, cookie)).headers["location"] == (
+        "/settings?calendar=connected"
+    )
+
+    events = await _sync_events(db_session, actor)
+    assert len(events) == 2
+    fresh = [event for event in events if event["id"] != first["id"]]
+    assert [(event["dedupe_key"], event["status"]) for event in fresh] == [
+        ("reconnect:2:1", "pending")
+    ]
+    assert await _task_sync(db_session, blocked) == "pending"
+
+
+async def test_a_reconnect_keeps_an_existing_calendar_link(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    tasks_table: None,
+) -> None:
+    """Thermos G1: only a missing target is filled; the event may live in the old one."""
+    actor = await make_actor(db_session)
+    await _seed_credential(
+        db_session, actor, scopes=["openid", *CALENDAR_SCOPES], status="disconnected"
+    )
+    blocked = await _insert_task(db_session, actor, status="confirmed", sync="blocked", version=1)
+    await db_session.execute(
+        text("UPDATE tasks SET calendar_id = 'previous@calendar.example' WHERE id = :id"),
+        {"id": blocked},
+    )
+    await db_session.commit()
+    _fake_google(monkeypatch, sub=actor.google_sub, scope=" ".join(CALENDAR_SCOPES))
+    _use_calendar(monkeypatch, _calendar_handler())
+
+    _, state, cookie = await _start(client, actor, RECONNECT)
+    assert (await _callback(client, actor, state, cookie)).headers["location"] == (
+        "/settings?calendar=connected"
+    )
+
+    assert await _task_sync(db_session, blocked) == "pending"
+    assert await _task_calendar(db_session, blocked) == "previous@calendar.example"
 
 
 async def test_a_reconnect_without_the_tasks_table_still_connects(

@@ -1426,8 +1426,9 @@ async def test_a_blocked_confirm_is_resumed_only_by_reconnect(
     stored = await db_session.get(Task, task_id)
     assert stored is not None
     assert stored.calendar_sync_status == "pending"
-    # Resume never guesses a target: none existed when the confirmation was blocked.
-    assert stored.calendar_id is None
+    # None existed when the confirmation was blocked; the resume takes the write calendar
+    # bound by the connection, or the worker would block it again (`calendar_missing`).
+    assert stored.calendar_id == CALENDAR_ID
     assert stored.version == 2
     events = await _sync_events(db_session, actor, task_id)
     assert len(events) == 1

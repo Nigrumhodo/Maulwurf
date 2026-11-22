@@ -8,8 +8,12 @@ token material is never logged. A rejected refresh disconnects the integration (
 leaves the task `blocked`, because a reconnect (J3.3) only revisits `blocked` tasks.
 
 Retry budget: one delivery plus `MAX_TRIES - 1` transient retries, using the same bounded
-backoff as the outbox. `invalid_grant` disconnects the integration and leaves the task
-`blocked` (J3.3 reconnects it); permanent errors leave it `failed` and are not raised.
+backoff as the outbox. ARQ only re-runs a job that raises `Retry`, so classified transient
+failures (Calendar budget, token endpoint, database connectivity) are converted to `Retry`
+and everything else is handled here. While retries remain the task stays `pending` so the
+next delivery can still settle it; once the budget is spent, or on a permanent unexpected
+error, the task is marked `failed` (D3.7 explicit retry). `invalid_grant` disconnects the
+integration and leaves the task `blocked` (J3.3 reconnects it).
 """
 
 import logging
@@ -56,6 +60,7 @@ from app.services.task_event_sync import (
     TaskEventSync,
     TaskEventTransientError,
 )
+from app.workers.retry import retry_decision
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +97,7 @@ async def sync_task_event(
     sessions = _sessions(ctx)
     store = SqlTaskEventStore(sessions)
     engine = TaskEventSync(store, _gateways(ctx, sessions))
+    task: SyncTask | None = None
     try:
         task = await _load_cross_tenant(store, parsed_id)
         if task is None:
@@ -105,7 +111,7 @@ async def sync_task_event(
     except TaskEventTransientError as exc:
         retries_left = job_try < MAX_TRIES
         if retries_left:
-            # The task is already `failed`; the next delivery can still succeed.
+            # The task is still `pending`, so the next delivery can settle it.
             delay = DEFAULT_RETRY.delay(job_try).total_seconds()
             logger.warning(
                 "calendar_sync.retry_scheduled task_id=%s attempt=%d",
@@ -119,14 +125,31 @@ async def sync_task_event(
             job_try,
             type(exc).__name__,
         )
+        await _mark_failed(store, parsed_id, task_version, task)
     except Exception as exc:
-        # Only the type: messages can carry provider or database content. Re-raise so ARQ
-        # applies the function's bounded `max_tries`: a transient database failure must not
-        # drop the delivery silently, and a permanent one still consumes that budget.
-        logger.warning(
-            "calendar_sync.unexpected task_id=%s error=%s", task_id, type(exc).__name__
+        # A plain exception would end the ARQ job for good, so only a classified transient
+        # failure (e.g. database connectivity) becomes a bounded `Retry`.
+        decision = retry_decision(
+            exc, job_try=job_try, max_transient_retries=MAX_TRIES - 1
         )
-        raise
+        if decision.retries and decision.delay_seconds is not None:
+            logger.warning(
+                "calendar_sync.retry_scheduled task_id=%s attempt=%d error=%s",
+                task_id,
+                job_try,
+                type(exc).__name__,
+            )
+            raise Retry(defer=decision.delay_seconds) from exc
+        # Only the type: messages can carry provider or database content. Not re-raised:
+        # ARQ would log the message and could not retry it anyway.
+        logger.warning(
+            "calendar_sync.unexpected task_id=%s attempt=%d error=%s exhausted=%s",
+            task_id,
+            job_try,
+            type(exc).__name__,
+            decision.exhausted,
+        )
+        await _mark_failed(store, parsed_id, task_version, task)
     finally:
         # The ARQ worker may reuse the context: never leave a tenant behind.
         clear_user()
@@ -140,6 +163,32 @@ async def _load_cross_tenant(
         return await store.load(task_id)
     finally:
         reset_cross_tenant(token)
+
+
+async def _mark_failed(
+    store: SqlTaskEventStore,
+    task_id: uuid.UUID,
+    version: int,
+    task: SyncTask | None,
+) -> None:
+    """Best-effort `pending -> failed` once no retry remains (version compare-and-set).
+
+    Without a loaded task the owner is unknown, so the write uses the same explicit
+    cross-tenant policy as the load. A failure here is only logged: the database is most
+    likely the reason the job could not finish in the first place.
+    """
+    token = bind_cross_tenant() if task is None else None
+    try:
+        await store.mark_failed(task_id, version)
+    except Exception as exc:
+        logger.warning(
+            "calendar_sync.mark_failed_error task_id=%s error=%s",
+            task_id,
+            type(exc).__name__,
+        )
+    finally:
+        if token is not None:
+            reset_cross_tenant(token)
 
 
 def _sessions(ctx: dict[str, Any]) -> SessionFactory:

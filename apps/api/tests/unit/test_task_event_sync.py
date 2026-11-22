@@ -761,7 +761,9 @@ async def test_a_disconnected_integration_blocks_the_task() -> None:
     assert store.blocked == [(task.task_id, 1)]
 
 
-async def test_transient_exhaustion_marks_failed_and_raises_for_arq() -> None:
+async def test_transient_exhaustion_keeps_pending_and_raises_for_arq() -> None:
+    """Thermos G1: the job marks `failed` only after its retry budget; a `failed` row could
+    never be settled by the same-version retry."""
     task = _task()
     store = Store(task)
     gateway = Gateway()
@@ -778,7 +780,7 @@ async def test_transient_exhaustion_marks_failed_and_raises_for_arq() -> None:
     assert len(gateway.insert_calls) == 2
     assert len(gateway.get_calls) == 2
     assert sleeper.delays == [0.25]
-    assert store.failed == [(task.task_id, 1)]
+    assert store.failed == []
     assert store.synced == []
 
 

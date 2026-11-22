@@ -555,7 +555,9 @@ async def _active_sync_event(
             OutboxEvent.type == SYNC_TASK_EVENT,
             OutboxEvent.resource_id == task_id,
             OutboxEvent.resource_version == version,
-            OutboxEvent.status.in_(("pending", "dispatched")),
+            # A dispatched row's job may already have finished and the dispatcher only
+            # publishes `pending` rows; the job is idempotent, so a new cycle is safe.
+            OutboxEvent.status == "pending",
         )
         .order_by(OutboxEvent.created_at.desc(), OutboxEvent.id.desc())
         .limit(1)
