@@ -167,15 +167,15 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
   return (
     <Card title={compact ? "agenda" : "calendario"}>
       <div className="flex flex-col gap-3">
-        <div className="grid gap-3 border-2 border-lavender/25 bg-dark/40 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
           <CalendarFreshness
             lastSyncedAt={data?.last_synced_at ?? null}
             coverageOk={data?.coverage_ok ?? false}
             coverageNotice={data === null ? "never_synced" : data.coverage_notice}
             stale={data?.stale ?? false}
           />
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="lowercase text-lavender/50">leyenda:</span>
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="lowercase text-lavender/60">leyenda:</span>
             <span className="border-2 border-[#64748b] bg-[#64748b] px-1.5 py-0.5 text-white">
               Google
             </span>
@@ -201,7 +201,7 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
           {data !== null && !data.coverage_ok && (
             <Link
               to="/settings"
-              className="lowercase text-xs text-mint underline decoration-dotted"
+              className="lowercase text-base text-mint underline decoration-dotted"
             >
               {data.coverage_notice === "never_synced"
                 ? "conectar google calendar"
@@ -213,33 +213,24 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
         </div>
 
         {syncNotice !== null && (
-          <p role="status" className="lowercase text-xs text-mint">
+          <p role="status" className="lowercase text-base text-mint">
             &gt; {syncNotice}
           </p>
         )}
 
         {syncError !== null && (
-          <p role="alert" className="lowercase text-xs text-mint">
+          <p role="alert" className="lowercase text-base text-mint">
             &gt; {syncError}
           </p>
         )}
 
-        <div className="grid gap-2 text-xs sm:grid-cols-3">
-          <div className="flex items-center justify-between border-2 border-lavender/25 px-2 py-1">
-            <span className="lowercase text-lavender/60">en el rango</span>
-            <span className="text-mint">{built.events.length}</span>
-          </div>
-          <div className="flex items-center justify-between border-2 border-lavender/25 px-2 py-1">
-            <span className="lowercase text-lavender/60">tareas dibujadas</span>
-            <span className="text-mint">
-              {built.events.filter((event) => event.extendedProps.kind === "task").length}
-            </span>
-          </div>
-          <div className="flex items-center justify-between border-2 border-lavender/25 px-2 py-1">
-            <span className="lowercase text-lavender/60">sin bloque</span>
-            <span className="text-mint">{withoutBlock.length}</span>
-          </div>
-        </div>
+        <p className="lowercase text-sm text-lavender/80">
+          <span className="text-mint">{built.events.length}</span> en rango ·{" "}
+          <span className="text-mint">
+            {built.events.filter((event) => event.extendedProps.kind === "task").length}
+          </span>{" "}
+          dibujadas · <span className="text-mint">{withoutBlock.length}</span> sin bloque
+        </p>
 
         {error !== null && (
           <div className="flex flex-wrap items-center gap-2">
@@ -258,7 +249,7 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
         )}
 
         {tasksWarning !== null && (
-          <p role="status" className="lowercase text-lavender/60">
+          <p role="status" className="lowercase text-base text-lavender/80">
             &gt; {tasksWarning}
           </p>
         )}
@@ -286,30 +277,32 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
         </div>
 
         {withoutBlock.length > 0 && (
-          <section className="border-2 border-lavender/25 px-3 py-2">
-            <h3 className="capitalize text-sm text-mint">tareas sin bloque de agenda</h3>
-            <p className="lowercase text-xs text-lavender/60">
+          <section className="flex flex-col gap-2">
+            <h3 className="capitalize text-lg text-mint">tareas sin bloque de agenda</h3>
+            <p className="lowercase text-base text-lavender/80">
               no se dibujan en el calendario porque no tienen un bloque confirmado.
             </p>
-            <ul className="mt-2 flex flex-col gap-1">
+            <ul className="flex flex-col">
               {withoutBlock.map((task) => {
                 const due = formatTaskDue(task);
                 return (
                   <li
                     key={task.id}
-                    className="flex flex-wrap items-center gap-2 border-b border-lavender/15 pb-1 text-xs last:border-b-0"
+                    className="flex flex-col gap-1 border-b border-lavender/15 py-2 last:border-b-0"
                   >
-                    <span className="normal-case text-lavender">{task.titulo}</span>
-                    <StatusBadge status={task.status} />
-                    <span className="text-lavender/50">
-                      {due ?? task.date_text ?? "sin fecha"}
-                    </span>
-                    <Link
-                      to="/gestion/tareas"
-                      className="ml-auto text-mint underline decoration-dotted"
-                    >
-                      revisar
-                    </Link>
+                    <span className="normal-case text-base text-lavender">{task.titulo}</span>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                      <StatusBadge status={task.status} />
+                      <span className="text-lavender/60">
+                        {due ?? task.date_text ?? "sin fecha"}
+                      </span>
+                      <Link
+                        to="/gestion/tareas"
+                        className="ml-auto inline-flex min-h-8 items-center text-mint underline decoration-dotted"
+                      >
+                        revisar
+                      </Link>
+                    </div>
                   </li>
                 );
               })}
