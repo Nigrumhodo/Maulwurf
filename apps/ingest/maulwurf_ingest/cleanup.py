@@ -14,10 +14,12 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import signal
 import tempfile
 import time
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -27,6 +29,11 @@ from maulwurf_ingest import hardening, metrics
 
 PROC = Path("/proc")
 logger = logging.getLogger(__name__)
+
+_ATTEMPT_DIR_RE = re.compile(
+    r"\Aattempt-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})-"
+)
 
 _ABSENCE_FLAGS = ("workdir_absent", "tmp_is_tmpfs")
 _ABSENCE_COUNTERS = (
@@ -114,6 +121,77 @@ def log_cleanup_failed(
         "cleanup.failed attempt_id=%s", attempt_id,
         extra={"attempt_id": attempt_id, "fields": counters},
     )
+
+
+def attempt_id_from_dirname(name: str) -> uuid.UUID | None:
+    """Parse ``attempt-<uuid>-<suffix>``. Other names are not attempt directories."""
+    match = _ATTEMPT_DIR_RE.match(name)
+    if match is None:
+        return None
+    try:
+        return uuid.UUID(match.group(1))
+    except ValueError:
+        return None
+
+
+def list_attempt_dirs(root: Path) -> list[Path]:
+    """Real attempt directories under ``root``. Symlinks are ignored."""
+    if not root.is_dir():
+        return []
+    found: list[Path] = []
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return []
+    for entry in entries:
+        if entry.is_symlink() or not entry.is_dir():
+            continue
+        if attempt_id_from_dirname(entry.name) is None:
+            continue
+        found.append(entry)
+    return sorted(found)
+
+
+@dataclass(frozen=True)
+class OrphanCleanup:
+    attempt_id: uuid.UUID
+    evidence: CleanupEvidence | None
+
+
+async def sweep_orphan_dirs(
+    root: Path, *, protected: set[uuid.UUID],
+) -> tuple[OrphanCleanup, ...]:
+    """Retry verified destruction of attempt directories with no live owner.
+
+    ``protected`` is the set of attempt ids that still hold a live lease or an
+    active receiving/transcribing row. Everything else is destroyed again so a
+    failed ``rmtree`` does not leave audio in the tmpfs until the container is
+    recreated.
+    """
+    results: list[OrphanCleanup] = []
+    for path in list_attempt_dirs(root):
+        attempt_id = attempt_id_from_dirname(path.name)
+        if attempt_id is None or attempt_id in protected:
+            continue
+        try:
+            evidence = await AttemptDir.destroy_one(path)
+        except Exception as exc:  # noqa: BLE001 — one directory must not abort the sweep
+            logger.error(
+                "cleanup.orphan_sweep_error attempt_id=%s error=%s",
+                attempt_id, type(exc).__name__,
+            )
+            log_cleanup_failed(str(attempt_id), None, error_type=type(exc).__name__)
+            results.append(OrphanCleanup(attempt_id, None))
+            continue
+        if evidence.workdir_absent:
+            logger.info(
+                "cleanup.orphan_swept attempt_id=%s verified=%s",
+                attempt_id, evidence.verified,
+            )
+        else:
+            log_cleanup_failed(str(attempt_id), evidence)
+        results.append(OrphanCleanup(attempt_id, evidence))
+    return tuple(results)
 
 
 def create_workdir(attempt_id: str, tmp_dir: str | None = None) -> Path:

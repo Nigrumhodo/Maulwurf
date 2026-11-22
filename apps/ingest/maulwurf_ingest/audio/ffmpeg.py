@@ -13,19 +13,23 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
-PROTOCOL_WHITELIST = "file,pipe,crypto"
+from maulwurf_ingest.config import settings
+
+# Local tmpfs inputs only. `crypto` is not required for wav/mp3/m4a/ogg/webm and
+# would let a nested protocol wrap a file the whitelist already allows.
+PROTOCOL_WHITELIST = "file,pipe"
 CANDIDATE_SAMPLE_RATE_HZ = 16_000
 
 # Techo de salida por invocación: el tmpfs provisional del slot (F0.2), no un
 # máximo de Riva. El timeout de pared conserva el de S1.B3.
 _OUTPUT_BYTES = 256 * 1024 * 1024
 _CPU_SECONDS = 300
-# ARM64/multi-core libavcodec + glibc arenas can reserve >2 GiB VA with minimal RSS;
-# physical RAM stays bounded by Docker mem_limit/memswap_limit.
-_ADDRESS_SPACE_BYTES = 4 * 1024 * 1024 * 1024
+# Matches the ingest container mem_limit (1 GiB). A 4 GiB RLIMIT_AS let one
+# ffmpeg mapping push the cgroup OOM killer into killing the whole service.
+_ADDRESS_SPACE_BYTES = settings.ffmpeg_address_space_bytes
 _TIME_LIMIT_S = 300
 _WALL_TIMEOUT_S = 600.0
 _FFMPEG_THREADS = 2
@@ -86,38 +90,84 @@ def bounded_argv(
     ]
 
 
+def limited_command(argv: Sequence[str], limits: FfmpegLimits) -> list[str]:
+    """Run `argv` under RLIMIT_CPU/AS/FSIZE without `preexec_fn`.
+
+    `preexec_fn` runs between fork and exec in the child while other threads
+    exist (the event loop, gRPC, the lease heartbeat) and can deadlock on a
+    libc lock. `prlimit` applies the limits and execs. When it is not installed,
+    a fresh interpreter applies `setrlimit` and execs — still no preexec hook.
+    """
+    if os.name != "posix":
+        return list(argv)
+    prlimit = shutil.which("prlimit")
+    if prlimit is not None:
+        return [
+            prlimit,
+            f"--cpu={limits.cpu_seconds}",
+            f"--as={limits.address_space_bytes}",
+            f"--fsize={limits.output_bytes}",
+            "--",
+            *argv,
+        ]
+    return [
+        sys.executable,
+        "-m",
+        "maulwurf_ingest.audio.limits_exec",
+        "--cpu",
+        str(limits.cpu_seconds),
+        "--as",
+        str(limits.address_space_bytes),
+        "--fsize",
+        str(limits.output_bytes),
+        "--",
+        *argv,
+    ]
+
+
+def _child_env() -> dict[str, str]:
+    # Two glibc arenas keep ffmpeg's virtual size inside the 1 GiB cap.
+    env = os.environ.copy()
+    env["MALLOC_ARENA_MAX"] = "2"
+    return env
+
+
 def run(argv: Sequence[str], *, limits: FfmpegLimits, capture_stderr: bool = False) -> bytes:
     """Ejecuta `argv` sin shell. Con `capture_stderr`, devuelve stderr y no lo loguea."""
     resolved = _resolve(argv)
+    command = limited_command(resolved, limits)
     stderr_mode: int | None = subprocess.PIPE if capture_stderr else subprocess.DEVNULL
+    env = _child_env()
     if os.name == "posix":
         completed = subprocess.run(  # noqa: S603 — argv lista, sin shell
-            resolved,
+            command,
             stdout=subprocess.DEVNULL,
             stderr=stderr_mode,
             timeout=limits.wall_timeout_s,
             check=False,
             shell=False,
-            preexec_fn=_limit_child(limits),
+            env=env,
         )
     elif sys.platform == "win32":
         completed = subprocess.run(  # noqa: S603 — argv lista, sin shell
-            resolved,
+            command,
             stdout=subprocess.DEVNULL,
             stderr=stderr_mode,
             timeout=limits.wall_timeout_s,
             check=False,
             shell=False,
             creationflags=subprocess.CREATE_NO_WINDOW,
+            env=env,
         )
     else:
         completed = subprocess.run(  # noqa: S603 — argv lista, sin shell
-            resolved,
+            command,
             stdout=subprocess.DEVNULL,
             stderr=stderr_mode,
             timeout=limits.wall_timeout_s,
             check=False,
             shell=False,
+            env=env,
         )
     if completed.returncode != 0:
         raise RuntimeError("ffmpeg_failed")
@@ -166,13 +216,3 @@ def ensure_conversion_complete(source_s: float, converted_s: float) -> None:
         raise RuntimeError("normalization_truncated")
 
 
-def _limit_child(limits: FfmpegLimits) -> Callable[[], None]:
-    def _apply() -> None:
-        import resource
-
-        cpu = (limits.cpu_seconds, limits.cpu_seconds)
-        space = (limits.address_space_bytes, limits.address_space_bytes)
-        resource.setrlimit(resource.RLIMIT_CPU, cpu)
-        resource.setrlimit(resource.RLIMIT_AS, space)
-
-    return _apply

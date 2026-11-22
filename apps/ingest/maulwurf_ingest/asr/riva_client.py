@@ -12,14 +12,18 @@ import asyncio
 import logging
 import math
 import os
+import re
 import secrets
+import ssl
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 from maulwurf_ingest.audio.reconcile import Word, parse_confidence
+from maulwurf_ingest.config import settings
 from maulwurf_ingest.logs import RedactionFilter
 
 MAX_ATTEMPTS = 3
@@ -33,6 +37,11 @@ _AUTH = frozenset({"UNAUTHENTICATED", "PERMISSION_DENIED"})
 _INVALID = frozenset({"INVALID_ARGUMENT"})
 _DEFAULT_SERVER = "grpc.nvcf.nvidia.com:443"
 _DEFAULT_FUNCTION_ID = "b702f636-f60c-4a3d-a6f4-f3568c13bd7d"
+_SERVER_RE = re.compile(
+    r"\A(?P<host>[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])\:(?P<port>[0-9]{1,5})\Z"
+)
+_SSL_TRUE = frozenset({"true", "1", "yes"})
+_SSL_FALSE = frozenset({"false", "0", "no"})
 _CLIENT_MAX_MESSAGE_LENGTH = 1_073_741_824
 _HTTP2_RESET_MARKERS = (
     "rst_stream",
@@ -44,6 +53,86 @@ _HTTP2_RESET_MARKERS = (
     "unexpected eof",
     "recvmsg",
 )
+
+
+def validate_riva_server(server: str) -> str:
+    """Accept only ``host:port``. A scheme or path is a different endpoint."""
+    candidate = server.strip()
+    if not candidate or any(char.isspace() for char in candidate):
+        raise RuntimeError("riva_server_invalid")
+    match = _SERVER_RE.fullmatch(candidate)
+    if match is None:
+        raise RuntimeError("riva_server_invalid")
+    port = int(match.group("port"))
+    if port < 1 or port > 65535:
+        raise RuntimeError("riva_server_invalid")
+    host = match.group("host")
+    if host.startswith(".") or host.endswith(".") or ".." in host:
+        raise RuntimeError("riva_server_invalid")
+    return candidate
+
+
+def _environment_name() -> str:
+    raw = os.environ.get("INGEST_ENV")
+    if raw is None:
+        raw = settings.environment
+    return raw.strip().casefold()
+
+
+def _system_store_verified() -> bool:
+    try:
+        context = ssl.create_default_context()
+    except ssl.SSLError:
+        return False
+    count = context.cert_store_stats().get("x509", 0)
+    return isinstance(count, int) and count > 0
+
+
+def resolve_riva_tls(*, use_ssl: bool, ca_file: str | None) -> str | None:
+    """Return an explicit CA path, or None for the verified system store.
+
+    Plaintext is refused outside ``INGEST_ENV=local``. A ``GRPC_DEFAULT_SSL_ROOTS_FILE_PATH``
+    that is not the explicit CA is a silent trust downgrade and is refused.
+    """
+    if not use_ssl:
+        if _environment_name() != "local":
+            raise RuntimeError("riva_tls_required")
+        return None
+    explicit = (ca_file or "").strip() or os.environ.get("INGEST_RIVA_CA_FILE", "").strip()
+    if not explicit:
+        configured = settings.riva_ca_file
+        explicit = configured.strip() if configured else ""
+    override = os.environ.get("GRPC_DEFAULT_SSL_ROOTS_FILE_PATH", "").strip()
+    if explicit:
+        path = Path(explicit)
+        if not path.is_file():
+            raise RuntimeError("riva_ca_unreadable")
+        if override:
+            try:
+                same = Path(override).resolve() == path.resolve()
+            except OSError:
+                same = False
+            if not same:
+                raise RuntimeError("riva_roots_overridden")
+        return str(path)
+    if override:
+        raise RuntimeError("riva_roots_overridden")
+    if not _system_store_verified():
+        raise RuntimeError("riva_system_store_missing")
+    return None
+
+
+def _use_ssl_from_env() -> bool:
+    raw = os.environ.get("RIVA_USE_SSL")
+    if raw is None:
+        return True
+    value = raw.strip().casefold()
+    if value in _SSL_TRUE:
+        return True
+    if value in _SSL_FALSE:
+        return False
+    # Anything else is not an explicit opt-in to TLS. Fail closed.
+    raise RuntimeError("riva_tls_required")
 
 
 def silence_grpc_metadata_trace() -> None:
@@ -239,11 +328,17 @@ class GrpcRivaTransport:
         server: str,
         function_id: str,
         per_call_timeout_s: float = _DEFAULT_PER_CALL_TIMEOUT_S,
+        use_ssl: bool = True,
+        ca_file: str | None = None,
     ) -> None:
         self._api_key = api_key
-        self._server = server
+        self._server = validate_riva_server(server)
         self._function_id = function_id
         self._per_call_timeout_s = per_call_timeout_s
+        self._use_ssl = use_ssl
+        self._ca_file = ca_file
+        if not use_ssl and _environment_name() != "local":
+            raise RuntimeError("riva_tls_required")
         self._auth: object | None = None
         self._asr: object | None = None
 
@@ -278,8 +373,10 @@ class GrpcRivaTransport:
         import riva.client
 
         silence_grpc_metadata_trace()
+        ca_file = resolve_riva_tls(use_ssl=self._use_ssl, ca_file=self._ca_file)
         auth = riva.client.Auth(
-            use_ssl=True,
+            use_ssl=self._use_ssl,
+            ssl_root_cert=ca_file,
             uri=self._server,
             metadata_args=[
                 ["function-id", self._function_id],
@@ -358,13 +455,20 @@ def riva_transport_from_env() -> GrpcRivaTransport:
     key = os.environ.get("NVIDIA_API_KEY", "").strip()
     if not key:
         raise RuntimeError("riva_unconfigured")
-    if os.environ.get("RIVA_USE_SSL", "true").strip().lower() != "true":
-        raise RuntimeError("riva_tls_required")
-    server = os.environ.get("RIVA_SERVER", _DEFAULT_SERVER).strip() or _DEFAULT_SERVER
+    use_ssl = _use_ssl_from_env()
+    server = validate_riva_server(
+        os.environ.get("RIVA_SERVER", _DEFAULT_SERVER).strip() or _DEFAULT_SERVER
+    )
     function_id = os.environ.get("RIVA_FUNCTION_ID", _DEFAULT_FUNCTION_ID).strip()
     if not function_id:
         function_id = _DEFAULT_FUNCTION_ID
-    return GrpcRivaTransport(api_key=key, server=server, function_id=function_id)
+    ca_file = os.environ.get("INGEST_RIVA_CA_FILE", "").strip() or None
+    # Fail at construction: a bad server, plaintext outside local, or a swapped
+    # root store must not wait until the first audio byte.
+    resolve_riva_tls(use_ssl=use_ssl, ca_file=ca_file)
+    return GrpcRivaTransport(
+        api_key=key, server=server, function_id=function_id, use_ssl=use_ssl, ca_file=ca_file,
+    )
 
 
 def _close_channel(auth: object) -> None:

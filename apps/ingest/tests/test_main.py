@@ -1,5 +1,7 @@
 """S1.B1: el arranque falla cerrado sin endurecimiento y /readyz refleja cada comprobación."""
 import asyncio
+import hashlib
+import hmac
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -230,25 +232,56 @@ async def test_startup_reconcile_skips_without_a_database_url(
     assert called is False
 
 
-def test_internal_metrics_requires_the_ingest_credential(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    secret = "ab" * 32
+def _metrics_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(hardening, "check", _no_failures)
     monkeypatch.setattr(settings, "ingest_hardening", "report")
-    monkeypatch.setattr(settings, "credential_secret", secret)
     monkeypatch.setattr(main, "reconcile_on_startup", _skip_reconcile)
     monkeypatch.setattr(
         main,
         "CHECKS",
         {"hardening": main.check_hardening, "tmpfs": _ok, "postgres": _ok, "credential": _ok},
     )
-    with TestClient(main.app) as client:
-        refused = client.get("/internal/metrics")
-        accepted = client.get("/internal/metrics", headers={"Authorization": f"Bearer {secret}"})
-    assert refused.status_code == 401
+    return TestClient(main.app)
+
+
+def test_internal_metrics_rejects_the_signing_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "ab" * 32
+    derived = hmac.new(
+        secret.encode(), b"maulwurf-ingest/metrics/v1", hashlib.sha256,
+    ).hexdigest()
+    monkeypatch.setattr(settings, "credential_secret", secret)
+    monkeypatch.setattr(settings, "metrics_token", None)
+    with _metrics_client(monkeypatch) as client:
+        missing = client.get("/internal/metrics")
+        signing = client.get("/internal/metrics", headers={"Authorization": f"Bearer {secret}"})
+        accepted = client.get(
+            "/internal/metrics", headers={"Authorization": f"Bearer {derived}"},
+        )
+    assert missing.status_code == 401
+    assert signing.status_code == 401
     assert accepted.status_code == 200
     assert "maulwurf_ingest_" in accepted.text
+
+
+def test_internal_metrics_uses_a_dedicated_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    secret = "ab" * 32
+    bearer = "metrics-only-credential"
+    derived = hmac.new(
+        secret.encode(), b"maulwurf-ingest/metrics/v1", hashlib.sha256,
+    ).hexdigest()
+    monkeypatch.setattr(settings, "credential_secret", secret)
+    monkeypatch.setattr(settings, "metrics_token", bearer)
+    with _metrics_client(monkeypatch) as client:
+        signing = client.get("/internal/metrics", headers={"Authorization": f"Bearer {secret}"})
+        derived_only = client.get(
+            "/internal/metrics", headers={"Authorization": f"Bearer {derived}"},
+        )
+        accepted = client.get("/internal/metrics", headers={"Authorization": f"Bearer {bearer}"})
+    assert signing.status_code == 401
+    assert derived_only.status_code == 401
+    assert accepted.status_code == 200
 
 
 async def test_startup_reconcile_failure_hides_the_dsn(

@@ -26,7 +26,7 @@ from starlette.requests import ClientDisconnect
 from maulwurf_ingest import admission, cleanup
 from maulwurf_ingest import lease as leases
 from maulwurf_ingest.audio.validate import probe_file
-from maulwurf_ingest.config import settings
+from maulwurf_ingest.config import SAFE_SLOT_CAP, settings
 from maulwurf_ingest.credential import (
     CredentialClaims,
     CredentialError,
@@ -35,7 +35,7 @@ from maulwurf_ingest.credential import (
     verify,
 )
 from maulwurf_ingest.outcomes import CATALOG, DISCARD_REASONS, HTTP_ONLY, ErrorSpec
-from maulwurf_ingest.receiver import PayloadTooLarge, receive
+from maulwurf_ingest.receiver import PayloadTooLarge, ReceiveResult, ReceptionTimeout, receive
 from maulwurf_ingest.supervisor import (
     Outcome,
     RunResult,
@@ -54,19 +54,29 @@ router = APIRouter()
 LEASE_TTL_S = 30.0
 CREDENTIAL_TTL_S = 30.0
 HOLD_TIMEOUT_S = 30.0
-ACTIVE_SLOTS = 1
 if CREDENTIAL_TTL_S > LEASE_TTL_S or HOLD_TIMEOUT_S > LEASE_TTL_S:
     raise RuntimeError("hold_exceeds_lease")
+
+
+def active_slot_count() -> int:
+    """Slots configured by ``INGEST_SLOTS``, clamped to the container budget."""
+    raw = settings.ingest_slots
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        return 1
+    return min(raw, SAFE_SLOT_CAP)
 
 _TASKS: set[asyncio.Task[object]] = set()
 
 
 class _Gate:
-    def __init__(self, slots: int) -> None:
-        self.slots = slots
+    def __init__(self) -> None:
         self._used = 0
         self._users: set[uuid.UUID] = set()
         self._lock = asyncio.Lock()
+
+    @property
+    def slots(self) -> int:
+        return active_slot_count()
 
     async def take(self, user_id: uuid.UUID) -> bool:
         async with self._lock:
@@ -111,7 +121,7 @@ class _Hold:
         self.cleanup_status: str | None = None
 
 
-_gate = _Gate(ACTIVE_SLOTS)
+_gate = _Gate()
 
 
 def slots_in_use() -> int:
@@ -419,6 +429,25 @@ async def _open_hold(
     raise RuntimeError("attempt_dir")
 
 
+async def _read_upload(request: Request, dest: Path) -> ReceiveResult:
+    """Read the body with a wall budget and a per-chunk idle budget.
+
+    The outer ``asyncio.timeout`` is the wall clock. ``receive`` applies the same
+    wall budget again and the idle gap, and deletes the partial file on either.
+    """
+    try:
+        async with asyncio.timeout(settings.reception_timeout_s):
+            return await receive(
+                request.stream(),
+                dest,
+                max_bytes=settings.max_upload_bytes,
+                chunk_timeout_s=settings.reception_chunk_timeout_s,
+                wall_timeout_s=settings.reception_timeout_s,
+            )
+    except TimeoutError as exc:
+        raise ReceptionTimeout() from exc
+
+
 @router.put("/internal/v1/receptions/{attempt_id}")
 async def put_receive(attempt_id: uuid.UUID, request: Request) -> JSONResponse:
     checked = _read_claims(request, op="receive", attempt_id=attempt_id, instance=None)
@@ -436,15 +465,14 @@ async def put_receive(attempt_id: uuid.UUID, request: Request) -> JSONResponse:
     if isinstance(opened, JSONResponse):
         return opened
     hold = opened
+    published = False
     failure = "supervisor_error"
     disconnected: BaseException | None = None
     try:
         if _declared_too_big(request):
             failure = "payload_too_large"
         else:
-            received = await receive(
-                request.stream(), hold.workdir / "original", max_bytes=settings.max_upload_bytes,
-            )
+            received = await _read_upload(request, hold.workdir / "original")
             decision = await asyncio.to_thread(probe_file, hold.workdir / "original")
             if decision.decision == "reject" or decision.duration_s is None:
                 failure = decision.reason if decision.reason in CATALOG else "supervisor_error"
@@ -462,6 +490,7 @@ async def put_receive(attempt_id: uuid.UUID, request: Request) -> JSONResponse:
                     "reception.held attempt_id=%s bytes=%s duration_s=%s",
                     attempt_id, received.received_bytes, decision.duration_s,
                 )
+                published = True
                 return JSONResponse(
                     status_code=200,
                     content={
@@ -474,16 +503,24 @@ async def put_receive(attempt_id: uuid.UUID, request: Request) -> JSONResponse:
                 )
     except PayloadTooLarge:
         failure = "payload_too_large"
+    except (ReceptionTimeout, TimeoutError):
+        failure = "reception_timeout"
     except (ClientDisconnect, asyncio.CancelledError) as exc:
         failure = "reception_interrupted"
         disconnected = exc
     except Exception as exc:
         logger.warning("reception.failed attempt_id=%s error=%s", attempt_id, type(exc).__name__)
         failure = "supervisor_error"
-    # Probe sits in the same try as the stream. A cancel there still deletes the file.
-    await asyncio.shield(
-        _safe_terminal(pool, hold, code=failure, from_status="receiving"),
-    )
+    finally:
+        # A hung body never reaches admit. Release the slot even if the status
+        # write fails; a published hold keeps it until admit, discard, or expiry.
+        if not published:
+            try:
+                await asyncio.shield(
+                    _safe_terminal(pool, hold, code=failure, from_status="receiving"),
+                )
+            finally:
+                await _gate.release(checked.user_id)
     if disconnected is not None:
         raise disconnected
     spec = CATALOG[failure]

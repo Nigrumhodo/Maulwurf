@@ -6,8 +6,9 @@ text, prompts, or credentials.
 
 Two operations are deliberately separate:
 
-- ``sweep_once`` repeats the startup recovery pass (``reconcile_committed`` and
-  ``sweep_stranded``). It never retranscribes and never takes a live lease.
+- ``sweep_once`` repeats the startup recovery pass (``reconcile_committed``,
+  ``sweep_stranded``, then a filesystem sweep of orphan attempt directories).
+  It never retranscribes and never takes a live lease.
 - ``resolve_attempts`` records an operator attestation for attempts whose audio was
   destroyed with a host or a container. It refuses to write without a destruction
   evidence file and only writes ``cleanup_status = 'verified'`` for attempts whose last
@@ -48,6 +49,7 @@ from maulwurf_ingest.reconciler import (
     ReconcileResult,
     local_workdirs,
     reconcile_committed,
+    sweep_orphan_dirs,
     sweep_stranded,
 )
 
@@ -451,6 +453,7 @@ async def sweep_once(
     """One startup-equivalent recovery pass. It never runs ASR and never takes a live lease."""
     reconciled = await reconcile_committed(pool, instance=instance, tmp_dir=tmp_dir)
     ended = await sweep_stranded(pool, tmp_dir=tmp_dir)
+    await sweep_orphan_dirs(pool, tmp_dir=tmp_dir)
     return SweepReport.from_results(reconciled, ended)
 
 

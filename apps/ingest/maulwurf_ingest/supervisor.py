@@ -51,11 +51,12 @@ from maulwurf_ingest.asr_job import ORIGINAL, SCRIPTED_NAME, STUB_TRANSCRIPT_NAM
 from maulwurf_ingest.audio.validate import probe_file
 from maulwurf_ingest.config import settings
 from maulwurf_ingest.outcomes import CATALOG
-from maulwurf_ingest.receiver import PayloadTooLarge, receive
+from maulwurf_ingest.receiver import PayloadTooLarge, ReceptionTimeout, receive
 from maulwurf_ingest.reconciler import (
     DEFAULT_LEASE_TTL,
     ReconcileResult,
     reconcile_committed,
+    sweep_orphan_dirs,
     sweep_stranded,
 )
 
@@ -140,11 +141,12 @@ async def sweep_once(
     pool: asyncpg.Pool, *, instance: str, tmp_dir: str | None = None,
     lease_ttl: timedelta = DEFAULT_LEASE_TTL,
 ) -> SweepResult:
-    """One recovery pass: post-commit reconciliation, then stranded attempts."""
+    """One recovery pass: post-commit reconciliation, stranded attempts, then orphan dirs."""
     committed = await reconcile_committed(
         pool, instance=instance, tmp_dir=tmp_dir, lease_ttl=lease_ttl,
     )
     stranded = await sweep_stranded(pool, tmp_dir=tmp_dir)
+    await sweep_orphan_dirs(pool, tmp_dir=tmp_dir)
     return SweepResult(committed=committed, stranded=stranded)
 
 
@@ -698,13 +700,23 @@ async def run_attempt(
             owned_audio = True
             try:
                 received = await receive(
-                    audio, workdir / ORIGINAL, max_bytes=settings.max_upload_bytes
+                    audio, workdir / ORIGINAL, max_bytes=settings.max_upload_bytes,
+                    chunk_timeout_s=settings.reception_chunk_timeout_s,
+                    wall_timeout_s=settings.reception_timeout_s,
                 )
             except PayloadTooLarge:
                 result.outcome = Outcome.REJECTED
                 if not await leases.transition(
                     pool, lease, from_status="receiving", to_status="rejected",
                     error_code="payload_too_large",
+                ):
+                    result.outcome = Outcome.LEASE_LOST
+                return result
+            except ReceptionTimeout:
+                result.outcome = Outcome.CANCELLED
+                if not await leases.transition(
+                    pool, lease, from_status="receiving", to_status="cancelled",
+                    error_code="reception_timeout",
                 ):
                     result.outcome = Outcome.LEASE_LOST
                 return result

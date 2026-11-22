@@ -4,10 +4,35 @@
 prefijo `INGEST_` (como `INGEST_SLOTS` en `.env.example`): la API rechaza cualquier
 `MAULWURF_*` que no conozca, y el `.env` es compartido.
 """
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import BeforeValidator, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Wall clock for one reception, and the idle gap that counts as an abandoned body.
+# A slow client must not hold the only admission slot until the edge times out.
+RECEPTION_TIMEOUT_S = 300.0
+RECEPTION_CHUNK_TIMEOUT_S = 30.0
+# Provisional ceiling from the 1 GiB container budget. The gate also clamps.
+SAFE_SLOT_CAP = 2
+# RLIMIT_AS aligned with the ingest container mem_limit (1 GiB), not the old 4 GiB.
+FFMPEG_ADDRESS_SPACE_FLOOR = 768 * 1024 * 1024
+FFMPEG_ADDRESS_SPACE_CEILING = 1024 * 1024 * 1024
+
+
+def _clamp_address_space(value: object) -> int:
+    """Keep ffmpeg's virtual-memory cap inside the container's 1 GiB budget."""
+    if isinstance(value, bool) or value is None:
+        return FFMPEG_ADDRESS_SPACE_CEILING
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return FFMPEG_ADDRESS_SPACE_CEILING
+    if parsed < FFMPEG_ADDRESS_SPACE_FLOOR:
+        return FFMPEG_ADDRESS_SPACE_FLOOR
+    if parsed > FFMPEG_ADDRESS_SPACE_CEILING:
+        return FFMPEG_ADDRESS_SPACE_CEILING
+    return parsed
 
 
 class Settings(BaseSettings):
@@ -62,6 +87,34 @@ class Settings(BaseSettings):
     )
     credential_previous_kid: str | None = Field(
         default=None, validation_alias="INGEST_CREDENTIAL_PREVIOUS_KID",
+    )
+    # Bearer for `/internal/metrics` only. Unset: the route derives a separate
+    # digest and rejects the signing secret presented in clear.
+    metrics_token: str | None = Field(default=None, validation_alias="INGEST_METRICS_TOKEN")
+    # `local` is the only profile that may open a plaintext Riva channel.
+    environment: str = Field(default="production", validation_alias="INGEST_ENV")
+    # Explicit PEM for the Riva channel. Unset uses the verified system store.
+    riva_ca_file: str | None = Field(default=None, validation_alias="INGEST_RIVA_CA_FILE")
+    ingest_slots: int = Field(
+        default=1, ge=1, le=SAFE_SLOT_CAP, validation_alias="INGEST_SLOTS",
+    )
+    reception_timeout_s: float = Field(
+        default=RECEPTION_TIMEOUT_S,
+        gt=0,
+        le=3_600.0,
+        validation_alias="INGEST_RECEPTION_TIMEOUT_S",
+    )
+    reception_chunk_timeout_s: float = Field(
+        default=RECEPTION_CHUNK_TIMEOUT_S,
+        gt=0,
+        le=300.0,
+        validation_alias="INGEST_RECEPTION_CHUNK_TIMEOUT_S",
+    )
+    ffmpeg_address_space_bytes: Annotated[
+        int, BeforeValidator(_clamp_address_space)
+    ] = Field(
+        default=FFMPEG_ADDRESS_SPACE_CEILING,
+        validation_alias="INGEST_FFMPEG_AS_BYTES",
     )
 
 
