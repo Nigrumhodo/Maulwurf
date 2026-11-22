@@ -64,7 +64,7 @@ export function SubjectStats({ subjects: initialSubjects }: SubjectStatsProps) {
       title="estadísticas por materia"
       footer={
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs text-lavender/70">
+          <span className="text-sm text-lavender/80">
             solo metadatos y texto · audio original no conservado (g1)
           </span>
           <Button
@@ -85,26 +85,26 @@ export function SubjectStats({ subjects: initialSubjects }: SubjectStatsProps) {
         <div className="lowercase flex flex-col gap-4">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="border-2 border-pure-black bg-dark p-2">
-              <p className="text-xs text-lavender/60">materias</p>
+              <p className="text-sm text-lavender/80">materias</p>
               <p className="text-2xl text-mint">{stats.subjectCount}</p>
             </div>
             <div className="border-2 border-pure-black bg-dark p-2">
-              <p className="text-xs text-lavender/60">clases listas / total</p>
+              <p className="text-sm text-lavender/80">clases listas / total</p>
               <p className="text-2xl text-mint">
                 {stats.readyClassCount} / {stats.classCount}
               </p>
             </div>
             <div className="border-2 border-pure-black bg-dark p-2">
-              <p className="text-xs text-lavender/60">duración transcrita</p>
+              <p className="text-sm text-lavender/80">duración transcrita</p>
               <p className="text-2xl text-mint">{stats.transcribedMinutes} min</p>
             </div>
             <div className="border-2 border-pure-black bg-dark p-2">
-              <p className="text-xs text-lavender/60">tareas confirmadas / por revisar</p>
+              <p className="text-sm text-lavender/80">tareas confirmadas / por revisar</p>
               <p className="text-2xl text-mint">
                 {stats.confirmedTaskCount} / {stats.pendingTaskCount}
               </p>
               {stats.completedTaskCount > 0 && (
-                <p className="text-xs text-lavender/70">
+                <p className="text-sm text-lavender/80">
                   {stats.completedTaskCount} completada(s)
                 </p>
               )}

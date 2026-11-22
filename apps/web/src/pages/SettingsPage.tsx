@@ -209,14 +209,19 @@ export function SettingsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="capitalize text-2xl text-mint">settings</h1>
+      <header className="flex flex-col gap-1">
+        <h1 className="capitalize text-2xl text-mint">ajustes</h1>
+        <p className="text-base text-lavender/80 max-w-prose">
+          perfil, notificaciones e integraciones con google.
+        </p>
+      </header>
 
       <Card title="perfil">
         {user === null ? (
           <p className="lowercase text-lavender">sin perfil cargado.</p>
         ) : (
-          <div className="lowercase flex flex-col gap-4 text-lavender">
-            <dl className="flex flex-col gap-2">
+          <div className="lowercase flex flex-col gap-3 text-lavender">
+            <dl className="flex flex-col gap-3">
               <div>
                 <dt className="text-mint">&gt; email</dt>
                 <dd>{user.email}</dd>
@@ -229,14 +234,16 @@ export function SettingsPage() {
 
             <form
               onSubmit={(event) => void handleSaveTimezone(event)}
-              className="flex flex-wrap items-end gap-3 border-t-2 border-lavender/20 pt-3"
+              className="flex flex-wrap items-end gap-3 border-t-2 border-lavender/30 pt-3"
             >
+              <div className="w-full max-w-sm">
               <TimezoneSelect
                 label="cambiar zona horaria"
                 value={timezoneDraft}
                 disabled={tzSaving}
                 onChange={(event) => setTimezoneDraft(event.target.value)}
               />
+              </div>
               <Button
                 type="submit"
                 size="sm"
@@ -286,12 +293,12 @@ export function SettingsPage() {
           {!statusLoading && statusError === null && (
             <div className="flex flex-wrap items-center gap-3">
               <StatusBadge status={gmailReady ? "connected" : "disconnected"} />
-              <span className="text-xs text-lavender/70">
+              <span className="text-sm text-lavender/80">
                 {gmailReady ? "permiso gmail.send concedido" : "sin permiso gmail.send"}
               </span>
               <a
                 href={GOOGLE_GMAIL_CONNECT_PATH}
-                className="inline-flex w-fit items-center gap-1 border-2 border-lavender/40 px-2 py-0.5 text-mint underline decoration-dotted hover:border-mint hover:bg-mint hover:text-on-accent"
+                className="inline-flex min-h-8 w-fit items-center gap-1 border-2 border-lavender/40 px-2 py-0.5 text-mint underline decoration-dotted hover:border-mint hover:bg-mint hover:text-on-accent"
               >
                 {gmailReady ? "reconectar gmail.send" : "conectar gmail (opt-in)"}
               </a>
@@ -311,7 +318,7 @@ export function SettingsPage() {
             {calendarNotice.kind === "connected" ? (
               <>
                 <p>&gt; google calendar conectado.</p>
-                <p className="text-xs">
+                <p className="text-sm">
                   las tareas bloqueadas volvieron a pendiente; nada se confirmó automáticamente.
                 </p>
               </>
@@ -322,24 +329,24 @@ export function SettingsPage() {
         )}
 
         {statusLoading ? (
-          <p className="lowercase text-lavender/60">&gt; comprobando Google Calendar…</p>
+          <p className="lowercase text-lavender/80">&gt; comprobando Google Calendar…</p>
         ) : statusError !== null ? (
           <p role="alert" className="lowercase text-mint">
             &gt; {statusError}
           </p>
         ) : google !== null ? (
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-3">
             <GoogleReconnect google={google} />
 
             {calendarScopesReady && (
-              <div className="lowercase flex flex-col gap-3 border-t-2 border-lavender/20 pt-3 text-lavender">
+              <div className="lowercase flex flex-col gap-3 border-t-2 border-lavender/30 pt-3 text-lavender">
                 <p className="text-mint">&gt; calendarios de lectura para tu agenda</p>
-                <p className="text-xs text-lavender/70">
+                <p className="text-sm text-lavender/80">
                   maulwurf escribe tareas confirmadas solo en el calendario secundario{" "}
                   <strong>Maulwurf</strong>; aquí eliges qué calendarios tuyos leer en la agenda.
                 </p>
 
-                <label className="flex items-center gap-2 text-sm">
+                <label className="flex min-h-10 items-center gap-2 text-sm">
                   <input
                     type="checkbox"
                     checked={readIds.includes("primary")}
@@ -351,7 +358,7 @@ export function SettingsPage() {
                 {remoteCalendars
                   .filter((item) => !item.primary && item.id !== "primary")
                   .map((item) => (
-                    <label key={item.id} className="flex items-center gap-2 text-sm">
+                    <label key={item.id} className="flex min-h-10 items-center gap-2 text-sm">
                       <input
                         type="checkbox"
                         checked={readIds.includes(item.id)}
@@ -392,12 +399,12 @@ export function SettingsPage() {
                 </div>
 
                 {calSettingsNotice !== null && (
-                  <p role="status" className="text-xs text-mint">
+                  <p role="status" className="text-sm text-mint">
                     &gt; {calSettingsNotice}
                   </p>
                 )}
                 {calSettingsError !== null && (
-                  <p role="alert" className="text-xs text-mint">
+                  <p role="alert" className="text-sm text-mint">
                     &gt; {calSettingsError}
                   </p>
                 )}

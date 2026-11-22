@@ -66,9 +66,9 @@ function ThresholdEditor({
   return (
     <fieldset className="flex flex-col gap-2 border-2 border-lavender/30 p-3">
       <legend className="capitalize px-1 text-mint">{title}</legend>
-      <p className="text-xs text-lavender/50">{hint}</p>
+      <p className="text-sm text-lavender/80">{hint}</p>
       {values.length === 0 ? (
-        <p className="lowercase text-lavender/60">
+        <p className="lowercase text-lavender/80">
           sin umbrales: no se enviarán recordatorios de este tipo.
         </p>
       ) : (
@@ -238,7 +238,7 @@ export function NotificationPreferences() {
   if (loading) {
     return (
       <Card title="notificaciones" as="section">
-        <p className="lowercase text-lavender/60">&gt; cargando preferencias…</p>
+        <p className="lowercase text-lavender/80">&gt; cargando preferencias…</p>
       </Card>
     );
   }
@@ -264,28 +264,28 @@ export function NotificationPreferences() {
 
   return (
     <Card title="notificaciones" as="section">
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-3">
         <fieldset className="flex flex-col gap-2 border-2 border-lavender/30 p-3">
           <legend className="capitalize px-1 text-mint">Gmail</legend>
-          <label className="flex items-start gap-2">
+          <label className="flex min-h-10 items-center gap-2">
             <input
               type="checkbox"
-              className="mt-1 h-4 w-4 accent-mint"
+              className="h-4 w-4 accent-mint"
               checked={draft.gmail_opt_in}
               disabled={saving}
               onChange={(event) => update("gmail_opt_in", event.target.checked)}
             />
             <span className="capitalize text-lavender">activar el opt-in de Gmail</span>
           </label>
-          <p className="lowercase text-sm text-lavender/70">
+          <p className="lowercase text-sm text-lavender/80">
             qué se envía: recordatorios de tareas con hora (48 h, 24 h y 2 h antes) y de todo
             el día (3 y 1 días antes a las 09:00 local); resumen diario a la hora elegida;
             resumen semanal el día elegido.
           </p>
-          <p className="lowercase text-sm text-lavender/70">
+          <p className="lowercase text-sm text-lavender/80">
             a qué email: {user?.email ?? "tu cuenta de Google"}.
           </p>
-          <p className="lowercase text-sm text-lavender/70">
+          <p className="lowercase text-sm text-lavender/80">
             cómo desactivarlo: desmarca esta casilla; sin opt-in no se registra ningún envío.
             el envío real lo controla el servidor; Gmail no garantiza exactamente un envío y
             no se reintenta automáticamente.
@@ -312,10 +312,10 @@ export function NotificationPreferences() {
 
         <fieldset className="flex flex-col gap-2 border-2 border-lavender/30 p-3">
           <legend className="capitalize px-1 text-mint">resumen diario</legend>
-          <label className="flex items-start gap-2">
+          <label className="flex min-h-10 items-center gap-2">
             <input
               type="checkbox"
-              className="mt-1 h-4 w-4 accent-mint"
+              className="h-4 w-4 accent-mint"
               checked={draft.digest_daily_enabled}
               disabled={saving}
               onChange={(event) => update("digest_daily_enabled", event.target.checked)}
@@ -329,25 +329,25 @@ export function NotificationPreferences() {
             disabled={saving}
             onChange={(event) => update("digest_daily_time", event.target.value.slice(0, 5))}
           />
-          <p className="lowercase text-xs text-lavender/50">
+          <p className="lowercase text-sm text-lavender/80">
             zona horaria del perfil: {user?.timezone ?? "sin perfil"}.
           </p>
         </fieldset>
 
         <fieldset className="flex flex-col gap-2 border-2 border-lavender/30 p-3">
           <legend className="capitalize px-1 text-mint">resumen semanal</legend>
-          <label className="flex items-start gap-2">
+          <label className="flex min-h-10 items-center gap-2">
             <input
               type="checkbox"
-              className="mt-1 h-4 w-4 accent-mint"
+              className="h-4 w-4 accent-mint"
               checked={draft.digest_weekly_enabled}
               disabled={saving}
               onChange={(event) => update("digest_weekly_enabled", event.target.checked)}
             />
             <span className="capitalize text-lavender">activar resumen semanal</span>
           </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-lavender/60">día</span>
+          <label className="flex max-w-sm flex-col gap-1">
+            <span className="text-lavender/80">día</span>
             <select
               aria-label="día del resumen semanal"
               value={draft.digest_weekday}
@@ -398,12 +398,12 @@ export function NotificationPreferences() {
             {testing ? "registrando prueba…" : "enviar prueba"}
           </Button>
           {!saved.gmail_opt_in && (
-            <span className="lowercase text-xs text-lavender/50">
+            <span className="lowercase text-sm text-lavender/80">
               activa el opt-in y guarda para poder enviar una prueba.
             </span>
           )}
           {dirty && (
-            <span className="lowercase text-xs text-lavender/50">
+            <span className="lowercase text-sm text-lavender/80">
               hay cambios sin guardar.
             </span>
           )}

@@ -460,7 +460,9 @@ export function UploadForm() {
         )}
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <section className="flex flex-col gap-3">
+        <h3 className="text-base text-mint">&gt; qué</h3>
+        <div className="grid gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-1">
           <label className="lowercase font-pixel flex flex-col gap-1">
             <span className="text-mint">&gt; materia</span>
@@ -484,6 +486,24 @@ export function UploadForm() {
           )}
         </div>
 
+        <Input
+          label="título (opcional)"
+          placeholder="clase 03 — integrales"
+          value={draft.title}
+          onChange={(event) => update("title", event.target.value)}
+        />
+        <Input
+          label="profesor (opcional)"
+          placeholder=""
+          value={draft.teacher}
+          onChange={(event) => update("teacher", event.target.value)}
+        />
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h3 className="text-base text-mint">&gt; cuándo</h3>
+        <div className="grid gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-1">
           <DateInput
             label="fecha de clase"
@@ -506,6 +526,12 @@ export function UploadForm() {
           )}
         </div>
 
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h3 className="text-base text-mint">&gt; idioma</h3>
+        <div className="grid gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-1">
           <LanguageSelect
             label="idioma del audio"
@@ -518,21 +544,10 @@ export function UploadForm() {
           )}
         </div>
 
-        <Input
-          label="título (opcional)"
-          placeholder="clase 03 — integrales"
-          value={draft.title}
-          onChange={(event) => update("title", event.target.value)}
-        />
-        <Input
-          label="profesor (opcional)"
-          placeholder=""
-          value={draft.teacher}
-          onChange={(event) => update("teacher", event.target.value)}
-        />
-      </div>
+        </div>
+      </section>
 
-      <div className="lowercase flex flex-col gap-2 border-2 border-mint px-4 py-3">
+      <div className="lowercase flex flex-col gap-2 border-2 border-lavender/30 px-4 py-3">
         <p className="text-mint">
           aviso de privacidad · versión {noticeVersion ?? "no publicada"}
         </p>
