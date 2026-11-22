@@ -516,7 +516,7 @@ async def test_reanalysis_leaves_an_activated_revision_untouched(
     assert active.version == 3
 
 
-async def test_reanalysis_supersedes_a_pending_edit_without_mutating_the_task(
+async def test_reanalysis_keeps_a_pending_user_edit_without_mutating_the_task(
     db_session: AsyncSession,
 ) -> None:
     actor, audio = await _class(db_session)
@@ -547,13 +547,13 @@ async def test_reanalysis_supersedes_a_pending_edit_without_mutating_the_task(
     await db_session.flush()
     db_session.expire_all()
 
-    discarded = await db_session.get(TaskRevision, manual_id)
-    assert discarded is not None
-    assert discarded.status == "discarded"
+    kept = await db_session.get(TaskRevision, manual_id)
+    assert kept is not None
+    assert kept.status == "pending_confirmation"
     pending = await _latest_revision(db_session, task_id, status="pending_confirmation")
     assert pending is not None
-    assert pending.revision_type == "reanalysis"
-    assert pending.base_task_version == 3
+    assert pending.id == manual_id
+    assert pending.revision_type == "edit_of_confirmed"
     active = await db_session.get(Task, task_id)
     assert active is not None
     assert active.titulo == "First title"
