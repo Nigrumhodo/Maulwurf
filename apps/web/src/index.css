@@ -28,9 +28,9 @@
   --color-on-accent: #050505;
   --color-surface: #0a0a0a;
 
-  /* Tipografía retro monospaced */
-  --font-pixel: "VT323", "Courier New", monospace;
-  --font-code: "Fira Code", "Space Mono", monospace;
+  /* System monospace only: a third-party font host would leak IP and User-Agent. */
+  --font-pixel: ui-monospace, "Cascadia Mono", "Segoe UI Mono", "Courier New", monospace;
+  --font-code: ui-monospace, "Cascadia Mono", "Segoe UI Mono", "Courier New", monospace;
 
   /* Sombras "bloque" (bordes rígidos, sin radio) */
   --shadow-block: 4px 4px 0 0 var(--color-pure-black);
