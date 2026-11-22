@@ -13,6 +13,22 @@ la política G1 de audio efímero (`tmpfs` no ejecutable sin volumen persistente
 - Edge TLS / reverse proxy: `infra/deploy/Caddyfile.prod`
 - Scraper interno de métricas (perfil opcional `observability`): `infra/deploy/prometheus.yml`
 
+### 1.1 Front proxy on the shared host
+
+The production host also runs Plane, whose own Caddy is the public entry point: it takes the
+host's 80/443 and forwards Maulwurf's traffic to this stack's Caddy. Consequences:
+
+- `Caddyfile.prod` sets `trusted_proxies static private_ranges` so Maulwurf's Caddy keeps the
+  client IP that the front Caddy forwards in `X-Forwarded-For`; without it every request
+  would carry the front Caddy's address and all users would share one API rate-limit bucket.
+- The front (Plane) Caddy must **not** trust client-supplied `X-Forwarded-For`: it is the
+  edge and must overwrite that header with the real peer address.
+- Any private-network peer that can reach Maulwurf's Caddy directly is trusted too; narrow
+  `trusted_proxies` to the shared Docker network's subnet once that subnet is fixed.
+- This differs from ADR-0010 option (a) (Caddy as the only ingress) and from the `80:80` /
+  `443:443` publication in `infra/docker-compose.prod.yml`; the host-specific wiring is not
+  versioned in this repository.
+
 ---
 
 ## 2. Variables y secretos obligatorios

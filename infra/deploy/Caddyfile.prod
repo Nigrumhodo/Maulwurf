@@ -3,6 +3,11 @@
 	admin off
 
 	servers {
+		# Production runs behind the Plane stack's Caddy on the same host, which reaches this
+		# Caddy from a private address. Trusting private peers keeps the real client IP for the
+		# API rate limits; the front Caddy must not trust client-supplied X-Forwarded-For.
+		# Narrow this to the shared network's subnet once it is fixed in the compose file.
+		trusted_proxies static private_ranges
 		timeouts {
 			read_body 40m
 			read_header 30s
