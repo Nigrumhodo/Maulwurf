@@ -1,13 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import { fetchAudios } from "@/lib/audios";
-import type { AudioListItemOut } from "@/lib/audios";
-import { computeSubjectStats } from "@/lib/stats";
-import { fetchSubjects } from "@/lib/subjects";
+import { useSubjectStats } from "@/components/subjects/useSubjectStats";
 import type { Subject } from "@/lib/subjects";
-import { fetchTaskPage } from "@/lib/tasks";
-import type { Task } from "@/lib/tasks";
 
 // D4.4 — Metadata & text-only study statistics. Zero audio files, URLs, or playback.
 
@@ -16,48 +10,7 @@ export interface SubjectStatsProps {
 }
 
 export function SubjectStats({ subjects: initialSubjects }: SubjectStatsProps) {
-  const [subjects, setSubjects] = useState<Subject[]>(initialSubjects ?? []);
-  const [audios, setAudios] = useState<AudioListItemOut[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (initialSubjects !== undefined) setSubjects(initialSubjects);
-  }, [initialSubjects]);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    const [subjectsRes, audiosRes, tasksRes] = await Promise.allSettled([
-      initialSubjects !== undefined ? Promise.resolve(initialSubjects) : fetchSubjects(),
-      fetchAudios(),
-      fetchTaskPage({ status: "all", limit: 200 }),
-    ]);
-    if (subjectsRes.status === "fulfilled" && Array.isArray(subjectsRes.value)) {
-      setSubjects(subjectsRes.value);
-    }
-    if (audiosRes.status === "fulfilled" && Array.isArray(audiosRes.value)) {
-      setAudios(audiosRes.value);
-    }
-    if (tasksRes.status === "fulfilled" && Array.isArray(tasksRes.value?.items)) {
-      setTasks(tasksRes.value.items);
-    }
-    setLoading(false);
-  }, [initialSubjects]);
-
-  useEffect(() => {
-    void load();
-    function onVisible() {
-      if (document.visibilityState === "visible") {
-        void load();
-      }
-    }
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [load]);
-
-  const stats = computeSubjectStats(subjects, audios, tasks);
+  const { stats, loading, reload } = useSubjectStats(initialSubjects);
 
   return (
     <Card
@@ -72,7 +25,7 @@ export function SubjectStats({ subjects: initialSubjects }: SubjectStatsProps) {
             size="sm"
             variant="ghost"
             disabled={loading}
-            onClick={() => void load()}
+            onClick={() => void reload()}
           >
             {loading ? "actualizando…" : "actualizar"}
           </Button>
