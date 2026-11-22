@@ -47,6 +47,13 @@ EMBEDDINGS_PATH = "embeddings"
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 _LOCAL_STUB_HOSTS = frozenset({"provider-double", "e2e-provider"})
 _LOCAL_ENVS = frozenset({"local", "ci"})
+EmbeddingInputType = Literal["query", "passage"]
+# Backoff base with a 2^(attempt-1) factor plus multiplicative jitter. `Retry-After` is capped
+# too: a huge header must not block the job indefinitely.
+_RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
+# 400 is handled separately: it can be an overlong batch (model limit) or a malformed request,
+# and that distinction changes the error code the job publishes.
+_TOO_LONG_MARKERS = ("context length", "maximum context", "too long", "too many tokens")
 
 
 def _require_tls_base_url(base_url: str, *, env: str, allow_insecure: bool) -> None:
@@ -68,13 +75,6 @@ def _require_tls_base_url(base_url: str, *, env: str, allow_insecure: bool) -> N
         "El proveedor de embeddings exige HTTPS fuera de un host local de prueba.",
         details={"reason": "insecure_base_url"},
     )
-EmbeddingInputType = Literal["query", "passage"]
-# Backoff base with a 2^(attempt-1) factor plus multiplicative jitter. `Retry-After` is capped
-# too: a huge header must not block the job indefinitely.
-_RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
-# 400 is handled separately: it can be an overlong batch (model limit) or a malformed request,
-# and that distinction changes the error code the job publishes.
-_TOO_LONG_MARKERS = ("context length", "maximum context", "too long", "too many tokens")
 
 
 class EmbeddingError(Exception):

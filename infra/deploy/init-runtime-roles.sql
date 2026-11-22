@@ -10,54 +10,57 @@
 -- Idempotent. Re-running rotates the passwords and resets attributes that must
 -- stay off (SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB).
 --
--- Apply after `alembic upgrade head`, from the operator shell (passwords come
--- from the environment, not from this file):
+-- Apply after `alembic upgrade head`, from the operator shell. Passwords are read
+-- from the environment inside psql via `\getenv` (PostgreSQL 15+; this project
+-- pins PG16) so they never appear in `ps` output or shell history:
 --
+--   set -a && source .env.prod && set +a
 --   psql "postgresql://${POSTGRES_USER}@127.0.0.1/${POSTGRES_DB}" \
 --     -v ON_ERROR_STOP=1 \
---     -v app_password="$DATABASE_PASSWORD_APP" \
---     -v ingest_password="$DATABASE_PASSWORD_INGEST" \
---     -v jobs_password="$DATABASE_PASSWORD_JOBS" \
 --     -f infra/deploy/init-runtime-roles.sql
 --
--- The password in each DATABASE_URL_* value must be the one passed here.
--- Use a single-line hex password (openssl rand -hex 24). Do not put $$ in it.
+-- On self-hosted PostgreSQL with `log_statement = 'all'` or `'ddl'`, run with
+-- `PGOPTIONS="-c log_statement=none"` so CREATE/ALTER ROLE PASSWORD statements
+-- do not reach server logs.
+--
+-- The password in each DATABASE_URL_* value must match the corresponding
+-- DATABASE_PASSWORD_* variable. Use a single-line hex password
+-- (`openssl rand -hex 24`). Do not put $$ in it.
 
 \set ON_ERROR_STOP on
 
+\getenv app_password DATABASE_PASSWORD_APP
+\getenv ingest_password DATABASE_PASSWORD_INGEST
+\getenv jobs_password DATABASE_PASSWORD_JOBS
+
 \if :{?app_password}
 \else
-\echo init-runtime-roles.sql: pass -v app_password=...
-\quit 2
+DO $mw$ BEGIN RAISE EXCEPTION 'init-runtime-roles.sql: DATABASE_PASSWORD_APP must be set in the environment'; END $mw$;
 \endif
 
 \if :{?ingest_password}
 \else
-\echo init-runtime-roles.sql: pass -v ingest_password=...
-\quit 2
+DO $mw$ BEGIN RAISE EXCEPTION 'init-runtime-roles.sql: DATABASE_PASSWORD_INGEST must be set in the environment'; END $mw$;
 \endif
 
 \if :{?jobs_password}
 \else
-\echo init-runtime-roles.sql: pass -v jobs_password=...
-\quit 2
+DO $mw$ BEGIN RAISE EXCEPTION 'init-runtime-roles.sql: DATABASE_PASSWORD_JOBS must be set in the environment'; END $mw$;
 \endif
 
 -- psql substitutes :'var' only outside dollar quotes, so the length check stays here.
+-- RAISE EXCEPTION aborts with non-zero exit code 3 under ON_ERROR_STOP (psql \quit always exits 0).
 SELECT (length(:'app_password') < 16) AS app_short \gset
 SELECT (length(:'ingest_password') < 16) AS ingest_short \gset
 SELECT (length(:'jobs_password') < 16) AS jobs_short \gset
 \if :app_short
-\echo init-runtime-roles.sql: app_password must be at least 16 characters
-\quit 2
+DO $mw$ BEGIN RAISE EXCEPTION 'init-runtime-roles.sql: DATABASE_PASSWORD_APP must be at least 16 characters'; END $mw$;
 \endif
 \if :ingest_short
-\echo init-runtime-roles.sql: ingest_password must be at least 16 characters
-\quit 2
+DO $mw$ BEGIN RAISE EXCEPTION 'init-runtime-roles.sql: DATABASE_PASSWORD_INGEST must be at least 16 characters'; END $mw$;
 \endif
 \if :jobs_short
-\echo init-runtime-roles.sql: jobs_password must be at least 16 characters
-\quit 2
+DO $mw$ BEGIN RAISE EXCEPTION 'init-runtime-roles.sql: DATABASE_PASSWORD_JOBS must be at least 16 characters'; END $mw$;
 \endif
 
 DO $mw$

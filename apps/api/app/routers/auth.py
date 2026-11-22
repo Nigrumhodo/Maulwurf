@@ -114,8 +114,10 @@ def oauth_callback_payload(request: Request, state: str | None) -> dict[str, Any
     """Signed state whose `state` matches the callback, preferring a flow-specific cookie.
 
     A legacy `mw_oauth` cookie is accepted only when no flow cookie matches, so existing
-    clients keep working. A query `state` that matches none of the cookies is rejected
-    instead of falling through to a different flow.
+    clients keep working. When multiple flow cookies are present and `state` matches none,
+    return `None` so one flow never falls through to another; when only a single signed
+    flow cookie exists, return it so that flow's callback rejects the mismatch on its own
+    redirect target and clears its cookie.
     """
     found: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -142,7 +144,7 @@ def oauth_callback_payload(request: Request, state: str | None) -> dict[str, Any
             and _constant_eq(state, expected)
         ):
             matched = payload
-    if state is not None:
+    if matched is not None:
         return matched
     if len(found) == 1:
         return found[0]
@@ -426,6 +428,10 @@ async def google_callback(
             request, db, payload, error=error, code=code, state=state
         )
     if error is not None:
+        if state is not None:
+            expected_state = payload.get("state") if payload is not None else None
+            if not isinstance(expected_state, str) or not _constant_eq(state, expected_state):
+                return _login_error("invalid_state")
         return _login_error("access_denied")
     if code is None or state is None:
         return _login_error("missing_params")

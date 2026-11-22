@@ -32,3 +32,12 @@ yet fixed. Dependency and image updates are tracked by Dependabot.
 Never commit `.env`, `.env.prod`, or files under `infra/deploy/secrets/`. Those paths
 are gitignored. Production templates that are safe to commit are `.env.example` and
 `infra/deploy/.env.prod.example`.
+
+## Browser security headers (CSP)
+
+The web server (`apps/web/src/server/security.ts`) enforces a strict Content Security
+Policy with `script-src 'self'` (no `'unsafe-inline'` or `'unsafe-eval'`),
+`object-src 'none'`, and `frame-ancestors 'none'`. It currently permits
+`style-src-elem 'unsafe-inline'` and `style-src-attr 'unsafe-inline'` as a documented
+concession for FullCalendar's runtime style injection; revisit this if FullCalendar is
+replaced or configured with nonced stylesheets.

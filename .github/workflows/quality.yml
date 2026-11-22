@@ -360,6 +360,18 @@ jobs:
         run: python3 scripts/ci/check_caddy_limits.py --caddyfile infra/Caddyfile --profile dev
       - name: Production Caddy limits
         run: python3 scripts/ci/check_caddy_limits.py --caddyfile infra/deploy/Caddyfile.prod --profile prod --public-tls
+      - name: Validate Caddyfile syntax with real Caddy binary
+        run: |
+          CADDY_IMAGE="caddy:2.8-alpine@sha256:af32e97399febea808609119bb21544d0265c58a02836576e32a2d082c262c17"
+          docker run --rm -e CADDY_HTTPS_PORT=443 \
+            -v "$PWD/infra/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            "$CADDY_IMAGE" caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile --validate >/dev/null
+          docker run --rm -e MAULWURF_DOMAIN=maulwurf.example.com \
+            -v "$PWD/infra/deploy/Caddyfile.prod:/etc/caddy/Caddyfile:ro" \
+            "$CADDY_IMAGE" caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile --validate >/dev/null
+          docker run --rm -e MAULWURF_DOMAIN=maulwurf.example.com -e CADDY_TRUSTED_PROXIES=172.28.10.0/24 \
+            -v "$PWD/infra/deploy/Caddyfile.prod:/etc/caddy/Caddyfile:ro" \
+            "$CADDY_IMAGE" caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile --validate >/dev/null
 
   # C-S2-JL-13 (L2.11): fail when a backticked repository path does not exist.
   docs:

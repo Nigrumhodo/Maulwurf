@@ -138,6 +138,7 @@ services:
           printf 'requirepass %s\n' "$$REDIS_PASSWORD"
         } > /tmp/redis.conf
         exec redis-server /tmp/redis.conf
+    # Healthcheck authenticates via REDISCLI_AUTH from the service environment.
     healthcheck:
       test: ["CMD", "redis-cli", "--no-auth-warning", "ping"]
       interval: 5s

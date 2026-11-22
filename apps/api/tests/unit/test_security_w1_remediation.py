@@ -348,6 +348,14 @@ def test_callback_still_accepts_the_legacy_cookie() -> None:
     assert payload.get("mode") == "gmail_connect"
 
 
+def test_callback_routes_single_flow_mismatch_back_to_that_flow() -> None:
+    calendar = _signed("calendar-state", mode="connect", user_id="user-1")
+    payload = oauth_callback_payload(_request({OAUTH_COOKIE_NAME: calendar}), "forged")
+    assert payload is not None
+    assert payload.get("mode") == "connect"
+    assert payload.get("state") == "calendar-state"
+
+
 def test_previous_encryption_key_is_a_pair() -> None:
     with pytest.raises(ValidationError, match="van juntos"):
         Settings(_env_file=None, **_SECRETS, previous_encryption_key="old-key-value")

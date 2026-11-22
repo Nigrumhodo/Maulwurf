@@ -83,7 +83,7 @@ services:
       RIVA_SERVER: e2e-asr:50051
       RIVA_FUNCTION_ID: e2e-function
       RIVA_USE_SSL: "true"
-      GRPC_DEFAULT_SSL_ROOTS_FILE_PATH: /e2e-tls/ca.pem
+      INGEST_RIVA_CA_FILE: /e2e-tls/ca.pem
       INGEST_CREDENTIAL_SECRET: 4d41554c575552464d41554c575552464d41554c575552464d41554c57555246
     volumes:
       - ${E2E_TLS_DIR:-../.e2e-tls}:/e2e-tls:ro
