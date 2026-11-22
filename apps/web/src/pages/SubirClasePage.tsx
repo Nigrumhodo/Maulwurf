@@ -1,4 +1,3 @@
-import { Card } from "@/components/ui/Card";
 import { UploadForm } from "@/components/upload/UploadForm";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
@@ -8,17 +7,16 @@ import { useDocumentTitle } from "@/lib/useDocumentTitle";
 export function SubirClasePage() {
   useDocumentTitle("subir clase");
   return (
-    <div className="flex flex-col gap-6">
-      <header className="flex flex-col gap-1">
+    <section className="lowercase font-pixel min-w-0 max-w-full border-2 border-pure-black bg-surface shadow-block">
+      <header className="flex flex-col gap-1 border-b-2 border-lavender/30 p-4 sm:p-6">
         <h1 className="capitalize text-2xl text-mint">subir clase</h1>
         <p className="text-base text-lavender/80 max-w-prose">
           reserva la clase y luego envía el audio; solo se conserva el texto.
         </p>
       </header>
-
-      <Card title="datos de la clase" variant="accent">
+      <div className="p-4 sm:p-6">
         <UploadForm />
-      </Card>
-    </div>
+      </div>
+    </section>
   );
 }
