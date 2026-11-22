@@ -99,6 +99,7 @@ _SESSION_CALLS = frozenset(
         "require_mutation_any",
         "resolve_authenticated_session",
         "resolve_mutation_session",
+        "_navigation_session",
     }
 )
 _HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete"})

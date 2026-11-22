@@ -55,7 +55,7 @@ _URL_CREDENTIALS: Final = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]*://)[^\s/@]+@")
 _BEARER: Final = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-~+/=]+")
 # OAuth callback parameters: the authorization `code` is a short-lived credential and the
 # `state` binds it to the signed cookie, so neither may reach an access log line.
-_SENSITIVE_QUERY_KEYS: Final = frozenset({"code", "state"})
+_SENSITIVE_QUERY_KEYS: Final = _SENSITIVE_EXACT
 _QUERY_PARAM: Final = re.compile(r"(?P<lead>[?&])(?P<key>[^=&#]+)=(?P<value>[^&#]*)")
 _UVICORN_ACCESS_PATH_ARG: Final = 2
 
@@ -142,12 +142,11 @@ class RedactionFilter(logging.Filter):
         # Scrub values, then the rendered line. Scrubbing the format string first
         # turns `api_key=%s` into `api_key=[REDACTED]` and leaves the real argument
         # unconverted (`not all arguments converted`).
-        uvicorn_access = (
+        if (
             record.name == "uvicorn.access"
             and isinstance(record.args, tuple)
             and len(record.args) == 5
-        )
-        if uvicorn_access:
+        ):
             # AccessFormatter reads this 5-tuple after the filter, so it has to stay.
             record.args = tuple(
                 self._scrub_access_arg(index, arg) for index, arg in enumerate(record.args)

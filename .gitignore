@@ -28,8 +28,6 @@ infra/deploy/**/*.token
 .env.local
 .env.*.local
 .env.plane.local
-.env.prod
-infra/deploy/secrets/
 *.dump.gpg
 *.pem
 *.key

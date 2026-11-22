@@ -172,12 +172,6 @@ class ChatTurnStream:
         except RedisError:
             logger.warning("chat.stream_slot_refresh_failed")
 
-    def _stream_timeout_error(self) -> ChatStreamError:
-        return ChatStreamError(
-            code="stream_timeout",
-            message="La respuesta tardó demasiado; vuelve a intentarlo.",
-        )
-
     async def _validate_citation(
         self, user_id: uuid.UUID, source: RetrievedChunk
     ) -> RetrievedChunk | None:

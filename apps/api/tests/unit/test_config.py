@@ -222,7 +222,7 @@ def test_surrounding_whitespace_in_a_provider_secret_is_rejected() -> None:
 
 def test_public_origin_requires_https_outside_local() -> None:
     with pytest.raises(ValidationError, match="https"):
-        _settings(env="staging", **{**PROD_URLS, "public_origin": "http://maulwurf.example"})
+        _prod(env="staging", public_origin="http://maulwurf.example")
 
 
 def test_allowed_origin_has_no_trailing_slash() -> None:
