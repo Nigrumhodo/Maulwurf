@@ -31,6 +31,7 @@ import {
   variantConflict,
 } from "@/lib/upload";
 import type { AudioCreated, UploadProgress } from "@/lib/upload";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 // D2.4 — Biblioteca real (E-S2-DA-06): listado por materia con agregado y estados por
 // etapa, aviso permanente de «audio no conservado» y acciones diferenciadas. «Volver a
@@ -47,6 +48,7 @@ interface Notice {
 }
 
 export function BibliotecaPage() {
+  useDocumentTitle("biblioteca");
   const [items, setItems] = useState<LibraryAudio[]>([]);
   const [capabilities, setCapabilities] = useState<IngestionCapabilities | null>(null);
   const [loading, setLoading] = useState(true);

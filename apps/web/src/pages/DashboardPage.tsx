@@ -5,10 +5,12 @@ import { TapeDeck } from "@/components/dashboard/TapeDeck";
 import { ActivityFeed } from "@/components/dashboard/ActivityFeed";
 import { TaskLog } from "@/components/dashboard/TaskLog";
 import { MoleCompanion } from "@/components/dashboard/MoleCompanion";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 // Command center. Classes and tasks come from the same endpoints as the gestión pages.
 // Chat lives only at `/gestion/chat`.
 export function DashboardPage() {
+  useDocumentTitle("inicio");
   return (
     <div className="relative flex flex-col gap-4">
       <div className="crt-overlay" aria-hidden="true" />

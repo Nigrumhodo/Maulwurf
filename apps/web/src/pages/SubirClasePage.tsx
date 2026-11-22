@@ -1,10 +1,12 @@
 import { Card } from "@/components/ui/Card";
 import { UploadForm } from "@/components/upload/UploadForm";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 // D2.1/D2.2 — Subida de clase (M2): el formulario reserva la clase con `POST /audios`
 // (consentimiento versionado, idioma sin preselección, límites publicados y «audio no
 // conservado») y envía el binario en streaming a la URL relativa de la reserva.
 export function SubirClasePage() {
+  useDocumentTitle("subir clase");
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-1">

@@ -1,6 +1,7 @@
 import { useSearchParams } from "react-router-dom";
 import { ChatWorkspace } from "@/components/chat/ChatWorkspace";
 import type { ChatMode, ConversationScope } from "@/lib/chat";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 // D2.6 — Chat académico: todas las clases, una materia o una clase. La ruta acepta
 // `?mode=subject&subject_id=…` / `?mode=class&audio_id=…` para que biblioteca o materias
@@ -10,6 +11,7 @@ function modeFromParam(value: string | null): ChatMode {
 }
 
 export function ChatPage() {
+  useDocumentTitle("chat");
   const [params] = useSearchParams();
   const mode = modeFromParam(params.get("mode"));
   const initialScope: ConversationScope = {

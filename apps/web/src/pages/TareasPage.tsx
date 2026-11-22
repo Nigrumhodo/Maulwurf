@@ -28,6 +28,7 @@ import type {
   TaskStatusFilter,
   TaskUpdate,
 } from "@/lib/tasks";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 const TASK_PAGE_SIZE = 20;
 
@@ -79,6 +80,7 @@ function parseInitialStatus(value: string | null): TaskStatusFilter {
 }
 
 export function TareasPage() {
+  useDocumentTitle("tareas");
   const [searchParams, setSearchParams] = useSearchParams();
   const initialEditId = searchParams.get("edit");
   const handledEditRef = useRef<string | null>(null);
