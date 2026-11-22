@@ -4,7 +4,6 @@ import { Link, useLocation } from "react-router-dom";
 import { ClassSummary } from "@/components/transcript/ClassSummary";
 import { Button } from "@/components/ui/Button";
 import { buttonClasses } from "@/components/ui/buttonStyles";
-import { Card } from "@/components/ui/Card";
 import { audioLabel } from "@/lib/library";
 import type { LibraryAudioDetail } from "@/lib/library";
 import { downloadSrt, segmentLabel } from "@/lib/reader";
@@ -74,8 +73,8 @@ export function TranscriptReader({
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <header className="flex flex-col gap-2">
+    <section className="lowercase font-pixel min-w-0 max-w-full border-2 border-pure-black bg-surface shadow-block">
+      <header className="flex flex-col gap-2 border-b-2 border-lavender/30 p-4 sm:p-6">
         <Link
           to="/gestion/biblioteca"
           className="self-start lowercase font-pixel text-base text-mint hover:underline"
@@ -127,11 +126,11 @@ export function TranscriptReader({
           {detail.language_code} · {detail.class_timezone}
         </p>
         {status}
-        <p className="lowercase text-sm text-lavender/60">
+        <p className="lowercase text-base text-lavender/60">
           &gt; audio no conservado · solo se guarda el texto de la transcripción.
         </p>
         {!detail.exports.srt && (
-          <p className="lowercase text-sm text-lavender/60">
+          <p className="lowercase text-base text-lavender/60">
             &gt; srt no disponible: la transcripción no tiene tiempos fiables dentro de la
             duración.
           </p>
@@ -149,13 +148,19 @@ export function TranscriptReader({
       </header>
 
       {!activeExists && (
-        <p role="alert" className="lowercase border-2 border-mint px-3 py-2 text-mint">
+        <p
+          role="alert"
+          className="lowercase border-b-2 border-lavender/30 px-4 py-3 text-mint sm:px-6"
+        >
           &gt; segmento no encontrado en esta transcripción; se muestra el texto completo.
         </p>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
-        <Card title={`segmentos · ${transcript.segments.length}`}>
+      <div className="grid lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <section aria-label="transcripción" className="min-w-0 p-4 sm:p-6">
+          <h2 className="capitalize mb-3 text-xl text-mint">
+            segmentos · {transcript.segments.length}
+          </h2>
           {transcript.segments.length === 0 ? (
             <p className="lowercase text-lavender/60">
               &gt; esta transcripción no tiene segmentos publicados.
@@ -199,13 +204,16 @@ export function TranscriptReader({
               })}
             </ol>
           )}
-        </Card>
+        </section>
 
-        <div className="flex flex-col gap-6">
+        <aside
+          aria-label="detalles"
+          className="flex min-w-0 flex-col divide-y-2 divide-lavender/20 border-t-2 border-lavender/30 p-4 sm:p-6 lg:border-l-2 lg:border-t-0"
+        >
           <ClassSummary detail={detail} transcript={transcript} />
           {aside}
-        </div>
+        </aside>
       </div>
-    </div>
+    </section>
   );
 }

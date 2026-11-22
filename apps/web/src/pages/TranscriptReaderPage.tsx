@@ -4,7 +4,6 @@ import { ClassItems } from "@/components/transcript/ClassItems";
 import { ClassStatus } from "@/components/transcript/ClassStatus";
 import { TranscriptReader } from "@/components/TranscriptReader";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { ApiHttpError } from "@/lib/api";
 import {
   backfillAnalysis,
@@ -126,17 +125,20 @@ export function TranscriptReaderPage() {
   }
 
   if (loading) {
-    return <p className="lowercase text-base text-lavender/60">&gt; cargando transcripción…</p>;
+    return (
+      <p className="lowercase font-pixel min-w-0 max-w-full border-2 border-pure-black bg-surface shadow-block p-4 text-base text-lavender/60 sm:p-6">
+        &gt; cargando transcripción…
+      </p>
+    );
   }
 
   if (error !== null || detail === null || transcript === null) {
     return (
-      <div className="flex flex-col items-start gap-3">
-        <Card title="transcripción">
-          <p role="alert" className="lowercase text-mint">
-            &gt; {error ?? "la transcripción no está disponible."}
-          </p>
-        </Card>
+      <section className="lowercase font-pixel min-w-0 max-w-full border-2 border-pure-black bg-surface shadow-block flex flex-col items-start gap-3 p-4 sm:p-6">
+        <h1 className="capitalize text-2xl text-mint">transcripción</h1>
+        <p role="alert" className="lowercase text-mint">
+          &gt; {error ?? "la transcripción no está disponible."}
+        </p>
         <Link
           to="/gestion/biblioteca"
           className="lowercase font-pixel border-2 border-mint px-3 py-2 text-mint hover:bg-mint hover:text-on-accent"
@@ -146,7 +148,7 @@ export function TranscriptReaderPage() {
         <Button type="button" variant="secondary" onClick={() => window.location.reload()}>
           reintentar
         </Button>
-      </div>
+      </section>
     );
   }
 
@@ -160,7 +162,7 @@ export function TranscriptReaderPage() {
   return (
     <div className="flex flex-col gap-6">
       {notice !== null && (
-        <p role="status" className="lowercase border-2 border-mint px-3 py-2 text-mint">
+        <p role="status" className="lowercase border-2 border-mint bg-surface px-3 py-2 text-mint">
           &gt; {notice}
         </p>
       )}
