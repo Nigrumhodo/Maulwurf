@@ -163,7 +163,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             type="button"
             onClick={() => onOpenChange(false)}
             aria-label="cerrar paleta"
-            className="border-2 border-on-accent/40 px-1.5 leading-none hover:bg-on-accent hover:text-mint"
+            className="inline-flex min-h-8 min-w-8 items-center justify-center border-2 border-on-accent/40 px-1.5 leading-none hover:bg-on-accent hover:text-mint"
           >
             esc
           </button>

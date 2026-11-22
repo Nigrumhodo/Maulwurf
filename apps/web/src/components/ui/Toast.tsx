@@ -44,7 +44,7 @@ export function Toast({ item, onDismiss }: ToastProps) {
         type="button"
         onClick={() => onDismiss(item.id)}
         aria-label="cerrar aviso"
-        className="border-2 border-pure-black px-1 leading-none hover:bg-mint hover:text-on-accent"
+        className="inline-flex min-h-8 min-w-8 items-center justify-center border-2 border-pure-black px-1 leading-none hover:bg-mint hover:text-on-accent"
       >
         x
       </button>

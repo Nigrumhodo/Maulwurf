@@ -43,7 +43,7 @@ export function ConfirmDialog({
             type="button"
             onClick={onCancel}
             aria-label="cerrar"
-            className="border-2 border-on-accent/40 px-1 leading-none hover:bg-on-accent hover:text-mint"
+            className="inline-flex min-h-8 min-w-8 items-center justify-center border-2 border-on-accent/40 px-1 leading-none hover:bg-on-accent hover:text-mint"
           >
             x
           </button>
