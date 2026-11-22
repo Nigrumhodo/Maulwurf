@@ -6,7 +6,6 @@ import { AccountDeletionPanel } from "@/components/settings/AccountDeletionPanel
 import { DeliveryPanel } from "@/components/settings/DeliveryPanel";
 import { NotificationPreferences } from "@/components/settings/NotificationPreferences";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { TimezoneSelect } from "@/components/ui/TimezoneSelect";
 import { updateTimezone } from "@/lib/auth";
@@ -209,16 +208,46 @@ export function SettingsPage() {
     }
   }
 
+  const h2 = "capitalize text-xl text-mint";
+  const h3 = "capitalize text-lg text-lavender";
+  const sections = [
+    { id: "perfil", label: "perfil" },
+    { id: "notificaciones", label: "notificaciones" },
+    { id: "entregas", label: "entregas" },
+    { id: "cuenta", label: "cuenta" },
+  ];
+
   return (
-    <div className="flex flex-col gap-6">
-      <header className="flex flex-col gap-1">
+    <div className="flex flex-col gap-4 border-2 border-pure-black bg-surface p-4 shadow-block sm:p-6">
+      <header className="flex flex-col gap-1 border-b-2 border-lavender/30 pb-4">
         <h1 className="capitalize text-2xl text-mint">ajustes</h1>
         <p className="text-base text-lavender/80 max-w-prose">
           perfil, notificaciones e integraciones con google.
         </p>
       </header>
 
-      <Card title="perfil">
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-8">
+        <nav
+          aria-label="secciones de ajustes"
+          className="lg:sticky lg:top-24 lg:w-44 lg:shrink-0"
+        >
+          <ul className="flex flex-wrap gap-2 lg:flex-col lg:gap-0 lg:divide-y-2 lg:divide-lavender/20">
+            {sections.map((section) => (
+              <li key={section.id}>
+                <a
+                  href={`#${section.id}`}
+                  className="capitalize inline-flex min-h-8 items-center border-2 border-lavender/30 px-3 text-lavender hover:border-mint hover:text-mint lg:flex lg:border-0 lg:px-0"
+                >
+                  {section.label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+
+        <div className="flex min-w-0 flex-1 flex-col gap-8 divide-y-2 divide-lavender/30 [&>section]:pt-8 [&>section:first-child]:pt-0">
+          <section id="perfil" aria-labelledby="ajustes-perfil" className="flex scroll-mt-24 flex-col gap-3">
+            <h2 id="ajustes-perfil" className={h2}>perfil</h2>
         {user === null ? (
           <p className="lowercase text-lavender">sin perfil cargado.</p>
         ) : (
@@ -268,11 +297,13 @@ export function SettingsPage() {
             )}
           </div>
         )}
-      </Card>
+          </section>
 
-      <NotificationPreferences />
-
-      <Card title="conexión gmail (opt-in)">
+          <section id="notificaciones" aria-labelledby="ajustes-notificaciones" className="flex scroll-mt-24 flex-col gap-6">
+            <h2 id="ajustes-notificaciones" className={h2}>notificaciones</h2>
+            <NotificationPreferences />
+            <div className="flex flex-col gap-3 border-t-2 border-lavender/30 pt-6">
+              <h3 className={h3}>conexión gmail (opt-in)</h3>
         <div className="lowercase flex flex-col gap-3 text-lavender">
           {gmailNotice !== null && (
             <div
@@ -307,11 +338,19 @@ export function SettingsPage() {
             </div>
           )}
         </div>
-      </Card>
+            </div>
+          </section>
 
-      <DeliveryPanel />
+          <section id="entregas" aria-labelledby="ajustes-entregas" className="flex scroll-mt-24 flex-col gap-3">
+            <h2 id="ajustes-entregas" className={h2}>entregas</h2>
+            <h3 className={h3}>entregas de correo</h3>
+            <DeliveryPanel />
+          </section>
 
-      <Card title="google calendar">
+          <section id="cuenta" aria-labelledby="ajustes-cuenta" className="flex scroll-mt-24 flex-col gap-6">
+            <h2 id="ajustes-cuenta" className={h2}>cuenta</h2>
+            <div className="flex flex-col gap-3">
+              <h3 className={h3}>google calendar</h3>
         {calendarNotice !== null && (
           <div
             role={calendarNotice.kind === "error" ? "alert" : "status"}
@@ -414,9 +453,14 @@ export function SettingsPage() {
             )}
           </div>
         ) : null}
-      </Card>
-
-      <AccountDeletionPanel />
+            </div>
+            <div className="flex flex-col gap-3 border-t-2 border-lavender/30 pt-6">
+              <h3 className={h3}>zona de peligro · eliminar cuenta</h3>
+              <AccountDeletionPanel />
+            </div>
+          </section>
+        </div>
+      </div>
     </div>
   );
 }

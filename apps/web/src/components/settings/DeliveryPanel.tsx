@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -136,7 +135,7 @@ export function DeliveryPanel() {
   }
 
   return (
-    <Card title="entregas de correo">
+    <div>
       <div className="lowercase flex flex-col gap-4">
         <p className="text-lavender/80">
           gmail no ofrece garantía de entrega única: si una respuesta se pierde o expira el lease,
@@ -198,12 +197,9 @@ export function DeliveryPanel() {
             description="cuando se programen recordatorios, resúmenes o pruebas verás aquí cada intento auditado."
           />
         ) : (
-          <ul className="flex flex-col gap-2">
+          <ul className="flex flex-col divide-y-2 divide-lavender/20 border-y-2 border-lavender/20">
             {items.map((item) => (
-              <li
-                key={item.id}
-                className="flex flex-col gap-2 border-2 border-pure-black bg-surface p-3"
-              >
+              <li key={item.id} className="flex flex-col gap-2 py-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-bold text-mint">{notificationTypeLabel(item.type)}</span>
@@ -295,6 +291,6 @@ export function DeliveryPanel() {
           setDuplicateAck(false);
         }}
       />
-    </Card>
+    </div>
   );
 }

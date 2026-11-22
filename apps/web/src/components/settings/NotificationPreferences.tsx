@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { ApiHttpError } from "@/lib/api";
@@ -64,8 +63,8 @@ function ThresholdEditor({
   };
 
   return (
-    <fieldset className="flex flex-col gap-2 border-2 border-lavender/30 p-3">
-      <legend className="capitalize px-1 text-mint">{title}</legend>
+    <fieldset className="flex min-w-0 flex-col gap-2 border-0 border-t-2 border-lavender/30 p-0 pt-4 first:border-t-0 first:pt-0">
+      <legend className="capitalize float-left mb-2 w-full p-0 text-lg text-mint">{title}</legend>
       <p className="text-sm text-lavender/80">{hint}</p>
       {values.length === 0 ? (
         <p className="lowercase text-lavender/80">
@@ -237,15 +236,15 @@ export function NotificationPreferences() {
 
   if (loading) {
     return (
-      <Card title="notificaciones" as="section">
+      <div>
         <p className="lowercase text-lavender/80">&gt; cargando preferencias…</p>
-      </Card>
+      </div>
     );
   }
 
   if (loadError !== null) {
     return (
-      <Card title="notificaciones" as="section">
+      <div>
         <p role="alert" className="lowercase text-mint">
           &gt; {loadError}
         </p>
@@ -254,7 +253,7 @@ export function NotificationPreferences() {
             reintentar
           </Button>
         </div>
-      </Card>
+      </div>
     );
   }
 
@@ -263,10 +262,10 @@ export function NotificationPreferences() {
   const dirty = isPreferencesDirty(draftOf(saved), draft);
 
   return (
-    <Card title="notificaciones" as="section">
+    <div>
       <div className="flex flex-col gap-3">
-        <fieldset className="flex flex-col gap-2 border-2 border-lavender/30 p-3">
-          <legend className="capitalize px-1 text-mint">Gmail</legend>
+        <fieldset className="flex min-w-0 flex-col gap-2 border-0 border-t-2 border-lavender/30 p-0 pt-4 first:border-t-0 first:pt-0">
+          <legend className="capitalize float-left mb-2 w-full p-0 text-lg text-mint">Gmail</legend>
           <label className="flex min-h-10 items-center gap-2">
             <input
               type="checkbox"
@@ -310,8 +309,8 @@ export function NotificationPreferences() {
           disabled={saving}
         />
 
-        <fieldset className="flex flex-col gap-2 border-2 border-lavender/30 p-3">
-          <legend className="capitalize px-1 text-mint">resumen diario</legend>
+        <fieldset className="flex min-w-0 flex-col gap-2 border-0 border-t-2 border-lavender/30 p-0 pt-4 first:border-t-0 first:pt-0">
+          <legend className="capitalize float-left mb-2 w-full p-0 text-lg text-mint">resumen diario</legend>
           <label className="flex min-h-10 items-center gap-2">
             <input
               type="checkbox"
@@ -334,8 +333,8 @@ export function NotificationPreferences() {
           </p>
         </fieldset>
 
-        <fieldset className="flex flex-col gap-2 border-2 border-lavender/30 p-3">
-          <legend className="capitalize px-1 text-mint">resumen semanal</legend>
+        <fieldset className="flex min-w-0 flex-col gap-2 border-0 border-t-2 border-lavender/30 p-0 pt-4 first:border-t-0 first:pt-0">
+          <legend className="capitalize float-left mb-2 w-full p-0 text-lg text-mint">resumen semanal</legend>
           <label className="flex min-h-10 items-center gap-2">
             <input
               type="checkbox"
@@ -409,6 +408,6 @@ export function NotificationPreferences() {
           )}
         </div>
       </div>
-    </Card>
+    </div>
   );
 }
