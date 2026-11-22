@@ -5,7 +5,7 @@ import { folder, folderClaro, madriguera, madrigueraClaro } from "@/components/V
 import { Clock } from "./Clock";
 
 function navClass({ isActive }: { isActive: boolean }): string {
-  return `capitalize font-pixel flex items-center gap-2 border-2 border-pure-black px-3 py-1 text-lavender hover:text-mint ${
+  return `capitalize font-pixel flex min-h-10 items-center justify-center gap-2 whitespace-nowrap border-2 border-pure-black px-2 py-1 text-lavender hover:text-mint sm:px-3 ${
     isActive ? "bg-mint text-on-accent" : ""
   }`;
 }
@@ -19,58 +19,56 @@ export function Header({ onOpenSearch }: { onOpenSearch?: () => void } = {}) {
 
   return (
     <header className="sticky top-0 z-50 border-b-2 border-pure-black bg-dark">
-      <div className="mx-auto grid max-w-7xl grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 py-3">
-        <div className="flex items-center gap-4">
-          <NavLink to="/" className="hidden lowercase text-xl text-mint sm:block">
+      <div className="mx-auto flex max-w-7xl flex-col gap-2 px-4 py-3 sm:grid sm:grid-cols-[1fr_auto_1fr] sm:items-center sm:gap-3">
+        <div className="hidden items-center gap-4 sm:flex">
+          <NavLink to="/" className="inline-flex min-h-10 items-center lowercase whitespace-nowrap text-xl text-mint">
             maulwurf<span className="text-lavender">@lab</span>
           </NavLink>
-          <div className="hidden sm:block">
-            <Clock />
-          </div>
+          <Clock />
         </div>
 
-        <div className="flex items-center gap-2">
-          <NavLink to="/" end className={navClass}>
+        <div className="flex gap-2">
+          <NavLink to="/" end className={(s) => `${navClass(s)} flex-1 sm:flex-none`}>
             <span className="img-dark-only">
-              <img src={madriguera} alt="" className="h-9 w-9 object-contain" style={{ imageRendering: "pixelated" }} />
+              <img src={madriguera} alt="" className="h-6 w-6 object-contain sm:h-9 sm:w-9" style={{ imageRendering: "pixelated" }} />
             </span>
             <span className="img-light-only">
-              <img src={madrigueraClaro} alt="" className="h-9 w-9 object-contain" style={{ imageRendering: "pixelated" }} />
+              <img src={madrigueraClaro} alt="" className="h-6 w-6 object-contain sm:h-9 sm:w-9" style={{ imageRendering: "pixelated" }} />
             </span>
             inicio
           </NavLink>
 
-          <NavLink to="/gestion" className={navClass}>
+          <NavLink to="/gestion" className={(s) => `${navClass(s)} flex-1 sm:flex-none`}>
             <span className="img-dark-only">
-              <img src={folder} alt="" className="h-9 w-9 object-contain" style={{ imageRendering: "pixelated" }} />
+              <img src={folder} alt="" className="h-6 w-6 object-contain sm:h-9 sm:w-9" style={{ imageRendering: "pixelated" }} />
             </span>
             <span className="img-light-only">
-              <img src={folderClaro} alt="" className="h-9 w-9 object-contain" style={{ imageRendering: "pixelated" }} />
+              <img src={folderClaro} alt="" className="h-6 w-6 object-contain sm:h-9 sm:w-9" style={{ imageRendering: "pixelated" }} />
             </span>
             <span className="capitalize">gestión</span>
           </NavLink>
         </div>
 
-        <div className="flex items-center justify-end gap-2">
+        <div className="flex items-stretch gap-2 sm:items-center sm:justify-end">
           {onOpenSearch !== undefined && (
             <button
               type="button"
               onClick={onOpenSearch}
               aria-label="buscar con ctrl+k"
-              className="lowercase font-pixel hidden items-center gap-1.5 border-2 border-pure-black px-2.5 py-1 text-lavender hover:border-mint hover:text-mint md:inline-flex"
+              className="lowercase font-pixel inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 whitespace-nowrap border-2 border-pure-black px-2 py-1 text-lavender hover:border-mint hover:text-mint sm:hidden sm:flex-none md:inline-flex md:px-2.5"
             >
               <span>buscar</span>
-              <kbd className="border border-lavender/40 px-1 text-xs text-mint">ctrl+k</kbd>
+              <kbd className="hidden border border-lavender/40 px-1 text-xs text-mint md:inline">ctrl+k</kbd>
             </button>
           )}
-          <NavLink to="/settings" className={navClass}>
+          <NavLink to="/settings" className={(s) => `${navClass(s)} flex-1 sm:flex-none`}>
             ajustes
           </NavLink>
           <ThemeToggle />
           <button
             type="button"
             onClick={() => void logout()}
-            className="capitalize font-pixel border-2 border-pure-black px-3 py-1 text-lavender hover:text-mint active:translate-x-[1px] active:translate-y-[1px]"
+            className="capitalize font-pixel min-h-10 flex-1 whitespace-nowrap border-2 border-pure-black px-2 py-1 text-lavender hover:text-mint sm:flex-none sm:px-3 active:translate-x-[1px] active:translate-y-[1px]"
           >
             salir
           </button>
