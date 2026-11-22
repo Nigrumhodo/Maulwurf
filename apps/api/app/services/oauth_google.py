@@ -15,6 +15,7 @@ import hashlib
 import secrets
 import time
 import urllib.parse
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -28,7 +29,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.crypto import encrypt
+from app.core.crypto import decrypt, encrypt
 from app.core.db import bind_google_sub, set_current_user
 from app.models import GoogleCredential, User
 
@@ -324,6 +325,41 @@ def merge_scopes(*groups: Sequence[str]) -> list[str]:
     return list(seen)
 
 
+def _refresh_ciphertext(
+    *,
+    user_id: uuid.UUID,
+    credential: GoogleCredential | None,
+    refresh_token: str | None,
+    key_version: int,
+) -> bytes | None:
+    """Ciphertext to store for the refresh token, or None when there is nothing to keep.
+
+    Google omits `refresh_token` after the first consent. The row has one `key_version`
+    for both blobs, so a rotation must decrypt the retained refresh token with its old
+    version and re-encrypt it before that version is overwritten.
+    """
+    if isinstance(refresh_token, str) and refresh_token:
+        blob, _version = encrypt(
+            refresh_token, user_id=user_id, field="google_credentials.refresh_token"
+        )
+        return blob
+    if credential is None or credential.refresh_token_enc is None:
+        return None
+    current = bytes(credential.refresh_token_enc)
+    if credential.key_version == key_version:
+        return current
+    plain = decrypt(
+        current,
+        key_version=credential.key_version,
+        user_id=user_id,
+        field="google_credentials.refresh_token",
+    )
+    blob, _version = encrypt(
+        plain, user_id=user_id, field="google_credentials.refresh_token"
+    )
+    return blob
+
+
 def _store_tokens(
     db: AsyncSession,
     user: User,
@@ -346,11 +382,12 @@ def _store_tokens(
         credential = GoogleCredential(user_id=user.id)
         db.add(credential)
     credential.access_token_enc = access_blob
-    refresh_token = tokens.refresh_token
-    if isinstance(refresh_token, str) and refresh_token:
-        credential.refresh_token_enc, _ = encrypt(
-            refresh_token, user_id=user.id, field="google_credentials.refresh_token"
-        )
+    credential.refresh_token_enc = _refresh_ciphertext(
+        user_id=user.id,
+        credential=credential,
+        refresh_token=tokens.refresh_token,
+        key_version=key_version,
+    )
     credential.key_version = key_version
     credential.scopes = list(scopes)
     credential.status = "connected"
@@ -429,12 +466,14 @@ async def upsert_google_identity(
         credential = GoogleCredential(user_id=user.id)
         db.add(credential)
     credential.access_token_enc = access_blob
-    refresh_token = tokens.refresh_token
-    if isinstance(refresh_token, str) and refresh_token:
-        credential.refresh_token_enc, _ = encrypt(
-            refresh_token, user_id=user.id, field="google_credentials.refresh_token"
-        )
-    # Without a new refresh token the previous one is kept (ESPECIFICACION, Google tokens).
+    # Without a new refresh token the previous one is kept (ESPECIFICACION, Google tokens),
+    # re-encrypted when the row's key version is not the current one.
+    credential.refresh_token_enc = _refresh_ciphertext(
+        user_id=user.id,
+        credential=credential,
+        refresh_token=tokens.refresh_token,
+        key_version=key_version,
+    )
     credential.key_version = key_version
     # A login must not erase an incremental Calendar/Gmail grant (J3.3): the login request
     # uses `include_granted_scopes`, so the response reports every scope the account still

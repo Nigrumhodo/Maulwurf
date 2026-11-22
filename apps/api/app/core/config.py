@@ -17,18 +17,21 @@ spike F0 (A2.2). Los valores provisionales del contrato S1 no se exponen como l�
 efectivos.
 """
 import os
+import re
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Annotated, Any, Literal, cast
 
 from dotenv import dotenv_values
 from pydantic import (
     AnyHttpUrl,
+    BeforeValidator,
     Field,
     PostgresDsn,
     RedisDsn,
     SecretStr,
     TypeAdapter,
+    field_serializer,
     model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -63,6 +66,49 @@ _PROVIDER_SECRET_FIELDS = ("google_client_secret", *_GATEWAY_SECRET_FIELDS)
 EMBEDDING_DIMENSION = 1536
 INGEST_SECRET_MIN_BYTES = 32
 _DEV_DEFAULT_FIELDS = ("database_url", "redis_url", "public_origin")
+# Userinfo (`user:password@`) is the only secret in a DSN. `str()` of the field stays the
+# driver URL because health, Redis, workers and Alembic connect with it; `repr`, model
+# dumps and the log redaction filter are what must not show the password.
+_DSN_USERINFO = re.compile(r"(://)([^/?#\s]*)@")
+_POSTGRES_DSN = TypeAdapter(PostgresDsn)
+_REDIS_DSN = TypeAdapter(RedisDsn)
+# `model_fields[...].annotation` is the bare `_DriverDsn`, which TypeAdapter cannot
+# schema. Compare those two defaults through the same DSN adapters the fields use.
+_DEV_DEFAULT_ADAPTERS: dict[str, TypeAdapter[Any]] = {
+    "database_url": _POSTGRES_DSN,
+    "redis_url": _REDIS_DSN,
+}
+
+
+def redact_dsn(url: str) -> str:
+    """Replace `scheme://userinfo@` with `scheme://***@`. URLs without userinfo are unchanged."""
+    return _DSN_USERINFO.sub(r"\1***@", url, count=1)
+
+
+class _DriverDsn(str):
+    """DSN whose `str()` is the driver URL and whose `repr()` hides userinfo."""
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({redact_dsn(self)!r})"
+
+
+def _coerce_driver_dsn(value: Any, adapter: TypeAdapter[Any]) -> _DriverDsn:
+    if isinstance(value, _DriverDsn):
+        adapter.validate_python(str(value))
+        return value
+    return _DriverDsn(str(adapter.validate_python(value)))
+
+
+def _coerce_postgres_dsn(value: Any) -> _DriverDsn:
+    return _coerce_driver_dsn(value, _POSTGRES_DSN)
+
+
+def _coerce_redis_dsn(value: Any) -> _DriverDsn:
+    return _coerce_driver_dsn(value, _REDIS_DSN)
+
+
+DriverPostgresDsn = Annotated[_DriverDsn, BeforeValidator(_coerce_postgres_dsn)]
+DriverRedisDsn = Annotated[_DriverDsn, BeforeValidator(_coerce_redis_dsn)]
 # `.env` que usa la construcción en curso (respeta `_env_file`, p. ej. None en tests).
 _active_env_files: ContextVar[tuple[str, ...]] = ContextVar("_active_env_files", default=ENV_FILES)
 
@@ -99,6 +145,10 @@ class Settings(BaseSettings):
     secret_key: SecretStr  # sin default: obliga a definirlo por entorno
     encryption_key: SecretStr  # AES-GCM (M1); nunca loguear .get_secret_value()
     encryption_key_version: int = Field(default=1, ge=1)  # se guarda junto a cada cifrado
+    # Optional previous AES key. Set both while rotating so blobs still tagged with the
+    # old version decrypt once and can be re-encrypted with `encryption_key`.
+    previous_encryption_key: SecretStr | None = None
+    previous_encryption_key_version: int | None = Field(default=None, ge=1)
     oauth_state_secret: SecretStr
     # Opcionales hasta A1.3 (OAuth).
     google_client_id: str | None = None
@@ -196,13 +246,20 @@ class Settings(BaseSettings):
     # Único Origin aceptado en mutaciones (A1.4): el que sirve Caddy, same-origin.
     public_origin: AnyHttpUrl = cast(AnyHttpUrl, "https://localhost")
     # cast: pydantic valida los DSN en runtime; mypy no relaja el tipo del default.
-    database_url: PostgresDsn = cast(
-        PostgresDsn, "postgresql+asyncpg://maulwurf:maulwurf@localhost:5432/maulwurf"
+    database_url: DriverPostgresDsn = cast(
+        DriverPostgresDsn,
+        "postgresql+asyncpg://maulwurf:maulwurf@localhost:5432/maulwurf",
     )
     # A2.17: constrained runtime role (NOLOGIN, no BYPASSRLS). Every transaction starts
     # with SET LOCAL ROLE before touching tenant rows; migrations keep the DSN owner.
     database_role: str = Field(default="maulwurf_app", pattern=r"^[a-z_][a-z0-9_]{0,62}$")
-    redis_url: RedisDsn = cast(RedisDsn, "redis://localhost:6379/0")
+    redis_url: DriverRedisDsn = cast(DriverRedisDsn, "redis://localhost:6379/0")
+
+    @field_serializer("database_url", "redis_url")
+    def _serialize_driver_dsn(self, value: _DriverDsn) -> str:
+        # Dumps are for diagnostics and tests. The live field still stringifies to the
+        # driver URL; this path must not repeat the password.
+        return redact_dsn(str(value))
     # J4.2/J4.1: without a deployed Gmail consumer, claiming due rows would move them to
     # `sending` only to expire them as a false `delivery_unknown` (terminal). The scheduler
     # therefore starts disabled and must only be enabled once J4.1 consumes `sending`.
@@ -250,6 +307,23 @@ class Settings(BaseSettings):
     def _reject_incomplete_oauth(self) -> "Settings":
         if (self.google_client_id is None) != (self.google_client_secret is None):
             raise ValueError("google_client_id y google_client_secret van juntos")
+        return self
+
+    @model_validator(mode="after")
+    def _reject_partial_previous_encryption_key(self) -> "Settings":
+        has_key = self.previous_encryption_key is not None
+        has_version = self.previous_encryption_key_version is not None
+        if has_key != has_version:
+            raise ValueError(
+                "previous_encryption_key y previous_encryption_key_version van juntos"
+            )
+        if (
+            self.previous_encryption_key_version is not None
+            and self.previous_encryption_key_version == self.encryption_key_version
+        ):
+            raise ValueError(
+                "previous_encryption_key_version debe ser distinto de encryption_key_version"
+            )
         return self
 
     @model_validator(mode="after")
@@ -408,14 +482,31 @@ class Settings(BaseSettings):
                 "metrics_token reutiliza secret_key, encryption_key u "
                 f"oauth_state_secret en env={self.env}"
             )
+        previous = self.previous_encryption_key
+        if previous is not None:
+            previous_raw = previous.get_secret_value()
+            if len(previous_raw.encode("utf-8")) < BOUNDARY_SECRET_MIN_BYTES:
+                raise ValueError(
+                    "previous_encryption_key debe tener al menos "
+                    f"{BOUNDARY_SECRET_MIN_BYTES} bytes en env={self.env}"
+                )
+            if previous_raw in boundary or previous_raw in secret_values.values():
+                raise ValueError(
+                    "previous_encryption_key reutiliza otro secreto "
+                    f"en env={self.env}"
+                )
         if self.public_origin.scheme != "https":
             raise ValueError(f"public_origin debe usar https en env={self.env}")
         for name in _DEV_DEFAULT_FIELDS:
             field = type(self).model_fields[name]
             # call_default_factory: con default_factory, get_default() devolvería la factoría
             # y el guard dejaría de detectar el valor de desarrollo (fail-open).
-            default: object = TypeAdapter(field.annotation).validate_python(
-                field.get_default(call_default_factory=True)
+            raw_default = field.get_default(call_default_factory=True)
+            adapter = _DEV_DEFAULT_ADAPTERS.get(name)
+            default: object = (
+                adapter.validate_python(raw_default)
+                if adapter is not None
+                else TypeAdapter(field.annotation).validate_python(raw_default)
             )
             if str(getattr(self, name)) == str(default):
                 raise ValueError(f"{name} conserva el valor de desarrollo en env={self.env}")

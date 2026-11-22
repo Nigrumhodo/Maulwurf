@@ -3,9 +3,9 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from pydantic import Field, RedisDsn, ValidationError
+from pydantic import Field, ValidationError
 
-from app.core.config import Settings
+from app.core.config import DriverRedisDsn, Settings
 
 SECRETS: dict[str, Any] = {
     "secret_key": "s2-test-secret-key-0123456789abcdef",
@@ -349,8 +349,8 @@ def test_dev_default_guard_also_covers_default_factory(
     monkeypatch.delenv("MAULWURF_REDIS_URL", raising=False)
 
     class FactorySettings(Settings):
-        redis_url: RedisDsn = Field(
-            default_factory=lambda: cast(RedisDsn, "redis://localhost:6379/0")
+        redis_url: DriverRedisDsn = Field(
+            default_factory=lambda: cast(DriverRedisDsn, "redis://localhost:6379/0")
         )
 
     urls = {k: v for k, v in PROD_URLS.items() if k != "redis_url"}

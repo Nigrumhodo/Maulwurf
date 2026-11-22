@@ -2,7 +2,7 @@
 
 El login se resuelve en dos saltos:
 1. `GET /auth/google/start` arma la URL de Google y firma el material efímero
-   (`state`, `nonce`, `code_verifier`) en la cookie `mw_oauth`.
+   (`state`, `nonce`, `code_verifier`) en la cookie `mw_oauth_login`.
 2. `GET /auth/google/callback` verifica el `state`, intercambia el código, valida el ID
    token y emite la sesión opaca `mw_session`, luego redirige al dashboard (`/`).
 
@@ -17,14 +17,14 @@ Cualquier fallo de login redirige a `/login?error=<razón>`; los fallos de Calen
 cookies se fijan sobre la `RedirectResponse` devuelta (no sobre el `Response` inyectado),
 que es el objeto que FastAPI envía de vuelta.
 
-Login y Calendar comparten la cookie `mw_oauth`: iniciar cualquiera de los dos flujos
-invalida el material efímero del otro en el mismo navegador, así que solo uno puede estar en
-vuelo a la vez.
+Cada flujo guarda su state en una cookie distinta (`mw_oauth_login`, `mw_oauth_calendar`,
+`mw_oauth_gmail`). El callback elige la cookie cuyo `state` firmado coincide con el query:
+iniciar un flujo ya no invalida el material del otro.
 """
 import hmac
 import logging
 import time
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import RedirectResponse
@@ -32,7 +32,10 @@ from fastapi.responses import RedirectResponse
 from app.core.db import set_current_user
 from app.core.deps import (
     COOKIE_NAME,
+    OAUTH_CALENDAR_COOKIE,
     OAUTH_COOKIE_NAME,
+    OAUTH_GMAIL_COOKIE,
+    OAUTH_LOGIN_COOKIE,
     AnyMutationSession,
     DbSession,
     clear_oauth_state_cookie,
@@ -83,7 +86,7 @@ def _constant_eq(a: str, b: str) -> bool:
 
 def _login_error(reason: str) -> RedirectResponse:
     redirect = RedirectResponse(f"/login?error={reason}", status_code=302)
-    clear_oauth_state_cookie(redirect)
+    clear_oauth_state_cookie(redirect, OAUTH_LOGIN_COOKIE, OAUTH_COOKIE_NAME)
     return redirect
 
 
@@ -93,7 +96,7 @@ def _calendar_result(result: str, *, reason: str | None = None) -> RedirectRespo
         query = f"{query}&reason={reason}"
     redirect = RedirectResponse(f"{SETTINGS_PATH}?{query}", status_code=302)
     redirect.headers["Cache-Control"] = "no-store"
-    clear_oauth_state_cookie(redirect)
+    clear_oauth_state_cookie(redirect, OAUTH_CALENDAR_COOKIE, OAUTH_COOKIE_NAME)
     return redirect
 
 
@@ -103,8 +106,47 @@ def _gmail_result(result: str, *, reason: str | None = None) -> RedirectResponse
         query = f"{query}&reason={reason}"
     redirect = RedirectResponse(f"{SETTINGS_PATH}?{query}", status_code=302)
     redirect.headers["Cache-Control"] = "no-store"
-    clear_oauth_state_cookie(redirect)
+    clear_oauth_state_cookie(redirect, OAUTH_GMAIL_COOKIE, OAUTH_COOKIE_NAME)
     return redirect
+
+
+def oauth_callback_payload(request: Request, state: str | None) -> dict[str, Any] | None:
+    """Signed state whose `state` matches the callback, preferring a flow-specific cookie.
+
+    A legacy `mw_oauth` cookie is accepted only when no flow cookie matches, so existing
+    clients keep working. A query `state` that matches none of the cookies is rejected
+    instead of falling through to a different flow.
+    """
+    found: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    matched: dict[str, Any] | None = None
+    for name in (
+        OAUTH_LOGIN_COOKIE,
+        OAUTH_CALENDAR_COOKIE,
+        OAUTH_GMAIL_COOKIE,
+        OAUTH_COOKIE_NAME,
+    ):
+        raw = request.cookies.get(name)
+        if raw is None or raw in seen:
+            continue
+        seen.add(raw)
+        payload = verify_state(raw, OAUTH_STATE_TTL_SECONDS)
+        if payload is None:
+            continue
+        found.append(payload)
+        expected = payload.get("state")
+        if (
+            matched is None
+            and state is not None
+            and isinstance(expected, str)
+            and _constant_eq(state, expected)
+        ):
+            matched = payload
+    if state is not None:
+        return matched
+    if len(found) == 1:
+        return found[0]
+    return None
 
 
 @router.post("/auth/logout", status_code=204, response_model=None)
@@ -122,7 +164,11 @@ async def logout(response: Response, session: AnyMutationSession, db: DbSession)
 @router.get(
     "/auth/google/start",
     response_model=None,
+    status_code=302,
     responses={
+        302: {
+            "description": "Redirect to Google, or to /login?error=… when OAuth is not configured"
+        },
         429: {"description": "rate_limited when the configured OAuth limit is exceeded"},
         503: {"description": "capacity_unavailable: el limitador no está disponible"},
     },
@@ -142,7 +188,7 @@ async def google_start(_limit: AuthRateLimit) -> RedirectResponse:
         }
     )
     redirect = RedirectResponse(request.url, status_code=302)
-    set_oauth_state_cookie(redirect, token, OAUTH_STATE_TTL_SECONDS)
+    set_oauth_state_cookie(redirect, token, OAUTH_STATE_TTL_SECONDS, flow="login")
     return redirect
 
 
@@ -349,7 +395,11 @@ async def _gmail_callback(
 @router.get(
     "/auth/google/callback",
     response_model=None,
+    status_code=302,
     responses={
+        302: {
+            "description": "Redirect to / on success, /login?error=… or /settings?… on failure"
+        },
         429: {"description": "rate_limited when the configured OAuth limit is exceeded"},
         503: {"description": "capacity_unavailable: el limitador no está disponible"},
     },
@@ -362,8 +412,7 @@ async def google_callback(
     code: Annotated[str | None, Query()] = None,
     state: Annotated[str | None, Query()] = None,
 ) -> RedirectResponse:
-    cookie = request.cookies.get(OAUTH_COOKIE_NAME)
-    payload = verify_state(cookie, OAUTH_STATE_TTL_SECONDS) if cookie else None
+    payload = oauth_callback_payload(request, state)
     mode = payload.get("mode") if payload is not None else None
     if mode in CALENDAR_MODES:
         assert payload is not None  # noqa: S101 - `mode` can only come from the payload
@@ -409,5 +458,5 @@ async def google_callback(
     await db.commit()
     redirect = RedirectResponse("/", status_code=302)
     set_session_cookie(redirect, issued.cookie_token)
-    clear_oauth_state_cookie(redirect)
+    clear_oauth_state_cookie(redirect, OAUTH_LOGIN_COOKIE, OAUTH_COOKIE_NAME)
     return redirect

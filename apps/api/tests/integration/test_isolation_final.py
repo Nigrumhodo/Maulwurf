@@ -909,6 +909,33 @@ async def test_account_deletion_leaves_no_derived_rows_and_the_sweep_stays_clean
     alice, bob = await actors.make_actor(db_session), await actors.make_actor(db_session)
     a = await _seed_full_class(db_session, alice)
     b = await _seed_full_class(db_session, bob, text=BOB_TEXT)
+    # Taskless rows have no FK cascade from `tasks`. Account deletion must delete them
+    # itself; the reminder seeded above only proves the task cascade.
+    for kind, occurrence in (
+        ("digest_daily", date(2026, 11, 10)),
+        ("test", date(2026, 11, 11)),
+    ):
+        db_session.add(
+            Notification(
+                user_id=alice.user_id,
+                task_id=None,
+                type=kind,
+                occurrence=occurrence,
+                due_version=None,
+                scheduled_at=datetime(
+                    occurrence.year, occurrence.month, occurrence.day, 8, 0, tzinfo=UTC
+                ),
+                dedupe_key=dedupe_key(
+                    user_id=alice.user_id,
+                    type=kind,
+                    task_id=None,
+                    due_version=None,
+                    occurrence=occurrence,
+                ),
+            )
+        )
+    await db_session.flush()
+    assert await _count(db_session, Notification, user_id=alice.user_id) == 3
 
     response = await client.request(
         "DELETE",

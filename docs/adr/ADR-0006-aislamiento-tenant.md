@@ -1,7 +1,7 @@
 # ADR-0006 — Tenant isolation in S1
 
 - Date (UTC): 2026-09-27
-- Updated (UTC): 2026-10-31 (A2.17 implementation and explicit accepted risk)
+- Updated (UTC): 2026-11-21 (ingest blast radius corrected; startup role check)
 - Status: Accepted (merged in #24 with review; A1.5)
 - Ticket: A1.5 (verified by A1.9)
 - Related: [../ESPECIFICACION.md](../ESPECIFICACION.md) §6,
@@ -91,20 +91,36 @@ write every tenant's attempt row. This is an explicit accepted risk, not an over
   not the capability. Doing it now would also move the lease/heartbeat/cancel/sweep state
   machine out of `maulwurf_ingest` and require re-testing the J2.4/S2.x failure matrix,
   outside this ticket's scope.
-- **Blast radius if `maulwurf_ingest` is compromised:** read/write of operational metadata
-  in `ingestion_attempts` for every tenant (ids, statuses, timings, byte counts, error
-  codes, `user_id`) and disruption of the ingest state machine. The role cannot read audio
-  (it is never persisted), transcripts, segments, chunks, embeddings, conversations,
-  sessions or Google credentials: those tables stay tenant-bound for this role, and
-  `audios`, `subjects` and `outbox_events` require `app.user_id`.
-- **Existing limits:** the role is `NOLOGIN`, `NOBYPASSRLS`, owns no table and is used only
-  by the ingest service DSN user; `ingest_attempt_queue` is scoped to that role alone, so
-  the API and jobs roles remain tenant-bound on `ingestion_attempts`.
-- **Review trigger:** revisit when S3 adds analysis, Calendar or Gmail work to the queue, if
-  another service needs more than queue metadata, or if the ingest network boundary stops
-  containing a compromise. The preferred direction is a `SECURITY DEFINER` queue API:
-  per-tenant operations for request-bound work and one narrow cross-tenant function for
-  the sweeps.
+- **Blast radius if `maulwurf_ingest` is compromised:** the role has
+  `SELECT, INSERT, UPDATE, DELETE` on nine tables: `users`, `subjects`, `audios`,
+  `ingestion_attempts`, `transcripts`, `segments`, `chunks`, `chunk_segments` and
+  `outbox_events`. Eight of those policies are `tenant_isolation`
+  (`id` or `user_id = current_setting('app.user_id')::uuid`). `ingestion_attempts` is the
+  accepted `USING (true)` queue. Nothing in the database stops the role from setting
+  `app.user_id` to any tenant, which is what `maulwurf_ingest.rls.bind_transaction` does
+  with the id it is given. A compromise that can choose that id can read and destroy
+  durable transcript text, segments, chunks, class and subject metadata, the verified
+  email and `google_sub`, and the outbox — for every tenant — plus the queue metadata
+  (ids, statuses, timings, byte counts, error codes). Audio bytes are still never
+  persisted. Embeddings, conversations, sessions and Google credentials stay outside
+  this grant. The network boundary does **not** contain a compromise that holds the
+  ingest DSN.
+- **Existing limits:** the role is `NOLOGIN`, `NOBYPASSRLS`, owns no table and is used
+  only by the ingest service DSN user; `ingest_attempt_queue` is scoped to that role
+  alone, so the API and jobs roles remain tenant-bound on `ingestion_attempts`. Those
+  limits do not stop the ingest process from choosing `app.user_id`.
+- **Mitigation roadmap (not this ADR's migration):** give each runtime a dedicated
+  `LOGIN` role (`NOSUPERUSER`, `NOBYPASSRLS`, `NOCREATEDB`, member of only its own
+  runtime role, owner of nothing) so `SET ROLE` cannot reach another role. Replace the
+  free `set_config('app.user_id', …)` in ingest with a `SECURITY DEFINER` function that
+  takes `attempt_id` and sets `app.user_id` from `ingestion_attempts.user_id`. The queue
+  sweeps stay one narrow cross-tenant function. `REVOKE DELETE` on `audios`, `subjects`
+  and `users`, and `REVOKE UPDATE` on `users`, cuts account destruction without changing
+  the happy path. The API startup check rejects a superuser or `BYPASSRLS` login role
+  outside `local` (`verify_db_role_least_privilege`).
+- **Review trigger:** revisit when that `LOGIN` role and the `SECURITY DEFINER` bind
+  land, or when another service needs more than queue metadata. Until then the accepted
+  risk is the nine-table radius above, not "attempt metadata only".
 
 ### Runtime identity debt (not changed by A2.17)
 
@@ -119,8 +135,9 @@ not restrict a superuser, and the owner can `SET ROLE maulwurf_jobs` plus
 That is acceptable for local development only. Staging and production must authenticate each
 runtime with a dedicated `LOGIN` role that is a member of only its own runtime role, owns no
 table and is not a superuser; `/internal/metrics` then needs a separate jobs-capable identity
-or a dedicated read path. Splitting the DSNs (Compose profiles plus deployment manifests) and
-adding a startup check that rejects an owner or superuser runtime DSN is follow-up work, not
-part of MAULW-177 (it changes credentials and deployment configuration, not the policies).
+or a dedicated read path. Splitting the DSNs (Compose profiles plus deployment manifests)
+remains follow-up work: it changes credentials and deployment configuration, not the
+policies. The startup check now exists: outside `local`, the API refuses to boot when the
+authenticated role has `rolsuper` or `rolbypassrls`. Local logs a warning and continues.
 
 
