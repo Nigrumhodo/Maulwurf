@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { AudioCard } from "@/components/library/AudioCard";
 import { AudioUploadPanel } from "@/components/upload/AudioUploadPanel";
 import { Button } from "@/components/ui/Button";
+import { buttonClasses } from "@/components/ui/buttonStyles";
 import { Card } from "@/components/ui/Card";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -281,15 +282,20 @@ export function BibliotecaPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="capitalize text-2xl text-mint">biblioteca</h1>
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          disabled={loading}
-          onClick={() => void load()}
-        >
-          actualizar
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={loading}
+            onClick={() => void load()}
+          >
+            actualizar
+          </Button>
+          <Link to="/gestion/subir" className={buttonClasses("primary", "sm")}>
+            subir clase
+          </Link>
+        </div>
       </div>
 
       {notice !== null && (
@@ -303,8 +309,8 @@ export function BibliotecaPage() {
         </p>
       )}
 
-      {loadError !== null && (
-        <div className="flex flex-col items-start gap-2">
+      {loadError !== null && items.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
           <p role="alert" className="lowercase text-mint">
             &gt; {loadError}
           </p>
@@ -316,7 +322,7 @@ export function BibliotecaPage() {
 
       {reupload !== null && (
         <Card title="volver a subir" variant="accent">
-          <p className="lowercase mb-3 text-lavender/70">
+          <p className="lowercase mb-3 text-lavender/80">
             &gt; clase {reuploadTarget !== null ? audioLabel(reuploadTarget) : reupload.audioId} ·
             reserva hasta {new Date(reupload.reservation.upload_expires_at).toLocaleString()}
           </p>
@@ -335,12 +341,26 @@ export function BibliotecaPage() {
       )}
 
       <Card title="tus clases">
-        <p className="lowercase border-2 border-mint px-3 py-2 text-mint">
+        <p className="lowercase text-sm text-lavender/60">
           &gt; audio no conservado · el audio se borra tras transcribir; solo se guarda el texto.
         </p>
 
         {loading && items.length === 0 ? (
-          <p className="lowercase mt-3 text-lavender/60">&gt; cargando biblioteca…</p>
+          <p role="status" className="lowercase mt-3 text-lavender/60">
+            &gt; cargando biblioteca…
+          </p>
+        ) : loadError !== null && items.length === 0 ? (
+          <div role="alert" className="mt-3">
+            <EmptyState
+              title="no se pudo cargar la biblioteca"
+              description={loadError}
+              action={
+                <Button type="button" size="sm" variant="secondary" onClick={() => void load()}>
+                  reintentar
+                </Button>
+              }
+            />
+          </div>
         ) : groups.length === 0 ? (
           <EmptyState
             className="mt-3"
@@ -349,7 +369,7 @@ export function BibliotecaPage() {
             action={
               <Link
                 to="/gestion/subir"
-                className="lowercase font-pixel border-2 border-mint px-3 py-2 text-mint hover:bg-mint hover:text-on-accent"
+                className={buttonClasses("primary", "sm")}
               >
                 subir clase
               </Link>
@@ -366,9 +386,9 @@ export function BibliotecaPage() {
                     style={{ backgroundColor: group.color }}
                   />
                   {group.name}
-                  <span className="text-lavender/50">({group.items.length})</span>
+                  <span className="text-lavender/60">({group.items.length})</span>
                 </h2>
-                <ul className="flex flex-col gap-2">
+                <ul className="flex flex-col divide-y-2 divide-lavender/20 border-y-2 border-lavender/20">
                   {group.items.map((audio) => (
                     <AudioCard
                       key={audio.id}
@@ -387,7 +407,7 @@ export function BibliotecaPage() {
               </section>
             ))}
             {items.length >= LIBRARY_LIMIT && (
-              <p className="lowercase text-lavender/50">
+              <p className="lowercase text-lavender/60">
                 &gt; se muestran hasta {LIBRARY_LIMIT} clases · el contrato S2 aún no ofrece
                 paginación.
               </p>
