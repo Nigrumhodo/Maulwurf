@@ -3,7 +3,6 @@
 	admin off
 
 	servers {
-		trusted_proxies static private_ranges
 		timeouts {
 			read_body 40m
 			read_header 30s

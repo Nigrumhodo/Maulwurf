@@ -17,6 +17,11 @@ Usage::
     python scripts/ops/budget_check.py --url http://api:8000/internal/metrics \
         --require-configured --format json
 
+    # Outside `local` the endpoint requires a bearer token: export MAULWURF_METRICS_TOKEN
+    # or pass --token-file PATH (never the token itself on the command line).
+    MAULWURF_METRICS_TOKEN=... python scripts/ops/budget_check.py
+    python scripts/ops/budget_check.py --token-file /run/secrets/metrics_token
+
 Exit codes:
 
 * ``0`` — every configured budget is below its warning ratio (unconfigured caps are allowed
@@ -34,11 +39,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 
 DEFAULT_URL: Final = "http://127.0.0.1:8000/internal/metrics"
@@ -178,10 +185,21 @@ def exit_code(budgets: list[Budget], *, require_configured: bool) -> int:
     return 0
 
 
-def _fetch(url: str, timeout: float) -> str:
+def _load_token(token_file: Path | None) -> str | None:
+    if token_file is not None:
+        token = token_file.read_text(encoding="utf-8").strip()
+    else:
+        token = os.environ.get("MAULWURF_METRICS_TOKEN", "").strip()
+    return token or None
+
+
+def _fetch(url: str, timeout: float, *, token: str | None = None) -> str:
     if not url.startswith(("http://", "https://")):
         raise MetricsError("the metrics URL must be http(s)")
-    request = urllib.request.Request(url, headers={"Accept": "text/plain"})  # noqa: S310
+    headers = {"Accept": "text/plain"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, headers=headers)  # noqa: S310
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
         return response.read().decode("utf-8")
 
@@ -207,10 +225,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="fail when a provider has no monthly cap",
     )
+    parser.add_argument(
+        "--token-file",
+        type=Path,
+        help="file holding the metrics bearer token (default: env MAULWURF_METRICS_TOKEN)",
+    )
     parser.add_argument("--format", choices=("text", "json"), default="text")
     args = parser.parse_args(argv)
     try:
-        budgets = evaluate(parse_metrics(_fetch(args.url, args.timeout)))
+        token = _load_token(args.token_file)
+        budgets = evaluate(parse_metrics(
+                _fetch(args.url, args.timeout, token=token)
+                if token
+                else _fetch(args.url, args.timeout)
+            ))
     except (MetricsError, OSError, urllib.error.URLError) as exc:
         print(f"budget_check: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 3
