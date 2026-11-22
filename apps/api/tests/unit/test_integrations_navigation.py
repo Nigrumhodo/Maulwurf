@@ -51,16 +51,16 @@ def _build_app(user: User, session: Session) -> FastAPI:
 
 
 @pytest.mark.parametrize(
-    ("path", "expected_query"),
+    "path",
     [
-        ("/integrations/google/connect", "calendar=error&reason=csrf_invalid"),
-        ("/integrations/google/reconnect", "calendar=error&reason=csrf_invalid"),
-        ("/integrations/google/gmail/connect", "gmail=error&reason=csrf_invalid"),
+        "/integrations/google/connect",
+        "/integrations/google/reconnect",
+        "/integrations/google/gmail/connect",
     ],
 )
-@pytest.mark.parametrize("fetch_site", ["cross-site", "Cross-Site", "same-site"])
+@pytest.mark.parametrize("fetch_site", ["cross-site", "Cross-Site"])
 async def test_navigation_rejects_cross_site_sec_fetch_site(
-    monkeypatch: pytest.MonkeyPatch, path: str, expected_query: str, fetch_site: str
+    monkeypatch: pytest.MonkeyPatch, path: str, fetch_site: str
 ) -> None:
     user_id = uuid.uuid4()
     user = User(id=user_id, email="student@example.test", google_sub="sub-1", display_name="A")
@@ -82,9 +82,12 @@ async def test_navigation_rejects_cross_site_sec_fetch_site(
             path, headers={"Sec-Fetch-Site": fetch_site}, follow_redirects=False
         )
 
-    assert response.status_code == 302
-    assert response.headers["location"] == f"/settings?{expected_query}"
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "csrf_invalid"
     assert deps.OAUTH_COOKIE_NAME not in response.cookies
+    assert deps.OAUTH_CALENDAR_COOKIE not in response.cookies
+    assert deps.OAUTH_GMAIL_COOKIE not in response.cookies
+    assert deps.OAUTH_LOGIN_COOKIE not in response.cookies
     limit_spy.assert_not_awaited()
 
 
@@ -129,11 +132,23 @@ async def test_gmail_connect_navigation_allows_same_origin(
     assert response.status_code == 302
     assert response.headers["location"].startswith("https://accounts.google.com/o/oauth2/v2/auth")
     assert captured_scopes == [[oauth_google.GMAIL_SEND_SCOPE]]
-    assert deps.OAUTH_COOKIE_NAME in response.cookies
+    assert deps.OAUTH_GMAIL_COOKIE in response.cookies
+    assert deps.OAUTH_LOGIN_COOKIE not in response.cookies
     limit_spy.assert_awaited_once()
 
 
-async def test_connect_navigation_allows_same_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Sec-Fetch-Site": "same-origin"},
+        {"Sec-Fetch-Site": "same-site"},
+        {"Sec-Fetch-Site": "none"},
+        {},
+    ],
+)
+async def test_connect_navigation_allows_non_cross_site(
+    monkeypatch: pytest.MonkeyPatch, headers: dict[str, str]
+) -> None:
     user_id = uuid.uuid4()
     user = User(id=user_id, email="student@example.test", google_sub="sub-1", display_name="A")
     session = Session(
@@ -162,11 +177,12 @@ async def test_connect_navigation_allows_same_origin(monkeypatch: pytest.MonkeyP
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
         response = await client.get(
             "/integrations/google/connect",
-            headers={"Sec-Fetch-Site": "same-origin"},
+            headers=headers,
             follow_redirects=False,
         )
 
     assert response.status_code == 302
     assert response.headers["location"].startswith("https://accounts.google.com/o/oauth2/v2/auth")
-    assert deps.OAUTH_COOKIE_NAME in response.cookies
+    assert deps.OAUTH_CALENDAR_COOKIE in response.cookies
+    assert deps.OAUTH_LOGIN_COOKIE not in response.cookies
     limit_spy.assert_awaited_once()

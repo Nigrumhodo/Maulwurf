@@ -464,7 +464,8 @@ async def upsert_google_identity(
         credential = GoogleCredential(user_id=user.id)
         db.add(credential)
     credential.access_token_enc = access_blob
-    # Without a new refresh token the previous one is kept (ESPECIFICACION, Google tokens).
+    # Without a new refresh token the previous one is kept (ESPECIFICACION, Google tokens),
+    # re-encrypted when the row's key version is not the current one.
     new_refresh = _set_refresh_token(credential, user, tokens.refresh_token, key_version)
     credential.key_version = key_version
     # A login must not erase an incremental Calendar/Gmail grant (J3.3): the login request

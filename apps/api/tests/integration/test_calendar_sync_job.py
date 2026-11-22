@@ -213,6 +213,8 @@ async def _insert_task(
         "id": uuid.uuid4(),
         "user_id": actor.user_id,
         "version": 1,
+        # SqlTaskEventStore.load only returns confirmed tasks (F4-04).
+        "status": "confirmed",
         "calendar_sync_status": "pending",
         "calendar_id": CALENDAR_ID,
         "calendar_event_id": None,

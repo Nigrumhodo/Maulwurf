@@ -311,11 +311,16 @@ def acknowledgement_required() -> ApiError:
 async def _handle_validation(_: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, RequestValidationError)  # noqa: S101 - registrado solo para ella
     # Solo ubicación y mensaje por campo: nunca el valor recibido (puede traer PII).
+    # pydantic-core's `uuid_parsing` text quotes one character of the input, so that
+    # type is replaced with a fixed message before anything is returned.
     fields: dict[str, str] = {}
     for error in exc.errors():
         name = ".".join(str(part) for part in error["loc"][1:]) or "body"
+        message = (
+            "identificador inválido" if error.get("type") == "uuid_parsing" else error["msg"]
+        )
         # Un campo puede fallar por varios motivos: se conservan todos, no solo el último.
-        fields[name] = f"{fields[name]}; {error['msg']}" if name in fields else error["msg"]
+        fields[name] = f"{fields[name]}; {message}" if name in fields else message
     return await _handle(_, validation_failed(fields))
 
 

@@ -25,14 +25,16 @@ from typing import Final
 
 from sqlalchemy import and_, exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from app.models import OutboxEvent, ProcessingRun
+from app.models import OutboxEvent, ProcessingRun, Task
 from app.services.index_job import LEASE, STAGE_INDEX
 from app.services.runs import INDEX_CONFIG_VERSION
 
 # Longer than a live `index` job can last (`LEASE`), so a dispatch still in flight is never
-# republished. Only `index_requested` is recovered: `analyze` has no run ledger, and republishing a
-# job that does nothing would loop forever.
+# republished. `analyze` is not recovered: it has no run ledger, and republishing a job that
+# does nothing would loop forever. `sync_task_event` is recovered only while the task is
+# still the confirmed version the event names and Calendar has not finished it.
 DISPATCH_GRACE: Final = LEASE + timedelta(minutes=15)
 LEASE_EXPIRED_CODE: Final = "lease_expired"
 
@@ -63,11 +65,15 @@ class ExpiredRun:
 async def select_lost_dispatches(
     db: AsyncSession, *, now: datetime, limit: int
 ) -> list[LostDispatch]:
-    """Index events dispatched before the grace margin with no terminal run for their version.
+    """Dispatches stuck past the grace margin: index events and confirmed calendar syncs.
 
-    A `failed` run with `lease_expired` is recoverable: its recovery job can itself be lost
-    when Redis restarts. The retry budget and `OutboxEvent.max_attempts` bound the loop.
-    Returns ids plus the fields the later compare-and-set needs; no ORM state is kept.
+    A `failed` index run with `lease_expired` is recoverable: its recovery job can itself
+    be lost when Redis restarts. The retry budget and `OutboxEvent.max_attempts` bound
+    the loop. A `sync_task_event` is recovered only when the task is still `confirmed`,
+    its version still matches the event, Calendar sync is still `pending`, and no sibling
+    of that version already reached a terminal outbox state. Index rows fill the batch
+    first so a full index backlog keeps the previous selection. Returns ids plus the
+    fields the later compare-and-set needs; no ORM state is kept.
     """
     terminal_run = exists().where(
         ProcessingRun.user_id == OutboxEvent.user_id,
@@ -104,7 +110,48 @@ async def select_lost_dispatches(
         .limit(limit)
         .with_for_update(skip_locked=True, of=OutboxEvent)
     )
-    rows = (await db.execute(statement)).all()
+    rows = list((await db.execute(statement)).all())
+    remaining = limit - len(rows)
+    if remaining > 0:
+        sibling = aliased(OutboxEvent)
+        resolved_sibling = exists().where(
+            sibling.type == "sync_task_event",
+            sibling.user_id == OutboxEvent.user_id,
+            sibling.resource_id == OutboxEvent.resource_id,
+            sibling.resource_version == OutboxEvent.resource_version,
+            sibling.id != OutboxEvent.id,
+            sibling.status.in_(("completed", "failed", "skipped")),
+        )
+        sync_statement = (
+            select(
+                OutboxEvent.id,
+                OutboxEvent.status,
+                OutboxEvent.published_at,
+                OutboxEvent.attempts,
+            )
+            .join(
+                Task,
+                and_(
+                    Task.id == OutboxEvent.resource_id,
+                    Task.user_id == OutboxEvent.user_id,
+                ),
+            )
+            .where(
+                OutboxEvent.type == "sync_task_event",
+                OutboxEvent.status == "dispatched",
+                OutboxEvent.published_at < now - DISPATCH_GRACE,
+                OutboxEvent.resource_version.is_not(None),
+                OutboxEvent.attempts < OutboxEvent.max_attempts,
+                Task.version == OutboxEvent.resource_version,
+                Task.status == "confirmed",
+                Task.calendar_sync_status == "pending",
+                ~resolved_sibling,
+            )
+            .order_by(OutboxEvent.published_at, OutboxEvent.id)
+            .limit(remaining)
+            .with_for_update(skip_locked=True, of=OutboxEvent)
+        )
+        rows.extend((await db.execute(sync_statement)).all())
     return [
         LostDispatch(
             id=row.id,

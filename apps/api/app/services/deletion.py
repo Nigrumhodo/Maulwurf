@@ -658,36 +658,41 @@ async def _ensure_operation(
     return operation
 
 
+# FK order: a taskless digest/test notification has no cascade from `tasks`, and `users`
+# is tombstoned rather than deleted, so `Notification` has to be purged explicitly.
+# It must go before `Task` because reminders reference `tasks` and would block that delete.
+_PURGE_USER_MODELS: tuple[type[Any], ...] = (
+    MessageSource,
+    Message,
+    Conversation,
+    TaskRevision,
+    TaskEvidence,
+    TaskSource,
+    CalendarEvent,
+    Notification,
+    Task,
+    ChunkSegment,
+    Embedding,
+    Chunk,
+    Segment,
+    Transcript,
+    ProcessingRun,
+    VariantConfirmationToken,
+    IngestionAttempt,
+    Audio,
+    IndexGeneration,
+    Subject,
+    OutboxEvent,
+    CalendarSettings,
+    GoogleCredential,
+)
+
+
 async def _purge_user_data(
     db: AsyncSession, *, user_id: uuid.UUID, deletion_id: uuid.UUID
 ) -> None:
     """Delete derived data in FK order, then scrub the profile and remove the tokens."""
-    for model in (
-        MessageSource,
-        Message,
-        Conversation,
-        # Digest and test rows have no task, so the task cascade alone would keep them.
-        Notification,
-        TaskRevision,
-        TaskEvidence,
-        TaskSource,
-        CalendarEvent,
-        Task,
-        ChunkSegment,
-        Embedding,
-        Chunk,
-        Segment,
-        Transcript,
-        ProcessingRun,
-        VariantConfirmationToken,
-        IngestionAttempt,
-        Audio,
-        IndexGeneration,
-        Subject,
-        OutboxEvent,
-        CalendarSettings,
-        GoogleCredential,
-    ):
+    for model in _PURGE_USER_MODELS:
         await db.execute(delete(model).where(model.user_id == user_id))
 
     # Keep only the restricted initiator; every other session (including revoked ones) is

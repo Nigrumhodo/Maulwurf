@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 
 import pytest
 
 from maulwurf_ingest.audio import ffmpeg as ffmpeg_mod
 from maulwurf_ingest.audio.ffmpeg import DEFAULT_LIMITS, PROTOCOL_WHITELIST, bounded_argv
+from maulwurf_ingest.audio.limits_exec import parse_limits
 
 
 def test_argv_is_a_list_without_network_or_shell() -> None:
@@ -23,8 +25,12 @@ def test_argv_is_a_list_without_network_or_shell() -> None:
     assert "-nostdin" in argv
     whitelist = argv[argv.index("-protocol_whitelist") + 1]
     assert whitelist == PROTOCOL_WHITELIST
-    assert "http" not in whitelist
-    assert "ftp" not in whitelist
+    assert whitelist == "file,pipe"
+    assert "http" not in whitelist.split(",")
+    assert "ftp" not in whitelist.split(",")
+    assert "crypto" not in whitelist.split(",")
+    assert "tcp" not in whitelist.split(",")
+    assert 768 * 1024 * 1024 <= DEFAULT_LIMITS.address_space_bytes <= 1024 * 1024 * 1024
     assert argv[argv.index("-timelimit") + 1] == str(DEFAULT_LIMITS.time_limit_s)
     assert argv[argv.index("-fs") + 1] == str(DEFAULT_LIMITS.output_bytes)
     assert DEFAULT_LIMITS.cpu_seconds > 0
@@ -38,8 +44,18 @@ def test_argv_is_a_list_without_network_or_shell() -> None:
         )
 
 
+def _which(found: dict[str, str]) -> object:
+    def lookup(name: str) -> str | None:
+        return found.get(name)
+
+    return lookup
+
+
 def test_run_applies_timeout_and_does_not_use_a_shell(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ffmpeg_mod.shutil, "which", lambda _name: "/usr/bin/ffmpeg")  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        ffmpeg_mod.shutil, "which",  # type: ignore[attr-defined]
+        _which({"ffmpeg": "/usr/bin/ffmpeg", "prlimit": "/usr/bin/prlimit"}),
+    )
     captured: dict[str, object] = {}
 
     def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -55,9 +71,49 @@ def test_run_applies_timeout_and_does_not_use_a_shell(monkeypatch: pytest.Monkey
     assert isinstance(kwargs, dict)
     assert kwargs["shell"] is False
     assert kwargs["timeout"] == DEFAULT_LIMITS.wall_timeout_s
-    assert captured["argv"] == ["/usr/bin/ffmpeg", *argv[1:]]
-    preexec = kwargs.get("preexec_fn")
+    assert kwargs.get("preexec_fn") is None
+    ran = captured["argv"]
+    assert isinstance(ran, list)
     if os.name == "posix":
-        assert callable(preexec)
+        assert ran[:1] == ["/usr/bin/prlimit"]
+        assert f"--cpu={DEFAULT_LIMITS.cpu_seconds}" in ran
+        assert f"--as={DEFAULT_LIMITS.address_space_bytes}" in ran
+        assert f"--fsize={DEFAULT_LIMITS.output_bytes}" in ran
+        assert ran[ran.index("--") + 1] == "/usr/bin/ffmpeg"
     else:
-        assert preexec is None
+        assert ran[0] == "/usr/bin/ffmpeg"
+
+
+def test_run_falls_back_to_limits_exec_without_prlimit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        ffmpeg_mod.shutil, "which",  # type: ignore[attr-defined]
+        _which({"ffmpeg": "/usr/bin/ffmpeg"}),
+    )
+    captured: dict[str, object] = {}
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        captured["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, stderr=b"")
+
+    monkeypatch.setattr(ffmpeg_mod.subprocess, "run", fake_run)  # type: ignore[attr-defined]
+    argv = bounded_argv(["-i", "in.wav", "-f", "wav"], output="out.wav", limits=DEFAULT_LIMITS)
+    ffmpeg_mod.run(argv, limits=DEFAULT_LIMITS)
+    ran = captured["argv"]
+    assert isinstance(ran, list)
+    if os.name != "posix":
+        assert ran[0] == "/usr/bin/ffmpeg"
+        return
+    assert ran[0] == sys.executable
+    assert "-m" in ran
+    assert "maulwurf_ingest.audio.limits_exec" in ran
+    assert ran[ran.index("--") + 1] == "/usr/bin/ffmpeg"
+
+
+def test_limits_exec_parses_the_three_caps() -> None:
+    cpu, space, fsize, command = parse_limits(
+        ["--cpu", "3", "--as", "4", "--fsize", "5", "--", "/usr/bin/ffmpeg", "-i", "a.wav"],
+    )
+    assert (cpu, space, fsize) == (3, 4, 5)
+    assert command == ["/usr/bin/ffmpeg", "-i", "a.wav"]
+    with pytest.raises(SystemExit):
+        parse_limits(["--cpu", "1", "--", "/bin/true"])

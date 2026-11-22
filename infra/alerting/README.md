@@ -23,11 +23,14 @@ Operator procedures:
 
 ## Metrics contract
 
-Both internal endpoints answer the Prometheus text format without authentication and are
-reachable only from the private data network; Caddy answers `404` to `/internal/*`. The
-example configuration scrapes them every **60 s**: `api:8000/internal/metrics` runs the
-cross-tenant budget aggregate on every scrape and the endpoint has no cache, so a lower
-interval adds database work without a better monthly signal.
+Outside `local`, `api:8000/internal/metrics` requires `Authorization: Bearer` equal to
+`MAULWURF_METRICS_TOKEN`. The ingest endpoint requires its own bearer,
+`INGEST_METRICS_TOKEN`, which is not the ingest credential. Both are reachable only
+from the private data network; Caddy answers `404` to `/internal/*`. The local compose
+stack does not set those tokens. The example configuration scrapes them every **60 s**:
+`api:8000/internal/metrics` runs the cross-tenant budget aggregate on every scrape and
+the endpoint has no cache, so a lower interval adds database work without a better
+monthly signal.
 
 | Endpoint | Series used by the rules |
 |---|---|
@@ -89,7 +92,11 @@ docker compose exec -T api python - --require-configured --format json \
 From a private-network host that resolves `api` (the J4.7 Prometheus host), run it directly:
 
 ```bash
-python scripts/ops/budget_check.py --url http://api:8000/internal/metrics
+# The bearer is the environment or a mode-0600 file, never a `--token` argument.
+MAULWURF_METRICS_TOKEN=... python scripts/ops/budget_check.py \
+  --url http://api:8000/internal/metrics
+python scripts/ops/budget_check.py --url http://api:8000/internal/metrics \
+  --token-file /etc/prometheus/secrets/api_metrics_token
 ```
 
 ## Verification

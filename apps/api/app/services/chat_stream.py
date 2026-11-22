@@ -14,6 +14,8 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from typing import cast
 
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -55,6 +57,7 @@ from app.services.llm import (
     LLMRateLimited,
 )
 from app.services.progress import encode_event, heartbeat
+from app.services.rate_limiter import refresh_stream_slot
 from app.services.retrieval import RetrievedChunk
 from app.services.tools import MAX_TOOL_ROUNDS, TOOL_BUDGET_SECONDS, ToolCall
 
@@ -147,6 +150,27 @@ class ChatTurnStream:
     _replay_poll_seconds: float
     _citation_validator: CitationValidator | None
     _count_tokens: Callable[[str], int]
+    # Set by the chat route for the lifetime of one SSE response. Absent in tests
+    # and replay-only callers: refresh is then a no-op and the slot TTL is the backstop.
+    _stream_redis: Redis | None = None
+
+    def bind_stream_slot(self, client: Redis) -> None:
+        """Keep the per-user stream counter alive for this response's Redis client."""
+        self._stream_redis = client
+
+    async def _refresh_stream_slot(self, user_id: uuid.UUID) -> None:
+        """Renew the concurrency key while the turn is open.
+
+        A failed refresh must not fail the turn: the slot TTL still bounds a lost
+        heartbeat, and dropping the answer would punish a Redis blip.
+        """
+        client = self._stream_redis
+        if client is None:
+            return
+        try:
+            await refresh_stream_slot(client, user_id)
+        except RedisError:
+            logger.warning("chat.stream_slot_refresh_failed")
 
     async def _validate_citation(
         self, user_id: uuid.UUID, source: RetrievedChunk
@@ -188,6 +212,7 @@ class ChatTurnStream:
         if current is None:
             return None
         return CitationRef(index=record.index, chunk=current, offset=record.offset)
+
     async def _live_events(self, prepared: PreparedStream) -> AsyncGenerator[str, None]:
         if self._llm is None:
             yield self._error_event(
@@ -227,17 +252,22 @@ class ChatTurnStream:
         producer_error: LLMError | None = None
         timed_out = False
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self._stream_max_seconds
-        last_checkpoint = loop.time()
+        started_at = loop.time()
+        deadline = started_at + self._stream_max_seconds
+        last_checkpoint = started_at
         last_checkpoint_content = ""
-        last_cancel_poll = loop.time()
-        last_heartbeat = loop.time()
+        last_cancel_poll = started_at
+        last_heartbeat = started_at
+        last_slot_refresh = started_at
         try:
             while True:
                 now = loop.time()
                 if now >= deadline:
                     timed_out = True
                     break
+                if now - last_slot_refresh >= self._cancel_poll_seconds:
+                    last_slot_refresh = now
+                    await self._refresh_stream_slot(prepared.user_id)
                 if cancel_event.is_set() or now - last_cancel_poll >= self._cancel_poll_seconds:
                     last_cancel_poll = now
                     status = await self._message_status(
@@ -352,11 +382,14 @@ class ChatTurnStream:
                 )
                 return
             if producer_error is not None or timed_out:
-                error = (
-                    _map_llm_error(producer_error)
-                    if producer_error is not None
-                    else _STREAM_TIMEOUT_ERROR
-                )
+                if timed_out or (
+                    producer_error is not None
+                    and producer_error.details.get("reason") == "stream_timeout"
+                ):
+                    error = _STREAM_TIMEOUT_ERROR
+                else:
+                    assert producer_error is not None  # noqa: S101
+                    error = _map_llm_error(producer_error)
                 actual = await self._finalize(
                     prepared, "failed", content, citations, tool_calls
                 )
@@ -410,65 +443,26 @@ class ChatTurnStream:
         messages = _merge_tool_protocol(prepared.messages)
         budget = self._llm.context_window - max_tokens - self._context_margin_tokens
         messages = _fit_to_budget(messages, budget, self._count_tokens)
-        rounds = 0
         started = time.monotonic()
-        budget_exhausted = False
+        deadline = started + self._stream_max_seconds
         try:
-            while True:
-                if budget_exhausted:
-                    async for delta in self._llm.stream(messages, max_tokens=max_tokens):
-                        await queue.put(_LLMEvent(kind="delta", text=delta))
-                    break
-                buffer = ""
-                flushed_any = False
-                last_flushed = ""
-                tool_executed = False
-                async for delta in self._llm.stream(messages, max_tokens=max_tokens):
-                    buffer += delta
-                    extracted = extract_tool_call(buffer)
-                    if extracted is not None:
-                        prefix, call = extracted
-                        tool_executed = True
-                        await self._run_tool(
-                            prepared, queue, messages, prefix, call, flushed_any, last_flushed
-                        )
-                        break
-                    cut = _safe_prose_cut(buffer, flushed_any=flushed_any)
-                    if cut > 0:
-                        chunk = buffer[:cut]
-                        await queue.put(_LLMEvent(kind="delta", text=chunk))
-                        buffer = buffer[cut:]
-                        flushed_any = True
-                        last_flushed = chunk
-                if not tool_executed and buffer:
-                    extracted = extract_tool_call(buffer)
-                    if extracted is not None:
-                        prefix, call = extracted
-                        tool_executed = True
-                        await self._run_tool(
-                            prepared, queue, messages, prefix, call, flushed_any, last_flushed
-                        )
-                    else:
-                        await queue.put(_LLMEvent(kind="delta", text=buffer))
-                if tool_executed:
-                    rounds += 1
-                    if (
-                        rounds >= MAX_TOOL_ROUNDS
-                        or time.monotonic() - started > TOOL_BUDGET_SECONDS
-                    ):
-                        budget_exhausted = True
-                        messages.append(
-                            ChatMessage(
-                                role="system",
-                                content=(
-                                    "Tool budget exhausted. Answer with the information "
-                                    "you already have."
-                                ),
-                            )
-                        )
-                    continue
-                break
-            await queue.put(_LLMEvent(kind="end"))
+            async with asyncio.timeout(self._stream_max_seconds):
+                await self._produce_rounds(
+                    prepared, max_tokens, queue, messages, started, deadline
+                )
+        except TimeoutError:
+            # The queue may already be full of deltas. Dropping the terminal marker is
+            # safe: the consumer applies the same deadline and finalizes the partial text.
+            with suppress(asyncio.QueueFull):
+                queue.put_nowait(
+                    _LLMEvent(
+                        kind="error",
+                        error=LLMProviderError(
+                            "stream_timeout",
+                            details={"reason": "stream_timeout"},
+                        ),
+                    )
+                )
         except LLMError as exc:
             await queue.put(_LLMEvent(kind="error", error=exc))
         except Exception as exc:  # noqa: BLE001 - provider adapters must not crash the stream
@@ -482,6 +476,81 @@ class ChatTurnStream:
                     ),
                 )
             )
+
+    async def _produce_rounds(
+        self,
+        prepared: PreparedStream,
+        max_tokens: int,
+        queue: asyncio.Queue[_LLMEvent],
+        messages: list[ChatMessage],
+        started: float,
+        deadline: float,
+    ) -> None:
+        """Run tool rounds until the model finishes or the stream deadline passes."""
+        assert self._llm is not None  # noqa: S101 - guarded by `_produce`
+        budget_exhausted = False
+        rounds = 0
+        while True:
+            if time.monotonic() >= deadline:
+                raise TimeoutError
+            if budget_exhausted:
+                async for delta in self._llm.stream(messages, max_tokens=max_tokens):
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError
+                    await queue.put(_LLMEvent(kind="delta", text=delta))
+                break
+            buffer = ""
+            flushed_any = False
+            last_flushed = ""
+            tool_executed = False
+            async for delta in self._llm.stream(messages, max_tokens=max_tokens):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError
+                buffer += delta
+                extracted = extract_tool_call(buffer)
+                if extracted is not None:
+                    prefix, call = extracted
+                    tool_executed = True
+                    await self._run_tool(
+                        prepared, queue, messages, prefix, call, flushed_any, last_flushed
+                    )
+                    break
+                cut = _safe_prose_cut(buffer, flushed_any=flushed_any)
+                if cut > 0:
+                    chunk = buffer[:cut]
+                    await queue.put(_LLMEvent(kind="delta", text=chunk))
+                    buffer = buffer[cut:]
+                    flushed_any = True
+                    last_flushed = chunk
+            if not tool_executed and buffer:
+                extracted = extract_tool_call(buffer)
+                if extracted is not None:
+                    prefix, call = extracted
+                    tool_executed = True
+                    await self._run_tool(
+                        prepared, queue, messages, prefix, call, flushed_any, last_flushed
+                    )
+                else:
+                    await queue.put(_LLMEvent(kind="delta", text=buffer))
+            if tool_executed:
+                rounds += 1
+                if (
+                    rounds >= MAX_TOOL_ROUNDS
+                    or time.monotonic() - started > TOOL_BUDGET_SECONDS
+                ):
+                    budget_exhausted = True
+                    messages.append(
+                        ChatMessage(
+                            role="system",
+                            content=(
+                                "Tool budget exhausted. Answer with the information "
+                                "you already have."
+                            ),
+                        )
+                    )
+                continue
+            break
+        await queue.put(_LLMEvent(kind="end"))
 
     async def _run_tool(
         self,

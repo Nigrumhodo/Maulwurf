@@ -13,6 +13,8 @@ A2.17 (ADR-0006): cada transacción empieza con `SET LOCAL ROLE` a un rol de run
 listener de `begin` lo traduce a `SET LOCAL app.user_id`. `SET LOCAL` muere al terminar la
 transacción, así que una conexión devuelta al pool no arrastra el usuario anterior.
 """
+import logging
+import os
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -28,6 +30,8 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 # One process. Compose runs three of these engines (api, worker, scheduler):
 # 3 * (5 + 5) = 30, plus the ingest service pool of 4. Postgres keeps the image
@@ -103,6 +107,61 @@ async def bind_google_sub(db: AsyncSession, sub: str) -> None:
     """
     await db.execute(
         text("SELECT set_config('app.google_sub', :sub, true)"), {"sub": sub}
+    )
+
+
+def runtime_privilege_check_enabled() -> bool:
+    """True when startup must reject a superuser or BYPASSRLS login role.
+
+    Local development is the documented exception (ADR-0006). Unit tests and other
+    pytest processes skip the catalog query: they boot the app without a role that
+    the check could meaningfully judge, and they cover the function directly.
+    """
+    if settings.env == "local":
+        return False
+    return os.environ.get("PYTEST_CURRENT_TEST") is None
+
+
+async def verify_db_role_least_privilege(engine: AsyncEngine) -> None:
+    """Fail closed when the authenticated role bypasses row-level security.
+
+    The begin listener downgrades every transaction with SET LOCAL ROLE, so
+    `current_user` inside that transaction is the runtime role, not the login
+    role. RESET ROLE restores the session user for this check only; the
+    transaction ends with the connection, so the downgrade does not leak.
+    """
+    async with engine.connect() as connection:
+        await connection.execute(text("RESET ROLE"))
+        row = (
+            await connection.execute(
+                text(
+                    "SELECT current_user, rolsuper, rolbypassrls "
+                    "FROM pg_roles WHERE rolname = current_user"
+                )
+            )
+        ).one()
+    rolsuper = bool(row[1])
+    rolbypassrls = bool(row[2])
+    if not rolsuper and not rolbypassrls:
+        return
+    if settings.env == "local":
+        logger.warning(
+            "db.runtime_role_is_privileged env=%s rolsuper=%s rolbypassrls=%s",
+            settings.env,
+            rolsuper,
+            rolbypassrls,
+            extra={
+                "fields": {
+                    "env": settings.env,
+                    "rolsuper": rolsuper,
+                    "rolbypassrls": rolbypassrls,
+                }
+            },
+        )
+        return
+    raise RuntimeError(
+        "runtime database role must not be a superuser or BYPASSRLS "
+        f"(env={settings.env}, rolsuper={rolsuper}, rolbypassrls={rolbypassrls})"
     )
 
 

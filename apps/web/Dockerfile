@@ -15,6 +15,8 @@ FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build --chown=node:node /app/dist ./dist
+# Source maps must not ship in the runtime image, even if a later compiler flag turns them back on.
+RUN find ./dist -name '*.map' -delete
 COPY --from=build --chown=node:node /app/package.json ./package.json
 # Production dependencies only: Vite, Tailwind, TypeScript and ESLint stay in the build stage.
 COPY --from=build --chown=node:node /app/node_modules ./node_modules

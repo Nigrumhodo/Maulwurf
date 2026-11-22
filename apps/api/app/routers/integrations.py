@@ -11,10 +11,12 @@ mismo `sub` de la sesión (ver `services/calendar_connection.py`).
 
 D3.7 añade las variantes `GET` de connect/reconnect para que el navegador pueda navegar de
 verdad: un `fetch` `POST` no puede seguir el `302` cross-origin a Google ni mostrar el
-consentimiento, así que la UI enlaza a estas rutas. La seguridad no cambia: el `state`
-firmado sigue ligado al `user_id` de la sesión y el callback exige consentimiento explícito
-y una sesión viva del mismo usuario. Un fallo de arranque vuelve a
-`/settings?calendar=error&reason=<razón cerrada>` en vez de renderizar JSON en el navegador.
+consentimiento, así que la UI enlaza a estas rutas. El `state` firmado sigue ligado al
+`user_id` de la sesión y el callback exige consentimiento explícito y una sesión viva del
+mismo usuario. La cookie es `mw_oauth_calendar` o `mw_oauth_gmail`, no la del login. Un
+`Sec-Fetch-Site: cross-site` se rechaza con 403; `same-origin`, `same-site`, `none` y la
+ausencia de cabecera (clientes no navegador) pueden iniciar el flujo. Un fallo de arranque
+vuelve a `/settings?calendar=error&reason=<razón cerrada>`.
 """
 
 import time
@@ -31,6 +33,7 @@ from app.core.deps import (
     CurrentSession,
     DbSession,
     MutationSession,
+    OAuthFlow,
     resolve_authenticated_session,
     set_oauth_state_cookie,
 )
@@ -181,7 +184,8 @@ def _build_incremental_redirect(
     )
     redirect = RedirectResponse(auth_req.url, status_code=302)
     redirect.headers["Cache-Control"] = "no-store"
-    set_oauth_state_cookie(redirect, token, OAUTH_STATE_TTL_SECONDS)
+    flow: OAuthFlow = "gmail" if mode == GMAIL_CONNECT else "calendar"
+    set_oauth_state_cookie(redirect, token, OAUTH_STATE_TTL_SECONDS, flow=flow)
     return redirect
 
 
@@ -217,11 +221,16 @@ async def _start_gmail_flow(db: DbSession, session: SessionRow) -> RedirectRespo
     )
 
 
-def _reject_cross_site_navigation(request: Request) -> None:
-    """Reject cross-site top-level navigations before starting OAuth."""
-    fetch_site = request.headers.get("sec-fetch-site", "none").lower()
-    if fetch_site not in {"none", "same-origin"}:
-        raise ApiError(403, "csrf_invalid", "Navegación de origen cruzado no permitida.")
+# Browsers send one of these. A missing header is a non-browser client or a test.
+_ALLOWED_FETCH_SITES = frozenset({"same-origin", "same-site", "none"})
+
+
+def _cross_site_navigation(request: Request) -> bool:
+    """True only when the browser says this navigation came from another site."""
+    fetch_site = request.headers.get("sec-fetch-site")
+    if fetch_site is None or not fetch_site.strip():
+        return False
+    return fetch_site.strip().lower() not in _ALLOWED_FETCH_SITES
 
 
 async def _start_oauth_navigation(
@@ -232,8 +241,10 @@ async def _start_oauth_navigation(
     error_redirect: Callable[[str], RedirectResponse],
 ) -> RedirectResponse:
     """Shared GET OAuth navigation guard for browser-initiated incremental consent."""
+    # 403, not the settings redirect: a cross-site navigation must not start consent.
+    if _cross_site_navigation(request):
+        raise ApiError(403, "csrf_invalid", "Navegación de origen cruzado no permitida.")
     try:
-        _reject_cross_site_navigation(request)
         await enforce_integration_limit(redis, session.user_id)
         return await starter()
     except ApiError as exc:

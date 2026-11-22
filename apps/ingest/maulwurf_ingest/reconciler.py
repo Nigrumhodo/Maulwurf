@@ -237,14 +237,26 @@ SELECT id, user_id, fencing_token
  LIMIT $2
 """
 
-# The token in the predicate is the one read before destruction. Bumping it fences the
-# dead owner: its transition, heartbeat and record_cleanup now match no row.
+# Fence before any deletion. The predicate token is the one just read. Bumping it
+# first means a concurrent acquire loses the row and cannot recreate the directory
+# we are about to destroy. RETURNING is the token cleanup must record against.
 _FENCE_SQL = """
 UPDATE ingestion_attempts
    SET status = $3, error_code = $4,
        fencing_token = fencing_token + 1, updated_at = now()
  WHERE id = $1 AND user_id = $2 AND fencing_token = $5
    AND status = ANY($6::text[]) AND lease_expires_at <= now()
+ RETURNING fencing_token
+"""
+
+# Orphan directories belong to terminal rows. A live receiving/transcribing lease
+# still owns its tmpfs and is left to the owner or to the stranded fence above.
+_ORPHAN_SKIP_STATES = frozenset({"receiving", "transcribing"})
+_ORPHAN_SQL = """
+SELECT id, user_id, fencing_token, status,
+       (lease_expires_at IS NOT NULL AND lease_expires_at > now()) AS lease_live
+  FROM ingestion_attempts
+ WHERE id = ANY($1::uuid[])
 """
 
 
@@ -252,7 +264,7 @@ async def _destroy_stranded(
     pool: rls.Executor, attempt_id: uuid.UUID, user_id: uuid.UUID, token: int,
     workdirs: list[Path],
 ) -> None:
-    """Verified destruction while the fencing token still matches this row."""
+    """Verified destruction after the row was fenced onto ``token``."""
     lease = leases.Lease(attempt_id, user_id, "sweep", token, DEFAULT_LEASE_TTL)
     try:
         evidence = await _destroy(workdirs)
@@ -288,8 +300,9 @@ async def sweep_stranded(
 ) -> tuple[uuid.UUID, ...]:
     """End receiving/transcribing attempts whose lease expired. Bounded, never retranscribes.
 
-    A local attempt directory is destroyed and verified before the row is fenced.
-    No directory is not proof the audio is gone, so ``cleanup_status`` stays as it was.
+    The row is fenced before any directory is destroyed. A lost race leaves the
+    new owner's files in place. No directory is not proof the audio is gone, so
+    ``cleanup_status`` stays as it was when this host has nothing to delete.
     Committed attempts and ``awaiting_upload`` are not selected.
     """
     root = Path(tmp_dir) if tmp_dir is not None else Path(tempfile.gettempdir())
@@ -311,16 +324,20 @@ async def sweep_stranded(
                 or not isinstance(token, int)
             ):
                 continue
-            workdirs = local_workdirs(root, attempt_id)
-            if workdirs:
-                await _destroy_stranded(pool, attempt_id, user_id, token, workdirs)
-            status = await rls.execute(
+            fenced = await rls.fetchrow(
                 pool, user_id, _FENCE_SQL,
                 attempt_id, user_id, STRANDED_STATUS, STRANDED_ERROR_CODE, token,
                 list(STRANDED_STATES),
             )
-            if status != "UPDATE 1":
+            if fenced is None:
+                logger.info("reconciler.stranded_lost_race attempt_id=%s", attempt_id)
                 continue
+            new_token = fenced["fencing_token"]
+            if isinstance(new_token, bool) or not isinstance(new_token, int):
+                continue
+            workdirs = local_workdirs(root, attempt_id)
+            if workdirs:
+                await _destroy_stranded(pool, attempt_id, user_id, new_token, workdirs)
             ended.append(attempt_id)
             logger.info(
                 "reconciler.stranded_ended attempt_id=%s user_id=%s", attempt_id, user_id,
@@ -330,3 +347,78 @@ async def sweep_stranded(
     if ended:
         logger.info("reconciler.stranded_swept count=%s", len(ended))
     return tuple(ended)
+
+
+async def sweep_orphan_dirs(
+    pool: rls.Executor, *, tmp_dir: str | None = None,
+) -> tuple[uuid.UUID, ...]:
+    """Destroy leftover attempt directories that no live lease still owns.
+
+    Runs after the stranded fence. A directory whose row is still
+    ``receiving``/``transcribing`` or whose lease is in the future is skipped.
+    A successful verified destruction is recorded; a directory that survives
+    keeps admission closed.
+    """
+    root = Path(tmp_dir) if tmp_dir is not None else Path(tempfile.gettempdir())
+    dirs = cleanup.list_attempt_dirs(root)
+    if not dirs:
+        return ()
+    ids: list[uuid.UUID] = []
+    for path in dirs:
+        attempt_id = cleanup.attempt_id_from_dirname(path.name)
+        if attempt_id is not None:
+            ids.append(attempt_id)
+    if not ids:
+        return ()
+    rows = await rls.fetch(pool, None, _ORPHAN_SQL, ids)
+    protected: set[uuid.UUID] = set()
+    owners: dict[uuid.UUID, tuple[uuid.UUID, int]] = {}
+    for row in rows:
+        attempt_id = row["id"]
+        user_id = row["user_id"]
+        token = row["fencing_token"]
+        status = row["status"]
+        if not isinstance(attempt_id, uuid.UUID):
+            continue
+        if row["lease_live"] is True or status in _ORPHAN_SKIP_STATES:
+            protected.add(attempt_id)
+            continue
+        if (
+            isinstance(user_id, uuid.UUID)
+            and not isinstance(token, bool)
+            and isinstance(token, int)
+        ):
+            owners[attempt_id] = (user_id, token)
+    swept = await cleanup.sweep_orphan_dirs(root, protected=protected)
+    removed: list[uuid.UUID] = []
+    for item in swept:
+        if item.evidence is not None and item.evidence.workdir_absent:
+            removed.append(item.attempt_id)
+        owner = owners.get(item.attempt_id)
+        if owner is None:
+            continue
+        user_id, token = owner
+        lease = leases.Lease(item.attempt_id, user_id, "sweep", token, DEFAULT_LEASE_TTL)
+        if item.evidence is None:
+            recorded = await _record_cleanup(
+                pool, lease, verified=False, evidence={"verified": False, "error": "orphan_sweep"},
+            )
+            if recorded:
+                admission.halt(item.attempt_id)
+            else:
+                _note_unrecorded_cleanup(item.attempt_id)
+            continue
+        recorded = await _record_cleanup(
+            pool, lease, verified=item.evidence.verified, evidence=item.evidence.as_json(),
+        )
+        if item.evidence.verified:
+            logger.info("cleanup.orphan_recovered attempt_id=%s", item.attempt_id)
+            continue
+        if recorded:
+            admission.halt(item.attempt_id)
+        else:
+            _note_unrecorded_cleanup(item.attempt_id)
+        # A surviving directory is already counted by the filesystem sweep.
+        if item.evidence.workdir_absent:
+            cleanup.log_cleanup_failed(str(item.attempt_id), item.evidence)
+    return tuple(removed)

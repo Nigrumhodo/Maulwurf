@@ -22,7 +22,11 @@ from app.core.errors import ApiError
 logger = logging.getLogger(__name__)
 
 MAX_STREAMS_PER_USER = 2
-STREAM_SLOT_TTL_SECONDS = 300
+# Must stay strictly above the live SSE cap (`chat_prompt.STREAM_MAX_SECONDS`, 300s).
+# A slot that expires while its stream is still open resets the counter and the
+# two-stream budget can be acquired again (F3-02). Refresh extends this TTL; the
+# gap is the backstop when a refresh does not reach Redis.
+STREAM_SLOT_TTL_SECONDS = 360
 STREAM_KEY_PREFIX = "chat:streams"
 
 # KEYS[1] = per-user counter. ARGV[1] = maximum slots, ARGV[2] = TTL seconds.
@@ -52,6 +56,17 @@ if not current or tonumber(current) <= 1 then
     return 0
 end
 return redis.call('DECR', KEYS[1])
+"""
+
+# KEYS[1] = per-user counter. ARGV[1] = TTL seconds.
+# EXPIRE only while the counter still exists and is positive, so a refresh cannot
+# resurrect a released slot or keep a zero-valued key alive after the last release.
+_REFRESH_SCRIPT = """
+local current = redis.call('GET', KEYS[1])
+if not current or tonumber(current) <= 0 then
+    return 0
+end
+return redis.call('EXPIRE', KEYS[1], ARGV[1])
 """
 
 
@@ -106,6 +121,27 @@ async def acquire_stream(
             # M7 fixes the budget (two streams) and DISENO §3.1 requires the header on 429.
             headers={"Retry-After": str(ttl_seconds)},
         )
+
+
+async def refresh_stream_slot(
+    client: Redis,
+    user_id: uuid.UUID,
+    *,
+    ttl_seconds: int = STREAM_SLOT_TTL_SECONDS,
+) -> bool:
+    """Extend the slot TTL while at least one stream for `user_id` is still held.
+
+    Returns whether Redis accepted the refresh. A missing or non-positive counter
+    is left untouched: the key must die with the last release, not be recreated by
+    a late heartbeat.
+    """
+    if ttl_seconds < 1:
+        raise ValueError("ttl_seconds debe ser >= 1")
+    refreshed = await cast(
+        Awaitable[int | str | bytes],
+        client.eval(_REFRESH_SCRIPT, 1, stream_key(user_id), str(ttl_seconds)),
+    )
+    return int(refreshed) == 1
 
 
 async def release_stream(client: Redis, user_id: uuid.UUID) -> int:

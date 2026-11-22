@@ -57,6 +57,7 @@ from app.services.index_job import (
     require_run_fence,
 )
 from app.services.llm import HttpChatProvider, LLMError
+from app.services.provider_budget import configured_budget_limits, enforce_provider_budget
 from app.services.runs import latest_attempt, run_spec
 from app.services.summary import SummaryRejected, assign_class_summary
 from app.workers.retry import retry_decision
@@ -282,6 +283,13 @@ async def _extract_and_publish(
     claimed: _Claim,
     now: datetime,
 ) -> None:
+    # Unset caps skip the read entirely. A spent cap raises before any provider call;
+    # the worker records it as a permanent llm quota failure and does not retry into
+    # more tokens. A blind reading raises ConnectionError, which the retry policy
+    # postpones without calling the model.
+    if configured_budget_limits(settings, providers=("llm",)):
+        async with sessions() as db:
+            await enforce_provider_budget(db, settings, providers=("llm",))
     async with sessions() as db:
         context = await _load_context(db, claimed)
     batch = await analyze_transcript(context, models(), now=now)

@@ -41,19 +41,31 @@ ownership is recorded in [docs/sprints/CLAIMS.md](../docs/sprints/CLAIMS.md); fu
   `scripts/load/ingress_limits.sh` (C-S2-JF-13). `scripts/load/proxy_no_buffering.sh`
   (I-S1-JF-02) is a wrapper around that harness.
 - **Edge limits (J2.10):** Caddy is the only HTTP ingress (ADR-0010). Uploads are capped at
-  220,000,000 bytes and JSON at 10,000,000; `read_body` 20m, `read_header` 30s, `write` 0
+  220,000,000 bytes and JSON at 10,000,000; `read_body` 40m, `read_header` 30s, `write` 0
   (SSE) and `idle` 5m. The 220 MB ceiling stays above the provisional 200 MiB API limit so the
   API answers with its `413` envelope. Measure it with `scripts/load/ingress_limits.sh`
   (C-S2-JF-13); the record is in `docs/spike/J2.10-ingress-limits.md`.
+- **Local assumptions, not the production posture.** Redis has no password and is published
+  on loopback only. Caddy is published on loopback only (`127.0.0.1`); to reach the stack
+  from another host on a trusted LAN, change that mapping to
+  `0.0.0.0:${CADDY_HTTPS_PORT:-443}:443` (and the same for port 80) for the local run, and
+  do not do that on a shared or production host. `/docs`, `/redoc` and `/openapi.json` are
+  answered `404` at the edge. Production passwords, dedicated database roles, HSTS and the
+  metrics bearers live in `infra/docker-compose.prod.yml`.
+- **Log retention:** every service uses the json-file driver with `max-size` 10m and
+  `max-file` 5 (about 50m per service). That is shorter than the 30-day D8 backup window
+  on purpose: edge logs are not a second copy of application data.
 - **Secrets outside the compose file:** the Postgres password goes as
   `${POSTGRES_PASSWORD:-maulwurf}` (overridable with `.env`); the `MAULWURF_*` values arrive
-  via `env_file`. Never commit `.env`.
+  via `env_file`. Never commit `.env` or `.env.prod`. The ingest-only `NVIDIA_API_KEY` and
+  `RIVA_*` variables are emptied on `api`, `worker` and `scheduler` so `env_file` cannot
+  inject them.
 
 ## Stack environment variables
 
 | Variable | Use |
 |---|---|
-| `CADDY_HTTP_PORT` / `CADDY_HTTPS_PORT` | Host ports for 80/443 (e.g. 8080/8443) |
+| `CADDY_HTTP_PORT` / `CADDY_HTTPS_PORT` | Host ports for 80/443, bound to `127.0.0.1` (e.g. 8080/8443) |
 | `REDIS_PORT` | Host port for the Redis published on loopback (e.g. 6380) |
 | `POSTGRES_PASSWORD` | Override for the local Postgres password |
 | `INGEST_TMPFS_BYTES` / `INGEST_MEM_LIMIT` | `ingest` tmpfs and memory limit; provisional |

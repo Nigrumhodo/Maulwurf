@@ -18,7 +18,11 @@ pins three invariants:
 * `/audios/*/progress` and `/chat/conversations/*/messages` set `flush_interval -1`.
 
 Usage:
-    python3 scripts/ci/check_caddy_limits.py [--caddyfile PATH]
+    python3 scripts/ci/check_caddy_limits.py
+    python3 scripts/ci/check_caddy_limits.py --caddyfile infra/Caddyfile --profile dev
+    python3 scripts/ci/check_caddy_limits.py --caddyfile infra/deploy/Caddyfile.prod --profile prod
+
+With no ``--caddyfile``, both the dev file and ``infra/deploy/Caddyfile.prod`` are checked.
 """
 
 from __future__ import annotations
@@ -31,6 +35,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CADDYFILE = REPO_ROOT / "infra" / "Caddyfile"
+DEFAULT_PROD_CADDYFILE = REPO_ROOT / "infra" / "deploy" / "Caddyfile.prod"
+_EXTENSION_REGEXP = r"\.(php|asp|aspx|jsp|bak|sql|env)$"
+_INERT_GLOBS = ("*.php", "*.asp", "*.aspx", "*.jsp", "*.bak", "*.sql")
 ROUTER_DIR = REPO_ROOT / "apps" / "api" / "app" / "routers"
 
 # Caddy 2.8: one trailing `*` is a prefix. A star anywhere else is one segment.
@@ -363,16 +370,77 @@ def _sse_flush(lines: list[str], blocks: list[HandleBlock]) -> None:
             _fail(f"`handle {name}` must set `flush_interval -1`")
 
 
-def check(caddyfile: Path, *, public_tls: bool = False) -> Report:
+def _profile_for(caddyfile: Path, requested: str) -> str:
+    if requested != "auto":
+        return requested
+    if caddyfile.name == "Caddyfile.prod":
+        return "prod"
+    return "dev"
+
+
+def _joined(lines: list[str]) -> str:
+    return "\n".join(_strip_comment(line) for line in lines)
+
+
+def _oauth_and_scanner(lines: list[str]) -> None:
+    """OAuth query secrets stay out of the access log, and extension globs are real."""
+    joined = _joined(lines)
+    if "log_skip" not in joined or "/auth/google/callback" not in joined:
+        _fail("missing log_skip for /auth/google/callback")
+    if "/integrations/google/*/callback" not in joined:
+        _fail("missing log_skip for /integrations/google/*/callback")
+    if "request>uri query" not in joined or "replace code REDACTED" not in joined:
+        _fail("missing access-log redaction of the OAuth code query parameter")
+    if "replace state REDACTED" not in joined:
+        _fail("missing access-log redaction of the OAuth state query parameter")
+    if "@scanner_probes path_regexp ext" not in joined or _EXTENSION_REGEXP not in joined:
+        _fail("missing @scanner_probes path_regexp for extension probes")
+    for inert in _INERT_GLOBS:
+        if inert in joined:
+            _fail(f"inert glob {inert} is still a path matcher")
+    body = _find_block(lines, "@scanner_paths")
+    if body is None:
+        _fail("missing `@scanner_paths` block")
+        return
+    for raw in body:
+        for token in _strip_comment(raw).split():
+            if token == "path" or "*" not in token:
+                continue
+            if not (token.count("*") == 1 and token.endswith("*")):
+                _fail(f"scanner path {token} is not an exact path or a trailing prefix star")
+    if not any(_strip_comment(line).strip() == "handle @scanner_paths {" for line in lines):
+        _fail("missing `handle @scanner_paths`")
+    if not any(_strip_comment(line).strip() == "handle @scanner_probes {" for line in lines):
+        _fail("missing `handle @scanner_probes`")
+
+
+def _prod_edge(lines: list[str]) -> None:
+    joined = _joined(lines)
+    if "tls internal" in joined:
+        _fail("production Caddyfile must not use `tls internal`")
+    if 'Strict-Transport-Security "max-age=31536000; includeSubDomains"' not in joined:
+        _fail("missing Strict-Transport-Security")
+    if 'X-Content-Type-Options "nosniff"' not in joined:
+        _fail("missing X-Content-Type-Options nosniff")
+    if 'X-Frame-Options "DENY"' not in joined:
+        _fail("missing X-Frame-Options DENY")
+    # Production runs behind Plane's front Caddy (docs/runbooks/deploy.md §1.1), so
+    # private_ranges is permitted as the fallback inside {$CADDY_TRUSTED_PROXIES:...},
+    # while hardcoded unparameterized trusted_proxies is rejected so operators can narrow it.
+    if "CADDY_TRUSTED_PROXIES" not in joined:
+        _fail("trusted_proxies must be parameterized with CADDY_TRUSTED_PROXIES")
+
+
+def check(caddyfile: Path, profile: str = "auto", *, public_tls: bool = False) -> Report:
     lines = _lines(caddyfile)
-    joined = "\n".join(_strip_comment(line) for line in lines)
+    joined = _joined(lines)
+    selected = "prod" if public_tls else _profile_for(caddyfile, profile)
 
     if "admin off" not in joined:
         _fail("missing `admin off`")
-    if public_tls:
-        # The production edge uses public ACME certificates; a local CA there would be a bug.
-        if "tls internal" in joined:
-            _fail("`tls internal` is not allowed with --public-tls")
+    _oauth_and_scanner(lines)
+    if selected == "prod":
+        _prod_edge(lines)
     elif "tls internal" not in joined:
         _fail("missing `tls internal`")
 
@@ -439,9 +507,21 @@ def summarize(report: Report) -> str:
     )
 
 
+def _check_one(caddyfile: Path, profile: str) -> int:
+    try:
+        report = check(caddyfile, profile)
+    except CheckError as exc:
+        print(f"FAIL: {caddyfile}: {exc}", file=sys.stderr)
+        return 1
+    print(f"Caddyfile: {caddyfile} ({_profile_for(caddyfile, profile)})")
+    print(summarize(report))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--caddyfile", type=Path, default=DEFAULT_CADDYFILE)
+    parser.add_argument("--caddyfile", type=Path, default=None)
+    parser.add_argument("--profile", choices=("auto", "dev", "prod"), default="auto")
     parser.add_argument(
         "--public-tls",
         action="store_true",
@@ -456,18 +536,25 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
-    try:
-        report = check(args.caddyfile, public_tls=args.public_tls)
-    except CheckError as exc:
-        print(f"FAIL: {exc}", file=sys.stderr)
-        return 1
+    profile = "prod" if args.public_tls else args.profile
     if args.print_sizes:
-        print(
-            f"{report.upload_max_bytes} {report.api_max_bytes} {API_UPLOAD_MAX_BYTES}"
-        )
+        caddyfile = args.caddyfile or DEFAULT_CADDYFILE
+        try:
+            report = check(caddyfile, profile)
+        except CheckError as exc:
+            print(f"FAIL: {exc}", file=sys.stderr)
+            return 1
+        print(f"{report.upload_max_bytes} {report.api_max_bytes} {API_UPLOAD_MAX_BYTES}")
         return 0
-    print(f"Caddyfile: {args.caddyfile}")
-    print(summarize(report))
+    targets = [args.caddyfile] if args.caddyfile is not None else [
+        DEFAULT_CADDYFILE,
+        DEFAULT_PROD_CADDYFILE,
+    ]
+    failed = 0
+    for caddyfile in targets:
+        failed += _check_one(caddyfile, profile)
+    if failed:
+        return 1
     print("OK: C-S2-JF-13 static checks passed.")
     return 0
 

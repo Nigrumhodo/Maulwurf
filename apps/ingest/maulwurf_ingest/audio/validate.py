@@ -18,9 +18,13 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 
-from maulwurf_ingest.audio.ffmpeg import DEFAULT_LIMITS, _limit_child
+from maulwurf_ingest.audio.ffmpeg import DEFAULT_LIMITS, PROTOCOL_WHITELIST, limited_command
 
-_URL_PREFIXES = (b"http://", b"https://")
+_URL_PREFIXES = (b"http://", b"https://", b"file://", b"rtsp://", b"rtsps://", b"ftp://")
+_BOM_UTF8 = b"\xef\xbb\xbf"
+_BOM_UTF16_LE = b"\xff\xfe"
+_BOM_UTF16_BE = b"\xfe\xff"
+_LEADING_SPACE = b" \t\r\n\x0b\x0c\x00"
 _PROBE_TIMEOUT_S = 30.0
 _PREFIX_BYTES = 64
 # Containers normalized to 16 kHz mono PCM s16le WAV via bounded ffmpeg.
@@ -68,20 +72,38 @@ def classify_upload(data: bytes) -> FormatDecision:
     return FormatDecision("accept", "wav_pcm_s16_mono")
 
 
+def _canonical_head(data: bytes) -> bytes:
+    """Drop a leading BOM and whitespace so a playlist cannot hide behind them.
+
+    UTF-16 text stores ASCII as interleaved NUL bytes. After the BOM is gone
+    those NULs are removed so the same markers match UTF-8 and UTF-16 bodies.
+    """
+    for _ in range(3):
+        data = data.lstrip(_LEADING_SPACE)
+        if data.startswith(_BOM_UTF8):
+            data = data[3:]
+            continue
+        if data.startswith(_BOM_UTF16_LE) or data.startswith(_BOM_UTF16_BE):
+            data = data[2:].replace(b"\x00", b"")
+            continue
+        break
+    return data.lstrip(_LEADING_SPACE)
+
+
 def _looks_like_url(data: bytes) -> bool:
     lowered = data.lower()
     return any(lowered.startswith(prefix) for prefix in _URL_PREFIXES)
 
 
 def _looks_like_playlist(data: bytes) -> bool:
-    head = data[:64].lstrip().lower()
+    head = data[:64].lower()
     markers = (b"#extm3u", b"#extinf", b"[playlist]")
     return any(head.startswith(marker) for marker in markers)
 
 
 def sniff_prefix(data: bytes) -> FormatDecision | None:
     """Reject a URL or playlist before ffprobe can try to open it."""
-    stripped = data.lstrip()
+    stripped = _canonical_head(data)
     if _looks_like_url(stripped):
         return FormatDecision("reject", "url")
     if _looks_like_playlist(stripped):
@@ -177,7 +199,7 @@ def probe_file(path: Path) -> ProbeDecision:
         "-loglevel",
         "error",
         "-protocol_whitelist",
-        "file,crypto",
+        PROTOCOL_WHITELIST,
         "-print_format",
         "json",
         "-show_format",
@@ -202,18 +224,18 @@ class _ProbeCrashed(Exception):
 
 
 def _run_ffprobe(argv: list[str]) -> bytes:
+    command = limited_command(argv, DEFAULT_LIMITS)
     if os.name == "posix":
         proc = subprocess.Popen(  # noqa: S603 — argv list, no shell
-            argv,
+            command,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             shell=False,
             start_new_session=True,
-            preexec_fn=_limit_child(DEFAULT_LIMITS),
         )
     elif sys.platform == "win32":
         proc = subprocess.Popen(  # noqa: S603 — argv list, no shell
-            argv,
+            command,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             shell=False,
@@ -221,7 +243,7 @@ def _run_ffprobe(argv: list[str]) -> bytes:
         )
     else:
         proc = subprocess.Popen(  # noqa: S603 — argv list, no shell
-            argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, shell=False,
+            command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, shell=False,
         )
     try:
         stdout, _ = proc.communicate(timeout=_PROBE_TIMEOUT_S)

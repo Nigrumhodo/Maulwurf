@@ -24,4 +24,35 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // Product source only. Tests keep `javascript:` strings as rejection fixtures.
+    files: ["src/**/*.{ts,tsx}"],
+    rules: {
+      "no-eval": "error",
+      "no-implied-eval": "error",
+      "no-new-func": "error",
+      "no-script-url": "error",
+      "no-restricted-properties": [
+        "error",
+        {
+          object: "document",
+          property: "write",
+          message: "document.write is an XSS sink.",
+        },
+        {
+          object: "document",
+          property: "writeln",
+          message: "document.writeln is an XSS sink.",
+        },
+        {
+          property: "innerHTML",
+          message: "Assigning innerHTML is an XSS sink.",
+        },
+        {
+          property: "outerHTML",
+          message: "Assigning outerHTML is an XSS sink.",
+        },
+      ],
+    },
+  },
 );

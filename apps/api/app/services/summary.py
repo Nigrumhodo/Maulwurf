@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -23,12 +24,32 @@ _SENTENCE_BREAK = re.compile(r"[.!?]+(?=\s|$)")
 _CODE_FENCE = re.compile(r"^\s*```(?:json)?\s*\n?(.*?)\n?\s*```\s*$", re.DOTALL | re.IGNORECASE)
 _SECRETS = (
     re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"),
-    re.compile(r"Bearer\s+\S+", re.IGNORECASE),
+    re.compile(r"Bearer\s+\S{8,}", re.IGNORECASE),
     re.compile(r"nvapi-", re.IGNORECASE),
     re.compile(
         r"(?i)\b(?:api[_-]?key|secret[_-]?key|client_secret|nvidia_api_key)\s*[=:]\s*\S+"
     ),
+    # Cloud credential shapes. NFKC is applied first so a lookalike prefix cannot slip
+    # past a literal denylist. Length floors avoid matching the prefix alone in prose.
+    re.compile(r"sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}"),
+    re.compile(r"sk-proj-", re.IGNORECASE),
+    re.compile(r"sk-ant-", re.IGNORECASE),
+    re.compile(r"ghp_[A-Za-z0-9]{16,}"),
+    re.compile(r"gho_[A-Za-z0-9]{16,}"),
+    re.compile(r"github_pat_[A-Za-z0-9_]{16,}"),
+    re.compile(r"AIza[0-9A-Za-z_-]{35}"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"ya29\.[0-9A-Za-z_-]+"),
+    re.compile(r"xox[baprs]-[0-9A-Za-z-]{8,}"),
+    re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"),
+    re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
 )
+
+
+def _contains_secret(blob: str) -> bool:
+    """True when `blob` matches a credential shape after compatibility normalization."""
+    normalized = unicodedata.normalize("NFKC", blob)
+    return any(pattern.search(normalized) for pattern in _SECRETS)
 
 
 class SummaryRejected(Exception):
@@ -121,7 +142,7 @@ def validate_summary(text: str, topics: Sequence[str]) -> ClassSummary:
     if prompts.version != SUMMARY_PROMPT_VERSION:
         raise SummaryRejected("the summary prompt version does not match")
     blob = cleaned + "\n" + "\n".join(stored)
-    if any(pattern.search(blob) for pattern in _SECRETS):
+    if _contains_secret(blob):
         raise SummaryRejected("the summary contains sensitive data")
     return ClassSummary(text=cleaned, topics=stored, prompt_version=prompts.version)
 
