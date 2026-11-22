@@ -44,6 +44,7 @@ def _build_app(user: User, session: Session) -> FastAPI:
         return object()
 
     app.dependency_overrides[deps.current_session] = fake_session
+    app.dependency_overrides[integrations._navigation_session] = fake_session
     app.dependency_overrides[db.get_session] = fake_db_dep
     app.dependency_overrides[redis.get_redis] = fake_redis_dep
     return app

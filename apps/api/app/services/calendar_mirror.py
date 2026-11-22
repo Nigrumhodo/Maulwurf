@@ -37,6 +37,7 @@ MANUAL_SYNC_COOLDOWN_SECONDS = 60
 # connection (and the user's credential) behind Google latency.
 LOCK_TIMEOUT_MS = 2_000
 LOCK_RETRY_AFTER_SECONDS = 2
+_UPSERT_BATCH_SIZE = 1000
 # Advisory-lock convention (A2.14, `services/audios.py`): the two-int form namespaces our
 # locks instead of a bare bigint. The namespace is the same 0x4D57 ("MW") value that module
 # uses and the per-user key uses the same derivation; a key collision only serializes two
@@ -227,24 +228,28 @@ class SqlCalendarMirror:
                 # place instead of violating the unique key and failing every sync.
                 # `source` and `task_id` are deliberately kept: they record who created the
                 # row and its task link, not where the current remote values came from.
-                statement = pg_insert(self._EVENTS).values(rows)
-                await self._db.execute(
-                    statement.on_conflict_do_update(
-                        index_elements=["user_id", "calendar_id", "event_id"],
-                        set_={
-                            "title": statement.excluded.title,
-                            "start_at": statement.excluded.start_at,
-                            "end_at": statement.excluded.end_at,
-                            "start_date": statement.excluded.start_date,
-                            "end_date_exclusive": statement.excluded.end_date_exclusive,
-                            "timezone": statement.excluded.timezone,
-                            "etag": statement.excluded.etag,
-                            "remote_status": statement.excluded.remote_status,
-                            "last_synced_at": statement.excluded.last_synced_at,
-                            "updated_at": func.now(),
-                        },
+                # Batched so a large window stays under asyncpg's 32767 bind-parameter cap.
+                for offset in range(0, len(rows), _UPSERT_BATCH_SIZE):
+                    statement = pg_insert(self._EVENTS).values(
+                        rows[offset : offset + _UPSERT_BATCH_SIZE]
                     )
-                )
+                    await self._db.execute(
+                        statement.on_conflict_do_update(
+                            index_elements=["user_id", "calendar_id", "event_id"],
+                            set_={
+                                "title": statement.excluded.title,
+                                "start_at": statement.excluded.start_at,
+                                "end_at": statement.excluded.end_at,
+                                "start_date": statement.excluded.start_date,
+                                "end_date_exclusive": statement.excluded.end_date_exclusive,
+                                "timezone": statement.excluded.timezone,
+                                "etag": statement.excluded.etag,
+                                "remote_status": statement.excluded.remote_status,
+                                "last_synced_at": statement.excluded.last_synced_at,
+                                "updated_at": func.now(),
+                            },
+                        )
+                    )
             if cancelled_keys:
                 # Google reported these instances as cancelled. A linked row is kept (deleting
                 # it would free `calendar_events_one_link`) but its old values must never be

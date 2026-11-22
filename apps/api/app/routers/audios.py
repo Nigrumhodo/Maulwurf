@@ -78,6 +78,7 @@ from app.services.audios import (
 from app.services.exports import render_srt, render_txt, srt_exportable
 from app.services.ingest_sink import get_reception_sink
 from app.services.quality import QualityWarning
+from app.services.rag import signal_cancel
 from app.services.runs import (
     RunHistoryEntry,
     ensure_reupload_allowed,
@@ -680,6 +681,10 @@ async def delete_audio(
     audio_id_value = audio.id
     result = await tombstone_audio(db, user_id=session.user_id, audio=audio)
     await db.commit()
+    # Wake the stopped streams only once the purge is durable: a rollback must never stop a
+    # stream whose rows still exist.
+    for message_id in result.stopped_message_ids:
+        signal_cancel(message_id)
     return TombstoneAccepted(
         audio_id=audio_id_value,
         purged=TombstonePurged(

@@ -25,7 +25,6 @@ import {
   mapUploadError,
   pickUploadFile,
   publishedLanguageCodes,
-  releaseUploadResources,
   uploadContent,
   uploadFormError,
   validateUpload,
@@ -141,8 +140,6 @@ export function UploadForm() {
   }
 
   const releaseFile = useCallback(() => {
-    // No hay vista previa ni object URL: se suelta el `File` y, si existiera, se revoca.
-    releaseUploadResources(null);
     setSelectedFile(null);
     setProgress(null);
   }, []);

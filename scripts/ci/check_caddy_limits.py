@@ -424,16 +424,17 @@ def _prod_edge(lines: list[str]) -> None:
         _fail("missing X-Content-Type-Options nosniff")
     if 'X-Frame-Options "DENY"' not in joined:
         _fail("missing X-Frame-Options DENY")
-    if "private_ranges" in joined:
-        _fail("trusted_proxies must not use private_ranges")
+    # Production runs behind Plane's front Caddy (docs/runbooks/deploy.md §1.1), so
+    # private_ranges is permitted as the fallback inside {$CADDY_TRUSTED_PROXIES:...},
+    # while hardcoded unparameterized trusted_proxies is rejected so operators can narrow it.
     if "CADDY_TRUSTED_PROXIES" not in joined:
         _fail("trusted_proxies must be parameterized with CADDY_TRUSTED_PROXIES")
 
 
-def check(caddyfile: Path, profile: str = "auto") -> Report:
+def check(caddyfile: Path, profile: str = "auto", *, public_tls: bool = False) -> Report:
     lines = _lines(caddyfile)
     joined = _joined(lines)
-    selected = _profile_for(caddyfile, profile)
+    selected = "prod" if public_tls else _profile_for(caddyfile, profile)
 
     if "admin off" not in joined:
         _fail("missing `admin off`")
@@ -522,6 +523,11 @@ def main() -> int:
     parser.add_argument("--caddyfile", type=Path, default=None)
     parser.add_argument("--profile", choices=("auto", "dev", "prod"), default="auto")
     parser.add_argument(
+        "--public-tls",
+        action="store_true",
+        help="production edge: require public ACME TLS instead of `tls internal`",
+    )
+    parser.add_argument(
         "--print-sizes",
         action="store_true",
         help=(
@@ -530,10 +536,11 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    profile = "prod" if args.public_tls else args.profile
     if args.print_sizes:
         caddyfile = args.caddyfile or DEFAULT_CADDYFILE
         try:
-            report = check(caddyfile, args.profile)
+            report = check(caddyfile, profile)
         except CheckError as exc:
             print(f"FAIL: {exc}", file=sys.stderr)
             return 1
@@ -545,7 +552,7 @@ def main() -> int:
     ]
     failed = 0
     for caddyfile in targets:
-        failed += _check_one(caddyfile, args.profile)
+        failed += _check_one(caddyfile, profile)
     if failed:
         return 1
     print("OK: C-S2-JF-13 static checks passed.")

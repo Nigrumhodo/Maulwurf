@@ -13,6 +13,7 @@ from datetime import date, datetime
 from email.message import EmailMessage
 from email.utils import parseaddr
 from typing import Final
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.models.notification import DIGEST_TYPES, REMINDER_TYPES
 from app.services.notifications import NotificationDeliveryRejected
@@ -58,8 +59,19 @@ def _require_safe_header_text(value: str, *, field: str, allow_empty: bool = Fal
     return cleaned
 
 
-def _format_due(due_at: datetime | None, due_date: date | None) -> str:
+def format_due(
+    due_at: datetime | None, due_date: date | None, timezone: str | None = None
+) -> str:
+    """Render a due instant in the given IANA zone; an invalid or missing zone falls back to UTC."""
     if due_at is not None:
+        zone: ZoneInfo | None = None
+        if timezone:
+            try:
+                zone = ZoneInfo(timezone)
+            except (ZoneInfoNotFoundError, ValueError, OSError):
+                zone = None
+        if zone is not None and due_at.tzinfo is not None:
+            due_at = due_at.astimezone(zone)
         return due_at.strftime("%Y-%m-%d %H:%M %Z").strip()
     if due_date is not None:
         return due_date.isoformat()
@@ -104,7 +116,10 @@ def render_notification_email(
     task_tipo: str | None = None,
     due_at: datetime | None = None,
     due_date: date | None = None,
+    task_timezone: str | None = None,
     digest_items: tuple[DigestItemView, ...] = (),
+    digest_window: tuple[date, date] | None = None,
+    digest_conflict_count: int = 0,
 ) -> RenderedEmail:
     """Render one notification type into plain-text + escaped HTML + base64url MIME."""
     if notification_type == "test":
@@ -132,7 +147,7 @@ def render_notification_email(
         safe_title_inline = " ".join(raw_title.split())
         raw_tipo = _require_safe_header_text(task_tipo or "tarea", field="task_tipo")
         window_label = _REMINDER_WINDOW_LABELS.get(notification_type, "recordatorio")
-        due_label = _format_due(due_at, due_date)
+        due_label = format_due(due_at, due_date, task_timezone)
         subject = f"[Maulwurf] Recordatorio ({raw_tipo}): {safe_title_inline}"[:200]
         text_body = (
             f"Maulwurf — Recordatorio ({window_label})\n\n"
@@ -156,6 +171,25 @@ def render_notification_email(
         period_label = "diario" if notification_type == "digest_daily" else "semanal"
         date_str = occurrence.isoformat() if occurrence is not None else "hoy"
         subject = f"[Maulwurf] Resumen {period_label} · {date_str}"
+        window_text = ""
+        if digest_window is not None:
+            start, end = digest_window
+            window_text = (
+                f"Periodo: {start.isoformat()}"
+                if start == end
+                else f"Periodo: {start.isoformat()} a {end.isoformat()}"
+            )
+        conflict_text = (
+            f"Conflictos detectados en el periodo: {digest_conflict_count}"
+            if digest_conflict_count > 0
+            else ""
+        )
+        extra_text = "\n".join(line for line in (window_text, conflict_text) if line)
+        extra_html = "".join(
+            f"<p>{html.escape(line, quote=True)}</p>"
+            for line in (window_text, conflict_text)
+            if line
+        )
         if digest_items:
             text_lines = [
                 f"- [{item.tipo}] {item.titulo} ({item.due_label})" for item in digest_items
@@ -173,6 +207,9 @@ def render_notification_email(
         else:
             text_list = "No tienes entregas confirmadas próximas en este periodo."
             html_list = "<p>No tienes entregas confirmadas próximas en este periodo.</p>"
+        if extra_text:
+            text_list = f"{extra_text}\n\n{text_list}"
+            html_list = f"{extra_html}{html_list}"
 
         text_body = f"Maulwurf — Resumen {period_label} ({date_str})\n\n{text_list}\n"
         escaped_heading = (

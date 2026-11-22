@@ -35,7 +35,7 @@ def sign_state(payload: dict[str, Any]) -> str:
 
 
 def verify_state(token: str, max_age_seconds: int) -> dict[str, Any] | None:
-    """Payload si la firma es válida y no expiró; `None` en cualquier otro caso."""
+    """Payload if the signature is valid, not expired and within `max_age_seconds`; else `None`."""
     try:
         body, presented = token.split(".", 1)
         expected = hmac.new(_key(), body.encode("ascii"), hashlib.sha256).digest()
@@ -47,6 +47,9 @@ def verify_state(token: str, max_age_seconds: int) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     exp = payload.get("exp", 0)
-    if not isinstance(exp, int) or exp < int(time.time()):
+    now = int(time.time())
+    # Signers set `exp = issue time + TTL`, so an `exp` further ahead than `max_age_seconds`
+    # was minted for a longer lifetime than the caller accepts and is rejected.
+    if not isinstance(exp, int) or exp < now or exp > now + max_age_seconds:
         return None
     return payload

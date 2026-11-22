@@ -358,7 +358,9 @@ services:
     image: caddy:2.8-alpine@sha256:af32e97399febea808609119bb21544d0265c58a02836576e32a2d082c262c17
     environment:
       MAULWURF_DOMAIN: ${MAULWURF_DOMAIN:?MAULWURF_DOMAIN required}
-      CADDY_TRUSTED_PROXIES: ${CADDY_TRUSTED_PROXIES:-127.0.0.1/32}
+      # Defaults to private_ranges because production runs behind Plane's front Caddy
+      # (see docs/runbooks/deploy.md §1.1); narrow to the shared subnet once fixed.
+      CADDY_TRUSTED_PROXIES: ${CADDY_TRUSTED_PROXIES:-private_ranges}
     ports:
       - "80:80"
       - "443:443"

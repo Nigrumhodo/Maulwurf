@@ -63,7 +63,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, TenantOwned, created_at, updated_at, uuid_pk
+from app.models.base import Base, TenantOwned, created_at, sql_in, updated_at, uuid_pk
 
 # Closed vocabularies of DISENO §2.9 / M8. They are the single source for the CHECKs and
 # for `services.notifications`; tests fail if the model and the migration drift apart.
@@ -94,11 +94,6 @@ TERMINAL_NOTIFICATION_STATUSES: Final = ("sent", "failed", "delivery_unknown", "
 ERROR_CODE_PATTERN: Final = r"^[a-z][a-z0-9_]{0,63}$"
 
 
-def _in(column: str, values: tuple[str, ...]) -> str:
-    quoted = ", ".join(f"'{value}'" for value in values)
-    return f"{column} IN ({quoted})"
-
-
 class Notification(TenantOwned, Base):
     """One audited delivery occurrence of the M8 reminder/digest pipeline."""
 
@@ -126,8 +121,8 @@ class Notification(TenantOwned, Base):
             name="uq_notifications_occurrence",
             postgresql_nulls_not_distinct=True,
         ),
-        CheckConstraint(_in("type", NOTIFICATION_TYPES), name="type"),
-        CheckConstraint(_in("status", NOTIFICATION_STATUSES), name="status"),
+        CheckConstraint(sql_in("type", NOTIFICATION_TYPES), name="type"),
+        CheckConstraint(sql_in("status", NOTIFICATION_STATUSES), name="status"),
         CheckConstraint("attempts >= 0", name="attempts"),
         CheckConstraint(
             "claimed_by_fence IS NULL OR claimed_by_fence >= 1", name="claimed_by_fence"

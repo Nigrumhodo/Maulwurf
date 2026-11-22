@@ -84,6 +84,11 @@ DUMMY_ENV: dict[str, str] = {
     "MAULWURF_EMBEDDING_API_KEY": "dummy-embedding-key",
     "MAULWURF_LLM_API_KEY": "dummy-llm-key",
     "POSTGRES_PASSWORD": "dummy-postgres",
+    # Required (`:?`) by the production compose file only.
+    "MAULWURF_DOMAIN": "dummy.example.com",
+    "MAULWURF_IMAGE_TAG": "dummy-tag",
+    "MAULWURF_METRICS_TOKEN": "dummy-metrics-token",
+    "REDIS_PASSWORD": "dummy-redis",
     "NVIDIA_API_KEY": "dummy-nvidia-key",
     "RIVA_SERVER": "dummy-riva.example:443",
     "RIVA_FUNCTION_ID": "dummy-function-id",
@@ -546,15 +551,18 @@ def _emit(report: Report) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--compose-file", type=Path, default=None)
+    parser.add_argument("--prod-compose-file", type=Path, default=None)
     args = parser.parse_args(argv)
     if shutil.which("docker") is None:
         print("FAIL docker CLI not found", file=sys.stderr)
         return 1
-    targets = (
-        [args.compose_file.resolve()]
-        if args.compose_file is not None
-        else [DEFAULT_COMPOSE, DEFAULT_PROD]
-    )
+    targets: list[Path] = []
+    if args.compose_file is not None:
+        targets.append(args.compose_file.resolve())
+    if args.prod_compose_file is not None:
+        targets.append(args.prod_compose_file.resolve())
+    if not targets:
+        targets = [DEFAULT_COMPOSE, DEFAULT_PROD]
     failed = 0
     for compose_file in targets:
         print(f"compose file: {compose_file}")

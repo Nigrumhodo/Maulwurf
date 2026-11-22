@@ -11,6 +11,7 @@ import time
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 from contextlib import suppress
+from datetime import UTC, datetime
 from typing import cast
 
 from redis.asyncio import Redis
@@ -29,6 +30,7 @@ from app.schemas.citations import (
 from app.schemas.tools import ToolCallOut, dump_tool_calls, parse_tool_calls
 from app.services.chat_prompt import (
     CITATION_VALIDATION_TIMEOUT_SECONDS,
+    MESSAGE_OVERHEAD_TOKENS,
     ChatStreamError,
     MessageSnapshot,
     PreparedStream,
@@ -57,9 +59,14 @@ from app.services.llm import (
 from app.services.progress import encode_event, heartbeat
 from app.services.rate_limiter import refresh_stream_slot
 from app.services.retrieval import RetrievedChunk
-from app.services.tools import MAX_TOOL_ROUNDS, TOOL_BUDGET_SECONDS
+from app.services.tools import MAX_TOOL_ROUNDS, TOOL_BUDGET_SECONDS, ToolCall
 
 logger = logging.getLogger(__name__)
+
+# A tool result is appended after the prompt budget was filled; bound it so one large payload
+# cannot push the next provider call over the context window.
+MAX_TOOL_RESULT_CHARS = 4000
+
 
 def _merge_tool_protocol(messages: Sequence[ChatMessage]) -> list[ChatMessage]:
     if messages and messages[0].role == "system":
@@ -69,6 +76,39 @@ def _merge_tool_protocol(messages: Sequence[ChatMessage]) -> list[ChatMessage]:
         )
         return [merged, *messages[1:]]
     return [ChatMessage(role="system", content=TOOL_PROTOCOL), *messages]
+
+
+def _fit_to_budget(
+    messages: list[ChatMessage], budget: int, count_tokens: Callable[[str], int]
+) -> list[ChatMessage]:
+    """Drop the oldest history turns until the prompt (with tool protocol) fits `budget`.
+
+    Layout is `[system, (user, assistant)*, final user]`; the system prompt and the final
+    evidence message are never removed.
+    """
+
+    def total(items: Sequence[ChatMessage]) -> int:
+        return sum(count_tokens(m.content) + MESSAGE_OVERHEAD_TOKENS for m in items)
+
+    kept = list(messages)
+    while len(kept) > 3 and total(kept) > budget:
+        del kept[1:3]
+    return kept
+
+
+def _tool_result_message(payload: dict[str, object]) -> ChatMessage:
+    body = json.dumps(payload, ensure_ascii=False)
+    if len(body) > MAX_TOOL_RESULT_CHARS:
+        body = body[:MAX_TOOL_RESULT_CHARS] + "...[truncated]"
+    return ChatMessage(
+        role="user",
+        content=(
+            "Tool result: "
+            + body
+            + "\n\nRespond now in the student's language using "
+            "this data without outputting JSON."
+        ),
+    )
 
 
 def _safe_prose_cut(buffer: str, *, flushed_any: bool) -> int:
@@ -90,6 +130,10 @@ def _safe_prose_cut(buffer: str, *, flushed_any: bool) -> int:
     return earliest
 # In-process wake-up. The database status is authoritative.
 _CANCEL_EVENTS: dict[uuid.UUID, asyncio.Event] = {}
+_STREAM_TIMEOUT_ERROR = ChatStreamError(
+    code="stream_timeout",
+    message="La respuesta tardó demasiado; vuelve a intentarlo.",
+)
 
 
 class ChatTurnStream:
@@ -102,6 +146,7 @@ class ChatTurnStream:
     _checkpoint_seconds: float
     _cancel_poll_seconds: float
     _stream_max_seconds: float
+    _context_margin_tokens: int
     _replay_poll_seconds: float
     _citation_validator: CitationValidator | None
     _count_tokens: Callable[[str], int]
@@ -211,18 +256,19 @@ class ChatTurnStream:
         terminal = False
         cancelled = False
         producer_error: LLMError | None = None
-        loop = asyncio.get_running_loop()
-        last_checkpoint = loop.time()
-        last_checkpoint_content = ""
-        last_cancel_poll = loop.time()
-        last_heartbeat = loop.time()
-        started_at = loop.time()
-        last_slot_refresh = started_at
         timed_out = False
+        loop = asyncio.get_running_loop()
+        started_at = loop.time()
+        deadline = started_at + self._stream_max_seconds
+        last_checkpoint = started_at
+        last_checkpoint_content = ""
+        last_cancel_poll = started_at
+        last_heartbeat = started_at
+        last_slot_refresh = started_at
         try:
             while True:
                 now = loop.time()
-                if now - started_at >= self._stream_max_seconds:
+                if now >= deadline:
                     timed_out = True
                     break
                 if now - last_slot_refresh >= self._cancel_poll_seconds:
@@ -328,24 +374,6 @@ class ChatTurnStream:
                     break
 
             await self._stop_producer(producer)
-            if timed_out:
-                actual = await self._finalize(
-                    prepared, "failed", content, citations, tool_calls
-                )
-                terminal = True
-                if actual == "cancelled":
-                    yield self._done_event(
-                        prepared,
-                        status="cancelled",
-                        event_id=len(content) + 1,
-                        sources=cited_sources(citations),
-                        tool_calls=tool_calls,
-                    )
-                else:
-                    yield self._error_event(
-                        self._stream_timeout_error(), len(content) + 1
-                    )
-                return
             if cancelled:
                 actual = await self._finalize(
                     prepared, "cancelled", content, citations, tool_calls
@@ -359,10 +387,14 @@ class ChatTurnStream:
                     tool_calls=tool_calls,
                 )
                 return
-            if producer_error is not None:
-                if producer_error.details.get("reason") == "stream_timeout":
-                    error = self._stream_timeout_error()
+            if producer_error is not None or timed_out:
+                if timed_out or (
+                    producer_error is not None
+                    and producer_error.details.get("reason") == "stream_timeout"
+                ):
+                    error = _STREAM_TIMEOUT_ERROR
                 else:
+                    assert producer_error is not None  # noqa: S101
                     error = _map_llm_error(producer_error)
                 actual = await self._finalize(
                     prepared, "failed", content, citations, tool_calls
@@ -415,6 +447,8 @@ class ChatTurnStream:
     ) -> None:
         assert self._llm is not None  # noqa: S101 - guarded by `_live_events`
         messages = _merge_tool_protocol(prepared.messages)
+        budget = self._llm.context_window - max_tokens - self._context_margin_tokens
+        messages = _fit_to_budget(messages, budget, self._count_tokens)
         started = time.monotonic()
         deadline = started + self._stream_max_seconds
         try:
@@ -483,38 +517,8 @@ class ChatTurnStream:
                 if extracted is not None:
                     prefix, call = extracted
                     tool_executed = True
-                    if flushed_any:
-                        if prefix.strip():
-                            sep_chunk = prefix.rstrip() + "\n\n"
-                            await queue.put(_LLMEvent(kind="delta", text=sep_chunk))
-                        elif not last_flushed.endswith("\n\n"):
-                            sep = "\n" if last_flushed.endswith("\n") else "\n\n"
-                            await queue.put(_LLMEvent(kind="delta", text=sep))
-                    record = await execute_tool(
-                        self._session_factory,
-                        user_id=prepared.user_id,
-                        call=call,
-                    )
-                    await queue.put(_LLMEvent(kind="tool", tool=record))
-                    messages.append(
-                        ChatMessage(
-                            role="assistant",
-                            content=json.dumps(
-                                {"tool": call.name, "arguments": dict(call.arguments)},
-                                ensure_ascii=False,
-                            ),
-                        )
-                    )
-                    messages.append(
-                        ChatMessage(
-                            role="user",
-                            content=(
-                                "Tool result: "
-                                + json.dumps(record.payload, ensure_ascii=False)
-                                + "\n\nRespond now in the student's language using "
-                                "this data without outputting JSON."
-                            ),
-                        )
+                    await self._run_tool(
+                        prepared, queue, messages, prefix, call, flushed_any, last_flushed
                     )
                     break
                 cut = _safe_prose_cut(buffer, flushed_any=flushed_any)
@@ -529,38 +533,8 @@ class ChatTurnStream:
                 if extracted is not None:
                     prefix, call = extracted
                     tool_executed = True
-                    if flushed_any:
-                        if prefix.strip():
-                            sep_chunk = prefix.rstrip() + "\n\n"
-                            await queue.put(_LLMEvent(kind="delta", text=sep_chunk))
-                        elif not last_flushed.endswith("\n\n"):
-                            sep = "\n" if last_flushed.endswith("\n") else "\n\n"
-                            await queue.put(_LLMEvent(kind="delta", text=sep))
-                    record = await execute_tool(
-                        self._session_factory,
-                        user_id=prepared.user_id,
-                        call=call,
-                    )
-                    await queue.put(_LLMEvent(kind="tool", tool=record))
-                    messages.append(
-                        ChatMessage(
-                            role="assistant",
-                            content=json.dumps(
-                                {"tool": call.name, "arguments": dict(call.arguments)},
-                                ensure_ascii=False,
-                            ),
-                        )
-                    )
-                    messages.append(
-                        ChatMessage(
-                            role="user",
-                            content=(
-                                "Tool result: "
-                                + json.dumps(record.payload, ensure_ascii=False)
-                                + "\n\nRespond now in the student's language using "
-                                "this data without outputting JSON."
-                            ),
-                        )
+                    await self._run_tool(
+                        prepared, queue, messages, prefix, call, flushed_any, last_flushed
                     )
                 else:
                     await queue.put(_LLMEvent(kind="delta", text=buffer))
@@ -583,6 +557,40 @@ class ChatTurnStream:
                 continue
             break
         await queue.put(_LLMEvent(kind="end"))
+
+    async def _run_tool(
+        self,
+        prepared: PreparedStream,
+        queue: asyncio.Queue[_LLMEvent],
+        messages: list[ChatMessage],
+        prefix: str,
+        call: ToolCall,
+        flushed_any: bool,
+        last_flushed: str,
+    ) -> None:
+        """Emit prose separator, run the tool and append the exchange to the prompt."""
+        if flushed_any:
+            if prefix.strip():
+                await queue.put(_LLMEvent(kind="delta", text=prefix.rstrip() + "\n\n"))
+            elif not last_flushed.endswith("\n\n"):
+                sep = "\n" if last_flushed.endswith("\n") else "\n\n"
+                await queue.put(_LLMEvent(kind="delta", text=sep))
+        record = await execute_tool(
+            self._session_factory,
+            user_id=prepared.user_id,
+            call=call,
+        )
+        await queue.put(_LLMEvent(kind="tool", tool=record))
+        messages.append(
+            ChatMessage(
+                role="assistant",
+                content=json.dumps(
+                    {"tool": call.name, "arguments": dict(call.arguments)},
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        messages.append(_tool_result_message(record.payload))
 
     async def _stop_producer(self, producer: asyncio.Task[None]) -> None:
         if producer.done():
@@ -631,13 +639,20 @@ class ChatTurnStream:
             )
             return
 
-        started = asyncio.get_running_loop().time()
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        # The cap runs from the turn's start, so a reconnect cannot fail a live turn early.
+        created = state.created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=UTC)
+        age = max(0.0, (datetime.now(UTC) - created).total_seconds())
+        deadline = started + self._stream_max_seconds - age
         last_heartbeat = started
         latest_content = state.content
         latest_citations = list(state.citations)
         latest_tool_calls = list(state.tool_calls)
         while True:
-            if asyncio.get_running_loop().time() - started >= self._stream_max_seconds:
+            if loop.time() >= deadline:
                 actual = await self._finalize(
                     prepared, "failed", latest_content, latest_citations, latest_tool_calls
                 )
@@ -650,13 +665,7 @@ class ChatTurnStream:
                         tool_calls=latest_tool_calls,
                     )
                 else:
-                    yield self._error_event(
-                        ChatStreamError(
-                            code="stream_timeout",
-                            message="La respuesta tardó demasiado; vuelve a intentarlo.",
-                        ),
-                        sent + 1,
-                    )
+                    yield self._error_event(_STREAM_TIMEOUT_ERROR, sent + 1)
                 return
             await asyncio.sleep(self._replay_poll_seconds)
             snapshot = await self._read_message(prepared.user_id, prepared.assistant_message_id)

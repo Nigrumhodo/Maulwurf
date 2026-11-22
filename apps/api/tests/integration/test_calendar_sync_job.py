@@ -20,8 +20,10 @@ from urllib.parse import unquote
 
 import httpx
 import pytest
+from arq.worker import Retry
 from pydantic import SecretStr
 from sqlalchemy import inspect, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.config import settings
@@ -42,6 +44,7 @@ from app.services.task_event_sync import (
 from app.workers.jobs.calendar_sync import (
     CALENDAR_TRANSPORT_KEY,
     GATEWAYS_KEY,
+    MAX_TRIES,
     SESSIONS_KEY,
     TOKEN_TRANSPORT_KEY,
     sync_task_event,
@@ -676,10 +679,10 @@ async def test_a_revoked_refresh_token_on_the_401_path_also_disconnects(
     assert credential.status == "disconnected"
 
 
-async def test_an_unexpected_failure_is_raised_for_the_arq_retry_budget(
+async def test_a_permanent_unexpected_failure_marks_the_task_failed(
     db_session: AsyncSession,
 ) -> None:
-    """J3.4 fix: a transient database/provider bug must reach ARQ instead of being swallowed."""
+    """Thermos G1: ARQ never retries a plain exception, so it must not leave `pending`."""
     actor = await make_actor(db_session)
     task_id, version = await _insert_task(db_session, actor)
 
@@ -692,5 +695,74 @@ async def test_an_unexpected_failure_is_raised_for_the_arq_retry_budget(
         "job_try": 1,
     }
 
-    with pytest.raises(RuntimeError, match="database unavailable"):
+    await sync_task_event(ctx, str(task_id), version)
+
+    assert (await _status(db_session, task_id)) == ("failed", None)
+
+
+def _db_down() -> OperationalError:
+    return OperationalError("SELECT 1", {}, ConnectionRefusedError("connection refused"))
+
+
+async def test_a_transient_database_failure_is_a_bounded_arq_retry(
+    db_session: AsyncSession,
+) -> None:
+    """Thermos G1: a connectivity error becomes `Retry` and, once spent, `failed`."""
+    actor = await make_actor(db_session)
+    task_id, version = await _insert_task(db_session, actor)
+
+    async def unavailable(_snapshot: SyncTask) -> CalendarGateway:
+        raise _db_down()
+
+    ctx: dict[str, Any] = {
+        SESSIONS_KEY: _session_factory(db_session),
+        GATEWAYS_KEY: unavailable,
+        "job_try": 1,
+    }
+    with pytest.raises(Retry):
         await sync_task_event(ctx, str(task_id), version)
+    assert (await _status(db_session, task_id)) == ("pending", None)
+
+    ctx["job_try"] = MAX_TRIES
+    await sync_task_event(ctx, str(task_id), version)
+    assert (await _status(db_session, task_id)) == ("failed", None)
+
+
+async def test_a_transient_calendar_failure_stays_pending_so_the_retry_can_settle(
+    db_session: AsyncSession,
+) -> None:
+    """Thermos G1: the retry ARQ schedules must be able to mark the same version synced."""
+    fake = FakeGoogle()
+    # Both insert attempts of the first delivery time out and nothing is written.
+    fake.timeouts_before_insert = 2
+    actor = await make_actor(db_session)
+    task_id, version = await _insert_task(db_session, actor)
+    ctx = _ctx(db_session, fake)
+
+    with pytest.raises(Retry):
+        await sync_task_event(ctx, str(task_id), version)
+    assert (await _status(db_session, task_id)) == ("pending", None)
+    assert fake.events == {}
+
+    ctx["job_try"] = 2
+    await sync_task_event(ctx, str(task_id), version)
+
+    event_id = deterministic_event_id(task_id)
+    assert (await _status(db_session, task_id)) == ("synced", event_id)
+    assert set(fake.events) == {(CALENDAR_ID, event_id)}
+
+
+async def test_transient_calendar_exhaustion_marks_the_task_failed(
+    db_session: AsyncSession,
+) -> None:
+    fake = FakeGoogle()
+    fake.timeouts_before_insert = 2
+    actor = await make_actor(db_session)
+    task_id, version = await _insert_task(db_session, actor)
+    ctx = _ctx(db_session, fake)
+    ctx["job_try"] = MAX_TRIES
+
+    await sync_task_event(ctx, str(task_id), version)
+
+    assert (await _status(db_session, task_id)) == ("failed", None)
+    assert fake.events == {}

@@ -39,7 +39,11 @@ response is lost, or a retry follows a timeout. The protocol is:
   repair cannot roll the baseline back either.
 - **Blocked vs failed.** A missing calendar, a disconnected Google integration or an
   ``invalid_grant`` leaves the task ``blocked`` (J3.3 reconnects it); other terminal failures
-  leave it ``failed``. Transient exhaustion raises so ARQ schedules a bounded retry.
+  leave it ``failed``. Transient exhaustion raises so ARQ schedules a bounded retry; the task
+  stays ``pending`` because ``mark_synced`` only settles from ``pending``/``synced``, and the
+  job marks it ``failed`` once its retry budget is spent.
+- **A cancelled event is not ours to adopt.** Google keeps a deleted event's ID with
+  ``status: "cancelled"``; it never counts as matching content, so it fails closed.
 
 The module is storage- and provider-agnostic: `TaskEventStore` and `CalendarGateway` are
 ports implemented by `task_event_store` and `calendar_gateway`.
@@ -240,6 +244,10 @@ def event_content_matches(event: Mapping[str, Any], body: Mapping[str, Any]) -> 
     to an older task version has to be repaired, otherwise the task would be `synced` while
     Google still shows the previous title/date/description.
     """
+    if event.get("status") == "cancelled":
+        # The user deleted the event in Google: adopting it would mark the task `synced`
+        # while nothing is visible in the calendar.
+        return False
     if event.get("summary") != body.get("summary"):
         return False
     if _description(event.get("description")) != _description(body.get("description")):
@@ -364,7 +372,8 @@ class TaskEventSync:
             # never return to `pending` after that reconnect.
             return await self._blocked(task, "google_unauthorized")
         except GoogleCalendarTransientError as exc:
-            await self._mark_failed(task)
+            # Leave the task `pending`: a `failed` row cannot be settled by the same-version
+            # retry ARQ is about to schedule. The job marks it `failed` when retries run out.
             logger.warning(
                 "calendar_sync.transient_exhausted task_id=%s error=%s",
                 task.task_id,
@@ -378,7 +387,6 @@ class TaskEventSync:
             await self._mark_failed(task)
             return SyncOutcome.FAILED
         # The loop either returns or raises; this keeps mypy honest if that changes.
-        await self._mark_failed(task)
         raise TaskEventTransientError("calendar_insert_transient")
 
     async def _reconcile(

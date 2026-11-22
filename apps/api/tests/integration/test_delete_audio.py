@@ -8,6 +8,7 @@ decisional puro (estados, token, opción remota) vive en `tests/unit/
 test_cancel_tombstone.py` (U-S2-AN-04).
 """
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -46,6 +47,7 @@ from app.models import (
 from app.routers import audios as audios_router
 from app.services import audios as audios_services
 from app.services.audios import cas_transition
+from app.services.chat_stream import _CANCEL_EVENTS
 from tests.integration import actors
 
 pytestmark = pytest.mark.integration
@@ -391,6 +393,63 @@ async def test_delete_tombstones_only_the_messages_that_cite_this_class(
     assert await _count(db_session, Transcript, user_id) == 1
     assert await _count(db_session, MessageSource, user_id) == 1
     assert await _count(db_session, Chunk, user_id) == 1
+
+
+async def test_delete_stops_live_streams_so_their_text_cannot_come_back(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    # A live turn keeps the deleted text in memory; `cancelled` would still receive the
+    # preserved partial from `ChatTurnStream._finalize`, so the tombstone moves it to `failed`.
+    actor = await actors.make_actor(db_session)
+    seeded = await _seed_class(db_session, actor)
+    seeded.message.status = "streaming"
+    cancelled_in_flight = Message(
+        user_id=actor.user_id,
+        conversation_id=seeded.conversation.id,
+        role="assistant",
+        content="parcial: secreto de clase",
+        status="cancelled",
+    )
+    db_session.add(cancelled_in_flight)
+    await db_session.flush()
+    # Ids are read before the request: the router's commit expires the ORM instances.
+    streaming_id, audio_id = seeded.message.id, seeded.audio.id
+    cancelled_id, user_id = cancelled_in_flight.id, actor.user_id
+    wake = asyncio.Event()
+    _CANCEL_EVENTS[streaming_id] = wake
+    try:
+        response = await client.delete(
+            f"/audios/{audio_id}", cookies=actor.cookies, headers=actor.headers
+        )
+    finally:
+        _CANCEL_EVENTS.pop(streaming_id, None)
+
+    assert response.status_code == 202
+    assert wake.is_set()  # signalled after the commit, like DELETE /chat/conversations
+    for message_id in (streaming_id, cancelled_id):
+        row = (
+            await db_session.execute(
+                select(Message.status, Message.content, Message.citas).where(
+                    Message.id == message_id
+                )
+            )
+        ).one()
+        assert tuple(row) == ("failed", "", [])
+        # The stream's own guarded writes (checkpoint and cancelled finalize) now miss.
+        for statuses in (("streaming",), ("streaming", "cancelled")):
+            late = cast(
+                CursorResult[Any],
+                await db_session.execute(
+                    update(Message)
+                    .where(
+                        Message.user_id == user_id,
+                        Message.id == message_id,
+                        Message.status.in_(statuses),
+                    )
+                    .values(content=TEXT)
+                ),
+            )
+            assert late.rowcount == 0
 
 
 async def test_delete_requires_session_csrf_and_origin(

@@ -79,7 +79,8 @@ async def record_pending_revision(
 
     The task row is locked and `base_task_version` comes from that locked row, never from
     the caller's snapshot. Returns the reused row, the new row, or `None` when the task
-    disappeared, is terminal, or the same analysis run already published a revision.
+    disappeared, is terminal, or the same analysis run already published a revision. A
+    reanalysis never displaces a pending user edit: that row is returned unchanged.
     """
     task = (
         await db.execute(
@@ -133,6 +134,13 @@ async def record_pending_revision(
         and current.base_task_version == base_version
         and same_proposed_fields(dict(current.proposed_fields), proposed_fields)
     ):
+        return current
+    if (
+        current is not None
+        and revision_type == REANALYSIS_REVISION
+        and current.revision_type == EDIT_REVISION
+    ):
+        # A reanalysis must not retire a proposal the user wrote themselves.
         return current
 
     await discard_pending_revisions(db, user_id, task_id)

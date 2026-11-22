@@ -242,7 +242,9 @@ async def _settle_after_send(
     provider_message_id: str | None,
 ) -> str | None:
     """Write the provider outcome only while this claim still owns the row."""
-    row = await db.get(Notification, notification_id, with_for_update=True)
+    row = await db.get(
+        Notification, notification_id, with_for_update=True, populate_existing=True
+    )
     if row is None or row.status != "sending" or row.lease_expires_at != lease_deadline:
         await db.commit()
         return None

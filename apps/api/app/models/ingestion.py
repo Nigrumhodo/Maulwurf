@@ -26,7 +26,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, TenantOwned, created_at, updated_at, uuid_pk
+from app.models.base import Base, TenantOwned, created_at, sql_in, updated_at, uuid_pk
 
 INGESTION_STATES = (
     "awaiting_upload",
@@ -50,10 +50,7 @@ CLEANUP_STATES = ("pending", "verified", "failed")
 # Solo estos tipos nacen bloqueados hasta cleanup verificado (S1.md §1.3).
 CLEANUP_GATED_EVENT_TYPES = ("index_requested", "analyze_requested")
 OUTBOX_STATES = ("pending", "dispatched", "completed", "failed", "skipped")
-
-
-def _in(column: str, values: tuple[str, ...]) -> str:
-    return f"{column} IN ({', '.join(repr(v) for v in values)})"
+_CLEANUP_GATED_TYPE_IN = sql_in("type", CLEANUP_GATED_EVENT_TYPES)
 
 
 class Audio(TenantOwned, Base):
@@ -119,14 +116,14 @@ class IngestionAttempt(TenantOwned, Base):
     __table_args__ = (
         UniqueConstraint("user_id", "id"),
         ForeignKeyConstraint(["user_id", "audio_id"], ["audios.user_id", "audios.id"]),
-        CheckConstraint(_in("status", INGESTION_STATES), name="status"),
-        CheckConstraint(_in("cleanup_status", CLEANUP_STATES), name="cleanup_status"),
+        CheckConstraint(sql_in("status", INGESTION_STATES), name="status"),
+        CheckConstraint(sql_in("cleanup_status", CLEANUP_STATES), name="cleanup_status"),
         # Un único intento activo por clase; cleanup pendiente sigue siendo trabajo activo.
         Index(
             "attempts_one_active",
             "audio_id",
             unique=True,
-            postgresql_where=text(_in("status", ACTIVE_INGESTION_STATES)),
+            postgresql_where=text(sql_in("status", ACTIVE_INGESTION_STATES)),
         ),
         Index("attempts_by_audio", "user_id", "audio_id"),
     )
@@ -205,13 +202,13 @@ class OutboxEvent(TenantOwned, Base):
     __tablename__ = "outbox_events"
     __table_args__ = (
         CheckConstraint("blocked_reason IN ('cleanup_pending')", name="blocked_reason"),
-        CheckConstraint(_in("status", OUTBOX_STATES), name="status"),
+        CheckConstraint(sql_in("status", OUTBOX_STATES), name="status"),
         CheckConstraint(
-            f"({_in('type', CLEANUP_GATED_EVENT_TYPES)} AND ((enabled AND blocked_reason IS NULL)"
+            f"({_CLEANUP_GATED_TYPE_IN} AND ((enabled AND blocked_reason IS NULL)"
             # IS NOT DISTINCT FROM: con `= 'cleanup_pending'` un NULL daría NULL y el CHECK
             # aceptaría una fila deshabilitada sin motivo.
             " OR (NOT enabled AND blocked_reason IS NOT DISTINCT FROM 'cleanup_pending')))"
-            f" OR (NOT {_in('type', CLEANUP_GATED_EVENT_TYPES)}"
+            f" OR (NOT {_CLEANUP_GATED_TYPE_IN}"
             " AND enabled AND blocked_reason IS NULL)",
             name="cleanup_gate",
         ),

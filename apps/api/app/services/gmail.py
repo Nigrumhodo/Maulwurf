@@ -18,11 +18,10 @@ Implements ``NotificationSender`` on the J4.5 settlement boundary:
 
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
-from datetime import date, datetime
+from datetime import date
 from typing import Any, Final
 
 import httpx
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -36,7 +35,8 @@ from app.models import (
     User,
 )
 from app.models.notification import DIGEST_TYPES, REMINDER_TYPES
-from app.services.gmail_templates import DigestItemView, render_notification_email
+from app.services.digests import build_digest_content
+from app.services.gmail_templates import DigestItemView, format_due, render_notification_email
 from app.services.google_tokens import (
     GoogleTokenRejected,
     GoogleTokenTransient,
@@ -57,14 +57,6 @@ DEFAULT_SENDER_TIMEOUT_S: Final = 15.0
 DIGEST_TASK_LIMIT: Final = 20
 
 SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
-
-
-def _digest_due_label(due_at: datetime | None, due_date: date | None) -> str:
-    if due_at is not None:
-        return due_at.strftime("%Y-%m-%d %H:%M %Z").strip()
-    if due_date is not None:
-        return due_date.isoformat()
-    return "sin fecha"
 
 
 class GmailNotificationSender:
@@ -133,7 +125,10 @@ class GmailNotificationSender:
                 task_tipo: str | None = None
                 due_at = None
                 due_date = None
+                task_timezone: str | None = None
                 digest_items: tuple[DigestItemView, ...] = ()
+                digest_window: tuple[date, date] | None = None
+                digest_conflict_count = 0
 
                 if request.type in REMINDER_TYPES:
                     if notification.task_id is None:
@@ -151,26 +146,29 @@ class GmailNotificationSender:
                     task_tipo = task.tipo
                     due_at = task.due_at
                     due_date = task.due_date
+                    task_timezone = task.timezone
                 elif request.type in DIGEST_TYPES:
-                    rows = (
-                        await db.scalars(
-                            select(Task)
-                            .where(Task.user_id == request.user_id, Task.status == "confirmed")
-                            .order_by(
-                                Task.due_date.asc().nulls_last(),
-                                Task.due_at.asc().nulls_last(),
-                                Task.created_at.asc(),
-                            )
-                            .limit(DIGEST_TASK_LIMIT)
-                        )
-                    ).all()
+                    user_timezone = user.timezone or "UTC"
+                    if request.occurrence is None:
+                        raise NotificationDeliveryRejected("provider_rejected")
+                    content = await build_digest_content(
+                        db,
+                        user_id=request.user_id,
+                        user_timezone=user_timezone,
+                        type_=request.type,
+                        local_date=request.occurrence,
+                    )
                     digest_items = tuple(
                         DigestItemView(
                             titulo=row.titulo,
                             tipo=row.tipo,
-                            due_label=_digest_due_label(row.due_at, row.due_date),
+                            due_label=format_due(row.due_at, row.due_date, user_timezone),
                         )
-                        for row in rows
+                        for row in content.upcoming_tasks[:DIGEST_TASK_LIMIT]
+                    )
+                    digest_window = (content.window_start, content.window_end)
+                    digest_conflict_count = len(content.conflicts.time_conflicts) + len(
+                        content.conflicts.deadline_clashes
                     )
 
                 email = render_notification_email(
@@ -181,7 +179,10 @@ class GmailNotificationSender:
                     task_tipo=task_tipo,
                     due_at=due_at,
                     due_date=due_date,
+                    task_timezone=task_timezone,
                     digest_items=digest_items,
+                    digest_window=digest_window,
+                    digest_conflict_count=digest_conflict_count,
                 )
 
                 try:

@@ -63,17 +63,12 @@ from maulwurf_ingest.reconciler import (
 logger = logging.getLogger(__name__)
 
 SWEEP_INTERVAL_S = 60.0
-# Defaults for the per-attempt lease (S4.2). The heartbeat interval must leave
-# several renewals inside one TTL: the asyncio loop can be busy (ffprobe thread
-# callbacks, GC, a slow event-loop task) and one late heartbeat must not expire a
-# live run. Three renewals per TTL means a single stall under two intervals
-# (20 s with the defaults) still finds the lease alive; a run whose loop is
-# blocked longer than the whole TTL is indistinguishable from a dead owner and
-# is ended as `technical_loss` by the sweeper.
-LEASE_TTL_S = 30
-HEARTBEAT_INTERVAL_S = 10.0
-MIN_HEARTBEATS_PER_LEASE = 3
-
+# The lease defaults live in `lease`; these names stay importable from here.
+LEASE_TTL_S = leases.LEASE_TTL_S
+HEARTBEAT_INTERVAL_S = leases.HEARTBEAT_INTERVAL_S
+MIN_HEARTBEATS_PER_LEASE = leases.MIN_HEARTBEATS_PER_LEASE
+# A stalled database must not hold the stderr drain (and with it cleanup) hostage.
+PROGRESS_UPDATE_TIMEOUT_S = 2.0
 
 
 def _default_fragment_seconds() -> int:
@@ -310,12 +305,6 @@ def _child_error_info(stderr: bytes | None) -> tuple[str | None, str | None]:
     return found_code, found_detail
 
 
-def _child_code(stderr: bytes | None) -> str | None:
-    """Read one error code. Anything else, including transcript text, is dropped."""
-    code, _ = _child_error_info(stderr)
-    return code
-
-
 def _progress_from_line(raw_line: bytes) -> tuple[int, int] | None:
     try:
         parsed: object = json.loads(raw_line.decode("utf-8"))
@@ -350,7 +339,12 @@ async def _drain_stderr(
         return b""
     chunks: list[bytes] = []
     while True:
-        line = await stream.readline()
+        try:
+            line = await stream.readline()
+        except ValueError:
+            # Over the reader limit: asyncio already dropped the line. Error and progress
+            # lines are short JSON, so an overlong line carries nothing to keep.
+            continue
         if not line:
             break
         chunks.append(line)
@@ -359,7 +353,12 @@ async def _drain_stderr(
             continue
         done, total = progress
         try:
-            await leases.update_progress(pool, lease, fragments_done=done, fragments_total=total)
+            await asyncio.wait_for(
+                leases.update_progress(
+                    pool, lease, fragments_done=done, fragments_total=total,
+                ),
+                timeout=PROGRESS_UPDATE_TIMEOUT_S,
+            )
         except Exception as exc:  # noqa: BLE001 — progress updates must never abort ASR
             logger.warning(
                 "supervisor.progress_update_failed attempt_id=%s error=%s",
@@ -386,7 +385,8 @@ async def _collect_child(
         stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
         await proc.wait()
         return stdout, stderr
-    except asyncio.CancelledError:
+    except BaseException:
+        # gather does not cancel the sibling when one task fails.
         stdout_task.cancel()
         stderr_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -646,7 +646,7 @@ async def commit_cleanup(
             pool, lease, attempt_id, evidence=evidence, exc=cleanup_error, result=result,
         )
         return
-    if cleanup_error is not None or (error is not None and cleanup_error is None):
+    if error is not None:
         recorded_error = cleanup_error or RuntimeError(type(error).__name__)
         await _note_cleanup_failure(
             pool, lease, attempt_id, owned_audio=owned_audio, exc=recorded_error,

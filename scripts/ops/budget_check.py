@@ -20,6 +20,11 @@ Usage::
     python scripts/ops/budget_check.py --url http://api:8000/internal/metrics \
         --token-file /run/secrets/api_metrics_token --require-configured --format json
 
+    # Outside `local` the endpoint requires a bearer token: export MAULWURF_METRICS_TOKEN
+    # or pass --token-file PATH (never the token itself on the command line).
+    MAULWURF_METRICS_TOKEN=... python scripts/ops/budget_check.py
+    python scripts/ops/budget_check.py --token-file /run/secrets/metrics_token
+
 Exit codes:
 
 * ``0`` — every configured budget is below its warning ratio (unconfigured caps are allowed
@@ -165,9 +170,7 @@ def evaluate(samples: list[Sample]) -> list[Budget]:
                 limit=None if limit is None else limit.value,
                 ratio=None if ratio is None else ratio.value,
                 warning=bool(warning.get(provider) and warning[provider].value == 1.0),
-                exhausted=bool(
-                    exhausted.get(provider) and exhausted[provider].value == 1.0
-                ),
+                exhausted=bool(exhausted.get(provider) and exhausted[provider].value == 1.0),
             )
         )
     return budgets
@@ -183,7 +186,7 @@ def exit_code(budgets: list[Budget], *, require_configured: bool) -> int:
     return 0
 
 
-def _token_from_sources(token_file: str | None) -> str | None:
+def _token_from_sources(token_file: str | Path | None) -> str | None:
     """Bearer from ``MAULWURF_METRICS_TOKEN`` or a file. Never from a CLI value."""
     file_value: str | None = None
     if token_file is not None:
@@ -246,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=5.0, help="HTTP timeout in seconds")
     parser.add_argument(
         "--token-file",
+        type=Path,
         default=None,
         help="file containing the metrics bearer (mode 0600); not a CLI secret",
     )
@@ -258,12 +262,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(raw)
     try:
         token = _token_from_sources(args.token_file)
-        metrics_text = (
-            _fetch(args.url, args.timeout)
-            if token is None
-            else _fetch(args.url, args.timeout, token)
-        )
-        budgets = evaluate(parse_metrics(metrics_text))
+        budgets = evaluate(parse_metrics(_fetch(args.url, args.timeout, token=token)))
     except (MetricsError, OSError, urllib.error.URLError) as exc:
         print(f"budget_check: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 3

@@ -84,10 +84,6 @@ class AnalysisWindow:
     def overlap_char_start(self) -> int:
         return self.char_start
 
-    @property
-    def overlap_chars(self) -> int:
-        return self.overlap_char_end - self.char_start
-
 
 @dataclass(frozen=True)
 class WindowPlan:
@@ -126,14 +122,6 @@ class WindowPlan:
     @property
     def budget_limited(self) -> bool:
         return self.effective_overlap_tokens < self.requested_overlap_tokens
-
-    @property
-    def coverage_char_start(self) -> int | None:
-        return self.windows[0].char_start if self.windows else None
-
-    @property
-    def coverage_char_end(self) -> int | None:
-        return self.windows[-1].char_end if self.windows else None
 
 
 @dataclass(frozen=True)

@@ -1,11 +1,16 @@
 # J4.7 — Production edge ingress over HTTPS (single origin for web + API).
-# Caddy is the first hop unless CADDY_TRUSTED_PROXIES names an external load balancer.
-# The default trusts only loopback, never every private range.
+# Production runs behind the Plane stack's Caddy on the same host (see docs/runbooks/deploy.md
+# §1.1), so CADDY_TRUSTED_PROXIES defaults to private_ranges and can be narrowed to the shared
+# Docker subnet once fixed.
 {
 	admin off
 
 	servers {
-		trusted_proxies static {$CADDY_TRUSTED_PROXIES:127.0.0.1/32}
+		# Production runs behind the Plane stack's Caddy on the same host, which reaches this
+		# Caddy from a private address. Trusting private peers keeps the real client IP for the
+		# API rate limits; the front Caddy must not trust client-supplied X-Forwarded-For.
+		# Narrow CADDY_TRUSTED_PROXIES to the shared network's subnet once it is fixed.
+		trusted_proxies static {$CADDY_TRUSTED_PROXIES:private_ranges}
 		timeouts {
 			read_body 40m
 			read_header 30s

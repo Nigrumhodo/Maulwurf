@@ -79,23 +79,31 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
   if (isPrivateOrApiPath(url.pathname)) return;
-  if (!isAllowlistedShellPath(url.pathname)) return;
 
   const accept = request.headers.get("accept") || "";
   if (accept.includes("text/event-stream")) return;
 
+  const isNavigation = request.mode === "navigate";
+  if (!isNavigation && !isAllowlistedShellPath(url.pathname)) return;
+
+  // Every SPA route is the same shell, so a navigation is cached once under "/".
+  const cacheKey = isNavigation ? "/" : request;
+
   event.respondWith(
     fetch(request)
       .then((response) => {
-        if (responseIsCacheable(response)) {
+        const contentType = (response.headers.get("content-type") || "").toLowerCase();
+        // A missing asset answered with the SPA fallback must not be cached as HTML.
+        const wrongType = !isNavigation && contentType.includes("text/html");
+        if (responseIsCacheable(response) && !wrongType) {
           const clone = response.clone();
           caches
             .open(CACHE_NAME)
-            .then((cache) => cache.put(request, clone))
+            .then((cache) => cache.put(cacheKey, clone))
             .catch(() => undefined);
         }
         return response;
       })
-      .catch(() => caches.match(request).then((cached) => cached || caches.match("/"))),
+      .catch(() => caches.match(cacheKey).then((cached) => cached || caches.match("/"))),
   );
 });

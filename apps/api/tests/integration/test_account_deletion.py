@@ -25,7 +25,7 @@ Covered:
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from urllib.parse import unquote
 
@@ -50,6 +50,7 @@ from app.models import (
     CalendarSettings,
     GoogleCredential,
     GoogleRemoteOperation,
+    Notification,
     Session,
     Subject,
     User,
@@ -57,6 +58,7 @@ from app.models import (
 from app.models.calendar_event import CalendarEvent
 from app.routers.me import deletion_google_transport
 from app.services import deletion, sessions
+from app.services.notifications import dedupe_key
 from tests.integration.actors import (
     Actor,
     make_actor,
@@ -98,6 +100,7 @@ TENANT_TABLES = (
     "task_evidence",
     "task_revisions",
     "calendar_events",
+    "notifications",
     "settings",
     "google_credentials",
 )
@@ -200,6 +203,23 @@ async def _seed_full_tenant(db: AsyncSession, actor: Actor) -> dict[str, Any]:
     settings_row = CalendarSettings(user_id=actor.user_id)
     db.add(settings_row)
     credential = await make_google_credential(db, actor)
+    # A digest has no task, so only an explicit purge removes it (the task FK cascade
+    # covers reminders only).
+    digest_day = date(2026, 11, 9)
+    digest = Notification(
+        user_id=actor.user_id,
+        type="digest_daily",
+        occurrence=digest_day,
+        scheduled_at=datetime(2026, 11, 9, 7, 0, tzinfo=UTC),
+        dedupe_key=dedupe_key(
+            user_id=actor.user_id,
+            type="digest_daily",
+            task_id=None,
+            due_version=None,
+            occurrence=digest_day,
+        ),
+    )
+    db.add(digest)
     await db.flush()
     return {
         "subject": subject,

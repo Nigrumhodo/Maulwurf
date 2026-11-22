@@ -359,7 +359,7 @@ jobs:
       - name: Dev Caddy limits
         run: python3 scripts/ci/check_caddy_limits.py --caddyfile infra/Caddyfile --profile dev
       - name: Production Caddy limits
-        run: python3 scripts/ci/check_caddy_limits.py --caddyfile infra/deploy/Caddyfile.prod --profile prod
+        run: python3 scripts/ci/check_caddy_limits.py --caddyfile infra/deploy/Caddyfile.prod --profile prod --public-tls
 
   # C-S2-JL-13 (L2.11): fail when a backticked repository path does not exist.
   docs:
