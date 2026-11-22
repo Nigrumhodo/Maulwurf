@@ -18,7 +18,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, cast
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, ConfigDict
 
 from app.core.deps import CurrentSession, DbSession, MutationSession
@@ -29,6 +29,7 @@ from app.core.errors import (
     notification_not_resendable,
     notifications_test_unavailable,
 )
+from app.core.redis import RedisDep
 from app.models import Notification, User
 from app.schemas.notifications import (
     NotificationListOut,
@@ -39,9 +40,18 @@ from app.schemas.notifications import (
     NotificationWithWarningOut,
 )
 from app.services import notification_center
+from app.services.limits import enforce_notification_send_limit
 from app.services.notifications import NotificationNotResendable
 
 router = APIRouter(tags=["notifications"])
+
+
+async def _notification_send_limit(session: MutationSession, redis: RedisDep) -> None:
+    """Cluster-wide cap on manual test sends and resends (F4-01)."""
+    await enforce_notification_send_limit(redis, session.user_id)
+
+
+NotificationSendLimit = Annotated[None, Depends(_notification_send_limit)]
 
 
 class ResendRequest(BaseModel):
@@ -116,10 +126,15 @@ async def list_notifications(
         401: {"description": "Sin sesión (auth_required)"},
         403: {"description": "Origin/CSRF inválidos (csrf_invalid)"},
         409: {"description": "notifications_test_unavailable: sin opt-in o email no verificado"},
+        429: {"description": "rate_limited: demasiados envíos de prueba o reenvíos"},
+        503: {"description": "capacity_unavailable: el limitador no está disponible"},
     },
 )
 async def send_test_notification(
-    session: MutationSession, db: DbSession, response: Response
+    session: MutationSession,
+    db: DbSession,
+    response: Response,
+    _limit: NotificationSendLimit,
 ) -> NotificationWithWarningOut:
     """Record the audited test occurrence; the recipient is always the verified email."""
     response.headers["Cache-Control"] = "no-store"
@@ -156,6 +171,8 @@ async def send_test_notification(
         404: {"description": "Entrega inexistente o ajena (not_found)"},
         409: {"description": "notification_not_resendable: estado no repetible"},
         422: {"description": "acknowledgement_required: falta aceptar el riesgo de duplicado"},
+        429: {"description": "rate_limited: demasiados envíos de prueba o reenvíos"},
+        503: {"description": "capacity_unavailable: el limitador no está disponible"},
     },
 )
 async def resend_notification(
@@ -164,6 +181,7 @@ async def resend_notification(
     session: MutationSession,
     db: DbSession,
     response: Response,
+    _limit: NotificationSendLimit,
 ) -> NotificationWithWarningOut:
     """Create a new audited occurrence after the duplicate risk is acknowledged."""
     response.headers["Cache-Control"] = "no-store"

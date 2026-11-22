@@ -101,10 +101,15 @@ class GmailNotificationSender:
                 ):
                     raise NotificationDeliveryRejected("provider_rejected")
 
-                if notification.claimed_by_fence is not None:
-                    lease = await db.get(SchedulerLease, SCHEDULER_ROLE)
-                    if lease is None or lease.fencing_token != notification.claimed_by_fence:
-                        raise NotificationDeliveryRejected("provider_rejected")
+                # A missing fence is not a match. Fail closed so a row claimed without
+                # an election token cannot be delivered (F4-05).
+                lease = await db.get(SchedulerLease, SCHEDULER_ROLE)
+                if (
+                    notification.claimed_by_fence is None
+                    or lease is None
+                    or lease.fencing_token != notification.claimed_by_fence
+                ):
+                    raise NotificationDeliveryRejected("provider_rejected")
 
                 user = await db.get(User, request.user_id)
                 if user is None or user.status != "active":

@@ -47,6 +47,8 @@ from app.schemas.tools import parse_tool_calls
 from app.services import conversations
 from app.services.chat_prompt import ChatContextExceeded
 from app.services.conversations import DEFAULT_PAGE_SIZE, MAX_CURSOR_LENGTH, MAX_PAGE_SIZE
+from app.services.limits import enforce_chat_turn_limit
+from app.services.provider_budget import ProviderBudgetExceeded, enforce_provider_budget
 from app.services.rag import (
     ChatConversationNotFound,
     ChatInvalidTransition,
@@ -289,7 +291,12 @@ async def delete_conversation(
         429: {
             "description": (
                 f"rate_limited: más de {MAX_STREAMS_PER_USER} streams simultáneos "
-                "para el mismo usuario"
+                "o el cupo de turnos por minuto, o presupuesto de proveedor agotado"
+            )
+        },
+        503: {
+            "description": (
+                "capacity_unavailable: limitador o comprobación de presupuesto no disponible"
             )
         },
     },
@@ -315,10 +322,31 @@ async def send_message(
         async with factory() as db:
             session = await resolve_mutation_session(db, request)
             user_id = session.user_id
+            try:
+                await enforce_provider_budget(db, settings, providers=("llm",))
+            except ProviderBudgetExceeded as exc:
+                raise ApiError(
+                    429,
+                    "rate_limited",
+                    "El presupuesto mensual del proveedor está agotado; inténtalo más tarde.",
+                    {"reason": "budget_exceeded", "provider": exc.provider},
+                    headers={"Retry-After": "60"},
+                ) from exc
+            except ConnectionError as exc:
+                # A configured cap that cannot be read must not fail open into more tokens.
+                raise ApiError(
+                    503,
+                    "capacity_unavailable",
+                    "El presupuesto del proveedor no se pudo comprobar; inténtalo más tarde.",
+                    {"reason": "budget_unavailable"},
+                    headers={"Retry-After": "60"},
+                ) from exc
+        await enforce_chat_turn_limit(redis, user_id)
         await acquire_stream(redis, user_id)
         slot = _Slot(redis, user_id)
 
         service = _service(factory, embeddings, llm)
+        service.bind_stream_slot(redis)
         try:
             prepared = await service.prepare(
                 user_id=user_id,

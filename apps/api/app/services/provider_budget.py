@@ -14,18 +14,23 @@ The budget is a monthly cap over a unit the application already measures:
   durably recorded, so this is also a lower bound.
 
 No price, quota or capacity number is invented here. Without a configured cap the usage
-is still exposed with ``configured=0`` and nothing alarms. The window is the UTC calendar
-month, which keeps the metric deterministic across hosts and matches the monthly budget.
+is still exposed with ``configured=0`` and nothing alarms. When a cap is configured and
+the measured month has reached it, ``enforce_provider_budget`` rejects new LLM work.
+The window is the UTC calendar month, which keeps the metric deterministic across hosts
+and matches the monthly budget.
 """
 
 from __future__ import annotations
 
+import logging
 import math
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final, Literal
 
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
@@ -52,6 +57,30 @@ UNITS: Final[dict[str, str]] = {
 DEFAULT_WARNING_RATIO: Final = 0.8
 GOOGLE_CALENDAR_WRITE_EVENT: Final = "sync_task_event"
 JOBS_ROLE: Final = "maulwurf_jobs"
+# One process-local reading. A chat turn must not run the monthly aggregates on every
+# request; the cap still closes within a minute of being crossed.
+_BUDGET_CACHE_SECONDS: Final = 60.0
+_cache_usage: dict[str, float] | None = None
+_cache_at: float = 0.0
+
+logger = logging.getLogger(__name__)
+
+
+class ProviderBudgetExceeded(Exception):
+    """A configured monthly cap is already spent. Callers must not start new provider work."""
+
+    code = "llm_rate_limited"
+
+    def __init__(self, provider: str) -> None:
+        self.provider = provider
+        super().__init__(provider)
+
+
+def reset_provider_budget_cache() -> None:
+    """Drop the memoized reading. Tests use this so cases do not share a minute of usage."""
+    global _cache_at, _cache_usage
+    _cache_at = 0.0
+    _cache_usage = None
 
 
 @dataclass(frozen=True)
@@ -313,6 +342,74 @@ async def collect_usage(
             (sent_notifications or 0) + (calendar_writes or 0) + (remote_deletions or 0)
         ),
     }
+
+
+def configured_budget_limits(
+    settings: Settings = live_settings, *, providers: tuple[str, ...] = PROVIDERS
+) -> dict[str, float]:
+    """Positive caps for `providers`. Unset and non-positive caps are not enforced."""
+    caps = budget_caps(settings)
+    active: dict[str, float] = {}
+    for name in providers:
+        limit = caps.get(name)
+        if limit is not None and limit > 0:
+            active[name] = limit
+    return active
+
+
+async def _cached_usage(db: AsyncSession) -> tuple[dict[str, float], bool]:
+    """Return monthly usage and whether this call refreshed the memo."""
+    global _cache_at, _cache_usage
+    now = time.monotonic()
+    cached = _cache_usage
+    if cached is not None and now - _cache_at < _BUDGET_CACHE_SECONDS:
+        return cached, False
+    try:
+        # The cap is a deployment bill, not a per-tenant quota, so the aggregate has to
+        # see every tenant. The caller's transaction must not continue after this read.
+        usage = await collect_usage(db, cross_tenant=True)
+    except SQLAlchemyError as exc:
+        logger.warning("provider_budget.unreadable error=%s", type(exc).__name__)
+        raise ConnectionError("provider budget unreadable") from exc
+    _cache_at = time.monotonic()
+    _cache_usage = usage
+    return usage, True
+
+
+async def enforce_provider_budget(
+    db: AsyncSession,
+    settings: Settings = live_settings,
+    *,
+    providers: tuple[str, ...] = ("llm",),
+) -> None:
+    """Reject new work when a configured monthly cap for `providers` is already spent.
+
+    Unset and non-positive caps do nothing, so deployments that only measure usage keep
+    the previous behavior. A cap that cannot be read fails closed: skipping the check
+    would spend more tokens while the control is blind.
+    """
+    active = configured_budget_limits(settings, providers=providers)
+    if not active:
+        return
+    usage, refreshed = await _cached_usage(db)
+    statuses = [
+        evaluate_budget(
+            provider,
+            usage.get(provider, 0.0),
+            active[provider],
+            warning_ratio=settings.budget_warning_ratio,
+        )
+        for provider in active
+    ]
+    if refreshed:
+        for status in statuses:
+            if status.exhausted:
+                logger.warning("provider_budget.exhausted provider=%s", status.provider)
+            elif status.warning:
+                logger.warning("provider_budget.warning provider=%s", status.provider)
+    for status in statuses:
+        if status.exhausted:
+            raise ProviderBudgetExceeded(status.provider)
 
 
 async def collect_budget_samples(

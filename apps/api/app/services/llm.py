@@ -14,6 +14,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -26,6 +27,32 @@ from app.services.http_retry import unit_interval as _unit_interval
 logger = logging.getLogger(__name__)
 
 CHAT_COMPLETIONS_PATH = "chat/completions"
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+# Compose stubs used by the local/CI smoke. Cleartext is rejected for every other host.
+_LOCAL_STUB_HOSTS = frozenset({"provider-double", "e2e-provider"})
+_LOCAL_ENVS = frozenset({"local", "ci"})
+
+
+def _require_tls_base_url(base_url: str, *, env: str, allow_insecure: bool) -> None:
+    """Reject cleartext provider URLs outside loopback and local stubs.
+
+    The API key and the prompt travel in the Authorization header. `http://` is only
+    tolerated for loopback and the e2e doubles, and only while the process itself is
+    local or CI. `allow_insecure` is an explicit test override.
+    """
+    if allow_insecure:
+        return
+    parsed = urlsplit(base_url.strip())
+    scheme = parsed.scheme.lower()
+    if scheme == "https":
+        return
+    host = (parsed.hostname or "").lower()
+    if scheme == "http" and env in _LOCAL_ENVS and host in _LOOPBACK_HOSTS | _LOCAL_STUB_HOSTS:
+        return
+    raise LLMProviderError(
+        "El proveedor exige HTTPS fuera de un host local de prueba.",
+        details={"reason": "insecure_base_url"},
+    )
 LLM_HTTP_LIMITS = httpx.Limits(max_connections=20, max_keepalive_connections=10)
 _shared_client: httpx.AsyncClient | None = None
 _RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
@@ -123,11 +150,18 @@ class HttpChatProvider:
         client: httpx.AsyncClient | None = None,
         sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
         jitter: Callable[[], float] = _unit_interval,
+        allow_insecure: bool = False,
+        env: str | None = None,
     ) -> None:
         if context_window <= 0:
             raise ValueError("context_window debe ser positivo")
         if client is not None and transport is not None:
             raise ValueError("client y transport son mutuamente exclusivos")
+        _require_tls_base_url(
+            base_url,
+            env=live_settings.env if env is None else env,
+            allow_insecure=allow_insecure,
+        )
         self._endpoint = f"{base_url.rstrip('/')}/{CHAT_COMPLETIONS_PATH}"
         self._api_key = api_key
         self._model = model
@@ -155,6 +189,7 @@ class HttpChatProvider:
             context_window=settings.llm_model_window,
             max_retries=settings.llm_max_retries,
             timeout_seconds=settings.llm_timeout_seconds,
+            env=settings.env,
             **overrides,
         )
 

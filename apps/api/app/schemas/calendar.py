@@ -17,11 +17,30 @@ counts; the client re-reads the mirror through `GET /calendar/events`. A manual 
 the per-user cooldown answers `429` with `Retry-After` before any Google request.
 """
 
+import re
 from datetime import date, datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from app.services.calendar_window import CoverageNotice
+
+# Whitespace and C0/C1 controls are rejected per item. Google ids may contain
+# `@`, `.`, `-`, `_` and `#` (holiday calendars), so those stay allowed.
+_CALENDAR_ID_UNSAFE = re.compile(r"[\s\x00-\x1f\x7f\u0080-\u009f]")
+
+
+def _read_calendar_id(value: str) -> str:
+    if _CALENDAR_ID_UNSAFE.search(value):
+        raise ValueError("read_calendar_id contains whitespace or a control character")
+    return value
+
+
+CalendarId = Annotated[
+    str,
+    Field(min_length=1, max_length=256),
+    AfterValidator(_read_calendar_id),
+]
 
 
 class CalendarEventOut(BaseModel):
@@ -109,7 +128,7 @@ class CalendarSettingsOut(BaseModel):
 class CalendarSettingsUpdateIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    read_calendar_ids: list[str] = Field(default_factory=list, max_length=25)
+    read_calendar_ids: list[CalendarId] = Field(default_factory=list, max_length=25)
 
 
 class CalendarListItemOut(BaseModel):
