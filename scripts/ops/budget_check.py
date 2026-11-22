@@ -167,9 +167,7 @@ def evaluate(samples: list[Sample]) -> list[Budget]:
                 limit=None if limit is None else limit.value,
                 ratio=None if ratio is None else ratio.value,
                 warning=bool(warning.get(provider) and warning[provider].value == 1.0),
-                exhausted=bool(
-                    exhausted.get(provider) and exhausted[provider].value == 1.0
-                ),
+                exhausted=bool(exhausted.get(provider) and exhausted[provider].value == 1.0),
             )
         )
     return budgets
@@ -234,11 +232,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         token = _load_token(args.token_file)
-        budgets = evaluate(parse_metrics(
-                _fetch(args.url, args.timeout, token=token)
-                if token
-                else _fetch(args.url, args.timeout)
-            ))
+        budgets = evaluate(parse_metrics(_fetch(args.url, args.timeout, token=token)))
     except (MetricsError, OSError, urllib.error.URLError) as exc:
         print(f"budget_check: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 3
