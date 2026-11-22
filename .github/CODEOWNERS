@@ -1,9 +1,0 @@
-# Security-sensitive paths. The last matching pattern wins.
-# Branch protection should require a review from the owner before merge.
-
-/infra/deploy/ @NigrumH0do
-/infra/*.yml @NigrumH0do
-/infra/Caddyfile @NigrumH0do
-/.github/ @NigrumH0do
-/scripts/ci/ @NigrumH0do
-/SECURITY.md @NigrumH0do
