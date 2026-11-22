@@ -49,6 +49,11 @@ _KEY_VALUE: Final = re.compile(
 )
 _URL_CREDENTIALS: Final = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]*://)[^\s/@]+@")
 _BEARER: Final = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-~+/=]+")
+# OAuth callback parameters: the authorization `code` is a short-lived credential and the
+# `state` binds it to the signed cookie, so neither may reach an access log line.
+_SENSITIVE_QUERY_KEYS: Final = frozenset({"code", "state"})
+_QUERY_PARAM: Final = re.compile(r"(?P<lead>[?&])(?P<key>[^=&#]+)=(?P<value>[^&#]*)")
+_UVICORN_ACCESS_PATH_ARG: Final = 2
 
 
 def is_sensitive_key(key: str) -> bool:
@@ -72,6 +77,21 @@ def scrub_text(text: str) -> str:
         return match.group(0)
 
     return _KEY_VALUE.sub(_mask_pair, text)
+
+
+def scrub_query(path: str) -> str:
+    """Mask OAuth and other sensitive query-string values in a request path."""
+    if "?" not in path:
+        return path
+
+    def _mask_param(match: re.Match[str]) -> str:
+        key = match.group("key")
+        if key.lower() in _SENSITIVE_QUERY_KEYS or is_sensitive_key(key):
+            return f"{match.group('lead')}{key}={REDACTED}"
+        return match.group(0)
+
+    base, sep, query = path.partition("?")
+    return base + _QUERY_PARAM.sub(_mask_param, sep + query)
 
 
 def _scrub_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
@@ -110,7 +130,7 @@ class RedactionFilter(logging.Filter):
             and len(record.args) == 5
         ):
             record.args = tuple(
-                scrub_text(arg) if isinstance(arg, str) else arg for arg in record.args
+                self._scrub_access_arg(index, arg) for index, arg in enumerate(record.args)
             )
         else:
             record.msg = scrub_text(record.getMessage())
@@ -120,6 +140,14 @@ class RedactionFilter(logging.Filter):
             record.fields = _scrub_fields(fields)
         self._scrub_traceback(record)
         return True
+
+    @staticmethod
+    def _scrub_access_arg(index: int, arg: object) -> object:
+        if not isinstance(arg, str):
+            return arg
+        if index == _UVICORN_ACCESS_PATH_ARG:
+            arg = scrub_query(arg)
+        return scrub_text(arg)
 
     @staticmethod
     def _scrub_traceback(record: logging.LogRecord) -> None:

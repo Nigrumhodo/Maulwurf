@@ -9,15 +9,13 @@ import type { Subject } from "@/lib/subjects";
 import {
   DEFAULT_EVENT_DURATION_MINUTES,
   addMinutes,
+  buildScheduleFields,
   createTask,
   dateOnlyAddDays,
   wallTimeToInstant,
 } from "@/lib/tasks";
-import type { Task, TaskCreateInput, TaskEventBlockPatch } from "@/lib/tasks";
+import type { DueMode, EventMode, Task, TaskCreateInput } from "@/lib/tasks";
 import { TIMEZONES } from "@/lib/timezones";
-
-type DueMode = "missing" | "all_day" | "timed";
-type EventMode = "none" | "all_day" | "timed";
 
 const ACTIVITY_TYPES = [
   "tarea",
@@ -45,14 +43,7 @@ function defaultTimezone(): string {
 }
 
 function fieldError(error: unknown): string {
-  if (error instanceof ApiHttpError) {
-    const fields = error.details.fields;
-    if (typeof fields === "object" && fields !== null && !Array.isArray(fields)) {
-      const first = Object.values(fields)[0];
-      if (typeof first === "string" && first !== "") return first;
-    }
-    return error.message;
-  }
+  if (error instanceof ApiHttpError) return error.firstFieldMessage()?.message ?? error.message;
   return "no se pudo crear la tarea; revisa la conexión.";
 }
 
@@ -147,56 +138,18 @@ export function TaskCreateForm({
   function buildPayload(): TaskCreateInput | string {
     if (titulo.trim() === "") return "el título no puede estar vacío.";
 
-    const resolvedDue =
-      dueMode === "all_day"
-        ? { due_date: dueDate, due_at: null, all_day: true }
-        : dueMode === "timed"
-          ? {
-              due_date: null,
-              due_at: wallTimeToInstant(dueDate, dueTime, timezone),
-              all_day: false,
-            }
-          : { due_date: null, due_at: null, all_day: false };
-
-    if (dueMode === "all_day" && dueDate === "") {
-      return "elige la fecha de vencimiento (o cambia el modo a «sin fecha»).";
-    }
-    if (dueMode === "timed") {
-      if (dueDate === "") return "elige la fecha de vencimiento.";
-      if (resolvedDue.due_at === null) {
-        return "la hora de vencimiento no existe en esta zona horaria.";
-      }
-    }
-
-    let eventBlock: TaskEventBlockPatch | null = null;
-    if (eventMode === "all_day") {
-      if (eventStartDate === "" || eventEndDate === "") {
-        return "el bloque de agenda necesita fecha de inicio y fin.";
-      }
-      if (eventEndDate <= eventStartDate) {
-        return "el fin de agenda debe ser posterior al inicio.";
-      }
-      eventBlock = {
-        start_at: null,
-        end_at: null,
-        start_date: eventStartDate,
-        end_date_exclusive: eventEndDate,
-      };
-    } else if (eventMode === "timed") {
-      if (eventStartDate === "") {
-        return "elige la fecha de inicio de agenda.";
-      }
-      const startAt = wallTimeToInstant(eventStartDate, eventStartTime, timezone);
-      if (startAt === null) return "la hora de inicio de agenda no existe en esta zona.";
-      const endAt = addMinutes(startAt, durationMinutes);
-      if (endAt === null) return "la duración de agenda no es válida.";
-      eventBlock = {
-        start_at: startAt,
-        end_at: endAt,
-        start_date: null,
-        end_date_exclusive: null,
-      };
-    }
+    const schedule = buildScheduleFields({
+      dueMode,
+      dueDate,
+      dueTime,
+      timezone,
+      eventMode,
+      eventStartDate,
+      eventStartTime,
+      eventEndDate,
+      durationMinutes,
+    });
+    if (typeof schedule === "string") return schedule;
 
     return {
       source: "manual",
@@ -204,12 +157,7 @@ export function TaskCreateForm({
       titulo: titulo.trim(),
       detalle: detalle.trim() === "" ? null : detalle.trim(),
       subject_id: subjectId !== "" ? subjectId : null,
-      date_status: dueMode === "missing" ? "missing" : "resolved",
-      due_date: resolvedDue.due_date,
-      due_at: resolvedDue.due_at,
-      timezone,
-      all_day: resolvedDue.all_day,
-      event_block: eventBlock,
+      ...schedule,
     };
   }
 

@@ -25,6 +25,7 @@ from typing import Annotated, NoReturn
 
 from fastapi import APIRouter, Query, Response
 
+from app.core.crypto import DecryptionError
 from app.core.deps import CurrentSession, DbSession, MutationSession
 from app.core.errors import (
     calendar_sync_cooldown,
@@ -68,6 +69,7 @@ from app.services.google_calendar import (
     GoogleCalendarInvalidGrant,
     GoogleCalendarService,
     GoogleCalendarTransientError,
+    GoogleCalendarUnauthorized,
     disconnect_google_credential,
 )
 from app.services.google_tokens import GoogleTokenTransient, GoogleTokenUnavailable
@@ -277,6 +279,8 @@ async def calendar_sync(
             await db.commit()
         # Any other state conflict wrote nothing; the request-scoped session rolls back.
         raise calendar_sync_unavailable(exc.code) from exc
+    except DecryptionError as exc:
+        raise calendar_sync_unavailable("google_not_connected") from exc
     except GoogleCalendarInvalidGrant as exc:
         # Defensive: the service converts this path, but never leave a revoked grant
         # looking connected if a future caller changes that contract.
@@ -369,7 +373,23 @@ async def list_google_calendars(
         access_token = await _renew_access_token(
             db, user_id=user_id, now=datetime.now(UTC)
         )
-        entries = await GoogleCalendarService(access_token=access_token).list_calendars()
+        try:
+            entries = await GoogleCalendarService(access_token=access_token).list_calendars()
+        except GoogleCalendarUnauthorized:
+            # Same single forced-renewal retry as the mirror refresh.
+            access_token = await _renew_access_token(
+                db, user_id=user_id, now=datetime.now(UTC), force=True
+            )
+            try:
+                entries = await GoogleCalendarService(
+                    access_token=access_token
+                ).list_calendars()
+            except (GoogleCalendarUnauthorized, GoogleCalendarInvalidGrant) as exc:
+                await disconnect_google_credential(db, user_id)
+                await db.commit()
+                raise calendar_sync_unavailable("google_invalid_grant") from exc
+    except DecryptionError as exc:
+        raise calendar_sync_unavailable("google_not_connected") from exc
     except CalendarSyncBusy as exc:
         raise calendar_sync_temporarily_unavailable(
             retry_after_seconds=LOCK_RETRY_AFTER_SECONDS

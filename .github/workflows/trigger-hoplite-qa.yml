@@ -13,6 +13,8 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+permissions: {}
+
 jobs:
   send-webhook:
     runs-on: ubuntu-latest

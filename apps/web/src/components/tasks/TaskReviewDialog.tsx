@@ -32,14 +32,7 @@ export interface TaskReviewDialogProps {
 }
 
 function errorMessage(error: unknown): string {
-  if (error instanceof ApiHttpError) {
-    const fields = error.details.fields;
-    if (typeof fields === "object" && fields !== null && !Array.isArray(fields)) {
-      const first = Object.values(fields)[0];
-      if (typeof first === "string" && first !== "") return first;
-    }
-    return error.message;
-  }
+  if (error instanceof ApiHttpError) return error.firstFieldMessage()?.message ?? error.message;
   return "no se pudo completar la operación; revisa tu conexión.";
 }
 

@@ -153,7 +153,7 @@ def test_main_prints_json_and_returns_the_state_code(
     monkeypatch.setattr(
         budget_check,
         "_fetch",
-        lambda url, timeout: _metrics(llm=(1_000.0, 1_000.0, 1.0, False, True)),
+        lambda url, timeout, token=None: _metrics(llm=(1_000.0, 1_000.0, 1.0, False, True)),
     )
 
     code = budget_check.main(["--url", "http://internal.test/metrics", "--format", "json"])
@@ -167,7 +167,7 @@ def test_main_prints_json_and_returns_the_state_code(
 def test_main_reports_a_transport_error_without_a_stack_trace(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    def _fail(url: str, timeout: float) -> str:
+    def _fail(url: str, timeout: float, token: str | None = None) -> str:
         raise urllib.error.URLError("connection refused")
 
     monkeypatch.setattr(budget_check, "_fetch", _fail)
@@ -176,3 +176,20 @@ def test_main_reports_a_transport_error_without_a_stack_trace(
 
     assert code == 3
     assert "budget_check: URLError" in capsys.readouterr().err
+
+
+def test_main_forwards_the_metrics_token_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[str | None] = []
+
+    def _fetch(url: str, timeout: float, token: str | None = None) -> str:
+        seen.append(token)
+        return _metrics(llm=(10.0, 1_000.0, 1.0, False, True))
+
+    monkeypatch.setenv("MAULWURF_METRICS_TOKEN", "test-token")
+    monkeypatch.setattr(budget_check, "_fetch", _fetch)
+
+    budget_check.main(["--url", "http://internal.test/metrics"])
+
+    assert seen == ["test-token"]

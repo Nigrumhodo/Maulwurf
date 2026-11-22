@@ -4,12 +4,17 @@ Toda lectura de una tabla de propiedad pasa por aquí con el `user_id` de la ses
 autenticada. Un ID ajeno se comporta igual que uno inexistente (404 en la API).
 """
 import uuid
-from typing import Any, Literal
+from typing import Any, Literal, Protocol, cast
 
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
 
 from app.models.base import TenantOwned
+
+
+class _HasUuidId(Protocol):
+    id: InstrumentedAttribute[uuid.UUID]
 
 
 def owned_by[T: TenantOwned](model: type[T], user_id: uuid.UUID) -> Select[tuple[T]]:
@@ -29,7 +34,7 @@ async def get_owned[T: TenantOwned](
 
     `lock` takes a row lock until the transaction ends, for check-then-write paths.
     """
-    pk = model.id  # type: ignore[attr-defined]
+    pk = cast(_HasUuidId, model).id
     query = owned_by(model, user_id).where(pk == resource_id)
     if lock is not None:
         query = query.with_for_update(read=lock == "share")

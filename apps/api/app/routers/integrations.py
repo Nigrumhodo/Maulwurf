@@ -31,6 +31,7 @@ from app.core.deps import (
     CurrentSession,
     DbSession,
     MutationSession,
+    resolve_authenticated_session,
     set_oauth_state_cookie,
 )
 from app.core.errors import (
@@ -84,6 +85,22 @@ def _login_redirect() -> RedirectResponse:
     redirect = RedirectResponse("/login?error=session_expired", status_code=302)
     redirect.headers["Cache-Control"] = "no-store"
     return redirect
+
+
+async def _navigation_session(request: Request, db: DbSession) -> SessionRow | None:
+    """Session for a GET navigation route, or `None` when it is missing or expired.
+
+    A browser navigating here must land on the login page, not on a JSON `401` body.
+    """
+    try:
+        return await resolve_authenticated_session(db, request)
+    except ApiError as exc:
+        if exc.code == "auth_required":
+            return None
+        raise
+
+
+NavigationSession = Annotated[SessionRow | None, Depends(_navigation_session)]
 
 
 async def _integration_rate_limit(session: MutationSession, redis: RedisDep) -> None:
@@ -209,7 +226,7 @@ def _reject_cross_site_navigation(request: Request) -> None:
 
 async def _start_oauth_navigation(
     request: Request,
-    session: CurrentSession,
+    session: SessionRow,
     redis: RedisDep,
     starter: Callable[[], Awaitable[RedirectResponse]],
     error_redirect: Callable[[str], RedirectResponse],
@@ -228,7 +245,7 @@ async def _start_oauth_navigation(
 async def _start_calendar_navigation(
     request: Request,
     db: DbSession,
-    session: CurrentSession,
+    session: SessionRow,
     redis: RedisDep,
     *,
     reconnect: bool,
@@ -252,8 +269,10 @@ async def _start_calendar_navigation(
     },
 )
 async def google_connect_navigation(
-    request: Request, db: DbSession, session: CurrentSession, redis: RedisDep
+    request: Request, db: DbSession, session: NavigationSession, redis: RedisDep
 ) -> RedirectResponse:
+    if session is None:
+        return _login_redirect()
     return await _start_calendar_navigation(request, db, session, redis, reconnect=False)
 
 
@@ -266,8 +285,10 @@ async def google_connect_navigation(
     },
 )
 async def google_reconnect_navigation(
-    request: Request, db: DbSession, session: CurrentSession, redis: RedisDep
+    request: Request, db: DbSession, session: NavigationSession, redis: RedisDep
 ) -> RedirectResponse:
+    if session is None:
+        return _login_redirect()
     return await _start_calendar_navigation(request, db, session, redis, reconnect=True)
 
 
@@ -314,8 +335,10 @@ async def google_reconnect(
     },
 )
 async def google_gmail_connect_navigation(
-    request: Request, db: DbSession, session: CurrentSession, redis: RedisDep
+    request: Request, db: DbSession, session: NavigationSession, redis: RedisDep
 ) -> RedirectResponse:
+    if session is None:
+        return _login_redirect()
     return await _start_oauth_navigation(
         request,
         session,

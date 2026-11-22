@@ -14,6 +14,7 @@ from pathlib import Path
 
 from maulwurf_ingest.audio.ffmpeg import (
     DEFAULT_LIMITS,
+    FfmpegFailed,
     FfmpegLimits,
     ensure_conversion_complete,
     ensure_pcm_fits,
@@ -53,6 +54,7 @@ class PipelineResult:
 
 Transcribe = Callable[[Path], FragmentWords]
 ProgressCallback = Callable[[int, int], None]
+StopCheck = Callable[[], bool]
 
 # Margin below output_bytes proving `-fs` did not truncate the final fragment.
 _TAIL_FS_MARGIN_BYTES = 65_536
@@ -71,15 +73,21 @@ def process(
     limits: FfmpegLimits = DEFAULT_LIMITS,
     realtime: bool = False,
     on_progress: ProgressCallback | None = None,
+    should_stop: StopCheck | None = None,
 ) -> PipelineResult:
-    """Planifica, extrae y reconcilia. `transcribe` ve un solo `frag-*.wav`."""
+    """Planifica, extrae y reconcilia. `transcribe` ve un solo `frag-*.wav`.
+
+    ``should_stop`` reports a cancelled job; once it is true no ffmpeg fallback runs.
+    """
     duration_s = probe_file(source).duration_s
     if duration_s is None:
         raise RuntimeError("normalization_duration_unknown")
     cap = effective_fragment_seconds(fragment_seconds)
     try:
         silences = detect_silences(source, limits=limits)
-    except (RuntimeError, subprocess.TimeoutExpired):
+    except (RuntimeError, subprocess.TimeoutExpired) as exc:
+        if _fallback_forbidden(exc, should_stop):
+            raise
         # Silence detection is only a cut-boundary hint; fall back to fixed spans instead of
         # failing an entire class upload on a long/unusual container.
         silences = []
@@ -102,7 +110,8 @@ def process(
             is_last = index == total - 1 and total > 1
             dest = workdir / f"frag-{index:04d}.wav"
             extracted = _extract(
-                source, dest, span, limits=limits, realtime=realtime, is_last=is_last
+                source, dest, span, limits=limits, realtime=realtime, is_last=is_last,
+                should_stop=should_stop,
             )
             if not extracted:
                 if on_progress is not None:
@@ -132,6 +141,7 @@ def _extract(
     limits: FfmpegLimits,
     realtime: bool,
     is_last: bool = False,
+    should_stop: StopCheck | None = None,
 ) -> bool:
     duration_s = span.end_s - span.start_s
     ensure_pcm_fits(duration_s, limits.output_bytes)
@@ -141,8 +151,8 @@ def _extract(
                 fragment_argv(source, dest, span, limits=limits, realtime=realtime),
                 limits=limits,
             )
-        except RuntimeError as exc:
-            if str(exc) != "ffmpeg_failed":
+        except FfmpegFailed as exc:
+            if _fallback_forbidden(exc, should_stop):
                 raise
             dest.unlink(missing_ok=True)
             run_ffmpeg(
@@ -162,3 +172,14 @@ def _extract(
     except Exception:
         dest.unlink(missing_ok=True)
         raise
+
+
+def _fallback_forbidden(exc: BaseException, should_stop: StopCheck | None) -> bool:
+    """A group kill (lease lost, user cancel) must not be retried as a bad container.
+
+    The SIGTERM can reach ffmpeg before the job's own handler marks it cancelled, so
+    the signalled exit code is checked as well as ``should_stop``.
+    """
+    if isinstance(exc, FfmpegFailed) and exc.signalled:
+        return True
+    return should_stop is not None and should_stop()

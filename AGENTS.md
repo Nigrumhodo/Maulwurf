@@ -5,7 +5,7 @@ searchable transcripts, cited RAG answers, reviewable task proposals, Google Cal
 and optional Gmail reminders. The repository contains the product and planning documentation
 plus the **S1 foundation**, the **S2 knowledge slice**, and partial **S3/S4** code
 (ownership and state in `docs/sprints/CLAIMS.md`): a Docker Compose stack of 8 services
-with healthchecks, nineteen Alembic migrations (`0001`–`0019`), real API routers (health,
+with healthchecks, twenty-four Alembic migrations (`0001`–`0024`), real API routers (health,
 session/CSRF, Google login, `GET/PATCH /me`, subject CRUD, `POST /audios`, streaming `PUT`
 with dedupe, search, chat SSE, integrations status, tasks, calendar, notifications,
 account deletion), a hardened ingestion package with internal reception endpoints, leases

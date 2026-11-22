@@ -132,6 +132,10 @@ class StubSession:
         if "FROM variant_confirmation_tokens" in sql:
             self.events.append("sql:lock_token")
             return _Rows(self.token)
+        if "count_active_ingestion_attempts" in sql:
+            # The global slot goes through the cross-tenant count function (0024).
+            self.events.append("sql:count_slot")
+            return _Rows(self.active)
         if "FROM ingestion_attempts" in sql:
             # Cuota (por usuario) y slot (global) comparten tabla: se separan por el filtro.
             self.events.append("sql:count_quota" if "user_id" in sql else "sql:count_slot")

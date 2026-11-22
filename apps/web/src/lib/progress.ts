@@ -5,6 +5,8 @@
 // al final, exactamente un `done` o `error`. Aquí no se calcula ningún porcentaje ni ETA:
 // solo se valida/normaliza el payload y se reduce a lo que la UI puede afirmar.
 
+import { isRecord } from "./json";
+
 export type ProgressAggregate = "processing" | "ready" | "partial" | "failed";
 
 export interface ProgressAttempt {
@@ -58,10 +60,6 @@ export const INITIAL_PROGRESS: ProgressState = {
 };
 
 const AGGREGATES: readonly ProgressAggregate[] = ["processing", "ready", "partial", "failed"];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function aggregateOf(value: unknown): ProgressAggregate | null {
   return typeof value === "string" && (AGGREGATES as readonly string[]).includes(value)

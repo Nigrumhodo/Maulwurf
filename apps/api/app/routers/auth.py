@@ -249,8 +249,9 @@ async def _calendar_callback(
             db, user_id=user_id, binding=binding
         )
         # Both a first connect and a reconnect reactivate waiting work (DISENO A3.8/A3.7):
-        # current-version blocked tasks go back to pending with one outbox event each and
-        # the newly bound write calendar.
+        # current-version blocked tasks go back to pending with one outbox event each; a
+        # task without a target calendar takes the newly bound write calendar, while an
+        # existing link is kept.
         await calendar_resume.resume_blocked_tasks(db, user_id=user_id)
     except GoogleCalendarInvalidGrant:
         # The grant Google just issued cannot be used: keep the integration disconnected

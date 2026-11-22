@@ -26,7 +26,6 @@ import {
   cancelAttempt,
   mapUploadError,
   pickUploadFile,
-  releaseUploadResources,
   uploadContent,
   variantConflict,
 } from "@/lib/upload";
@@ -98,7 +97,6 @@ export function BibliotecaPage() {
   }, []);
 
   const releaseFile = useCallback(() => {
-    releaseUploadResources(null);
     setSelectedFile(null);
     setFileError(null);
     setProgress(null);

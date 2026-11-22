@@ -28,6 +28,7 @@ discarded context. Token-confirmed variants skip the re-check: sharing a hash ac
 legal once the human confirmed it.
 """
 
+import asyncio
 import hashlib
 import uuid
 from contextlib import suppress
@@ -452,9 +453,10 @@ async def receive_content(
     except SinkError as exc:
         await sink.abort()
         raise _sink_api_error(exc) from exc
-    except Exception:
-        # Disconnect or broken read mid-upload (ADR-0008 §7): no response to send.
-        await _abort_disconnected(sink, finished=False)
+    except (Exception, asyncio.CancelledError):
+        # Disconnect, broken read or task cancellation mid-upload (ADR-0008 §7): no response
+        # to send. Shielded so a cancelled request still releases the ingest slot.
+        await asyncio.shield(_abort_disconnected(sink, finished=False))
         raise
 
     if received == 0:

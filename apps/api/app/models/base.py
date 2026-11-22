@@ -20,6 +20,12 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
+def sql_in(column: str, values: tuple[str, ...]) -> str:
+    # The values are closed enum literals defined in code, never user input.
+    quoted = ", ".join(f"'{value}'" for value in values)
+    return f"{column} IN ({quoted})"
+
+
 def uuid_pk() -> Mapped[uuid.UUID]:
     return mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")

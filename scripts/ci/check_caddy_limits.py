@@ -363,13 +363,17 @@ def _sse_flush(lines: list[str], blocks: list[HandleBlock]) -> None:
             _fail(f"`handle {name}` must set `flush_interval -1`")
 
 
-def check(caddyfile: Path) -> Report:
+def check(caddyfile: Path, *, public_tls: bool = False) -> Report:
     lines = _lines(caddyfile)
     joined = "\n".join(_strip_comment(line) for line in lines)
 
     if "admin off" not in joined:
         _fail("missing `admin off`")
-    if "tls internal" not in joined:
+    if public_tls:
+        # The production edge uses public ACME certificates; a local CA there would be a bug.
+        if "tls internal" in joined:
+            _fail("`tls internal` is not allowed with --public-tls")
+    elif "tls internal" not in joined:
         _fail("missing `tls internal`")
 
     blocks = _handle_blocks(lines)
@@ -439,6 +443,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--caddyfile", type=Path, default=DEFAULT_CADDYFILE)
     parser.add_argument(
+        "--public-tls",
+        action="store_true",
+        help="production edge: require public ACME TLS instead of `tls internal`",
+    )
+    parser.add_argument(
         "--print-sizes",
         action="store_true",
         help=(
@@ -448,7 +457,7 @@ def main() -> int:
     )
     args = parser.parse_args()
     try:
-        report = check(args.caddyfile)
+        report = check(args.caddyfile, public_tls=args.public_tls)
     except CheckError as exc:
         print(f"FAIL: {exc}", file=sys.stderr)
         return 1

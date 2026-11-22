@@ -31,7 +31,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, created_at, uuid_pk
+from app.models.base import Base, created_at, sql_in, uuid_pk
 
 # `running` is the atomic claim between two executions; `claimed_at` bounds that claim so a
 # crashed process can be resumed instead of leaving the operation stuck.
@@ -40,16 +40,11 @@ REMOTE_KINDS = ("delete_event", "delete_calendar", "account_cleanup")
 REMOTE_STATUSES = ("pending", "running", "succeeded", "failed")
 
 
-def _in(column: str, values: tuple[str, ...]) -> str:
-    quoted = ", ".join(f"'{value}'" for value in values)
-    return f"{column} IN ({quoted})"
-
-
 class AccountDeletion(Base):
     __tablename__ = "account_deletions"
     __table_args__ = (
         UniqueConstraint("former_user_id", name="uq_account_deletions_former_user_id"),
-        CheckConstraint(_in("status", DELETION_STATUSES), name="status"),
+        CheckConstraint(sql_in("status", DELETION_STATUSES), name="status"),
         Index("account_deletions_expiry", "expires_at"),
     )
 
@@ -82,8 +77,8 @@ class GoogleRemoteOperation(Base):
             name="uq_google_remote_operations_identity",
             postgresql_nulls_not_distinct=True,
         ),
-        CheckConstraint(_in("kind", REMOTE_KINDS), name="kind"),
-        CheckConstraint(_in("status", REMOTE_STATUSES), name="status"),
+        CheckConstraint(sql_in("kind", REMOTE_KINDS), name="kind"),
+        CheckConstraint(sql_in("status", REMOTE_STATUSES), name="status"),
         Index("google_remote_operations_by_user", "user_id", "status"),
         # J4.8: the internal Google budget counts recorded operations in a UTC month.
         Index("google_remote_operations_by_created_at", "created_at"),

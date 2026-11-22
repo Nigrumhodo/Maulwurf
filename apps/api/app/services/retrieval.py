@@ -172,6 +172,8 @@ def _common_conditions(
         Chunk.index_version == version,
         Audio.user_id == user_id,
         Audio.deleted_at.is_(None),
+        Subject.user_id == user_id,
+        Subject.deleted_at.is_(None),
         Transcript.user_id == user_id,
         Transcript.version == Audio.active_transcript_version,
         Chunk.transcript_version == Transcript.version,
@@ -190,6 +192,10 @@ def _common_conditions(
 
 def _audio_join() -> ColumnElement[bool]:
     return and_(Audio.user_id == Chunk.user_id, Audio.id == Chunk.audio_id)
+
+
+def _subject_join() -> ColumnElement[bool]:
+    return and_(Subject.user_id == Audio.user_id, Subject.id == Audio.subject_id)
 
 
 def _transcript_join() -> ColumnElement[bool]:
@@ -240,6 +246,7 @@ def lexical_candidates_statement(
         arm = (
             select(Chunk.id.label("chunk_id"), Chunk.audio_id, score)
             .join(Audio, _audio_join())
+            .join(Subject, _subject_join())
             .join(Transcript, _transcript_join())
             .where(
                 Transcript.fts_config == cfg,
@@ -289,6 +296,7 @@ def vector_candidates_statement(
             ),
         )
         .join(Audio, _audio_join())
+        .join(Subject, _subject_join())
         .join(Transcript, _transcript_join())
         .where(
             Embedding.user_id == user_id,
@@ -534,21 +542,6 @@ async def hybrid_search(
     )
     return hits
 
-def _reliable_times(
-    *,
-    precision: str,
-    t_start: float | None,
-    t_end: float | None,
-    duration_seconds: float | None,
-) -> tuple[float | None, float | None]:
-    """Return the segment times only when they are truthful; otherwise both are null."""
-    return reliable_times(
-        timestamp_precision=precision,
-        t_start=t_start,
-        t_end=t_end,
-        duration_seconds=duration_seconds,
-    )
-
 async def _hydrate(
     db: AsyncSession,
     *,
@@ -585,7 +578,7 @@ async def _hydrate(
         )
         .select_from(Chunk)
         .join(Audio, and_(Audio.user_id == Chunk.user_id, Audio.id == Chunk.audio_id))
-        .join(Subject, and_(Subject.user_id == Audio.user_id, Subject.id == Audio.subject_id))
+        .join(Subject, _subject_join())
         .join(
             Transcript,
             and_(Transcript.user_id == Chunk.user_id, Transcript.id == Chunk.transcript_id),
@@ -644,8 +637,8 @@ async def _hydrate(
         selected = segments.get(hit.chunk_id)
         segment = selected[1] if selected is not None else None
         segment_id = segment.segment_id if segment is not None else None
-        t_start, t_end = _reliable_times(
-            precision=hydrated_row.timestamp_precision,
+        t_start, t_end = reliable_times(
+            timestamp_precision=hydrated_row.timestamp_precision,
             t_start=segment.segment_t_start if segment is not None else None,
             t_end=segment.segment_t_end if segment is not None else None,
             duration_seconds=hydrated_row.duration_seconds,

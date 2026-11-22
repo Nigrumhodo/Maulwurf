@@ -6,7 +6,7 @@ Every page is followed. A truncated read is an error, never a complete window.
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal, Protocol
 from urllib.parse import quote
 
@@ -146,8 +146,13 @@ def parse_remote_event(
     if start.get("dateTime") is not None or end.get("dateTime") is not None:
         start_at = _parse_instant(start.get("dateTime"), field="start")
         end_at = _parse_instant(end.get("dateTime"), field="end")
-        if start_at >= end_at:
+        if start_at > end_at:
             raise CalendarEventInvalid("event_time_inverted")
+        if start_at == end_at:
+            # Google allows zero-duration events, but the mirror CHECK requires
+            # start < end. A minimal span keeps the event visible instead of aborting the
+            # whole read; it cannot meaningfully overlap anything else.
+            end_at = start_at + _ZERO_DURATION_SPAN
         raw_zone = start.get("timeZone")
         timezone = _valid_timezone(raw_zone)
     elif start.get("date") is not None or end.get("date") is not None:
@@ -173,6 +178,9 @@ def parse_remote_event(
         etag=etag or None,
         remote_status=remote_status,
     )
+
+
+_ZERO_DURATION_SPAN = timedelta(seconds=1)
 
 
 class CalendarEventSource(Protocol):
@@ -238,9 +246,3 @@ class GoogleCalendarEventSource:
                 # Never return a partial first page as if it were the whole window.
                 raise CalendarPaginationExhausted("pagination_exhausted")
             token = next_token
-
-
-
-def google_event_source(access_token: str) -> CalendarEventSource:
-    """Build the Google reader; tests replace this factory to inject a deterministic read."""
-    return GoogleCalendarEventSource(GoogleCalendarService(access_token=access_token))

@@ -10,10 +10,17 @@ The rules this module enforces:
 - **The active task row is the current version.** `tasks.version` is the only version a
   worker may sync; pending revisions live in `task_revisions` and are deliberately NOT read
   or activated here, so reconnecting never promotes an obsolete proposal.
-- **Create or reuse the outbox.** A pending/dispatched `sync_task_event` for the same
+- **Create or reuse the outbox.** A still-`pending` `sync_task_event` for the same
   `(task, version)` is reused; otherwise a new event is inserted with a deterministic
-  per-cycle dedupe key (`reconnect:<version>:<cycle>`). The `UPDATE ... RETURNING` locks
-  the task rows, so two concurrent reconnects serialize instead of duplicating work.
+  per-cycle dedupe key (`reconnect:<version>:<cycle>`). A `dispatched` row is never reused:
+  its job already ran (that is how the task became `blocked`) and the dispatcher only
+  publishes `pending` rows, so reusing it would enqueue nothing. The job is idempotent, so a
+  fresh cycle is safe. The `UPDATE ... RETURNING` locks the task rows, so two concurrent
+  reconnects serialize instead of duplicating work.
+- **Fill a missing target calendar.** A task confirmed before the first connection has no
+  `calendar_id`; it takes the write calendar bound by this connection, otherwise the worker
+  would block it again with `calendar_missing`. An existing link is never replaced: the
+  event may already live in that calendar under the deterministic ID.
 - **Atomic with the connection.** No commit happens here: the callback commits the tokens,
   the calendar ID, the task transitions and the outbox in one transaction.
 
@@ -38,7 +45,7 @@ from sqlalchemy import func, inspect, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import OutboxEvent
+from app.models import CalendarSettings, OutboxEvent
 from app.services.outbox import SYNC_TASK_EVENT
 from app.services.task_event_store import TASKS
 from app.services.task_state import SyncCommand, sync_transition
@@ -92,7 +99,8 @@ async def _active_event(
             OutboxEvent.type == SYNC_TASK_EVENT,
             OutboxEvent.resource_id == task_id,
             OutboxEvent.resource_version == version,
-            OutboxEvent.status.in_(("pending", "dispatched")),
+            # Only an undispatched row will still be published; see the module docstring.
+            OutboxEvent.status == "pending",
         )
         .order_by(OutboxEvent.created_at.desc(), OutboxEvent.id.desc())
         .limit(1)
@@ -155,11 +163,24 @@ async def _ensure_outbox(
     raise RuntimeError("sync_task_event could not be created or reused")
 
 
+async def _write_calendar(db: AsyncSession, *, user_id: uuid.UUID) -> str | None:
+    """The write calendar bound in this transaction, trimmed; blank means none."""
+    value = await db.scalar(
+        select(CalendarSettings.calendar_write_calendar_id).where(
+            CalendarSettings.user_id == user_id
+        )
+    )
+    if value is None:
+        return None
+    return value.strip() or None
+
+
 async def resume_blocked_tasks(db: AsyncSession, *, user_id: uuid.UUID) -> ResumeReport:
     """Move current blocked tasks to `pending` and (re)create their sync outbox."""
     if not await tasks_table_available(db):
         logger.info("calendar.resume_skipped reason=tasks_table_missing")
         return ResumeReport(available=False, tasks=())
+    write_calendar = await _write_calendar(db, user_id=user_id)
     statement = (
         update(TASKS)
         .where(
@@ -167,7 +188,13 @@ async def resume_blocked_tasks(db: AsyncSession, *, user_id: uuid.UUID) -> Resum
             TASKS.c.calendar_sync_status == _RECONNECT_FROM,
             TASKS.c.status == "confirmed",
         )
-        .values(calendar_sync_status=_RECONNECT_TO, updated_at=func.now())
+        .values(
+            calendar_sync_status=_RECONNECT_TO,
+            calendar_id=func.coalesce(
+                func.nullif(func.btrim(TASKS.c.calendar_id), ""), write_calendar
+            ),
+            updated_at=func.now(),
+        )
         .returning(TASKS.c.id, TASKS.c.version)
     )
     rows = (await db.execute(statement)).all()

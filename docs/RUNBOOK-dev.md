@@ -163,7 +163,7 @@ instead of failing with "already exists" (it rebuilds the indexes a previous att
 finished).
 
 ```bash
-docker compose exec api alembic current            # applied revision (head; 0001–0019)
+docker compose exec api alembic current            # applied revision (head; 0001–0024)
 docker compose exec api alembic upgrade head       # apply manually, e.g. after a pull
 docker compose exec api alembic downgrade -1       # rollback to the previous revision
 docker compose exec api alembic history            # revision chain
@@ -184,6 +184,17 @@ starts with `SET LOCAL ROLE` and binds `app.user_id` (or, for the jobs role, the
 `app.cross_tenant` switch). `SET LOCAL` ends with the transaction, so pooled connections do
 not carry a tenant. `MAULWURF_DATABASE_ROLE` selects the API role; compose overrides it to
 `maulwurf_jobs` for the two ARQ processes and ingest uses `maulwurf_ingest` unconditionally.
+
+Revision `0024` (A2.14) adds `public.count_active_ingestion_attempts()`, a `SECURITY DEFINER`
+function that returns only the integer count of active ingestion attempts. `reserve_slot`
+calls it because, under `maulwurf_app`, the `tenant_isolation` policy hides other tenants'
+attempts and a plain `count(*)` would turn the global `active_slots` cap into a per-user one.
+`EXECUTE` is revoked from `PUBLIC` and granted to `maulwurf_app` only, and `search_path` is
+pinned. The same revision adds a `capacity_count` `SELECT` policy for the migration owner,
+open only while `app.capacity_count = 'on'`, which the function sets for its own call: under
+`FORCE ROW LEVEL SECURITY` a non-superuser, non-`BYPASSRLS` owner (staging and production)
+would otherwise count zero rows. Ordinary owner sessions still see no tenant rows. The
+revision reads and writes no tenant rows, so it needs no bypass window below.
 
 **Data migrations under `FORCE ROW LEVEL SECURITY` (staging and production):** `FORCE` makes
 the table owner subject to the RLS policies too, so an owner connection without `BYPASSRLS`

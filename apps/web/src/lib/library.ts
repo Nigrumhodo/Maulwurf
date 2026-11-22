@@ -1,5 +1,7 @@
 import { apiFetch } from "./api";
 import type { ApiHttpError } from "./api";
+import { readJson } from "./json";
+import { isAudioCreated } from "./upload";
 import type { AudioCreated } from "./upload";
 
 // D2.4 — Contrato de biblioteca (A2.9/A2.8). El listado ya trae la materia, el agregado,
@@ -126,7 +128,11 @@ export async function reuploadAudio(audioId: string): Promise<AudioCreated> {
   const res = await apiFetch(`/audios/${encodeURIComponent(audioId)}/reupload`, {
     method: "POST",
   });
-  return (await res.json()) as AudioCreated;
+  const payload = await readJson(res);
+  if (!isAudioCreated(payload)) {
+    throw new Error("La reserva de audio no coincide con el contrato.");
+  }
+  return payload;
 }
 
 export interface AudioDeleted {

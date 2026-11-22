@@ -187,16 +187,20 @@ async def _run_service(
         if production_riva:
             created = NvidiaRivaTranscriptionService(
                 chosen,
+                cancel=cancelled,
                 max_attempts=_PROD_RIVA_MAX_ATTEMPTS,
                 backoff_base_s=_PROD_RIVA_BACKOFF_BASE_S,
             )
         else:
-            created = NvidiaRivaTranscriptionService(chosen)
+            created = NvidiaRivaTranscriptionService(chosen, cancel=cancelled)
         service_box["service"] = created
         return created
 
     def _hear(path: Path) -> FragmentWords:
         nonlocal seconds
+        # The service is built lazily: a SIGTERM before it exists only sets the flag.
+        if cancelled.is_set():
+            raise _JobError("rpc_cancelled", detail="CANCELLED")
         seconds += _wav_seconds(path)
         service = _service()
         remaining = deadline_at - time.monotonic()
@@ -219,11 +223,18 @@ async def _run_service(
         # Only numeric progress counts; never paths or transcript text.
         print(json.dumps({"progress": {"done": done, "total": total}}), file=sys.stderr, flush=True)
 
-    outcome = await asyncio.to_thread(
-        process, workdir / ORIGINAL, workdir, fragment_seconds=float(fragment_seconds),
-        overlap_s=settings.fragment_overlap_s, transcribe=_hear, limits=limits, realtime=realtime,
-        on_progress=_emit_progress if transport is None else None,
-    )
+    try:
+        outcome = await asyncio.to_thread(
+            process, workdir / ORIGINAL, workdir, fragment_seconds=float(fragment_seconds),
+            overlap_s=settings.fragment_overlap_s, transcribe=_hear, limits=limits,
+            realtime=realtime, on_progress=_emit_progress if transport is None else None,
+            should_stop=cancelled.is_set,
+        )
+    except (RuntimeError, OSError, wave.Error, subprocess.TimeoutExpired):
+        # The group SIGTERM also kills ffmpeg; report the cancel, not a bad recording.
+        if cancelled.is_set():
+            raise _JobError("rpc_cancelled", detail="CANCELLED") from None
+        raise
     return {
         "fragments": outcome.fragments,
         "seconds": round(seconds, 3),

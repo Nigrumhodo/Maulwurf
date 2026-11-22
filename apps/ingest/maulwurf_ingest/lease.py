@@ -39,6 +39,20 @@ ACTIVE_STATES = (
     "transcript_committed_cleanup_pending",
 )
 
+# Defaults for the per-attempt lease (S4.2). The heartbeat interval must leave
+# several renewals inside one TTL: the asyncio loop can be busy (ffprobe thread
+# callbacks, GC, a slow event-loop task) and one late heartbeat must not expire a
+# live run. Three renewals per TTL means a single stall under two intervals
+# (20 s with the defaults) still finds the lease alive; a run whose loop is
+# blocked longer than the whole TTL is indistinguishable from a dead owner and
+# is ended as `technical_loss` by the sweeper.
+LEASE_TTL_S = 30.0
+HEARTBEAT_INTERVAL_S = 10.0
+MIN_HEARTBEATS_PER_LEASE = 3
+DEFAULT_LEASE_TTL = timedelta(seconds=LEASE_TTL_S)
+if HEARTBEAT_INTERVAL_S * MIN_HEARTBEATS_PER_LEASE > LEASE_TTL_S:
+    raise RuntimeError("heartbeat_exceeds_lease")
+
 
 @dataclass(frozen=True)
 class Lease:

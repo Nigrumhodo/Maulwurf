@@ -22,6 +22,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_COMPOSE = REPO_ROOT / "infra" / "docker-compose.yml"
 DEFAULT_E2E = REPO_ROOT / "infra" / "docker-compose.e2e.yml"
+DEFAULT_PROD = REPO_ROOT / "infra" / "docker-compose.prod.yml"
 RENDER_TIMEOUT_S = 120
 TMP_MOUNT = "/work/tmp"
 TMP_FLAGS = frozenset({"noexec", "nosuid", "nodev"})
@@ -75,6 +76,11 @@ DUMMY_ENV: dict[str, str] = {
     "MAULWURF_EMBEDDING_API_KEY": "dummy-embedding-key",
     "MAULWURF_LLM_API_KEY": "dummy-llm-key",
     "POSTGRES_PASSWORD": "dummy-postgres",
+    # Required (`:?`) by the production compose file only.
+    "MAULWURF_DOMAIN": "dummy.example.com",
+    "MAULWURF_IMAGE_TAG": "dummy-tag",
+    "MAULWURF_METRICS_TOKEN": "dummy-metrics-token",
+    "REDIS_PASSWORD": "dummy-redis",
     "NVIDIA_API_KEY": "dummy-nvidia-key",
     "RIVA_SERVER": "dummy-riva.example:443",
     "RIVA_FUNCTION_ID": "dummy-function-id",
@@ -368,15 +374,27 @@ def run_checks(compose_file: Path) -> Report:
     return report
 
 
+def run_prod_checks(prod_file: Path) -> Report:
+    report = Report()
+    model = render(prod_file, {})
+    check_ingest(report, model, all_set=True)
+    check_api_ingest_pair(report, model, expect_set=True)
+    check_mount_contract(report, model, "prod")
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--compose-file", type=Path, default=DEFAULT_COMPOSE)
+    parser.add_argument("--prod-compose-file", type=Path, default=DEFAULT_PROD)
     args = parser.parse_args(argv)
     if shutil.which("docker") is None:
         print("FAIL docker CLI not found", file=sys.stderr)
         return 1
     try:
         report = run_checks(args.compose_file.resolve())
+        prod_report = run_prod_checks(args.prod_compose_file.resolve())
+        report.failures.extend(prod_report.failures)
     except (RuntimeError, subprocess.SubprocessError, json.JSONDecodeError, KeyError) as error:
         print(f"FAIL {type(error).__name__}: {error}", file=sys.stderr)
         return 1

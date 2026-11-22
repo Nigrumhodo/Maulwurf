@@ -1,4 +1,5 @@
 import { apiFetch } from "./api";
+import { isRecord } from "./json";
 import type { LibraryAudioDetail } from "./library";
 import { safeCitationHref } from "./markdown";
 
@@ -88,9 +89,8 @@ export interface TaskPage {
   next_cursor: string | null;
 }
 
-/** Wire aliases used by the shared TaskList (develop's refactor). */
+/** Wire alias used by the shared TaskList. */
 export type TaskOut = Task;
-export type TaskListOut = TaskPage;
 
 export interface TaskQuery {
   status?: TaskStatusFilter;
@@ -438,10 +438,6 @@ async function closeTask(
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function readString(record: Record<string, unknown>, key: string): string | null | undefined {
   if (!(key in record)) return undefined;
   const value = record[key];
@@ -685,4 +681,77 @@ export function addMinutes(instant: string, minutes: number): string | null {
   const date = new Date(instant);
   if (Number.isNaN(date.getTime())) return null;
   return new Date(date.getTime() + minutes * 60_000).toISOString();
+}
+
+export type DueMode = "missing" | "all_day" | "timed";
+export type EventMode = "none" | "all_day" | "timed";
+
+export interface ScheduleFormValues {
+  dueMode: DueMode;
+  dueDate: string;
+  dueTime: string;
+  timezone: string;
+  eventMode: EventMode;
+  eventStartDate: string;
+  eventStartTime: string;
+  eventEndDate: string;
+  durationMinutes: number;
+}
+
+export interface ScheduleFields {
+  date_status: TaskDateStatus;
+  due_date: string | null;
+  due_at: string | null;
+  timezone: string;
+  all_day: boolean;
+  event_block: TaskEventBlockPatch | null;
+}
+
+/** Validate the due/agenda form state. Returns the wire fields or a Spanish error message. */
+export function buildScheduleFields(values: ScheduleFormValues): ScheduleFields | string {
+  const { dueMode, dueDate, dueTime, timezone, eventMode } = values;
+  let dueFields: Pick<ScheduleFields, "due_date" | "due_at" | "all_day">;
+  if (dueMode === "all_day") {
+    if (dueDate === "") {
+      return "elige la fecha de vencimiento (o cambia el modo a «sin fecha»).";
+    }
+    dueFields = { due_date: dueDate, due_at: null, all_day: true };
+  } else if (dueMode === "timed") {
+    if (dueDate === "") return "elige la fecha de vencimiento.";
+    const dueAt = wallTimeToInstant(dueDate, dueTime, timezone);
+    if (dueAt === null) return "la hora de vencimiento no existe en esta zona horaria.";
+    dueFields = { due_date: null, due_at: dueAt, all_day: false };
+  } else {
+    dueFields = { due_date: null, due_at: null, all_day: false };
+  }
+
+  let eventBlock: TaskEventBlockPatch | null = null;
+  if (eventMode === "all_day") {
+    if (values.eventStartDate === "" || values.eventEndDate === "") {
+      return "el bloque de agenda necesita fecha de inicio y fin.";
+    }
+    if (values.eventEndDate <= values.eventStartDate) {
+      return "el fin de agenda debe ser posterior al inicio.";
+    }
+    eventBlock = {
+      start_at: null,
+      end_at: null,
+      start_date: values.eventStartDate,
+      end_date_exclusive: values.eventEndDate,
+    };
+  } else if (eventMode === "timed") {
+    if (values.eventStartDate === "") return "elige la fecha de inicio de agenda.";
+    const startAt = wallTimeToInstant(values.eventStartDate, values.eventStartTime, timezone);
+    if (startAt === null) return "la hora de inicio de agenda no existe en esta zona.";
+    const endAt = addMinutes(startAt, values.durationMinutes);
+    if (endAt === null) return "la duración de agenda no es válida.";
+    eventBlock = { start_at: startAt, end_at: endAt, start_date: null, end_date_exclusive: null };
+  }
+
+  return {
+    date_status: dueMode === "missing" ? "missing" : "resolved",
+    ...dueFields,
+    timezone,
+    event_block: eventBlock,
+  };
 }

@@ -27,15 +27,18 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.crypto import decrypt, encrypt
 from app.models import GoogleCredential
 from app.services.google_calendar import disconnect_google_credential
-from app.services.oauth_google import GoogleTokenResponse
+from app.services.oauth_google import (
+    GOOGLE_TOKEN_URL,
+    GoogleTokenResponse,
+    OAuthError,
+    client_credentials,
+)
 
 logger = logging.getLogger(__name__)
 
-GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105 - URL pública
 HTTP_TIMEOUT_SECONDS = 10.0
 # Refresh slightly before the real expiry: a call that starts 30 s before it can still lose
 # the race against Google's clock.
@@ -83,11 +86,10 @@ def token_needs_refresh(
 
 
 def _client_credentials() -> tuple[str, str]:
-    client_id = settings.google_client_id
-    client_secret = settings.google_client_secret
-    if client_id is None or client_secret is None:
-        raise GoogleTokenUnavailable("oauth_not_configured")
-    return client_id, client_secret.get_secret_value()
+    try:
+        return client_credentials()
+    except OAuthError as exc:
+        raise GoogleTokenUnavailable(exc.reason) from exc
 
 
 def _error_code(payload: Mapping[str, Any]) -> str | None:

@@ -39,6 +39,16 @@ import type {
 // streaming va por `fetch` POST (no EventSource), la clave de idempotencia vive en memoria
 // y un corte de red se reconcilia desde el historial persistido, nunca se reenvía solo.
 
+const MAX_CHAT_CHARS = 4000;
+
+function isChatProposal(payload: Record<string, unknown>): payload is Record<string, unknown> & ChatProposal {
+  return (
+    typeof payload.task_id === "string" &&
+    typeof payload.status === "string" &&
+    (payload.evidence === "corpus" || payload.evidence === "general_suggestion")
+  );
+}
+
 interface UiMessage {
   key: string;
   id: string | null;
@@ -316,8 +326,8 @@ export function ChatWorkspace({
     event.preventDefault();
     const content = draft.trim();
     if (content === "" || streaming || creating) return;
-    if (content.length > 4000) {
-      setNotice("la pregunta supera el máximo de 4000 caracteres.");
+    if (content.length > MAX_CHAT_CHARS) {
+      setNotice("la pregunta supera el máximo de " + MAX_CHAT_CHARS + " caracteres.");
       return;
     }
 
@@ -411,6 +421,7 @@ export function ChatWorkspace({
     setLoadingOlder(true);
     try {
       const page = await fetchConversationMessages(conversationId, historyCursor);
+      if (conversationIdRef.current !== conversationId) return;
       setMessages((current) => [...page.items.map(fromServer), ...current]);
       setHistoryCursor(page.next_cursor);
     } catch (error) {
@@ -440,7 +451,6 @@ export function ChatWorkspace({
       const remaining = conversations.filter((conversation) => conversation.id !== target.id);
       setConversations(remaining);
       if (conversationId === target.id) {
-        skipNextHistoryRef.current = remaining[0]?.id ?? null;
         setConversationId(remaining[0]?.id ?? null);
         setMessages([]);
         setHistoryCursor(null);
@@ -674,18 +684,11 @@ export function ChatWorkspace({
                 )}
                 {message.role === "assistant" &&
                   message.toolCalls
-                    .filter(
-                      (tool) =>
-                        tool.name === "propose_task" &&
-                        tool.ok &&
-                        typeof tool.payload.task_id === "string",
-                    )
-                    .map((tool, index) => (
-                      <ProposalCard
-                        key={`proposal-${index}`}
-                        proposal={tool.payload as unknown as ChatProposal}
-                      />
-                    ))}
+                    .flatMap((tool, index) =>
+                      tool.name === "propose_task" && tool.ok && isChatProposal(tool.payload)
+                        ? [<ProposalCard key={`proposal-${index}`} proposal={tool.payload} />]
+                        : [],
+                    )}
                 <CitationList citations={message.citations} />
 
               </div>
@@ -698,7 +701,7 @@ export function ChatWorkspace({
         <textarea
           aria-label="pregunta"
           value={draft}
-          maxLength={4000}
+          maxLength={MAX_CHAT_CHARS}
           rows={compact ? 2 : 3}
           disabled={streaming || loadingHistory || loadingConversations}
           onChange={(event) => setDraft(event.target.value)}
@@ -707,7 +710,7 @@ export function ChatWorkspace({
           className="min-h-16 w-full resize-none border-2 border-lavender bg-surface px-3 py-2 font-pixel text-lavender caret-mint placeholder:text-lavender/40 focus:border-mint focus:outline-none disabled:opacity-50"
         />
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs text-lavender/50">{draft.length}/4000</span>
+          <span className="text-xs text-lavender/50">{draft.length}/{MAX_CHAT_CHARS}</span>
           <div className="flex items-center gap-2">
             {streaming && (
               <Button type="button" size="sm" variant="danger" onClick={() => void handleCancel()}>
