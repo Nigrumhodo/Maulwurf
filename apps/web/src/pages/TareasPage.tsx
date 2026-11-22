@@ -285,13 +285,14 @@ export function TareasPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
           <h1 className="capitalize text-2xl text-mint">tareas</h1>
-          <p className="lowercase text-lavender/60">
+          <p className="lowercase text-base text-lavender/80 max-w-prose">
             &gt; crea tareas propias o revisa propuestas del análisis; confirma para enviarlas a Calendar.
           </p>
         </div>
         {!creatingTask && (
           <Button
             type="button"
+            variant={tasks.some((item) => item.status === "needs_review") ? "secondary" : "primary"}
             onClick={() => {
               setSavedNotice(null);
               setError(null);

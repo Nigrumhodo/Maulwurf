@@ -1,4 +1,5 @@
 import { TaskCard } from "@/components/tasks/TaskCard";
+import { qualitySummary } from "@/lib/tasks";
 import type { Task, TaskQualityState } from "@/lib/tasks";
 
 // D3.1 — presentational inbox list. Fetching, filters and pagination stay in the page so
@@ -18,7 +19,27 @@ export function TaskInbox({
   onReview,
   onComplete,
 }: TaskInboxProps) {
+  const qualities = tasks.flatMap((task) => {
+    const state = task.audio_id === null ? undefined : qualityByAudio[task.audio_id];
+    return state === undefined ? [] : [state];
+  });
+  const anyUnavailable = qualities.some((state) => state.unavailable);
+  const signals = [
+    ...new Set(
+      qualities.flatMap((state) => state.signals.map((signal) => qualitySummary(signal))),
+    ),
+  ];
+
   return (
+    <div className="flex flex-col gap-3">
+      {(anyUnavailable || signals.length > 0) && (
+        <div role="status" className="capitalize border-2 border-mint px-3 py-2 text-mint">
+          {signals.length > 0 && <p>calidad ASR baja: {signals.join(" · ")}</p>}
+          {anyUnavailable && (
+            <p>calidad ASR no disponible en algunas clases; revisa la cita antes de decidir.</p>
+          )}
+        </div>
+      )}
     <ul aria-label="tareas para revisar" className="flex flex-col gap-3">
       {tasks.map((task) => (
         <TaskCard
@@ -31,5 +52,6 @@ export function TaskInbox({
         />
       ))}
     </ul>
+    </div>
   );
 }
