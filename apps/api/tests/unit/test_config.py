@@ -32,7 +32,7 @@ def _prod(**overrides: Any) -> Settings:
         "metrics_token": "m" * 32,
         "auth_rate_limit_per_minute": 30,
     }
-    return _settings(env="prod", **{**PROD_URLS, **required, **overrides})
+    return _settings(**{"env": "prod", **PROD_URLS, **required, **overrides})
 
 
 @pytest.mark.parametrize("missing", sorted(SECRETS))
