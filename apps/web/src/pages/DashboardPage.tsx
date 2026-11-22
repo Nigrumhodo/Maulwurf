@@ -1,48 +1,61 @@
-import { StatusTicker } from "@/components/dashboard/StatusTicker";
-import { TelemetryBanner } from "@/components/dashboard/TelemetryBanner";
-import { WeekStrip } from "@/components/dashboard/WeekStrip";
-import { TapeDeck } from "@/components/dashboard/TapeDeck";
-import { ActivityFeed } from "@/components/dashboard/ActivityFeed";
-import { TaskLog } from "@/components/dashboard/TaskLog";
+import { AccessTiles } from "@/components/dashboard/AccessTiles";
 import { MoleCompanion } from "@/components/dashboard/MoleCompanion";
+import { statusLine, upcomingTasks } from "@/components/dashboard/summary";
+import { UpcomingTasks } from "@/components/dashboard/UpcomingTasks";
+import { useAuth } from "@/components/auth/AuthProvider";
+import { fetchAudios } from "@/lib/audios";
+import { fetchTasks } from "@/lib/tasks";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
+import { useServerList } from "@/lib/useServerList";
 
-// Command center. Classes and tasks come from the same endpoints as the gestión pages.
-// Chat lives only at `/gestion/chat`.
+function greetingName(user: { display_name: string | null; email: string } | null): string {
+  const display = user?.display_name?.trim();
+  if (display) return display;
+  return user?.email.split("@")[0] ?? "";
+}
+
+// Inicio: a calm entry screen. Detail (stats, week, activity, task log) lives in `/gestion`.
+// Classes and tasks come from the same endpoints as the gestión pages. Chat lives only at
+// `/gestion/chat`.
 export function DashboardPage() {
   useDocumentTitle("inicio");
+  const { user } = useAuth();
+  const audios = useServerList(fetchAudios);
+  const tasks = useServerList(fetchTasks);
+  const name = greetingName(user);
+  const summary =
+    audios.loading || tasks.loading ? "cargando…" : statusLine(audios.items, tasks.items);
+
   return (
-    <div className="relative flex flex-col gap-4">
+    <div className="relative">
       <div className="crt-overlay" aria-hidden="true" />
+      <div className="relative flex flex-col gap-6 border-2 border-pure-black bg-surface p-6 shadow-block lg:flex-row lg:items-start">
+        <div className="flex min-w-0 flex-1 flex-col gap-6">
+          <header className="flex flex-col gap-1">
+            <h1 className="capitalize text-2xl text-mint">{name ? `hola, ${name}` : "hola"}</h1>
+            <p className="lowercase max-w-prose text-base text-lavender/80" aria-live="polite">
+              {summary}
+            </p>
+          </header>
 
-      <TelemetryBanner />
+          <AccessTiles />
 
-      <main className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
-        <section className="lg:col-span-12">
-          <WeekStrip />
-        </section>
-
-        <section className="flex flex-col gap-4 lg:col-span-4">
-          <TapeDeck />
-        </section>
-
-        <section className="flex flex-col gap-4 lg:col-span-5">
-          <ActivityFeed />
-        </section>
-
-        <section className="flex flex-col gap-4 lg:col-span-3">
-          <TaskLog />
-          <MoleCompanion />
-        </section>
-      </main>
-
-      <footer className="flex flex-col gap-2">
-        <StatusTicker />
-        <div className="lowercase flex flex-wrap items-center justify-between gap-2 border-2 border-pure-black bg-surface px-3 py-1.5 text-lavender/60">
-          <span>audio no conservado · cifrado aes-gcm · solo texto persistido</span>
-          <span>maulwurf@lab © 2026</span>
+          <section aria-labelledby="inicio-siguiente" className="flex flex-col gap-3">
+            <h2 id="inicio-siguiente" className="lowercase text-xl text-mint">
+              lo siguiente
+            </h2>
+            <UpcomingTasks
+              tasks={upcomingTasks(tasks.items)}
+              loading={tasks.loading}
+              error={tasks.error}
+            />
+          </section>
         </div>
-      </footer>
+
+        <div className="hidden w-56 shrink-0 lg:block">
+          <MoleCompanion />
+        </div>
+      </div>
     </div>
   );
 }
