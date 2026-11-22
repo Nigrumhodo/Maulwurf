@@ -268,7 +268,7 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
 
         <fieldset className="flex flex-col gap-3 border-2 border-lavender/30 p-3">
           <legend className="capitalize px-1 text-mint">bloque de agenda</legend>
-          <p className="text-xs text-lavender/50">
+          <p className="text-xs text-lavender/60">
             propuesta editable de Maulwurf; no proviene del docente.
           </p>
           <label className="flex flex-col gap-1">
@@ -321,7 +321,7 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
                   setDurationMinutes(Math.max(1, Number(event.target.value) || 1))
                 }
               />
-              <p className="self-end text-sm text-lavender/70">
+              <p className="self-end text-sm text-lavender/80">
                 fin calculado:{" "}
                 {eventEnd === null
                   ? "hora inválida"
@@ -334,7 +334,7 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
             </div>
           )}
           {eventMode === "all_day" && (
-            <p className="text-xs text-lavender/50">
+            <p className="text-xs text-lavender/60">
               fin exclusivo: el día indicado no se muestra en el evento.
             </p>
           )}

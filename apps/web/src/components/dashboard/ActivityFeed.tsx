@@ -22,7 +22,7 @@ function AudioCard({ audio }: { audio: AudioListItemOut }) {
       </div>
       <div>
         <h3 className="lowercase text-lavender">{title}</h3>
-        <p className="lowercase mt-0.5 text-lavender/50">
+        <p className="lowercase mt-0.5 text-lavender/60">
           {audio.class_date} · {audio.language_code}
           {audio.duration_seconds !== null ? ` · ${audio.duration_seconds} s` : ""}
         </p>

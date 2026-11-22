@@ -39,7 +39,7 @@ export function MoleCompanion() {
         </div>
 
         <div className="lowercase relative w-full border-2 border-pure-black bg-surface p-3 text-lavender shadow-block">
-          <p className="text-lavender/50">&gt; maulwurf dice:</p>
+          <p className="text-lavender/60">&gt; maulwurf dice:</p>
           <p className="mt-1">
             sube una clase, revisa tareas propuestas o pregúntame con{" "}
             <span className="font-bold text-mint underline">citas exactas</span> sobre tus

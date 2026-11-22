@@ -57,7 +57,7 @@ export function WeekStrip() {
               className={`flex min-w-0 flex-col items-center gap-0.5 border-2 px-1 py-1.5 ${
                 active
                   ? "border-mint bg-mint text-on-accent"
-                  : "border-lavender/25 text-lavender/70"
+                  : "border-lavender/25 text-lavender/80"
               }`}
             >
               <span className="lowercase text-xs">{weekday.format(day)}</span>

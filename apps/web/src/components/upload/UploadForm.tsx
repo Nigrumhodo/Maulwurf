@@ -334,15 +334,15 @@ export function UploadForm() {
             ? "contenido admitido · la transcripción empezará en breve"
             : "este audio ya estaba en la biblioteca"}
         </p>
-        <dl className="grid gap-1 text-lavender/70">
+        <dl className="grid gap-1 text-lavender/80">
           {accepted ? (
             <>
               <div className="flex gap-2">
-                <dt className="text-lavender/50">intento</dt>
+                <dt className="text-lavender/60">intento</dt>
                 <dd>{result.attemptId ?? "—"}</dd>
               </div>
               <div className="flex gap-2">
-                <dt className="text-lavender/50">bytes recibidos</dt>
+                <dt className="text-lavender/60">bytes recibidos</dt>
                 <dd>
                   {result.receivedBytes !== null ? formatBytes(result.receivedBytes) : "—"}
                 </dd>
@@ -350,7 +350,7 @@ export function UploadForm() {
             </>
           ) : (
             <div className="flex gap-2">
-              <dt className="text-lavender/50">clase existente</dt>
+              <dt className="text-lavender/60">clase existente</dt>
               <dd>{result.audioId ?? "—"}</dd>
             </div>
           )}
@@ -379,11 +379,11 @@ export function UploadForm() {
     const subjectName = subjects.find((subject) => subject.id === draft.subjectId)?.name ?? "clase";
     return (
       <div className="lowercase flex flex-col gap-4">
-        <div className="border-2 border-lavender/40 px-3 py-2 text-lavender/70">
+        <div className="border-2 border-lavender/40 px-3 py-2 text-lavender/80">
           <p>
             &gt; reserva creada · {subjectName} · {draft.classDate || "sin fecha"}
           </p>
-          <p className="text-lavender/50">
+          <p className="text-lavender/60">
             &gt; expira {new Date(reservation.upload_expires_at).toLocaleString()} · solo falta el
             archivo
           </p>
@@ -444,7 +444,7 @@ export function UploadForm() {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
-      <div className="lowercase flex flex-col gap-1 border-2 border-lavender/40 px-3 py-2 text-lavender/70">
+      <div className="lowercase flex flex-col gap-1 border-2 border-lavender/40 px-3 py-2 text-lavender/80">
         {usable ? (
           <p>
             &gt; límites publicados · máx {formatBytes(capabilities?.max_upload_bytes ?? null)} ·{" "}
@@ -551,7 +551,7 @@ export function UploadForm() {
         <p className="text-mint">
           aviso de privacidad · versión {noticeVersion ?? "no publicada"}
         </p>
-        <p className="text-lavender/70">
+        <p className="text-lavender/80">
           el audio se envía a un proveedor en la nube para transcribirlo y se borra al terminar.
         </p>
 
@@ -597,12 +597,12 @@ export function UploadForm() {
           reservar subida
         </Button>
         {!usable ? (
-          <span className="lowercase text-lavender/50">
+          <span className="lowercase text-lavender/60">
             &gt; esperando límites publicados por el servidor
           </span>
         ) : (
           !consentReady && (
-            <span className="lowercase text-lavender/50">
+            <span className="lowercase text-lavender/60">
               &gt; acepta el consentimiento para continuar
             </span>
           )

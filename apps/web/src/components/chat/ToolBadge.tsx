@@ -25,7 +25,7 @@ export function ToolBadge({ tool }: ToolBadgeProps) {
     <span
       className={
         tool.ok
-          ? "lowercase inline-flex items-center border-2 border-lavender/40 px-2 py-0.5 text-xs text-lavender/70"
+          ? "lowercase inline-flex items-center border-2 border-lavender/40 px-2 py-0.5 text-xs text-lavender/80"
           : "lowercase inline-flex items-center border-2 border-mint px-2 py-0.5 text-xs text-mint"
       }
     >
