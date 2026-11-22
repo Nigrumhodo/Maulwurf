@@ -4,7 +4,6 @@ import { AudioCard } from "@/components/library/AudioCard";
 import { AudioUploadPanel } from "@/components/upload/AudioUploadPanel";
 import { Button } from "@/components/ui/Button";
 import { buttonClasses } from "@/components/ui/buttonStyles";
-import { Card } from "@/components/ui/Card";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ApiHttpError } from "@/lib/api";
@@ -282,141 +281,144 @@ export function BibliotecaPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="capitalize text-2xl text-mint">biblioteca</h1>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            disabled={loading}
-            onClick={() => void load()}
-          >
-            actualizar
-          </Button>
-          <Link to="/gestion/subir" className={buttonClasses("primary", "sm")}>
-            subir clase
-          </Link>
-        </div>
-      </div>
-
-      {notice !== null && (
-        <p
-          role={notice.tone === "error" ? "alert" : "status"}
-          className={`lowercase border-2 px-3 py-2 ${
-            notice.tone === "error" ? "border-mint text-mint" : "border-lavender/40 text-lavender"
-          }`}
-        >
-          &gt; {notice.message}
-        </p>
-      )}
-
-      {loadError !== null && items.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
-          <p role="alert" className="lowercase text-mint">
-            &gt; {loadError}
-          </p>
-          <Button type="button" size="sm" variant="secondary" onClick={() => void load()}>
-            reintentar
-          </Button>
-        </div>
-      )}
-
-      {reupload !== null && (
-        <Card title="volver a subir" variant="accent">
-          <p className="lowercase mb-3 text-lavender/80">
-            &gt; clase {reuploadTarget !== null ? audioLabel(reuploadTarget) : reupload.audioId} ·
-            reserva hasta {new Date(reupload.reservation.upload_expires_at).toLocaleString()}
-          </p>
-          <AudioUploadPanel
-            capabilities={capabilities}
-            selectedFile={selectedFile}
-            fileError={fileError}
-            progress={progress}
-            uploading={uploading}
-            formError={uploadError}
-            onFileChange={handleFileChange}
-            onUpload={() => void handleReuploadUpload()}
-            onCancel={() => void cancelReupload()}
-          />
-        </Card>
-      )}
-
-      <Card title="tus clases">
-        <p className="lowercase text-sm text-lavender/60">
-          &gt; audio no conservado · el audio se borra tras transcribir; solo se guarda el texto.
-        </p>
-
-        {loading && items.length === 0 ? (
-          <p role="status" className="lowercase mt-3 text-lavender/60">
-            &gt; cargando biblioteca…
-          </p>
-        ) : loadError !== null && items.length === 0 ? (
-          <div role="alert" className="mt-3">
-            <EmptyState
-              title="no se pudo cargar la biblioteca"
-              description={loadError}
-              action={
-                <Button type="button" size="sm" variant="secondary" onClick={() => void load()}>
-                  reintentar
-                </Button>
-              }
-            />
+      <section className="lowercase font-pixel min-w-0 max-w-full border-2 border-pure-black bg-surface shadow-block">
+        <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 p-4 sm:p-6">
+          <div className="flex min-w-0 flex-col gap-1">
+            <h1 className="capitalize text-2xl text-mint">biblioteca</h1>
+            <p className="text-base text-lavender/80 max-w-prose">
+              &gt; audio no conservado · el audio se borra tras transcribir; solo se guarda el
+              texto.
+            </p>
           </div>
-        ) : groups.length === 0 ? (
-          <EmptyState
-            className="mt-3"
-            title="aún no hay clases"
-            description="sube la primera para ver aquí su transcripción y el estado de cada etapa."
-            action={
-              <Link
-                to="/gestion/subir"
-                className={buttonClasses("primary", "sm")}
-              >
-                subir clase
-              </Link>
-            }
-          />
-        ) : (
-          <div className="mt-3 flex flex-col gap-4">
-            {groups.map((group) => (
-              <section key={group.id} className="flex flex-col gap-2">
-                <h2 className="capitalize font-pixel flex items-center gap-2 text-mint">
-                  <span
-                    aria-hidden="true"
-                    className="inline-block h-3 w-3 border-2 border-pure-black"
-                    style={{ backgroundColor: group.color }}
-                  />
-                  {group.name}
-                  <span className="text-lavender/60">({group.items.length})</span>
-                </h2>
-                <ul className="flex flex-col divide-y-2 divide-lavender/20 border-y-2 border-lavender/20">
-                  {group.items.map((audio) => (
-                    <AudioCard
-                      key={audio.id}
-                      audio={audio}
-                      expanded={expandedId === audio.id}
-                      busy={busyId === audio.id || uploading}
-                      onToggleProgress={() =>
-                        setExpandedId((current) => (current === audio.id ? null : audio.id))
-                      }
-                      onRetry={() => void handleRetry(audio)}
-                      onReupload={() => void startReupload(audio.id)}
-                      onDelete={() => setDeleteTarget(audio)}
-                    />
-                  ))}
-                </ul>
-              </section>
-            ))}
-            {items.length >= LIBRARY_LIMIT && (
-              <p className="lowercase text-lavender/60">
-                &gt; se muestran hasta {LIBRARY_LIMIT} clases · el contrato S2 aún no ofrece
-                paginación.
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={loading}
+              onClick={() => void load()}
+            >
+              actualizar
+            </Button>
+            <Link to="/gestion/subir" className={buttonClasses("primary", "sm")}>
+              subir clase
+            </Link>
+          </div>
+        </header>
+
+        <div className="flex flex-col divide-y-2 divide-lavender/20 border-t-2 border-lavender/30">
+          {notice !== null && (
+            <p
+              role={notice.tone === "error" ? "alert" : "status"}
+              className={`px-4 py-3 sm:px-6 ${
+                notice.tone === "error" ? "text-mint" : "text-lavender"
+              }`}
+            >
+              &gt; {notice.message}
+            </p>
+          )}
+
+          {loadError !== null && items.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 px-4 py-3 sm:px-6">
+              <p role="alert" className="text-mint">
+                &gt; {loadError}
               </p>
-            )}
-          </div>
-        )}
-      </Card>
+              <Button type="button" size="sm" variant="secondary" onClick={() => void load()}>
+                reintentar
+              </Button>
+            </div>
+          )}
+
+          {reupload !== null && (
+            <section aria-label="volver a subir" className="flex flex-col gap-3 p-4 sm:p-6">
+              <h2 className="capitalize text-xl text-mint">volver a subir</h2>
+              <p className="text-base text-lavender/80">
+                &gt; clase {reuploadTarget !== null ? audioLabel(reuploadTarget) : reupload.audioId}{" "}
+                · reserva hasta {new Date(reupload.reservation.upload_expires_at).toLocaleString()}
+              </p>
+              <AudioUploadPanel
+                capabilities={capabilities}
+                selectedFile={selectedFile}
+                fileError={fileError}
+                progress={progress}
+                uploading={uploading}
+                formError={uploadError}
+                onFileChange={handleFileChange}
+                onUpload={() => void handleReuploadUpload()}
+                onCancel={() => void cancelReupload()}
+              />
+            </section>
+          )}
+
+          {loading && items.length === 0 ? (
+            <p role="status" className="p-4 text-base text-lavender/60 sm:p-6">
+              &gt; cargando biblioteca…
+            </p>
+          ) : loadError !== null && items.length === 0 ? (
+            <div role="alert" className="p-4 sm:p-6">
+              <EmptyState
+                title="no se pudo cargar la biblioteca"
+                description={loadError}
+                action={
+                  <Button type="button" size="sm" variant="secondary" onClick={() => void load()}>
+                    reintentar
+                  </Button>
+                }
+              />
+            </div>
+          ) : groups.length === 0 ? (
+            <div className="p-4 sm:p-6">
+              <EmptyState
+                title="aún no hay clases"
+                description="sube la primera para ver aquí su transcripción y el estado de cada etapa."
+                action={
+                  <Link to="/gestion/subir" className={buttonClasses("primary", "sm")}>
+                    subir clase
+                  </Link>
+                }
+              />
+            </div>
+          ) : (
+            <>
+              {groups.map((group) => (
+                <section key={group.id} className="flex flex-col gap-2 p-4 sm:p-6">
+                  <h2 className="capitalize flex items-center gap-2 text-xl text-mint">
+                    <span
+                      aria-hidden="true"
+                      className="inline-block h-3 w-3 shrink-0 border-2 border-pure-black"
+                      style={{ backgroundColor: group.color }}
+                    />
+                    {group.name}
+                    <span className="text-base text-lavender/60">({group.items.length})</span>
+                  </h2>
+                  <ul className="flex flex-col divide-y-2 divide-lavender/20">
+                    {group.items.map((audio) => (
+                      <AudioCard
+                        key={audio.id}
+                        audio={audio}
+                        expanded={expandedId === audio.id}
+                        busy={busyId === audio.id || uploading}
+                        onToggleProgress={() =>
+                          setExpandedId((current) => (current === audio.id ? null : audio.id))
+                        }
+                        onRetry={() => void handleRetry(audio)}
+                        onReupload={() => void startReupload(audio.id)}
+                        onDelete={() => setDeleteTarget(audio)}
+                      />
+                    ))}
+                  </ul>
+                </section>
+              ))}
+              {items.length >= LIBRARY_LIMIT && (
+                <p className="px-4 py-3 text-base text-lavender/60 sm:px-6">
+                  &gt; se muestran hasta {LIBRARY_LIMIT} clases · el contrato S2 aún no ofrece
+                  paginación.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      </section>
 
       <ConfirmDialog
         open={deleteTarget !== null}
