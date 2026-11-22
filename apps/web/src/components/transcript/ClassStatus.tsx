@@ -1,5 +1,4 @@
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { failedStages, isCleanupPending } from "@/lib/library";
 import type { LibraryAudioDetail } from "@/lib/library";
@@ -32,50 +31,48 @@ export function ClassStatus({
   const retryIndex = failedStages(detail).includes("index");
 
   return (
-    <Card title="estado de la clase">
-      <div className="lowercase flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span>clase</span>
-          <StatusBadge status={detail.aggregate_status} />
-          <span>intento</span>
-          {detail.attempt !== null ? (
-            <StatusBadge status={detail.attempt.status} />
-          ) : (
-            <span className="text-lavender/50">sin intento</span>
-          )}
-          <span>índice</span>
-          <StatusBadge status={indexState} />
-          <span>análisis</span>
-          <StatusBadge status={analyzeState} />
-        </div>
-
-        {cleanupPending && (
-          <p role="status" className="border-2 border-mint px-2 py-1 text-mint">
-            &gt; limpieza pendiente: el audio aún no se ha verificado como borrado.
-          </p>
+    <section aria-label="estado de la clase" className="lowercase flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2 text-base">
+        <span>clase</span>
+        <StatusBadge status={detail.aggregate_status} />
+        <span>intento</span>
+        {detail.attempt !== null ? (
+          <StatusBadge status={detail.attempt.status} />
+        ) : (
+          <span className="text-lavender/60">sin intento</span>
         )}
-
-        {detail.analysis_backfill_available && (
-          <div className="flex flex-col gap-2 border-2 border-mint/60 px-3 py-2">
-            <p className="text-lavender/70">
-              &gt; {analysisActionLabel(analyzeState)} usando solo el texto persistido; no se
-              vuelve a subir ni a transcribir el audio.
-            </p>
-            <Button type="button" size="sm" disabled={busy} onClick={onBackfill}>
-              {analysisActionLabel(analyzeState)}
-            </Button>
-          </div>
-        )}
-
-        {retryIndex && (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onRetryIndex}>
-              reintentar índice
-            </Button>
-            <span className="text-lavender/60">solo texto persistido</span>
-          </div>
-        )}
+        <span>índice</span>
+        <StatusBadge status={indexState} />
+        <span>análisis</span>
+        <StatusBadge status={analyzeState} />
       </div>
-    </Card>
+
+      {cleanupPending && (
+        <p role="status" className="border-2 border-mint px-2 py-1 text-mint">
+          &gt; limpieza pendiente: el audio aún no se ha verificado como borrado.
+        </p>
+      )}
+
+      {detail.analysis_backfill_available && (
+        <div className="flex flex-col gap-2 border-2 border-mint/60 px-3 py-2">
+          <p className="text-base text-lavender/80">
+            &gt; {analysisActionLabel(analyzeState)} usando solo el texto persistido; no se
+            vuelve a subir ni a transcribir el audio.
+          </p>
+          <Button type="button" size="sm" disabled={busy} onClick={onBackfill}>
+            {analysisActionLabel(analyzeState)}
+          </Button>
+        </div>
+      )}
+
+      {retryIndex && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onRetryIndex}>
+            reintentar índice
+          </Button>
+          <span className="text-sm text-lavender/60">solo texto persistido</span>
+        </div>
+      )}
+    </section>
   );
 }

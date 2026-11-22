@@ -124,7 +124,7 @@ export function TranscriptReaderPage() {
   }
 
   if (loading) {
-    return <p className="lowercase text-lavender/60">&gt; cargando transcripción…</p>;
+    return <p className="lowercase text-base text-lavender/60">&gt; cargando transcripción…</p>;
   }
 
   if (error !== null || detail === null || transcript === null) {
@@ -163,25 +163,27 @@ export function TranscriptReaderPage() {
         </p>
       )}
 
-      <ClassStatus
-        detail={detail}
-        busy={actionBusy}
-        onBackfill={() => void handleBackfill()}
-        onRetryIndex={() => void handleRetryIndex()}
-      />
-
       <TranscriptReader
         detail={detail}
         transcript={transcript}
         activeSegmentId={activeSegmentId}
-      />
-
-      <ClassItems
-        tasks={tasks}
-        quality={classQuality}
-        loading={tasksLoading}
-        error={tasksError}
-        onRefresh={() => setReloadKey((value) => value + 1)}
+        status={
+          <ClassStatus
+            detail={detail}
+            busy={actionBusy}
+            onBackfill={() => void handleBackfill()}
+            onRetryIndex={() => void handleRetryIndex()}
+          />
+        }
+        aside={
+          <ClassItems
+            tasks={tasks}
+            quality={classQuality}
+            loading={tasksLoading}
+            error={tasksError}
+            onRefresh={() => setReloadKey((value) => value + 1)}
+          />
+        }
       />
     </div>
   );
