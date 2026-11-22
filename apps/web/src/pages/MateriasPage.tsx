@@ -20,6 +20,7 @@ export function MateriasPage() {
   const { toast } = useToast();
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [form, setForm] = useState<FormState>(null);
   const [busy, setBusy] = useState(false);
   const [activeAudios, setActiveAudios] = useState<{ name: string; classCount: number } | null>(
@@ -31,12 +32,14 @@ export function MateriasPage() {
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current;
     setLoading(true);
+    setLoadFailed(false);
     try {
       const next = await fetchSubjects();
       if (generation !== loadGeneration.current) return;
       setSubjects(next);
     } catch (error) {
       if (generation !== loadGeneration.current) return;
+      setLoadFailed(true);
       toast(error instanceof Error ? error.message : "no se pudieron cargar las materias", "error");
     } finally {
       if (generation === loadGeneration.current) setLoading(false);
@@ -97,13 +100,14 @@ export function MateriasPage() {
     }
   }
 
+  const showEmptyState = !loading && !loadFailed && subjects.length === 0;
   const editing = form?.mode === "edit" ? form.subject : null;
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="capitalize text-2xl text-mint">materias</h1>
-        {form === null && (
+        {form === null && !showEmptyState && (
           <Button onClick={() => setForm({ mode: "create" })}>nueva materia</Button>
         )}
       </div>
@@ -131,13 +135,25 @@ export function MateriasPage() {
       <Card title="tus materias">
         {loading ? (
           <p className="lowercase text-lavender/60">&gt; cargando…</p>
+        ) : loadFailed ? (
+          <EmptyState
+            title="no se pudieron cargar las materias"
+            description="revisa tu conexión e inténtalo de nuevo."
+            action={
+              <Button variant="secondary" onClick={() => void load()}>
+                reintentar
+              </Button>
+            }
+          />
         ) : subjects.length === 0 ? (
           <EmptyState
             title="aún no tienes materias"
             description="crea la primera para empezar a subir clases."
             action={
               form === null ? (
-                <Button onClick={() => setForm({ mode: "create" })}>crear materia</Button>
+                <Button variant="secondary" onClick={() => setForm({ mode: "create" })}>
+                  crear materia
+                </Button>
               ) : undefined
             }
           />
@@ -146,30 +162,37 @@ export function MateriasPage() {
             {subjects.map((subject) => (
               <li
                 key={subject.id}
-                className="flex items-center gap-3 border-2 border-pure-black px-3 py-2"
+                className="flex flex-wrap items-center gap-3 border-2 border-pure-black px-3 py-2"
               >
                 <span
                   aria-hidden="true"
                   className="inline-block h-4 w-4 shrink-0"
                   style={{ backgroundColor: subject.color }}
                 />
-                <span className="flex-1 text-lavender">{subject.name}</span>
+                <span className="text-lavender">{subject.name}</span>
                 {subject.teacher != null && subject.teacher !== "" && (
-                  <span className="text-lavender/60">{subject.teacher}</span>
+                  <span className="text-lavender/80">{subject.teacher}</span>
                 )}
-                <span className="text-lavender/60">
+                <span className="text-lavender/80">
                   {subject.class_count} {subject.class_count === 1 ? "clase" : "clases"}
                 </span>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setForm({ mode: "edit", subject })}
-                >
-                  editar
-                </Button>
-                <Button size="sm" variant="danger" disabled={busy} onClick={() => void handleDelete(subject)}>
-                  eliminar
-                </Button>
+                <span className="ml-auto flex items-center gap-6">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setForm({ mode: "edit", subject })}
+                  >
+                    editar
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    disabled={busy}
+                    onClick={() => void handleDelete(subject)}
+                  >
+                    eliminar
+                  </Button>
+                </span>
               </li>
             ))}
           </ul>
