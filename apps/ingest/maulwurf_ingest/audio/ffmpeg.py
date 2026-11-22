@@ -29,6 +29,21 @@ _ADDRESS_SPACE_BYTES = 4 * 1024 * 1024 * 1024
 _TIME_LIMIT_S = 300
 _WALL_TIMEOUT_S = 600.0
 _FFMPEG_THREADS = 2
+# ffmpeg traps SIGTERM/SIGINT and exits 255; an untrapped signal shows as a negative code.
+_SIGNALLED_EXIT = 255
+
+
+class FfmpegFailed(RuntimeError):
+    """Non-zero ffmpeg exit. The message stays ``ffmpeg_failed`` for the closed detail set."""
+
+    def __init__(self, returncode: int) -> None:
+        super().__init__("ffmpeg_failed")
+        self.returncode = returncode
+
+    @property
+    def signalled(self) -> bool:
+        """The process was stopped by a signal (group kill), not by a bad input."""
+        return self.returncode < 0 or self.returncode == _SIGNALLED_EXIT
 
 
 @dataclass(frozen=True)
@@ -120,7 +135,7 @@ def run(argv: Sequence[str], *, limits: FfmpegLimits, capture_stderr: bool = Fal
             shell=False,
         )
     if completed.returncode != 0:
-        raise RuntimeError("ffmpeg_failed")
+        raise FfmpegFailed(completed.returncode)
     if not capture_stderr:
         return b""
     captured = completed.stderr

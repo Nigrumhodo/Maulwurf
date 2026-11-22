@@ -25,7 +25,7 @@ from maulwurf_ingest.cleanup import CleanupEvidence
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_LEASE_TTL = timedelta(seconds=30)
+DEFAULT_LEASE_TTL = leases.DEFAULT_LEASE_TTL
 
 
 class ReconcileAction(StrEnum):

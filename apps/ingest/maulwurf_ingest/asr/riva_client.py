@@ -1,9 +1,12 @@
-"""Cliente Riva bloqueante, aislado del event loop (S2.4).
+"""Blocking Riva client, kept off the event loop (S2.4).
 
-Los reintentos caben en el deadline del intento: como máximo tres llamadas, con
-backoff y jitter. Auth, idioma y formato inválido no se reintentan. Agotar el
-plazo pide reupload. El transporte real no se construye en las pruebas; la clave
-no se registra.
+Retries stay inside the attempt deadline, with exponential backoff and jitter capped
+at ``max_backoff_s``. The call budget is ``max_attempts`` per fragment: the class
+default is ``MAX_ATTEMPTS`` (3), while the production ASR job
+(``asr_job._PROD_RIVA_MAX_ATTEMPTS``) passes 6 calls with a 1 s backoff base. Only
+transient codes are retried; auth, language and invalid format are not. Running out
+of deadline, attempts or a cancel asks for a reupload. Tests never build the real
+transport, and the key is never logged.
 """
 
 from __future__ import annotations

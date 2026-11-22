@@ -15,7 +15,6 @@ import tempfile
 import time
 import uuid
 from collections import OrderedDict
-from datetime import timedelta
 from pathlib import Path
 
 import asyncpg
@@ -49,9 +48,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+LEASE_TTL_S = leases.LEASE_TTL_S
 # Named apart from the lease TTL so a later change of one does not move the other.
 # Both are the S1.B3 value today, and neither may exceed it.
-LEASE_TTL_S = 30.0
 CREDENTIAL_TTL_S = 30.0
 HOLD_TIMEOUT_S = 30.0
 ACTIVE_SLOTS = 1
@@ -263,8 +262,8 @@ def _instance_id(request: Request) -> str:
 def _asr_config(request: Request) -> SupervisorConfig:
     return SupervisorConfig(
         instance=_instance_id(request),
-        lease_ttl=timedelta(seconds=LEASE_TTL_S),
-        heartbeat_interval_s=10.0,
+        lease_ttl=leases.DEFAULT_LEASE_TTL,
+        heartbeat_interval_s=leases.HEARTBEAT_INTERVAL_S,
         asr_timeout_s=settings.asr_timeout_s,
     )
 
@@ -378,7 +377,7 @@ async def _open_hold(
         lease = await leases.acquire_bound(
             pool, user_id=claims.user_id, audio_id=claims.audio_id,
             attempt_id=claims.attempt_id, expected_token=claims.fencing_token,
-            instance=instance, ttl=timedelta(seconds=LEASE_TTL_S),
+            instance=instance, ttl=leases.DEFAULT_LEASE_TTL,
         )
     except Exception:  # noqa: BLE001 — any acquire failure must return the slot
         await _gate.release(claims.user_id)
@@ -389,7 +388,7 @@ async def _open_hold(
     attempt_dir = cleanup.AttemptDir(str(claims.attempt_id), None)
     try:
         async with attempt_dir:
-            keeper = _LeaseKeeper(pool, lease, 10.0)
+            keeper = _LeaseKeeper(pool, lease, leases.HEARTBEAT_INTERVAL_S)
             workdir = attempt_dir.path
             if workdir is None:
                 raise RuntimeError("attempt_dir")
