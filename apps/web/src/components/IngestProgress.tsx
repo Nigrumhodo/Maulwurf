@@ -94,7 +94,7 @@ export function IngestProgress({ audioId }: IngestProgressProps) {
   }
 
   return (
-    <div className="lowercase flex flex-col gap-2 border-2 border-lavender/40 px-3 py-2">
+    <div className="lowercase flex flex-col gap-2 border-t-2 border-lavender/30 pt-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-pixel text-mint">&gt; progreso de la clase</span>
         {aggregate !== null && <StatusBadge status={aggregate} />}

@@ -1,7 +1,6 @@
 import { Link } from "react-router-dom";
 import { TranscriptLink } from "@/components/transcript/TranscriptLink";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { formatTaskDue } from "@/lib/tasks";
 import type { Task, TaskQualityState } from "@/lib/tasks";
@@ -37,10 +36,11 @@ export function ClassItems({
   const items = ordered(Array.isArray(tasks) ? tasks : []);
 
   return (
-    <Card title="elementos detectados">
-      <div className="lowercase flex flex-col gap-3">
+    <section aria-label="elementos detectados" className="lowercase py-5 first:pt-0 last:pb-0">
+      <div className="flex flex-col gap-3">
+        <h2 className="capitalize text-xl text-mint">elementos detectados</h2>
         {loading ? (
-          <p className="text-base text-lavender/60">&gt; cargando elementos detectadosÃ¢â‚¬Â¦</p>
+          <p className="text-base text-lavender/60">&gt; cargando elementos detectados…</p>
         ) : error !== null ? (
           <div className="flex flex-wrap items-center gap-2">
             <p role="alert" className="text-mint">
@@ -55,14 +55,17 @@ export function ClassItems({
             &gt; no se detectaron tareas en esta clase.
           </p>
         ) : (
-          <ul aria-label="elementos detectados" className="flex flex-col gap-2">
+          <ul
+            aria-label="elementos detectados"
+            className="flex flex-col divide-y-2 divide-lavender/20"
+          >
             {items.map((task) => {
               const due = formatTaskDue(task);
               const evidence = task.evidence[0];
               return (
                 <li
                   key={task.id}
-                  className="flex flex-col gap-1 border-2 border-lavender/30 px-3 py-2"
+                  className="flex flex-col gap-1 py-3 first:pt-0 last:pb-0"
                 >
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="normal-case text-lavender">{task.titulo}</span>
@@ -105,7 +108,7 @@ export function ClassItems({
           </p>
         )}
       </div>
-    </Card>
+    </section>
   );
 }
 

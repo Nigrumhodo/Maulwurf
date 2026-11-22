@@ -304,7 +304,7 @@ export function UploadForm() {
   }
 
   if (loading) {
-    return <p className="lowercase text-lavender/60">&gt; cargando datos de subida…</p>;
+    return <p className="lowercase text-base text-lavender/60">&gt; cargando datos de subida…</p>;
   }
 
   if (loadError != null) {
@@ -379,7 +379,7 @@ export function UploadForm() {
     const subjectName = subjects.find((subject) => subject.id === draft.subjectId)?.name ?? "clase";
     return (
       <div className="lowercase flex flex-col gap-4">
-        <div className="border-2 border-lavender/40 px-3 py-2 text-lavender/80">
+        <div className="flex flex-col gap-1 text-base text-lavender/80">
           <p>
             &gt; reserva creada · {subjectName} · {draft.classDate || "sin fecha"}
           </p>
@@ -443,10 +443,14 @@ export function UploadForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
-      <div className="lowercase flex flex-col gap-1 border-2 border-lavender/40 px-3 py-2 text-lavender/80">
+    <form
+      onSubmit={handleSubmit}
+      className="flex flex-col divide-y-2 divide-lavender/20"
+      noValidate
+    >
+      <section aria-label="límites" className="lowercase flex flex-col gap-1 pb-5 text-base">
         {usable ? (
-          <p>
+          <p className="text-lavender/80">
             &gt; límites publicados · máx {formatBytes(capabilities?.max_upload_bytes ?? null)} ·{" "}
             {capabilities?.max_duration_seconds ?? "?"} s ·{" "}
             {(capabilities?.accepted_input_formats ?? []).join(", ") || "sin formatos"} ·{" "}
@@ -458,104 +462,103 @@ export function UploadForm() {
             archivos hasta que el spike publique sus límites.
           </p>
         )}
-      </div>
+      </section>
 
-      <section className="flex flex-col gap-3">
-        <h3 className="text-base text-mint">&gt; qué</h3>
+      <section className="flex flex-col gap-3 py-5">
+        <h3 className="text-lg text-mint">&gt; qué</h3>
         <div className="grid gap-4 sm:grid-cols-2">
-        <div className="flex flex-col gap-1">
-          <label className="lowercase font-pixel flex flex-col gap-1">
-            <span className="text-mint">&gt; materia</span>
-            <select
-              className={selectClass}
-              value={draft.subjectId}
-              onChange={(event) => update("subjectId", event.target.value)}
-            >
-              <option value="" disabled>
-                selecciona materia
-              </option>
-              {subjects.map((subject) => (
-                <option key={subject.id} value={subject.id}>
-                  {subject.name}
+          <div className="flex flex-col gap-1">
+            <label className="lowercase font-pixel flex flex-col gap-1">
+              <span className="text-mint">&gt; materia</span>
+              <select
+                className={selectClass}
+                value={draft.subjectId}
+                onChange={(event) => update("subjectId", event.target.value)}
+              >
+                <option value="" disabled>
+                  selecciona materia
                 </option>
-              ))}
-            </select>
-          </label>
-          {errors.fields.subjectId != null && (
-            <span className="lowercase text-mint">{errors.fields.subjectId}</span>
-          )}
-        </div>
+                {subjects.map((subject) => (
+                  <option key={subject.id} value={subject.id}>
+                    {subject.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {errors.fields.subjectId != null && (
+              <span className="lowercase text-mint">{errors.fields.subjectId}</span>
+            )}
+          </div>
 
-        <Input
-          label="título (opcional)"
-          placeholder="clase 03 — integrales"
-          value={draft.title}
-          onChange={(event) => update("title", event.target.value)}
-        />
-        <Input
-          label="profesor (opcional)"
-          placeholder=""
-          value={draft.teacher}
-          onChange={(event) => update("teacher", event.target.value)}
-        />
+          <Input
+            label="título (opcional)"
+            placeholder="clase 03 — integrales"
+            value={draft.title}
+            onChange={(event) => update("title", event.target.value)}
+          />
+          <Input
+            label="profesor (opcional)"
+            placeholder=""
+            value={draft.teacher}
+            onChange={(event) => update("teacher", event.target.value)}
+          />
         </div>
       </section>
 
-      <section className="flex flex-col gap-3">
-        <h3 className="text-base text-mint">&gt; cuándo</h3>
+      <section className="flex flex-col gap-3 py-5">
+        <h3 className="text-lg text-mint">&gt; cuándo</h3>
         <div className="grid gap-4 sm:grid-cols-2">
-        <div className="flex flex-col gap-1">
-          <DateInput
-            label="fecha de clase"
-            value={draft.classDate}
-            onChange={(event) => update("classDate", event.target.value)}
-          />
-          {errors.fields.classDate != null && (
-            <span className="lowercase text-mint">{errors.fields.classDate}</span>
-          )}
-        </div>
+          <div className="flex flex-col gap-1">
+            <DateInput
+              label="fecha de clase"
+              value={draft.classDate}
+              onChange={(event) => update("classDate", event.target.value)}
+            />
+            {errors.fields.classDate != null && (
+              <span className="lowercase text-mint">{errors.fields.classDate}</span>
+            )}
+          </div>
 
-        <div className="flex flex-col gap-1">
-          <TimezoneSelect
-            label="zona horaria"
-            value={draft.classTimezone}
-            onChange={(event) => update("classTimezone", event.target.value)}
-          />
-          {errors.fields.classTimezone != null && (
-            <span className="lowercase text-mint">{errors.fields.classTimezone}</span>
-          )}
-        </div>
-
+          <div className="flex flex-col gap-1">
+            <TimezoneSelect
+              label="zona horaria"
+              value={draft.classTimezone}
+              onChange={(event) => update("classTimezone", event.target.value)}
+            />
+            {errors.fields.classTimezone != null && (
+              <span className="lowercase text-mint">{errors.fields.classTimezone}</span>
+            )}
+          </div>
         </div>
       </section>
 
-      <section className="flex flex-col gap-3">
-        <h3 className="text-base text-mint">&gt; idioma</h3>
+      <section className="flex flex-col gap-3 py-5">
+        <h3 className="text-lg text-mint">&gt; idioma</h3>
         <div className="grid gap-4 sm:grid-cols-2">
-        <div className="flex flex-col gap-1">
-          <LanguageSelect
-            label="idioma del audio"
-            options={languages}
-            value={draft.languageCode}
-            onChange={(event) => update("languageCode", event.target.value)}
-          />
-          {errors.fields.languageCode != null && (
-            <span className="lowercase text-mint">{errors.fields.languageCode}</span>
-          )}
-        </div>
-
+          <div className="flex flex-col gap-1">
+            <LanguageSelect
+              label="idioma del audio"
+              options={languages}
+              value={draft.languageCode}
+              onChange={(event) => update("languageCode", event.target.value)}
+            />
+            {errors.fields.languageCode != null && (
+              <span className="lowercase text-mint">{errors.fields.languageCode}</span>
+            )}
+          </div>
         </div>
       </section>
 
-      <div className="lowercase flex flex-col gap-2 border-2 border-lavender/30 px-4 py-3">
-        <p className="text-mint">
+      <section className="lowercase flex flex-col gap-2 py-5">
+        <h3 className="text-lg text-mint">&gt; privacidad</h3>
+        <p className="text-base text-lavender">
           aviso de privacidad · versión {noticeVersion ?? "no publicada"}
         </p>
-        <p className="text-lavender/80">
+        <p className="text-base text-lavender/80">
           el audio se envía a un proveedor en la nube para transcribirlo y se borra al terminar.
         </p>
 
-        <label className="flex items-start gap-2 text-lavender">
+        <label className="flex min-h-8 items-start gap-2 text-base text-lavender">
           <input
             type="checkbox"
             checked={draft.cloudAccepted}
@@ -565,7 +568,7 @@ export function UploadForm() {
           <span>acepto el tratamiento en la nube para transcribir este audio</span>
         </label>
 
-        <label className="flex items-start gap-2 text-lavender">
+        <label className="flex min-h-8 items-start gap-2 text-base text-lavender">
           <input
             type="checkbox"
             checked={draft.voiceAcknowledged}
@@ -580,33 +583,35 @@ export function UploadForm() {
             &gt; {errors.consent}
           </p>
         )}
-      </div>
 
-      <p className="lowercase text-lavender/60">
-        &gt; audio no conservado · el audio se borra; solo se guarda el texto de la transcripción.
-      </p>
-
-      {errors.form != null && (
-        <p role="alert" className="lowercase border-2 border-mint px-3 py-2 text-mint">
-          &gt; {errors.form}
+        <p className="text-base text-lavender/60">
+          &gt; audio no conservado · el audio se borra; solo se guarda el texto de la transcripción.
         </p>
-      )}
+      </section>
 
-      <div className="flex items-center gap-2">
-        <Button type="submit" disabled={!canSubmit}>
-          reservar subida
-        </Button>
-        {!usable ? (
-          <span className="lowercase text-lavender/60">
-            &gt; esperando límites publicados por el servidor
-          </span>
-        ) : (
-          !consentReady && (
-            <span className="lowercase text-lavender/60">
-              &gt; acepta el consentimiento para continuar
-            </span>
-          )
+      <div className="flex flex-col gap-3 pt-5">
+        {errors.form != null && (
+          <p role="alert" className="lowercase text-mint">
+            &gt; {errors.form}
+          </p>
         )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="submit" disabled={!canSubmit}>
+            reservar subida
+          </Button>
+          {!usable ? (
+            <span className="lowercase text-base text-lavender/60">
+              &gt; esperando límites publicados por el servidor
+            </span>
+          ) : (
+            !consentReady && (
+              <span className="lowercase text-base text-lavender/60">
+                &gt; acepta el consentimiento para continuar
+              </span>
+            )
+          )}
+        </div>
       </div>
 
       <ConfirmDialog

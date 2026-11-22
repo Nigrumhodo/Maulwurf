@@ -84,7 +84,7 @@ export function AudioUploadPanel({
       )}
 
       {formError !== null && (
-        <p role="alert" className="border-2 border-mint px-3 py-2 text-mint">
+        <p role="alert" className="text-mint">
           &gt; {formError}
         </p>
       )}
