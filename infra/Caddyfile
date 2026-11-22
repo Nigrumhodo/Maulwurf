@@ -30,6 +30,35 @@
 https://localhost {
 	tls internal
 
+	# Defensive headers. HSTS stays off this file: `tls internal` on localhost must
+	# not pin a browser. Production sets HSTS in infra/deploy/Caddyfile.prod.
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# The OAuth code and state travel in the query string. Skip the access log for
+	# the callbacks, and redact those keys on every other request (Caddy 2.8 filter).
+	@oauth_callback path /auth/google/callback /integrations/google/*/callback
+	log_skip @oauth_callback
+
+	# Scanner probes. A leading `*` is not a prefix match in Caddy 2.8, so extensions
+	# use path_regexp. Literal paths and the regexp are OR'd as two handles.
+	@scanner_paths {
+		path /.env /.env.* /.git /.git/* /.aws/* /.htaccess /.htpasswd /docs /redoc /openapi.json
+		path /wp-login.php /wp-admin /wp-admin/* /wp-content/* /wp-includes/* /xmlrpc.php
+		path /phpmyadmin /phpmyadmin/* /pma /pma/* /admin.php /config.php /phpinfo.php
+	}
+	@scanner_probes path_regexp ext \.(php|asp|aspx|jsp|bak|sql|env)$
+	handle @scanner_paths {
+		respond 404
+	}
+	handle @scanner_probes {
+		respond 404
+	}
+
 	# 1) Binary PUT: ends at api; api streams to ingest over the internal network (ADR-0008).
 	@upload {
 		method PUT
@@ -106,6 +135,14 @@ https://localhost {
 
 	log {
 		output stdout
-		format json
+		format filter {
+			wrap json
+			fields {
+				request>uri query {
+					replace code REDACTED
+					replace state REDACTED
+				}
+			}
+		}
 	}
 }

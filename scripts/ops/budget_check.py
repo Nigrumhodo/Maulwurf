@@ -12,10 +12,13 @@ Usage::
     cd infra
     docker compose exec -T api python - < ../scripts/ops/budget_check.py
 
-    # From a host on the private network that resolves the service name:
-    python scripts/ops/budget_check.py --url http://api:8000/internal/metrics
+    # From a host on the private network that resolves the service name.
+    # The bearer comes from the environment or a file. Do not pass it as a
+    # CLI argument: that value is visible in ``ps``.
+    MAULWURF_METRICS_TOKEN=... python scripts/ops/budget_check.py \
+        --url http://api:8000/internal/metrics
     python scripts/ops/budget_check.py --url http://api:8000/internal/metrics \
-        --require-configured --format json
+        --token-file /run/secrets/api_metrics_token --require-configured --format json
 
 Exit codes:
 
@@ -34,11 +37,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 
 DEFAULT_URL: Final = "http://127.0.0.1:8000/internal/metrics"
@@ -178,10 +183,35 @@ def exit_code(budgets: list[Budget], *, require_configured: bool) -> int:
     return 0
 
 
-def _fetch(url: str, timeout: float) -> str:
+def _token_from_sources(token_file: str | None) -> str | None:
+    """Bearer from ``MAULWURF_METRICS_TOKEN`` or a file. Never from a CLI value."""
+    file_value: str | None = None
+    if token_file is not None:
+        try:
+            file_value = Path(token_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise MetricsError("cannot read the metrics token file") from exc
+        if not file_value:
+            raise MetricsError("the metrics token file is empty")
+    env_value = os.environ.get("MAULWURF_METRICS_TOKEN")
+    if env_value is not None:
+        env_value = env_value.strip() or None
+    if file_value and env_value and file_value != env_value:
+        raise MetricsError("MAULWURF_METRICS_TOKEN and --token-file disagree")
+    return file_value or env_value
+
+
+def _request(url: str, token: str | None) -> urllib.request.Request:
     if not url.startswith(("http://", "https://")):
         raise MetricsError("the metrics URL must be http(s)")
-    request = urllib.request.Request(url, headers={"Accept": "text/plain"})  # noqa: S310
+    headers = {"Accept": "text/plain"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return urllib.request.Request(url, headers=headers)  # noqa: S310
+
+
+def _fetch(url: str, timeout: float, token: str | None) -> str:
+    request = _request(url, token)
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
         return response.read().decode("utf-8")
 
@@ -198,19 +228,37 @@ def _format_text(budgets: list[Budget]) -> str:
     return "\n".join(lines)
 
 
+def _reject_cli_token(argv: list[str]) -> bool:
+    """True when the caller tried to put the bearer on the command line."""
+    return any(arg == "--token" or arg.startswith("--token=") for arg in argv)
+
+
 def main(argv: list[str] | None = None) -> int:
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if _reject_cli_token(raw):
+        print(
+            "budget_check: pass the bearer via MAULWURF_METRICS_TOKEN or --token-file",
+            file=sys.stderr,
+        )
+        return 2
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default=DEFAULT_URL, help="internal metrics URL")
     parser.add_argument("--timeout", type=float, default=5.0, help="HTTP timeout in seconds")
+    parser.add_argument(
+        "--token-file",
+        default=None,
+        help="file containing the metrics bearer (mode 0600); not a CLI secret",
+    )
     parser.add_argument(
         "--require-configured",
         action="store_true",
         help="fail when a provider has no monthly cap",
     )
     parser.add_argument("--format", choices=("text", "json"), default="text")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw)
     try:
-        budgets = evaluate(parse_metrics(_fetch(args.url, args.timeout)))
+        token = _token_from_sources(args.token_file)
+        budgets = evaluate(parse_metrics(_fetch(args.url, args.timeout, token)))
     except (MetricsError, OSError, urllib.error.URLError) as exc:
         print(f"budget_check: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 3

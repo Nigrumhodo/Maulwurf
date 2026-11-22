@@ -1,9 +1,11 @@
 # J4.7 — Production edge ingress over HTTPS (single origin for web + API).
+# Caddy is the first hop unless CADDY_TRUSTED_PROXIES names an external load balancer.
+# The default trusts only loopback, never every private range.
 {
 	admin off
 
 	servers {
-		trusted_proxies static private_ranges
+		trusted_proxies static {$CADDY_TRUSTED_PROXIES:127.0.0.1/32}
 		timeouts {
 			read_body 40m
 			read_header 30s
@@ -22,9 +24,23 @@
 		-Server
 	}
 
+	# The OAuth code and state travel in the query string. Skip the access log for
+	# the callbacks, and redact those keys on every other request (Caddy 2.8 filter).
+	@oauth_callback path /auth/google/callback /integrations/google/*/callback
+	log_skip @oauth_callback
+
 	# Drop automated vulnerability/CMS scanner probes at the edge with 404.
-	@scanner_probes {
-		path /.env /.env.* /.git /.git/* /.aws/* /.htaccess /.htpasswd /docs /redoc /openapi.json /wp-login.php /wp-admin /wp-admin/* /wp-content/* /wp-includes/* /xmlrpc.php /phpmyadmin /phpmyadmin/* /pma /pma/* /admin.php /config.php /phpinfo.php *.php *.asp *.aspx *.jsp *.bak *.sql
+	# A leading `*` is not a prefix match in Caddy 2.8 (`path.Match` must match the
+	# whole path and `*` does not cross `/`), so extensions use path_regexp.
+	# The two handles are OR'd; putting both matchers in one block would AND them.
+	@scanner_paths {
+		path /.env /.env.* /.git /.git/* /.aws/* /.htaccess /.htpasswd /docs /redoc /openapi.json
+		path /wp-login.php /wp-admin /wp-admin/* /wp-content/* /wp-includes/* /xmlrpc.php
+		path /phpmyadmin /phpmyadmin/* /pma /pma/* /admin.php /config.php /phpinfo.php
+	}
+	@scanner_probes path_regexp ext \.(php|asp|aspx|jsp|bak|sql|env)$
+	handle @scanner_paths {
+		respond 404
 	}
 	handle @scanner_probes {
 		respond 404
@@ -85,6 +101,14 @@
 
 	log {
 		output stdout
-		format json
+		format filter {
+			wrap json
+			fields {
+				request>uri query {
+					replace code REDACTED
+					replace state REDACTED
+				}
+			}
+		}
 	}
 }
