@@ -106,6 +106,17 @@ write every tenant's attempt row. This is an explicit accepted risk, not an over
   per-tenant operations for request-bound work and one narrow cross-tenant function for
   the sweeps.
 
+### Follow-up: `0024` global capacity count (A2.14)
+
+The API reserves ingest slots against a global `active_slots` cap, but `maulwurf_app` only
+sees its own tenant's `ingestion_attempts`, so a plain count made the cap per-user. Revision
+`0024` adds the narrow function this ADR's review trigger pointed at, for this one read:
+`public.count_active_ingestion_attempts()` is `SECURITY DEFINER`, pins `search_path`, returns
+only an integer, and is executable by `maulwurf_app` alone. It gives the API no row access to
+other tenants. A `capacity_count` `SELECT` policy for the migration owner, gated by a setting
+only the function sets for its own call, keeps the count correct when the owner is neither
+superuser nor `BYPASSRLS`. The ingest queue policy and its accepted risk above are unchanged.
+
 ### Runtime identity debt (not changed by A2.17)
 
 RLS here is a second barrier against application bugs, not a boundary against a compromised
