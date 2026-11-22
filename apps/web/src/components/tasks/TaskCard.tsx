@@ -21,7 +21,7 @@ export function TaskCard({ task, quality, onEdit, onReview, onComplete }: TaskCa
     quality !== null && (quality.unavailable || quality.signals.length > 0);
 
   return (
-    <li className="lowercase flex flex-col gap-3 border-2 border-lavender/30 bg-surface px-3 py-3">
+    <li className="lowercase flex flex-col gap-3 px-4 py-4">
       <div className="flex min-w-0 flex-col gap-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <p className="min-w-0 wrap-anywhere capitalize text-lg text-lavender">{task.titulo}</p>
