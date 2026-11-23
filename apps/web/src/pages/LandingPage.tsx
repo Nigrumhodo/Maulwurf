@@ -41,7 +41,7 @@ export function LandingPage() {
       <WavesBackground />
       <div className="crt-overlay" aria-hidden="true" />
 
-      <header className="relative z-10 mx-auto flex max-w-5xl items-center justify-between gap-2 border-2 border-pure-black bg-dark px-4 py-2 shadow-block">
+      <header className="relative z-10 mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-2 border-2 border-pure-black bg-dark px-4 py-2 shadow-block">
         <span className="lowercase shrink-0 whitespace-nowrap text-2xl text-mint">
           maulwurf<span className="text-lavender">@lab</span>
         </span>
