@@ -76,7 +76,7 @@ export function LandingPage() {
               <Link to="/register" className={buttonClasses("secondary", "lg")}>
                 crear cuenta
               </Link>
-              <Link to="/login" className={buttonClasses("secondary", "lg")}>
+              <Link to="/login" className={buttonClasses("ghost", "md")}>
                 acceso existente
               </Link>
             </div>
@@ -87,7 +87,7 @@ export function LandingPage() {
               <img
                 src={loginuposcuro}
                 alt="maulwurf terminal"
-                className="max-h-44 w-auto object-contain"
+                className="max-h-32 w-auto object-contain"
                 style={{ imageRendering: "pixelated" }}
               />
             </span>
@@ -95,7 +95,7 @@ export function LandingPage() {
               <img
                 src={loginup}
                 alt="maulwurf terminal"
-                className="max-h-44 w-auto object-contain"
+                className="max-h-32 w-auto object-contain"
                 style={{ imageRendering: "pixelated" }}
               />
             </span>
