@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Card } from "@/components/ui/Card";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { FlickerText } from "@/components/motion/FlickerText";
+import { WavesBackground } from "@/components/motion/WavesBackground";
 import { loginup, loginuposcuro } from "@/components/Visual";
 
 export interface AuthShellProps {
@@ -17,9 +18,10 @@ export interface AuthShellProps {
 export function AuthShell({ title, children }: AuthShellProps) {
   return (
     <div className="relative z-10 flex min-h-screen flex-col items-center justify-center px-4 py-10">
+      <WavesBackground />
       <div className="crt-overlay" aria-hidden="true" />
 
-      <div className="absolute right-4 top-4">
+      <div className="absolute right-4 top-4 z-10">
         <ThemeToggle />
       </div>
 
@@ -40,12 +42,12 @@ export function AuthShell({ title, children }: AuthShellProps) {
         />
       </div>
 
-      <Card title={title} variant="outline" className="relative z-10 w-full max-w-md glitch-hover">
+      <Card title={title} variant="outline" className="relative z-10 w-full bg-surface! max-w-md glitch-hover">
         <div className="flex flex-col gap-5">{children}</div>
       </Card>
 
-      <p className="lowercase mt-8 text-center">
-        <FlickerText mode="blink" className="text-4xl text-mint">
+      <p className="lowercase relative z-10 mt-8 border-2 border-pure-black bg-dark px-4 py-1 text-center">
+        <FlickerText mode="blink" className="text-3xl text-mint">
           maulwurf<span className="text-lavender">@lab</span>
         </FlickerText>
       </p>
