@@ -230,7 +230,7 @@ export function MateriasPage() {
                             : "sin datos"
                           : `${item.readyClasses}/${item.totalClasses} listas · ${item.transcribedMinutes} min · ${item.confirmedTasks} confirmadas / ${item.pendingTasks} pendientes`}
                       </span>
-                      <span className="ml-auto flex items-center gap-6">
+                      <span className="ml-auto flex items-center gap-2">
                         <Button
                           size="sm"
                           variant="secondary"
@@ -238,14 +238,16 @@ export function MateriasPage() {
                         >
                           editar
                         </Button>
-                        <Button
-                          size="sm"
-                          variant="danger"
-                          disabled={busy}
-                          onClick={() => void handleDelete(subject)}
-                        >
-                          eliminar
-                        </Button>
+                        <span className="ml-4 border-l-2 border-lavender/30 pl-4">
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            disabled={busy}
+                            onClick={() => void handleDelete(subject)}
+                          >
+                            eliminar
+                          </Button>
+                        </span>
                       </span>
                     </li>
                   );
