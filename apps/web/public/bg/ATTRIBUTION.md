@@ -1,8 +1,7 @@
 # Waves background attribution
 
-`waves-dark.png` (320x176, three colours: transparent, `#0f8b8d`, `#ffffff`) and
-`waves-light.png` (320x176, three colours: transparent, `#8e51ff` = Tailwind violet-500
-`oklch(60.6% 0.25 292.717)`, `#000000`) are derived pixel-art renderings of:
+`waves-dark.png` (320x176, three colours: transparent, `#a855f7`, `#f3e8ff` — Lavanda Nocturna) and
+`waves-light.png` (320x176, three colours: transparent, `#b45309`, `#26180a` — Ámbar CRT & Pergamino) are derived pixel-art renderings of:
 
 - Work: Katsushika Hokusai, *Under the Wave off Kanagawa (The Great Wave)*.
 - Licence: public domain (Metropolitan Museum of Art Open Access, object 45434).

@@ -1,6 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
+import { RetroVisual } from "@/components/ui/RetroVisual";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import {
+  estadoError404,
+  estadoError404Anim,
+  estadoPrivacidadRam,
+  estadoPrivacidadRamAnim,
+  estadoTranscribiendo,
+  estadoTranscribiendoAnim,
+  loaderCassetteAmbar,
+  loaderCassetteAmbarStatic,
+  loaderCassetteLavanda,
+  loaderCassetteLavandaStatic,
+} from "@/components/Visual";
 import {
   INITIAL_PROGRESS,
   fragmentLabel,
@@ -72,22 +85,31 @@ export function IngestProgress({ audioId }: IngestProgressProps) {
 
   if (state.terminal === "error" && state.error !== null) {
     return (
-      <div className="lowercase flex flex-col gap-2 border-2 border-mint px-3 py-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-pixel text-mint">&gt; progreso detenido</span>
-          <span className="text-mint">{state.error.code}</span>
-          {aggregate !== null && <StatusBadge status={aggregate} />}
+      <div className="lowercase flex flex-col gap-3 border-2 border-mint px-3 py-2 sm:flex-row sm:items-center">
+        <div className="w-fit shrink-0 border-2 border-pure-black bg-dark p-1">
+          <RetroVisual
+            src={estadoError404Anim}
+            staticSrc={estadoError404}
+            className="h-16 w-16 object-contain"
+          />
         </div>
-        {state.error.detail !== null && (
-          <p className="text-lavender/80">&gt; detalle: {state.error.detail}</p>
-        )}
-        <p className="text-lavender/60">
-          &gt; la clase no se muestra como lista. Revisa la etapa o vuelve a subir el audio.
-        </p>
-        <div>
-          <Button type="button" size="sm" variant="secondary" onClick={() => setRetryKey((k) => k + 1)}>
-            reintentar progreso
-          </Button>
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-pixel text-mint">&gt; progreso detenido</span>
+            <span className="text-mint">{state.error.code}</span>
+            {aggregate !== null && <StatusBadge status={aggregate} />}
+          </div>
+          {state.error.detail !== null && (
+            <p className="text-lavender/80">&gt; detalle: {state.error.detail}</p>
+          )}
+          <p className="text-lavender/60">
+            &gt; la clase no se muestra como lista. Revisa la etapa o vuelve a subir el audio.
+          </p>
+          <div>
+            <Button type="button" size="sm" variant="secondary" onClick={() => setRetryKey((k) => k + 1)}>
+              reintentar progreso
+            </Button>
+          </div>
         </div>
       </div>
     );
@@ -115,6 +137,29 @@ export function IngestProgress({ audioId }: IngestProgressProps) {
         </p>
       ) : (
         <>
+          {state.terminal === null && !cleanupPending && (
+            <div className="flex items-center gap-3 border-2 border-lavender/30 bg-dark p-2">
+              <RetroVisual
+                src={estadoTranscribiendoAnim}
+                staticSrc={estadoTranscribiendo}
+                className="h-14 w-14 shrink-0 object-contain"
+              />
+              <span className="img-dark-only">
+                <RetroVisual
+                  src={loaderCassetteLavanda}
+                  staticSrc={loaderCassetteLavandaStatic}
+                  className="h-10 w-auto object-contain"
+                />
+              </span>
+              <span className="img-light-only">
+                <RetroVisual
+                  src={loaderCassetteAmbar}
+                  staticSrc={loaderCassetteAmbarStatic}
+                  className="h-10 w-auto object-contain"
+                />
+              </span>
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-2 text-lavender/80">
             {hasAttemptData ? (
               <>
@@ -150,10 +195,19 @@ export function IngestProgress({ audioId }: IngestProgressProps) {
           </div>
 
           {cleanupPending && (
-            <p role="status" className="border-2 border-mint px-2 py-1 text-mint">
-              &gt; limpieza pendiente · no es un éxito y la indexación sigue bloqueada hasta
-              verificar el borrado del audio.
-            </p>
+            <div className="flex items-center gap-3 border-2 border-mint px-2 py-1.5">
+              <div className="shrink-0 border border-pure-black bg-dark p-0.5">
+                <RetroVisual
+                  src={estadoPrivacidadRamAnim}
+                  staticSrc={estadoPrivacidadRam}
+                  className="h-12 w-12 object-contain"
+                />
+              </div>
+              <p role="status" className="text-mint">
+                &gt; limpieza pendiente · no es un éxito y la indexación sigue bloqueada hasta
+                verificar el borrado del audio.
+              </p>
+            </div>
           )}
         </>
       )}

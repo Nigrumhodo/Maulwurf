@@ -23,7 +23,7 @@ const DOT_CLASSES: Record<StatusTone, string> = {
   muted: "bg-lavender/40",
   info: "bg-lavender",
   active: "bg-mint animate-pulse",
-  success: "bg-mint",
+  success: "bg-on-accent",
   warning: "bg-mint",
   error: "bg-mint",
 };

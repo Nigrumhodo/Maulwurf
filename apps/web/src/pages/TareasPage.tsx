@@ -6,6 +6,8 @@ import { TaskInbox } from "@/components/tasks/TaskInbox";
 import { TaskReviewDialog } from "@/components/tasks/TaskReviewDialog";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { RetroVisual } from "@/components/ui/RetroVisual";
+import { estadoTareasCafe, estadoTareasCafeAnim } from "@/components/Visual";
 import { ApiHttpError } from "@/lib/api";
 import {
   fetchIntegrationsStatus,
@@ -294,11 +296,20 @@ export function TareasPage() {
   return (
     <section className="lowercase flex flex-col border-2 border-pure-black bg-surface shadow-block">
       <header className="flex flex-wrap items-start justify-between gap-3 p-4">
-        <div className="flex flex-col gap-1">
-          <h1 className="capitalize text-2xl text-mint">tareas</h1>
-          <p className="lowercase text-base text-lavender/80 max-w-prose">
-            &gt; crea tareas propias o revisa propuestas del análisis; confirma para enviarlas a Calendar.
-          </p>
+        <div className="flex items-center gap-3">
+          <div className="hidden shrink-0 border-2 border-pure-black bg-dark p-1 shadow-block-sm sm:block">
+            <RetroVisual
+              src={estadoTareasCafeAnim}
+              staticSrc={estadoTareasCafe}
+              className="h-14 w-14 object-contain"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <h1 className="capitalize text-2xl text-mint">tareas</h1>
+            <p className="lowercase text-base text-lavender/80 max-w-prose">
+              &gt; crea tareas propias o revisa propuestas del análisis; confirma para enviarlas a Calendar.
+            </p>
+          </div>
         </div>
         {!creatingTask && (
           <Button
@@ -436,6 +447,7 @@ export function TareasPage() {
         ) : empty ? (
           <div className="p-4">
             <EmptyState
+              illustration="tasks"
               title="no hay tareas en este estado"
               description="cuando un análisis proponga una tarea, aparecerá aquí con su cita."
             />

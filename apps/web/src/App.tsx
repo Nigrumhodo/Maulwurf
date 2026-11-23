@@ -3,6 +3,8 @@ import { AuthProvider, RequireAuth, useAuth } from "@/components/auth/AuthProvid
 import { AppLayout } from "@/components/layout/AppLayout";
 import { GestionLayout } from "@/components/layout/GestionLayout";
 import { BlinkingCaret } from "@/components/motion/BlinkingCaret";
+import { RetroVisual } from "@/components/ui/RetroVisual";
+import { estadoError404, estadoError404Anim } from "@/components/Visual";
 import { LandingPage } from "@/pages/LandingPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { RegisterPage } from "@/pages/RegisterPage";
@@ -33,7 +35,14 @@ function HomeRoute() {
 
   if (unavailable) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-4 text-center">
+        <div className="border-2 border-pure-black bg-dark p-2 shadow-block">
+          <RetroVisual
+            src={estadoError404Anim}
+            staticSrc={estadoError404}
+            className="h-32 w-32 object-contain"
+          />
+        </div>
         <p className="lowercase text-lavender">no se pudo comprobar la sesión. revisa tu conexión.</p>
         <button
           type="button"

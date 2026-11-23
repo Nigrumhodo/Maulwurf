@@ -2,7 +2,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/Button";
+import { RetroVisual } from "@/components/ui/RetroVisual";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import {
+  estadoBusquedaRag,
+  estadoBusquedaRagAnim,
+  estadoLeyendoCitas,
+  estadoLeyendoCitasAnim,
+  iconChatCrt,
+  loaderCassetteAmbar,
+  loaderCassetteAmbarStatic,
+  loaderCassetteLavanda,
+  loaderCassetteLavandaStatic,
+} from "@/components/Visual";
 import { CitationList } from "@/components/chat/Citation";
 import { MarkdownBody } from "@/components/chat/MarkdownBody";
 import { ProposalCard } from "@/components/chat/ProposalCard";
@@ -627,12 +639,30 @@ export function ChatWorkspace({
         {loadingHistory ? (
           <p className="text-lavender/80">cargando mensajes…</p>
         ) : messages.length === 0 ? (
-          <p className="text-lavender/80">
-            &gt;{" "}
-            {conversationId === null
-              ? "escribe una pregunta para abrir la conversación."
-              : "sin mensajes todavía."}
-          </p>
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 py-6 text-center">
+            <div className="border-2 border-pure-black bg-dark p-2 shadow-block-sm">
+              <span className="img-dark-only">
+                <RetroVisual
+                  src={estadoBusquedaRagAnim}
+                  staticSrc={estadoBusquedaRag}
+                  className={compact ? "h-24 w-24 object-contain" : "h-36 w-36 object-contain"}
+                />
+              </span>
+              <span className="img-light-only">
+                <RetroVisual
+                  src={estadoLeyendoCitasAnim}
+                  staticSrc={estadoLeyendoCitas}
+                  className={compact ? "h-24 w-24 object-contain" : "h-36 w-36 object-contain"}
+                />
+              </span>
+            </div>
+            <p className="text-lavender/80">
+              &gt;{" "}
+              {conversationId === null
+                ? "escribe una pregunta para abrir la conversación."
+                : "sin mensajes todavía."}
+            </p>
+          </div>
         ) : (
           <>
             {historyCursor !== null && (
@@ -654,6 +684,9 @@ export function ChatWorkspace({
                 }`}
               >
                 <div className="flex items-center gap-2 text-sm text-lavender/60">
+                  {message.role === "assistant" && (
+                    <RetroVisual src={iconChatCrt} className="h-5 w-5 object-contain" />
+                  )}
                   <span>{message.role === "user" ? "tú" : "asistente"}</span>
                   {message.role === "assistant" && <StatusBadge status={message.status} />}
                 </div>
@@ -671,7 +704,23 @@ export function ChatWorkspace({
                       message.content
                     )
                   ) : message.status === "streaming" ? (
-                    "…"
+                    <span className="inline-flex items-center gap-2">
+                      <span className="img-dark-only">
+                        <RetroVisual
+                          src={loaderCassetteLavanda}
+                          staticSrc={loaderCassetteLavandaStatic}
+                          className="h-6 w-auto object-contain"
+                        />
+                      </span>
+                      <span className="img-light-only">
+                        <RetroVisual
+                          src={loaderCassetteAmbar}
+                          staticSrc={loaderCassetteAmbarStatic}
+                          className="h-6 w-auto object-contain"
+                        />
+                      </span>
+                      <span>…</span>
+                    </span>
                   ) : message.status === "failed" ? (
                     "la respuesta falló; vuelve a preguntar."
                   ) : message.status === "cancelled" ? (

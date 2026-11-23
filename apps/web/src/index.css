@@ -75,37 +75,23 @@
 }
 
 /*
- * Maulwurf — estética Cyber Y2K / Retro OS / Glitch Terminal, dos temas:
- *   - oscuro (por defecto): fondo #050505, acento #0f8b8d (azul esmeralda), texto #ffffff.
- *   - claro  (clase `.light` en <html>): fondo #ebebeb, acento violeta-500 #8e51ff, texto #000000.
+ * Maulwurf — Cyber Y2K / Retro 16-bit RPG Terminal, two WCAG-AA themes:
+ *   - dark  (default — Lavanda Nocturna): canvas #12101a, surface #1c1829, accent #c084fc, ink #cb99ff, text #f5f2ff.
+ *   - light (`.light` on <html> — Ámbar CRT & Pergamino): canvas #efe7da, surface #fcf9f2, accent #b45309, ink #9a4306, text #26180a.
  *
- * Los colores son variables CSS que se sobreescriben bajo `:root.light`; los
- * utilities de Tailwind referencian `var(--color-*)`, así que cambiar la clase
- * de `<html>` basta para conmutar todo el árbol.
- *
- * Semántica de los tokens:
- *   --color-dark        → fondo de página.
- *   --color-mint        → acento primario para UI sin texto: bordes, focus, tintes
- *                         (violeta-500 en claro, azul esmeralda en oscuro).
- *   --color-mint-ink    → variante AA del acento para texto y fondos con `on-accent`
- *                         (violeta #7b38ef en claro; igual que mint en oscuro). Los utilities
- *                         `text-mint`/`bg-mint`/`caret-mint` la usan vía `--*-color-mint`.
- *   --color-lavender    → texto secundario (negro en claro, blanco en oscuro).
- *   --color-pure-black  → tinta / bordes / sombras (negro en claro, blanco en oscuro).
- *   --color-pure-white  → papel / texto sobre superficies oscuras.
- *   --color-on-accent   → texto sobre fondos `mint`/`lavender`.
- *   --color-surface     → superficie de ventanas/cards e inputs.
+ * All colors are CSS custom properties overridden under `:root.light`; Tailwind utilities
+ * reference `var(--color-*)`, so toggling `.light` on `<html>` switches the entire tree.
  */
 @theme {
-  /* Color — modo oscuro (default) */
-  --color-pure-black: #ffffff;
-  --color-dark: #050505;
-  --color-pure-white: #ffffff;
-  --color-mint: #0f8b8d;
-  --color-mint-ink: #0f8b8d;
-  --color-lavender: #ffffff;
-  --color-on-accent: #050505;
-  --color-surface: #0a0a0a;
+  /* Color — dark mode (default: Lavanda Nocturna) */
+  --color-pure-black: #dfd6f7;
+  --color-dark: #12101a;
+  --color-pure-white: #f5f2ff;
+  --color-mint: #c084fc;
+  --color-mint-ink: #cb99ff;
+  --color-lavender: #f5f2ff;
+  --color-on-accent: #140b24;
+  --color-surface: #1c1829;
 
   /* Tailwind resolves text-*, bg-* and caret-* from these namespaces before --color-*, so
      text and filled-with-text accents use the AA ink while border/outline/ring keep mint. */
@@ -196,16 +182,16 @@
   }
 }
 
-/* Tema claro: sobrescribe las mismas variables. */
+/* Light theme (Ámbar CRT & Pergamino): overrides the same semantic tokens. */
 :root.light {
-  --color-pure-black: #000000;
-  --color-dark: #ebebeb;
-  --color-pure-white: #ffffff;
-  --color-mint: oklch(60.6% 0.25 292.717);
-  --color-mint-ink: oklch(54% 0.25 292.717);
-  --color-lavender: #000000;
+  --color-pure-black: #26180a;
+  --color-dark: #efe7da;
+  --color-pure-white: #fcf9f2;
+  --color-mint: #b45309;
+  --color-mint-ink: #9a4306;
+  --color-lavender: #26180a;
   --color-on-accent: #ffffff;
-  --color-surface: #ffffff;
+  --color-surface: #fcf9f2;
 }
 
 /*
@@ -315,13 +301,19 @@
   }
   .glitch-hover:hover {
     animation: glitch-shake 0.22s steps(2, end) infinite;
-    text-shadow: 1px 0 rgba(15, 139, 141, 0.55), -1px 0 rgba(0, 255, 255, 0.55);
+    text-shadow: 1px 0 rgba(192, 132, 252, 0.55), -1px 0 rgba(223, 214, 247, 0.55);
+  }
+  :root.light .glitch-hover:hover {
+    text-shadow: 1px 0 rgba(180, 83, 9, 0.45), -1px 0 rgba(38, 24, 10, 0.35);
   }
 
   /* Glitch de un solo disparo (p. ej. al entrar como invitado). */
   .glitch-once {
     animation: glitch-shake 0.3s steps(2, end);
-    text-shadow: 1px 0 rgba(15, 139, 141, 0.55), -1px 0 rgba(0, 255, 255, 0.55);
+    text-shadow: 1px 0 rgba(192, 132, 252, 0.55), -1px 0 rgba(223, 214, 247, 0.55);
+  }
+  :root.light .glitch-once {
+    text-shadow: 1px 0 rgba(180, 83, 9, 0.45), -1px 0 rgba(38, 24, 10, 0.35);
   }
 
   /* Imágenes específicas por tema: la oscura es el default, la clara en .light. */

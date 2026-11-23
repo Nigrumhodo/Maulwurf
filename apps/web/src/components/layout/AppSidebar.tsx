@@ -2,7 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
-import { folder, folderClaro, madriguera, madrigueraClaro } from "@/components/Visual";
+import {
+  iconCalendario,
+  iconCarpeta,
+  iconCassette,
+  iconChatCrt,
+  iconMadriguera,
+  iconTareas,
+} from "@/components/Visual";
 import { Clock } from "./Clock";
 import { Header } from "./Header";
 import {
@@ -14,14 +21,15 @@ import {
 } from "./gestionNav";
 import type { AppNavItem } from "./gestionNav";
 
-interface Sprite {
-  dark: string;
-  light: string;
-}
-
-const SPRITES: Record<string, Sprite> = {
-  [HOME_ITEM.to]: { dark: madriguera, light: madrigueraClaro },
-  [PANEL_ITEM.to]: { dark: folder, light: folderClaro },
+const NAV_ICONS: Record<string, string> = {
+  [HOME_ITEM.to]: iconMadriguera,
+  [PANEL_ITEM.to]: iconCarpeta,
+  "/gestion/subir": iconCassette,
+  "/gestion/biblioteca": iconCarpeta,
+  "/gestion/chat": iconChatCrt,
+  "/gestion/materias": iconCarpeta,
+  "/gestion/tareas": iconTareas,
+  "/gestion/agenda": iconCalendario,
 };
 
 const GLYPH = "w-6 shrink-0 text-center";
@@ -36,8 +44,8 @@ function rowClasses(rail: boolean, active = false): string {
 }
 
 function ItemIcon({ item }: { item: AppNavItem }) {
-  const sprite = SPRITES[item.to];
-  if (sprite === undefined) {
+  const icon = NAV_ICONS[item.to];
+  if (icon === undefined) {
     return (
       <span aria-hidden="true" className={GLYPH}>
         {item.glyph}
@@ -46,8 +54,12 @@ function ItemIcon({ item }: { item: AppNavItem }) {
   }
   return (
     <span aria-hidden="true" className="flex w-6 shrink-0 justify-center">
-      <img src={sprite.dark} alt="" className="img-dark-only h-6 w-6 object-contain" style={{ imageRendering: "pixelated" }} />
-      <img src={sprite.light} alt="" className="img-light-only h-6 w-6 object-contain" style={{ imageRendering: "pixelated" }} />
+      <img
+        src={icon}
+        alt=""
+        className="h-6 w-6 object-contain"
+        style={{ imageRendering: "pixelated" }}
+      />
     </span>
   );
 }

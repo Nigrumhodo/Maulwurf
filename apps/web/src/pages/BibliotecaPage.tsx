@@ -357,6 +357,7 @@ export function BibliotecaPage() {
           ) : loadError !== null && items.length === 0 ? (
             <div role="alert" className="p-4 sm:p-6">
               <EmptyState
+                illustration="error"
                 title="no se pudo cargar la biblioteca"
                 description={loadError}
                 action={
@@ -369,6 +370,7 @@ export function BibliotecaPage() {
           ) : groups.length === 0 ? (
             <div className="p-4 sm:p-6">
               <EmptyState
+                illustration="library"
                 title="aún no hay clases"
                 description="sube la primera para ver aquí su transcripción y el estado de cada etapa."
                 action={

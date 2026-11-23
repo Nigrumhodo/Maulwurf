@@ -163,6 +163,7 @@ export function MateriasPage() {
           ) : loadFailed ? (
             <div className="p-4">
               <EmptyState
+                illustration="error"
                 title="no se pudieron cargar las materias"
                 description="revisa tu conexión e inténtalo de nuevo."
                 action={
@@ -175,6 +176,7 @@ export function MateriasPage() {
           ) : subjects.length === 0 ? (
             <div className="p-4">
               <EmptyState
+                illustration="library"
                 title="aún no tienes materias"
                 description="crea la primera para empezar a subir clases."
                 action={

@@ -7,10 +7,10 @@ File: https://upload.wikimedia.org/wikipedia/commons/a/a5/Tsunami_by_hokusai_19t
 The source image is NOT committed; download it and pass it with --source.
 
 Output: indexed PNG, 320x176, with three palette entries per theme:
-  --theme dark  (default): transparent, #0f8b8d and #ffffff.
-  --theme light: transparent, #8e51ff (Tailwind violet-500, oklch(60.6% 0.25 292.717)) and
-                 #000000. Paper sky and enclosed paper (foam) are transparent, the wave body
-                 is violet and the darkest strokes are black.
+  --theme dark  (default): transparent, #a855f7 and #f3e8ff (Lavanda Nocturna).
+  --theme light: transparent, #b45309 and #26180a (Ámbar CRT & Pergamino). Paper sky and
+                 enclosed paper (foam) stay transparent, the wave body is burnt amber and
+                 the darkest strokes are deep espresso.
 
 Commands:
     uv run --with pillow --with numpy python scripts/assets/pixelate_background.py \
@@ -33,39 +33,17 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-DARK_ACCENT = (15, 139, 141)
-DARK_INK = (255, 255, 255)
-LIGHT_INK = (0, 0, 0)
-LIGHT_OKLCH = (0.606, 0.25, 292.717)
+DARK_ACCENT = (168, 85, 247)
+DARK_INK = (243, 232, 255)
+LIGHT_ACCENT = (180, 83, 9)
+LIGHT_INK = (38, 24, 10)
 BAYER = np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]) / 16.0
 CROP_TOP = 0.18
 FADE_SPAN = 0.40
 
 
-def oklch_to_srgb(lightness: float, chroma: float, hue_deg: float) -> tuple[int, int, int]:
-    """OKLCH -> OKLab -> linear sRGB -> gamma-encoded 8-bit sRGB."""
-    hue = np.radians(hue_deg)
-    a, b = chroma * np.cos(hue), chroma * np.sin(hue)
-    l_ = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3
-    m_ = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3
-    s_ = (lightness - 0.0894841775 * a - 1.2914855480 * b) ** 3
-    lin = np.array(
-        [
-            4.0767416621 * l_ - 3.3077115913 * m_ + 0.2309699292 * s_,
-            -1.2684380046 * l_ + 2.6097574011 * m_ - 0.3413193965 * s_,
-            -0.0041960863 * l_ - 0.7034186147 * m_ + 1.7076147010 * s_,
-        ]
-    )
-    lin = np.clip(lin, 0, 1)
-    enc = np.where(lin <= 0.0031308, 12.92 * lin, 1.055 * lin ** (1 / 2.4) - 0.055)
-    r, g, bl = (round(float(v) * 255) for v in enc)
-    return r, g, bl
-
-
 def light_accent() -> tuple[int, int, int]:
-    accent = oklch_to_srgb(*LIGHT_OKLCH)
-    assert accent == (142, 81, 255), accent
-    return accent
+    return LIGHT_ACCENT
 
 
 def dilate(mask: np.ndarray) -> np.ndarray:

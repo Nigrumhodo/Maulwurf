@@ -10,21 +10,31 @@ function block(selector: string): string {
   return css.slice(start, css.indexOf("}", start));
 }
 
-describe("light palette tokens", () => {
-  it("uses the violet accent with an AA ink variant", () => {
+describe("dual retro palette tokens (Lavanda Nocturna + Ámbar CRT)", () => {
+  it("uses the Ámbar CRT & Pergamino palette in light mode with an AA ink variant", () => {
     const light = block(":root.light");
-    expect(light).toContain("--color-mint: oklch(60.6% 0.25 292.717);");
-    expect(light).toContain("--color-mint-ink: oklch(54% 0.25 292.717);");
+    expect(light).toContain("--color-dark: #efe7da;");
+    expect(light).toContain("--color-surface: #fcf9f2;");
+    expect(light).toContain("--color-pure-black: #26180a;");
+    expect(light).toContain("--color-mint: #b45309;");
+    expect(light).toContain("--color-mint-ink: #9a4306;");
+    expect(light).toContain("--color-on-accent: #ffffff;");
   });
 
-  it("no longer contains the old cobalt accent", () => {
-    expect(css.toLowerCase()).not.toContain("#0000ff");
-  });
-
-  it("keeps the dark accent unchanged", () => {
+  it("uses the Lavanda Nocturna palette in dark mode with an AA ink variant", () => {
     const theme = block("@theme");
-    expect(theme).toContain("--color-mint: #0f8b8d;");
-    expect(theme).toContain("--color-mint-ink: #0f8b8d;");
+    expect(theme).toContain("--color-dark: #12101a;");
+    expect(theme).toContain("--color-surface: #1c1829;");
+    expect(theme).toContain("--color-pure-black: #dfd6f7;");
+    expect(theme).toContain("--color-mint: #c084fc;");
+    expect(theme).toContain("--color-mint-ink: #cb99ff;");
+    expect(theme).toContain("--color-on-accent: #140b24;");
+  });
+
+  it("no longer contains legacy cobalt or emerald accents", () => {
+    const lower = css.toLowerCase();
+    expect(lower).not.toContain("#0000ff");
+    expect(lower).not.toContain("#0f8b8d");
   });
 
   it("routes text and filled accents to the ink variant", () => {
@@ -34,9 +44,11 @@ describe("light palette tokens", () => {
     }
   });
 
-  it("shows the waves layer in the light theme", () => {
-    const rule = block(":root.light .waves-bg");
-    expect(rule).toContain("waves-light.png");
-    expect(rule).not.toContain("display: none");
+  it("shows the pixel-art waves layer in both dark and light themes", () => {
+    const darkWaves = block(".waves-bg");
+    expect(darkWaves).toContain("waves-dark.png");
+    const lightWaves = block(":root.light .waves-bg");
+    expect(lightWaves).toContain("waves-light.png");
+    expect(lightWaves).not.toContain("display: none");
   });
 });

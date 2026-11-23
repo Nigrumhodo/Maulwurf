@@ -1,8 +1,15 @@
 import { Link } from "react-router-dom";
 import { WavesBackground } from "@/components/motion/WavesBackground";
+import { RetroVisual } from "@/components/ui/RetroVisual";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { buttonClasses } from "@/components/ui/buttonStyles";
-import { loginup, loginuposcuro } from "@/components/Visual";
+import {
+  estadoPrivacidadRam,
+  estadoPrivacidadRamAnim,
+  heroMadriguera,
+  heroMadrigueraAnim,
+  heroPergaminoClaro,
+} from "@/components/Visual";
 import { GOOGLE_AUTH_START_URL } from "@/lib/auth";
 
 // D1.8 — Public landing page on `/` when unauthenticated. Makes zero private API calls.
@@ -82,21 +89,20 @@ export function LandingPage() {
             </div>
           </div>
 
-          <div className="flex items-center justify-center border-2 border-pure-black bg-dark p-4">
+          <div className="flex items-center justify-center border-2 border-pure-black bg-dark p-3 shadow-block-sm">
             <span className="img-dark-only">
-              <img
-                src={loginuposcuro}
-                alt="maulwurf terminal"
-                className="max-h-32 w-auto object-contain"
-                style={{ imageRendering: "pixelated" }}
+              <RetroVisual
+                src={heroMadrigueraAnim}
+                staticSrc={heroMadriguera}
+                alt="madriguera subterránea 16-bit de maulwurf"
+                className="max-h-52 w-auto object-contain"
               />
             </span>
             <span className="img-light-only">
-              <img
-                src={loginup}
-                alt="maulwurf terminal"
-                className="max-h-32 w-auto object-contain"
-                style={{ imageRendering: "pixelated" }}
+              <RetroVisual
+                src={heroPergaminoClaro}
+                alt="topo de estudio retro de maulwurf"
+                className="max-h-52 w-auto object-contain"
               />
             </span>
           </div>
@@ -117,12 +123,23 @@ export function LandingPage() {
         </section>
 
         <section className="border-t-2 border-lavender/30 p-5">
-          <h2 className="lowercase mb-3 text-xl text-mint">contrato de privacidad (g1)</h2>
-          <ul className="lowercase grid gap-x-6 gap-y-1 text-base text-lavender/80 md:grid-cols-2">
-            {PRIVACY_POINTS.map((p) => (
-              <li key={p}>&gt; {p}</li>
-            ))}
-          </ul>
+          <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center">
+            <div className="shrink-0 border-2 border-pure-black bg-dark p-1.5 shadow-block-sm">
+              <RetroVisual
+                src={estadoPrivacidadRamAnim}
+                staticSrc={estadoPrivacidadRam}
+                className="h-20 w-20 object-contain"
+              />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h2 className="lowercase mb-3 text-xl text-mint">contrato de privacidad (g1)</h2>
+              <ul className="lowercase grid gap-x-6 gap-y-1 text-base text-lavender/80 md:grid-cols-2">
+                {PRIVACY_POINTS.map((p) => (
+                  <li key={p}>&gt; {p}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
         </section>
 
         <section className="border-t-2 border-lavender/30 p-5">
