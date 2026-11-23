@@ -3,7 +3,7 @@
 /*
  * Maulwurf — estética Cyber Y2K / Retro OS / Glitch Terminal, dos temas:
  *   - oscuro (por defecto): fondo #050505, acento #0f8b8d (azul esmeralda), texto #ffffff.
- *   - claro  (clase `.light` en <html>): fondo #ebebeb, acento #0000ff (cobalto), texto #000000.
+ *   - claro  (clase `.light` en <html>): fondo #ebebeb, acento violeta-500 #8e51ff, texto #000000.
  *
  * Los colores son variables CSS que se sobreescriben bajo `:root.light`; los
  * utilities de Tailwind referencian `var(--color-*)`, así que cambiar la clase
@@ -11,7 +11,11 @@
  *
  * Semántica de los tokens:
  *   --color-dark        → fondo de página.
- *   --color-mint        → acento primario (cobalto en claro, azul esmeralda en oscuro).
+ *   --color-mint        → acento primario para UI sin texto: bordes, focus, tintes
+ *                         (violeta-500 en claro, azul esmeralda en oscuro).
+ *   --color-mint-ink    → variante AA del acento para texto y fondos con `on-accent`
+ *                         (violeta #7b38ef en claro; igual que mint en oscuro). Los utilities
+ *                         `text-mint`/`bg-mint`/`caret-mint` la usan vía `--*-color-mint`.
  *   --color-lavender    → texto secundario (negro en claro, blanco en oscuro).
  *   --color-pure-black  → tinta / bordes / sombras (negro en claro, blanco en oscuro).
  *   --color-pure-white  → papel / texto sobre superficies oscuras.
@@ -24,9 +28,16 @@
   --color-dark: #050505;
   --color-pure-white: #ffffff;
   --color-mint: #0f8b8d;
+  --color-mint-ink: #0f8b8d;
   --color-lavender: #ffffff;
   --color-on-accent: #050505;
   --color-surface: #0a0a0a;
+
+  /* Tailwind resolves text-*, bg-* and caret-* from these namespaces before --color-*, so
+     text and filled-with-text accents use the AA ink while border/outline/ring keep mint. */
+  --text-color-mint: var(--color-mint-ink);
+  --background-color-mint: var(--color-mint-ink);
+  --caret-color-mint: var(--color-mint-ink);
 
   /* Tipografía retro monospaced */
   --font-pixel: "VT323", "Courier New", monospace;
@@ -115,7 +126,8 @@
   --color-pure-black: #000000;
   --color-dark: #ebebeb;
   --color-pure-white: #ffffff;
-  --color-mint: #0000ff;
+  --color-mint: oklch(60.6% 0.25 292.717);
+  --color-mint-ink: oklch(54% 0.25 292.717);
   --color-lavender: #000000;
   --color-on-accent: #ffffff;
   --color-surface: #ffffff;
@@ -190,13 +202,13 @@
 
   body {
     background-color: var(--color-dark);
-    color: var(--color-mint);
+    color: var(--color-mint-ink);
     font-family: var(--font-pixel);
     -webkit-font-smoothing: none;
   }
 
   ::selection {
-    background-color: var(--color-mint);
+    background-color: var(--color-mint-ink);
     color: var(--color-on-accent);
   }
 
@@ -287,13 +299,13 @@
   --fc-neutral-text-color: var(--color-lavender);
   --fc-today-bg-color: color-mix(in srgb, var(--color-mint) 12%, transparent);
   --fc-button-text-color: var(--color-on-accent);
-  --fc-button-bg-color: var(--color-mint);
+  --fc-button-bg-color: var(--color-mint-ink);
   --fc-button-border-color: var(--color-pure-black);
   --fc-button-hover-bg-color: var(--color-surface);
   --fc-button-hover-border-color: var(--color-mint);
   --fc-button-active-bg-color: var(--color-surface);
   --fc-button-active-border-color: var(--color-mint);
-  --fc-event-bg-color: var(--color-mint);
+  --fc-event-bg-color: var(--color-mint-ink);
   --fc-event-border-color: var(--color-mint);
   --fc-event-text-color: var(--color-on-accent);
   color: var(--color-lavender);
@@ -323,7 +335,7 @@
 }
 
 .calendar-shell .fc-toolbar-title {
-  color: var(--color-mint);
+  color: var(--color-mint-ink);
   font-size: 1.5rem;
   text-transform: capitalize;
 }
@@ -337,7 +349,7 @@
 }
 
 .calendar-shell .fc-button-primary {
-  background-color: var(--color-mint);
+  background-color: var(--color-mint-ink);
   border-color: var(--color-pure-black);
   color: var(--color-on-accent);
 }
@@ -345,14 +357,14 @@
 .calendar-shell .fc-button-primary:hover {
   background-color: var(--color-surface);
   border-color: var(--color-mint);
-  color: var(--color-mint);
+  color: var(--color-mint-ink);
 }
 
 .calendar-shell .fc-button-primary:not(:disabled).fc-button-active,
 .calendar-shell .fc-button-primary:not(:disabled):active {
   background-color: var(--color-surface);
   border-color: var(--color-mint);
-  color: var(--color-mint);
+  color: var(--color-mint-ink);
 }
 
 .calendar-shell .fc-button-group > .fc-button {
@@ -373,7 +385,7 @@
 }
 
 .calendar-shell .fc-col-header-cell-cushion {
-  color: var(--color-mint);
+  color: var(--color-mint-ink);
   padding: 0.35rem 0.25rem;
   text-transform: capitalize;
 }
@@ -406,7 +418,7 @@
 }
 
 .calendar-shell .fc-daygrid-more-link {
-  color: var(--color-mint);
+  color: var(--color-mint-ink);
 }
 
 .calendar-shell .fc-scrollgrid-section-sticky > * {
@@ -435,7 +447,7 @@
   }
 }
 
-/* Pixel-art waves layer (WavesBackground): decorative, static, dark theme only. */
+/* Pixel-art waves layer (WavesBackground): decorative, static, one pixel-art image per theme. */
 .waves-bg {
   position: fixed;
   inset: auto 0 0 0;
@@ -453,5 +465,6 @@
 }
 
 :root.light .waves-bg {
-  display: none;
+  opacity: 0.18;
+  background-image: url("/bg/waves-light.png");
 }
