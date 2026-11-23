@@ -242,7 +242,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                       }`}
                     >
                       <span>› {item.label}</span>
-                      <span className="text-xs text-lavender/60">{item.hint}</span>
+                      <span className="text-base text-lavender/60">{item.hint}</span>
                     </button>
                   </li>
                 );

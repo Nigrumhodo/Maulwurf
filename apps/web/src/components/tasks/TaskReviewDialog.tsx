@@ -272,7 +272,7 @@ export function TaskReviewDialog({
               </p>
             )}
             {!closed && effective.date_status !== "resolved" && (
-              <p className="normal-case text-xs text-mint">
+              <p className="normal-case text-base text-mint">
                 &gt; para confirmar esta tarea, primero edítala para definir una fecha resuelta y un
                 bloque de agenda.
               </p>

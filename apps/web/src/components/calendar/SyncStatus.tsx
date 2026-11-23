@@ -25,7 +25,7 @@ export function SyncStatus({ task, showAction = true }: SyncStatusProps) {
   if (description === null && !blocked) return null;
 
   return (
-    <div className="lowercase flex flex-col gap-1 text-xs text-lavender/80">
+    <div className="lowercase flex flex-col gap-1 text-base text-lavender/80">
       {description !== null && <p>{description}</p>}
       {showAction && blocked && (
         <a

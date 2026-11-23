@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { DateInput } from "@/components/ui/DateInput";
 import { Input } from "@/components/ui/Input";
 import { TimezoneSelect } from "@/components/ui/TimezoneSelect";
@@ -183,7 +182,8 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
 
   return (
     <div ref={containerRef}>
-      <Card title="editar tarea" variant="accent">
+      <section aria-label="editar tarea" className="flex flex-col gap-4">
+        <h2 className="lowercase text-xl text-mint">editar tarea</h2>
         <div className="flex flex-col gap-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <Input
@@ -268,7 +268,7 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
 
         <fieldset className="flex flex-col gap-3 border-2 border-lavender/30 p-3">
           <legend className="capitalize px-1 text-mint">bloque de agenda</legend>
-          <p className="text-xs text-lavender/60">
+          <p className="text-base text-lavender/60">
             propuesta editable de Maulwurf; no proviene del docente.
           </p>
           <label className="flex flex-col gap-1">
@@ -334,7 +334,7 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
             </div>
           )}
           {eventMode === "all_day" && (
-            <p className="text-xs text-lavender/60">
+            <p className="text-base text-lavender/60">
               fin exclusivo: el día indicado no se muestra en el evento.
             </p>
           )}
@@ -365,7 +365,7 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
           </Button>
         </div>
       </div>
-    </Card>
+      </section>
     </div>
   );
 }

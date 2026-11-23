@@ -43,7 +43,7 @@ export function GoogleReconnect({ google, compact = false }: GoogleReconnectProp
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <StatusBadge status={google.status} />
-        <span className="lowercase text-xs text-lavender/80">
+        <span className="lowercase text-base text-lavender/80">
           {google.calendar_write_ready ? "listo para escribir" : "sin escritura lista"}
         </span>
       </div>

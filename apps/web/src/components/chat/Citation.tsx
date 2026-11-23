@@ -33,7 +33,7 @@ export interface CitationListProps {
 export function CitationList({ citations }: CitationListProps) {
   if (citations.length === 0) return null;
   return (
-    <ul aria-label="fuentes de la respuesta" className="flex flex-col gap-1 text-xs text-lavender/60">
+    <ul aria-label="fuentes de la respuesta" className="flex flex-col gap-1 text-base text-lavender/60">
       {citations.map((citation) => (
         <li key={citation.index}>
           <CitationLink citation={citation} />

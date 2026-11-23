@@ -20,7 +20,7 @@ export function AppLayout({ children }: { children?: ReactNode }) {
       <div className="relative z-10 min-h-screen">
         <WavesBackground />
         <AppSidebar onOpenSearch={() => setPaletteOpen(true)} />
-        <div className="md:pl-14 lg:pl-60">
+        <div className="relative z-10 md:pl-14 lg:pl-60">
           <main className="mx-auto w-full max-w-[75rem] px-4 py-6 lg:px-8">
             {children ?? <Outlet />}
           </main>
