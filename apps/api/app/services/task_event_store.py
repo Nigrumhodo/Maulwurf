@@ -86,7 +86,14 @@ class SqlTaskEventStore:
     async def load(self, task_id: uuid.UUID) -> SyncTask | None:
         async with self._sessions() as db:
             row = (
-                await db.execute(select(TASKS).where(TASKS.c.id == task_id))
+                await db.execute(
+                    select(TASKS).where(
+                        TASKS.c.id == task_id,
+                        # Defense in depth: a needs_review row must not reach Google even
+                        # if a caller raced the confirm check (F4-04).
+                        TASKS.c.status == "confirmed",
+                    )
+                )
             ).mappings().one_or_none()
         if row is None:
             return None

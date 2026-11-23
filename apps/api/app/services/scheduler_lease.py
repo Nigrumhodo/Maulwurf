@@ -47,6 +47,7 @@ user's local time when the occurrence was created (J4.3/J4.4/J4.6), so the sched
 compares instants.
 """
 
+import hashlib
 import os
 import socket
 import uuid
@@ -128,9 +129,13 @@ def process_holder() -> str:
     """Stable identity of this scheduler process, unique across hosts and restarts.
 
     The nonce separates two processes that reuse the same PID on the same host (a restart
-    inside one container can). It is not a secret and is never derived from user data.
+    inside one container can). The host and pid are hashed so the lease row does not
+    store a raw hostname (F4-11). The nonce is not a secret and is never derived from
+    user data.
     """
-    return f"{socket.gethostname()}:{os.getpid()}:{_PROCESS_NONCE}"
+    material = f"{socket.gethostname()}:{os.getpid()}".encode()
+    digest = hashlib.sha256(material).hexdigest()[:16]
+    return f"worker:{digest}:{_PROCESS_NONCE}"
 
 
 def _require_instant(value: datetime) -> datetime:

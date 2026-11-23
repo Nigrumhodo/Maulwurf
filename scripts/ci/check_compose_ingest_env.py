@@ -3,6 +3,9 @@
 Renders the compose file from a scratch copy whose sibling `.env` holds dummy values, so the
 developer's real `../.env` is never read. Prints variable names and pass/fail only, never values.
 Requires the `docker` CLI with the Compose plugin; it does not start containers.
+
+The default invocation checks the dev file (including the e2e merge) and
+``infra/docker-compose.prod.yml``. ``--compose-file`` checks that one file.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_COMPOSE = REPO_ROOT / "infra" / "docker-compose.yml"
 DEFAULT_E2E = REPO_ROOT / "infra" / "docker-compose.e2e.yml"
 DEFAULT_PROD = REPO_ROOT / "infra" / "docker-compose.prod.yml"
+EDGE_SUBNET = "172.28.10.0/24"
 RENDER_TIMEOUT_S = 120
 TMP_MOUNT = "/work/tmp"
 TMP_FLAGS = frozenset({"noexec", "nosuid", "nodev"})
@@ -43,9 +47,13 @@ INGEST_ENV_ALLOWLIST = frozenset(
         "RIVA_FUNCTION_ID",
         "RIVA_USE_SSL",
         "TMPDIR",
+        "INGEST_METRICS_TOKEN",
     }
 )
 INGEST_RIVA_NAMES = ("NVIDIA_API_KEY", "RIVA_SERVER", "RIVA_FUNCTION_ID", "RIVA_USE_SSL")
+APP_SERVICES = ("api", "worker", "scheduler")
+HARDENED_PROD_SERVICES = ("caddy", "postgres", "redis", "prometheus")
+READ_ONLY_PROD_SERVICES = ("caddy", "redis", "prometheus")
 INGEST_LIMIT_NAMES = (
     "INGEST_MAX_UPLOAD_BYTES",
     "INGEST_FRAGMENT_OVERLAP_S",
@@ -90,6 +98,22 @@ DUMMY_ENV: dict[str, str] = {
     "INGEST_CREDENTIAL_PREVIOUS_SECRET": "cd" * 32,
     "INGEST_CREDENTIAL_PREVIOUS_KID": "k1",
 }
+PROD_DUMMY: dict[str, str] = {
+    "REDIS_PASSWORD": "dummy-redis",
+    "MAULWURF_DOMAIN": "maulwurf.example",
+    "MAULWURF_IMAGE_TAG": "ci",
+    "MAULWURF_METRICS_TOKEN": "dummy-metrics-token",
+    "INGEST_METRICS_TOKEN": "dummy-ingest-metrics-token",
+    "DATABASE_URL_APP": (
+        "postgresql+asyncpg://maulwurf_app_login:dummy-app@postgres:5432/maulwurf"
+    ),
+    "DATABASE_URL_INGEST": (
+        "postgresql+asyncpg://maulwurf_ingest_login:dummy-ingest@postgres:5432/maulwurf"
+    ),
+    "DATABASE_URL_JOBS": (
+        "postgresql+asyncpg://maulwurf_jobs_login:dummy-jobs@postgres:5432/maulwurf"
+    ),
+}
 
 
 @dataclass
@@ -103,7 +127,10 @@ class Report:
 
 
 def render(
-    compose_files: Path | tuple[Path, ...], overrides: Mapping[str, str | None]
+    compose_files: Path | tuple[Path, ...],
+    overrides: Mapping[str, str | None],
+    *,
+    profiles: tuple[str, ...] = (),
 ) -> dict:
     """Render the compose model with `overrides` applied; a None value removes the name.
 
@@ -133,6 +160,8 @@ def render(
         command = ["docker", "compose"]
         for destination in copied:
             command.extend(["-f", str(destination)])
+        for profile in profiles:
+            command.extend(["--profile", profile])
         command.extend(["--env-file", str(env_file), "config", "--format", "json"])
         result = subprocess.run(  # noqa: S603
             command,
@@ -350,7 +379,121 @@ def check_origin(report: Report, compose_file: Path) -> None:
     )
 
 
-def run_checks(compose_file: Path) -> Report:
+def check_riva_not_on_app_services(report: Report, model: Mapping[str, Any], label: str) -> None:
+    """F6-13: NVIDIA/Riva material stays on ingest. Empty overrides env_file; a value does not."""
+    services = model["services"]
+    for name in APP_SERVICES:
+        env = service_env(model, name) if name in services else {}
+        leaked = sorted(key for key in INGEST_RIVA_NAMES if env.get(key))
+        report.check(
+            not leaked,
+            f"{label}: {name} has no NVIDIA/Riva secrets (found: {leaked or 'none'})",
+        )
+
+
+def _command_text(service: Mapping[str, Any]) -> str:
+    command = service.get("command")
+    if isinstance(command, list):
+        return " ".join(str(part) for part in command)
+    if isinstance(command, str):
+        return command
+    return ""
+
+
+def _positive_limit(value: object) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return value > 0
+    return isinstance(value, str) and value.isdigit() and int(value) > 0
+
+
+def check_log_rotation(report: Report, model: Mapping[str, Any], label: str) -> None:
+    for name, service in model["services"].items():
+        if not isinstance(service, dict):
+            report.check(False, f"{label}: {name} logging rotates json-file at 10m x 5")
+            continue
+        logging = service.get("logging") or {}
+        options = logging.get("options") if isinstance(logging, dict) else {}
+        options = options or {}
+        report.check(
+            isinstance(logging, dict)
+            and logging.get("driver") == "json-file"
+            and options.get("max-size") == "10m"
+            and str(options.get("max-file")) == "5",
+            f"{label}: {name} logging rotates json-file at 10m x 5",
+        )
+
+
+def check_prod_hardening(report: Report, model: Mapping[str, Any]) -> None:
+    services = model["services"]
+    for name in HARDENED_PROD_SERVICES:
+        service = services[name]
+        cap_drop = [str(item).upper() for item in (service.get("cap_drop") or [])]
+        cap_add = [str(item).upper() for item in (service.get("cap_add") or [])]
+        security = service.get("security_opt") or []
+        report.check("ALL" in cap_drop, f"prod: {name} drops all capabilities")
+        report.check(
+            "no-new-privileges:true" in security,
+            f"prod: {name} sets no-new-privileges",
+        )
+        report.check(_positive_limit(service.get("pids_limit")), f"prod: {name} sets pids_limit")
+        report.check("NET_RAW" not in cap_add, f"prod: {name} does not add NET_RAW")
+    for name in READ_ONLY_PROD_SERVICES:
+        report.check(
+            services[name].get("read_only") is True,
+            f"prod: {name} root is read-only",
+        )
+    redis_command = _command_text(services["redis"])
+    report.check(
+        "--requirepass" not in redis_command,
+        "prod: redis command has no --requirepass argv",
+    )
+    api_command = _command_text(services["api"])
+    report.check(
+        "10.0.0.0/8" not in api_command and "192.168.0.0/16" not in api_command,
+        "prod: forwarded-allow-ips is not every private range",
+    )
+    report.check(EDGE_SUBNET in api_command or "UVICORN_FORWARDED_ALLOW_IPS" in api_command, (
+        "prod: forwarded-allow-ips stays on the edge subnet"
+    ))
+    ingest_env = service_env(model, "ingest")
+    metrics = ingest_env.get("INGEST_METRICS_TOKEN")
+    credential = ingest_env.get("INGEST_CREDENTIAL_SECRET")
+    report.check(
+        bool(metrics) and metrics != credential,
+        "prod: INGEST_METRICS_TOKEN is set and distinct from the ingest credential",
+    )
+    migrate_url = str(service_env(model, "migrate").get("MAULWURF_DATABASE_URL") or "")
+    report.check(
+        migrate_url.startswith("postgresql") and "maulwurf_app_login" not in migrate_url,
+        "prod: migrate keeps the owner DSN",
+    )
+    report.check(
+        "maulwurf_app_login" in str(service_env(model, "api").get("MAULWURF_DATABASE_URL") or ""),
+        "prod: api uses DATABASE_URL_APP",
+    )
+    report.check(
+        "maulwurf_ingest_login"
+        in str(service_env(model, "ingest").get("MAULWURF_DATABASE_URL") or ""),
+        "prod: ingest uses DATABASE_URL_INGEST",
+    )
+    report.check(
+        "maulwurf_jobs_login" in str(service_env(model, "worker").get("MAULWURF_DATABASE_URL") or ""),
+        "prod: worker uses DATABASE_URL_JOBS",
+    )
+    report.check(
+        "maulwurf_jobs_login"
+        in str(service_env(model, "scheduler").get("MAULWURF_DATABASE_URL") or ""),
+        "prod: scheduler uses DATABASE_URL_JOBS",
+    )
+
+
+def _is_prod(compose_file: Path) -> bool:
+    return compose_file.name == "docker-compose.prod.yml"
+
+
+def run_dev_checks(compose_file: Path) -> Report:
     report = Report()
     full = render(compose_file, {})
     check_ingest(report, full, all_set=True)
@@ -366,43 +509,70 @@ def run_checks(compose_file: Path) -> Report:
 
     check_origin(report, compose_file)
     check_mount_contract(report, full, "base")
+    check_riva_not_on_app_services(report, full, "base")
+    check_log_rotation(report, full, "base")
     merged = render(
         (compose_file, DEFAULT_E2E),
         {"E2E_ALLOW_EPHEMERAL_CREDENTIALS": "1"},
     )
     check_mount_contract(report, merged, "e2e")
+    check_riva_not_on_app_services(report, merged, "e2e")
+    check_log_rotation(report, merged, "e2e")
     return report
 
 
-def run_prod_checks(prod_file: Path) -> Report:
+def run_prod_checks(compose_file: Path) -> Report:
     report = Report()
-    model = render(prod_file, {})
-    check_ingest(report, model, all_set=True)
-    check_api_ingest_pair(report, model, expect_set=True)
-    check_mount_contract(report, model, "prod")
+    full = render(compose_file, PROD_DUMMY, profiles=("observability",))
+    check_ingest(report, full, all_set=True)
+    check_api_ingest_pair(report, full, expect_set=True)
+    check_mount_contract(report, full, "prod")
+    check_riva_not_on_app_services(report, full, "prod")
+    check_log_rotation(report, full, "prod")
+    check_prod_hardening(report, full)
     return report
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--compose-file", type=Path, default=DEFAULT_COMPOSE)
-    parser.add_argument("--prod-compose-file", type=Path, default=DEFAULT_PROD)
-    args = parser.parse_args(argv)
-    if shutil.which("docker") is None:
-        print("FAIL docker CLI not found", file=sys.stderr)
-        return 1
-    try:
-        report = run_checks(args.compose_file.resolve())
-        prod_report = run_prod_checks(args.prod_compose_file.resolve())
-        report.failures.extend(prod_report.failures)
-    except (RuntimeError, subprocess.SubprocessError, json.JSONDecodeError, KeyError) as error:
-        print(f"FAIL {type(error).__name__}: {error}", file=sys.stderr)
-        return 1
+def run_checks(compose_file: Path) -> Report:
+    """Backward-compatible entry: one file, dev or prod by name."""
+    if _is_prod(compose_file):
+        return run_prod_checks(compose_file)
+    return run_dev_checks(compose_file)
+
+
+def _emit(report: Report) -> int:
     if report.failures:
         print(f"{len(report.failures)} check(s) failed", file=sys.stderr)
         return 1
     print("I-S2-JF-11 passed")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--compose-file", type=Path, default=None)
+    parser.add_argument("--prod-compose-file", type=Path, default=None)
+    args = parser.parse_args(argv)
+    if shutil.which("docker") is None:
+        print("FAIL docker CLI not found", file=sys.stderr)
+        return 1
+    targets: list[Path] = []
+    if args.compose_file is not None:
+        targets.append(args.compose_file.resolve())
+    if args.prod_compose_file is not None:
+        targets.append(args.prod_compose_file.resolve())
+    if not targets:
+        targets = [DEFAULT_COMPOSE, DEFAULT_PROD]
+    failed = 0
+    for compose_file in targets:
+        print(f"compose file: {compose_file}")
+        try:
+            report = run_checks(compose_file)
+        except (RuntimeError, subprocess.SubprocessError, json.JSONDecodeError, KeyError) as error:
+            print(f"FAIL {type(error).__name__}: {error}", file=sys.stderr)
+            return 1
+        failed += _emit(report)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

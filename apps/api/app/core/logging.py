@@ -41,17 +41,21 @@ _SENSITIVE_SUBSTRINGS: Final = (
     "prompt",
 )
 _SAFE_SUFFIXES: Final = ("_id", "_ids", "_version", "_count", "_status", "_kid", "_bytes")
+# Query parameters that are credentials even though their names are ordinary words.
+# Exact match: `status_code` and `code_verifier` stay visible.
+_SENSITIVE_EXACT: Final = frozenset({"code", "state"})
 
 # `key=value` or `key: value` inside message text (the codebase logs with `%s=%s`).
+# `&` and `#` end a query value so `code=SECRET&state=STATE` redacts both parameters.
 _KEY_VALUE: Final = re.compile(
     r"(?P<key>[A-Za-z_][A-Za-z0-9_\-]*)(?P<sep>\s*[=:]\s*)"
-    r"(?P<value>\"[^\"]*\"|'[^']*'|[^\s,;]+)"
+    r"(?P<value>\"[^\"]*\"|'[^']*'|[^\s,;&]+)"
 )
 _URL_CREDENTIALS: Final = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]*://)[^\s/@]+@")
 _BEARER: Final = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-~+/=]+")
 # OAuth callback parameters: the authorization `code` is a short-lived credential and the
 # `state` binds it to the signed cookie, so neither may reach an access log line.
-_SENSITIVE_QUERY_KEYS: Final = frozenset({"code", "state"})
+_SENSITIVE_QUERY_KEYS: Final = _SENSITIVE_EXACT
 _QUERY_PARAM: Final = re.compile(r"(?P<lead>[?&])(?P<key>[^=&#]+)=(?P<value>[^&#]*)")
 _UVICORN_ACCESS_PATH_ARG: Final = 2
 
@@ -59,11 +63,22 @@ _UVICORN_ACCESS_PATH_ARG: Final = 2
 def is_sensitive_key(key: str) -> bool:
     """True when a field or key name must never reach the log output."""
     lowered = key.lower()
-    if lowered == "text":
+    if lowered == "text" or lowered in _SENSITIVE_EXACT:
         return True
     if lowered.endswith(_SAFE_SUFFIXES):
         return False
     return any(part in lowered for part in _SENSITIVE_SUBSTRINGS)
+
+
+def _scrub_args(args: Any) -> Any:
+    if isinstance(args, tuple):
+        return tuple(scrub_text(arg) if isinstance(arg, str) else arg for arg in args)
+    if isinstance(args, dict):
+        return {
+            key: scrub_text(value) if isinstance(value, str) else value
+            for key, value in args.items()
+        }
+    return args
 
 
 def scrub_text(text: str) -> str:
@@ -124,14 +139,27 @@ class RedactionFilter(logging.Filter):
     """Mask the message, extra fields and traceback before any handler runs."""
 
     def filter(self, record: logging.LogRecord) -> bool:
+        # Scrub values, then the rendered line. Scrubbing the format string first
+        # turns `api_key=%s` into `api_key=[REDACTED]` and leaves the real argument
+        # unconverted (`not all arguments converted`).
         if (
             record.name == "uvicorn.access"
             and isinstance(record.args, tuple)
             and len(record.args) == 5
         ):
+            # AccessFormatter reads this 5-tuple after the filter, so it has to stay.
             record.args = tuple(
                 self._scrub_access_arg(index, arg) for index, arg in enumerate(record.args)
             )
+        elif isinstance(record.msg, str):
+            if record.args:
+                record.args = _scrub_args(record.args)
+            try:
+                rendered = record.getMessage()
+            except (TypeError, ValueError):
+                rendered = record.msg
+            record.msg = scrub_text(rendered)
+            record.args = ()
         else:
             record.msg = scrub_text(record.getMessage())
             record.args = ()

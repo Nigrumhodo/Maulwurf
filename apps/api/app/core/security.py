@@ -1,8 +1,9 @@
 """Firma HMAC de tokens de estado (OAuth): `sign_state` / `verify_state`.
 
-El contenido efímero del login (`state`, `nonce`, `code_verifier`) viaja en una cookie
-`mw_oauth` firmada con `oauth_state_secret`. El callback la verifica sin guardar nada en el
-servidor; un token ajeno, alterado o expirado falla en tiempo constante y devuelve `None`.
+El contenido efímero del flujo (`state`, `nonce`, `code_verifier`) viaja en una cookie
+firmada con `oauth_state_secret` (`mw_oauth_login`, `mw_oauth_calendar` o `mw_oauth_gmail`).
+El callback la verifica sin guardar nada en el servidor; un token ajeno, alterado o
+expirado falla en tiempo constante y devuelve `None`.
 """
 import base64
 import hashlib

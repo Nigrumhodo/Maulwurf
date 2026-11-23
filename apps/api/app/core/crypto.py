@@ -4,7 +4,9 @@ Formato de cada blob: `nonce (12 bytes) || ciphertext+tag`. Cada cifrado usa un 
 aleatorio nuevo, así dos tokens del mismo usuario nunca comparten nonce. El AAD ata el blob
 a su usuario, a su campo y a su versión de clave: copiar el token de A a la fila de B, el
 refresh al access o reetiquetar la versión hace fallar el descifrado. `key_version` viaja
-en la fila; S1 solo conoce la clave actual, la rotación llega con una segunda versión.
+en la fila. El cifrado nuevo usa siempre la clave actual; el descifrado también acepta la
+clave anterior (`previous_encryption_key` + `previous_encryption_key_version`) para poder
+re-cifrar durante una rotación sin dejar el refresh token ilegible.
 """
 import os
 import uuid
@@ -45,6 +47,22 @@ def _current() -> tuple[AESGCM, int]:
     return _cipher(settings.encryption_key.get_secret_value(), version), version
 
 
+def _cipher_for_version(version: int) -> AESGCM:
+    """Resolve the AES-GCM key for a blob's stored version.
+
+    The current version is the only one `encrypt` writes. A blob still tagged with the
+    previous version decrypts only when that key is configured, so a rotation can read
+    it once and re-encrypt it. Any other version fails closed.
+    """
+    if version == settings.encryption_key_version:
+        return _cipher(settings.encryption_key.get_secret_value(), version)
+    previous = settings.previous_encryption_key
+    previous_version = settings.previous_encryption_key_version
+    if previous is not None and previous_version is not None and version == previous_version:
+        return _cipher(previous.get_secret_value(), version)
+    raise DecryptionError(f"key_version {version} no disponible")
+
+
 def _aad(user_id: uuid.UUID, field: CryptoField, key_version: int) -> bytes:
     return f"{user_id}:{field}:v{key_version}".encode()
 
@@ -59,9 +77,7 @@ def encrypt(plaintext: str, *, user_id: uuid.UUID, field: CryptoField) -> tuple[
 def decrypt(
     blob: bytes, *, key_version: int, user_id: uuid.UUID, field: CryptoField
 ) -> str:
-    cipher, version = _current()
-    if key_version != version:
-        raise DecryptionError(f"key_version {key_version} no disponible")
+    cipher = _cipher_for_version(key_version)
     if len(blob) <= NONCE_BYTES:
         raise DecryptionError("blob truncado")
     try:

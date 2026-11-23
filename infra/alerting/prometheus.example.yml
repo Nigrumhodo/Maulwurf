@@ -13,15 +13,18 @@ global:
   external_labels:
     deployment: maulwurf-reference
 
+# Same mount the production compose uses: ./alerting/maulwurf.rules.yml at
+# /etc/prometheus/rules/maulwurf.rules.yml, and bearer files under
+# /etc/prometheus/secrets (api_metrics_token, ingest_metrics_token).
 rule_files:
-  - /etc/prometheus/maulwurf.rules.yml
+  - /etc/prometheus/rules/*.yml
 
 scrape_configs:
   - job_name: maulwurf-api
     metrics_path: /internal/metrics
     authorization:
       type: Bearer
-      credentials_file: /run/secrets/maulwurf_metrics_token
+      credentials_file: /etc/prometheus/secrets/api_metrics_token
     static_configs:
       - targets: ["api:8000"]
         labels:
@@ -31,7 +34,7 @@ scrape_configs:
     metrics_path: /internal/metrics
     authorization:
       type: Bearer
-      credentials_file: /run/secrets/ingest_credential
+      credentials_file: /etc/prometheus/secrets/ingest_metrics_token
     static_configs:
       - targets: ["ingest:8000"]
         labels:

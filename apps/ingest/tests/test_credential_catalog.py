@@ -121,11 +121,12 @@ def test_catalog_covers_every_persisted_code() -> None:
         "supervisor_error",
         "reception_interrupted",
         "reception_abandoned",
+        "reception_timeout",
     }
     assert written == set(CATALOG)
     for code, spec in CATALOG.items():
         assert spec.status in {"rejected", "requires_reupload", "cancelled"}
-        assert spec.http_status in {409, 413, 415, 422, 500, 503}
+        assert spec.http_status in {408, 409, 413, 415, 422, 500, 503}
         assert spec.http_code
         assert spec.message
         assert code

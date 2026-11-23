@@ -13,14 +13,26 @@ import { clearCsrfToken, getCsrfToken, setCsrfToken } from "./csrf";
 import { isRecord } from "./json";
 import type { Me, SessionProbe } from "./auth";
 
-/** Mismo origen: Caddy enruta /auth/*, /me, /subjects/* y /audios/* a la API. */
-const SAME_ORIGIN = true;
+const EXTERNAL_SCHEME = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+
+/**
+ * Same-origin relative path only. A single leading slash is not enough:
+ * `//host` and `/\host` are cross-origin, and a scheme would send the CSRF
+ * header off-origin. Callers must pass a path, never a URL.
+ */
+export function isSameOriginApiPath(path: string): boolean {
+  if (!path.startsWith("/")) return false;
+  if (path.startsWith("//")) return false;
+  if (path.includes("\\")) return false;
+  if (EXTERNAL_SCHEME.test(path)) return false;
+  return true;
+}
 
 export function apiUrl(path: string): string {
-  if (!path.startsWith("/")) {
-    throw new Error(`La ruta de API debe empezar por '/': ${path}`);
+  if (!isSameOriginApiPath(path)) {
+    throw new Error(`La ruta de API debe ser relativa del mismo origen: ${path}`);
   }
-  return SAME_ORIGIN ? path : path;
+  return path;
 }
 
 /** Cabecera CSRF que exige la API en toda mutación (A1.4). */

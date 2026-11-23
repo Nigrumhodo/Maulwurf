@@ -1,6 +1,7 @@
 """J4.2 unit guardrails for the scheduler election and claim budgets."""
 
 import os
+import socket
 from datetime import timedelta
 from typing import cast
 
@@ -49,9 +50,14 @@ def test_the_process_holder_is_stable_and_identifies_the_process() -> None:
     second = process_holder()
 
     assert first == second
-    assert str(os.getpid()) in first
+    parts = first.split(":")
+    assert len(parts) == 3
+    assert parts[0] == "worker"
+    assert len(parts[1]) == 16
+    assert all(ch in "0123456789abcdef" for ch in parts[1])
+    assert socket.gethostname() not in parts
+    assert str(os.getpid()) not in parts
     assert first.strip() == first
-    assert len(first.split(":")) == 3
 
 
 def test_an_inactive_report_carries_no_claim_counts() -> None:

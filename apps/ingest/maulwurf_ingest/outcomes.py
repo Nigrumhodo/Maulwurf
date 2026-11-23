@@ -74,6 +74,12 @@ CATALOG: dict[str, ErrorSpec] = {
     ),
     "api_error": _technical(),
     "reception_interrupted": _cancelled("reception_interrupted"),
+    "reception_timeout": ErrorSpec(
+        "cancelled",
+        408,
+        "reception_timeout",
+        "La recepción tardó demasiado y se canceló. Vuelve a subir el audio.",
+    ),
     "client_disconnected": _cancelled("client_disconnected"),
     "duplicate_exact": _cancelled("duplicate_exact"),
     "duplicate_variant": _cancelled("duplicate_variant"),

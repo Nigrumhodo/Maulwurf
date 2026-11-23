@@ -80,5 +80,35 @@ class MountContractTest(unittest.TestCase):
         self.assertTrue(self._failures(ulimits={"core": 0}))
 
 
+class RivaIsolationTest(unittest.TestCase):
+    def _model(self, api_env: dict[str, str]) -> dict:
+        empty: dict[str, str] = {}
+        return {
+            "services": {
+                "api": {"environment": api_env},
+                "worker": {"environment": empty},
+                "scheduler": {"environment": empty},
+            }
+        }
+
+    def test_an_empty_override_is_not_a_secret(self) -> None:
+        report = compose.Report()
+        compose.check_riva_not_on_app_services(
+            report,
+            self._model({"NVIDIA_API_KEY": "", "RIVA_SERVER": ""}),
+            "base",
+        )
+        self.assertEqual(report.failures, [])
+
+    def test_a_riva_value_on_the_api_fails(self) -> None:
+        report = compose.Report()
+        compose.check_riva_not_on_app_services(
+            report,
+            self._model({"NVIDIA_API_KEY": "present"}),
+            "base",
+        )
+        self.assertTrue(report.failures)
+
+
 if __name__ == "__main__":
     unittest.main()

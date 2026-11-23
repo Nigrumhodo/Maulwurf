@@ -29,6 +29,8 @@ jobs:
         working-directory: apps/${{ matrix.app }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v5
         with:
           version: "0.12.18"
@@ -53,6 +55,8 @@ jobs:
         working-directory: apps/${{ matrix.app }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v5
         with:
           version: "0.12.18"
@@ -74,6 +78,8 @@ jobs:
         working-directory: apps/web
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -84,6 +90,14 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Reject published source maps
+        run: |
+          maps=$(find dist -name '*.map' -print)
+          if [ -n "$maps" ]; then
+            echo "apps/web/dist must not contain source maps:" >&2
+            printf '%s\n' "$maps" >&2
+            exit 1
+          fi
 
   integration:
     runs-on: ubuntu-latest
@@ -119,6 +133,8 @@ jobs:
       MAULWURF_OAUTH_STATE_SECRET: ci-oauth-state
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       # Los service containers de GitHub no aceptan argumentos de redis-server:
       # se arranca Redis con la política de ADR-0005 (sin persistencia, noeviction).
       - name: Start Redis with the ADR-0005 policy
@@ -197,7 +213,26 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - run: bash scripts/ci/check_no_secrets.sh
+
+  # Non-destructive: reads the lockfile, does not install or rewrite it.
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Production npm audit
+        working-directory: apps/web
+        run: npm audit --omit=dev --audit-level=high --package-lock-only
 
   license-report:
     runs-on: ubuntu-latest
@@ -208,6 +243,8 @@ jobs:
         app: [api, ingest, web]
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - if: matrix.app != 'web'
         uses: astral-sh/setup-uv@v5
         with:
@@ -235,6 +272,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - run: docker build -t maulwurf-api:ci apps/api
       - run: docker build --target runtime -t maulwurf-ingest:ci apps/ingest
       - run: docker build -t maulwurf-web:ci apps/web
@@ -254,6 +293,8 @@ jobs:
         working-directory: infra
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       # `runner.temp` is not available in a job-level env; persist it for the next steps.
       # `E2E_TLS_GID` lets the non-root e2e-asr container read the 640 server key.
       - name: Point the smoke at ephemeral TLS material
@@ -300,7 +341,12 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - run: python3 scripts/ci/check_compose_ingest_env.py
+        with:
+          persist-credentials: false
+      - name: Dev and e2e compose contract
+        run: python3 scripts/ci/check_compose_ingest_env.py --compose-file infra/docker-compose.yml
+      - name: Production compose contract
+        run: python3 scripts/ci/check_compose_ingest_env.py --compose-file infra/docker-compose.prod.yml
 
   # C-S2-JF-13 (J2.10): the Caddy edge limits must stay present and above the API limit.
   caddy-limits:
@@ -308,8 +354,24 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - run: python3 scripts/ci/check_caddy_limits.py
-      - run: python3 scripts/ci/check_caddy_limits.py --caddyfile infra/deploy/Caddyfile.prod --public-tls
+        with:
+          persist-credentials: false
+      - name: Dev Caddy limits
+        run: python3 scripts/ci/check_caddy_limits.py --caddyfile infra/Caddyfile --profile dev
+      - name: Production Caddy limits
+        run: python3 scripts/ci/check_caddy_limits.py --caddyfile infra/deploy/Caddyfile.prod --profile prod --public-tls
+      - name: Validate Caddyfile syntax with real Caddy binary
+        run: |
+          CADDY_IMAGE="caddy:2.8-alpine@sha256:af32e97399febea808609119bb21544d0265c58a02836576e32a2d082c262c17"
+          docker run --rm -e CADDY_HTTPS_PORT=443 \
+            -v "$PWD/infra/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            "$CADDY_IMAGE" caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile --validate >/dev/null
+          docker run --rm -e MAULWURF_DOMAIN=maulwurf.example.com \
+            -v "$PWD/infra/deploy/Caddyfile.prod:/etc/caddy/Caddyfile:ro" \
+            "$CADDY_IMAGE" caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile --validate >/dev/null
+          docker run --rm -e MAULWURF_DOMAIN=maulwurf.example.com -e CADDY_TRUSTED_PROXIES=172.28.10.0/24 \
+            -v "$PWD/infra/deploy/Caddyfile.prod:/etc/caddy/Caddyfile:ro" \
+            "$CADDY_IMAGE" caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile --validate >/dev/null
 
   # C-S2-JL-13 (L2.11): fail when a backticked repository path does not exist.
   docs:
@@ -317,4 +379,6 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - run: python3 scripts/docs/check_refs.py

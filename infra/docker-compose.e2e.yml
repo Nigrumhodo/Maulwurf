@@ -25,6 +25,12 @@
 
 name: maulwurf-e2e
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 x-e2e-fixture: &e2e-fixture
   SMOKE_EXPECTED_TEXT: "La fotosíntesis convierte la luz del sol en energía química. Las plantas usan clorofila."
 
@@ -53,18 +59,22 @@ x-e2e-api-env: &e2e-api-env
 
 services:
   api:
+    logging: *default-logging
     environment:
       <<: *e2e-api-env
 
   worker:
+    logging: *default-logging
     environment:
       <<: *e2e-api-env
 
   scheduler:
+    logging: *default-logging
     environment:
       <<: *e2e-api-env
 
   ingest:
+    logging: *default-logging
     environment:
       E2E_ALLOW_EPHEMERAL_CREDENTIALS: "${E2E_ALLOW_EPHEMERAL_CREDENTIALS:?set E2E_ALLOW_EPHEMERAL_CREDENTIALS=1 only for an ephemeral, non-production run}"
       # Fake key: the ASR child requires a non-empty value before it opens the gRPC
@@ -73,7 +83,7 @@ services:
       RIVA_SERVER: e2e-asr:50051
       RIVA_FUNCTION_ID: e2e-function
       RIVA_USE_SSL: "true"
-      GRPC_DEFAULT_SSL_ROOTS_FILE_PATH: /e2e-tls/ca.pem
+      INGEST_RIVA_CA_FILE: /e2e-tls/ca.pem
       INGEST_CREDENTIAL_SECRET: 4d41554c575552464d41554c575552464d41554c575552464d41554c57555246
     volumes:
       - ${E2E_TLS_DIR:-../.e2e-tls}:/e2e-tls:ro
@@ -123,6 +133,7 @@ services:
       timeout: 3s
       retries: 12
     networks: [data]
+    logging: *default-logging
     restart: unless-stopped
 
   # Riva SpeechRecognition gRPC double over TLS. It reuses the ingest runtime image, which
@@ -165,4 +176,5 @@ services:
       timeout: 3s
       retries: 12
     networks: [data]
+    logging: *default-logging
     restart: unless-stopped

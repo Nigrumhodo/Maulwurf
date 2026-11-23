@@ -310,10 +310,10 @@ async def test_expired_stranded_attempt_ends_requires_reupload(
     assert await _transcripts(pool, audio_id) == 0
 
 
-async def test_stranded_attempt_destroys_a_local_directory_before_fencing(
+async def test_stranded_attempt_fences_then_destroys_the_local_directory(
     pool: asyncpg.Pool, tmpfs_dir: Path,
 ) -> None:
-    """A dead receiving attempt must not leave its audio on this host's tmpfs."""
+    """The row is fenced before its directory is removed, and the audio is gone."""
     if cleanup.open_descriptors_under(tmpfs_dir)[1]:
         pytest.skip("multi-UID /proc: cleanup is fail-closed; run the ingest suite as root")
     attempt, _owned, _audio_id = await _ready(pool)

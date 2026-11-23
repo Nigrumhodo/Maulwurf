@@ -327,6 +327,17 @@ if digest != manifest["dump_sha256"]:
     raise SystemExit("backup_restore: backup checksum does not match the manifest")
 log_name = manifest.get("deletion_log")
 if log_name:
+    if (
+        not isinstance(log_name, str)
+        or not log_name
+        or log_name in {".", ".."}
+        or "/" in log_name
+        or "\\" in log_name
+        or ".." in log_name
+    ):
+        raise SystemExit(
+            "backup_restore: deletion log name must be a basename without '..'"
+        )
     log_path = os.path.join(os.path.dirname(backup_path), log_name)
     if os.path.exists(log_path):
         with open(log_path, "rb") as handle:

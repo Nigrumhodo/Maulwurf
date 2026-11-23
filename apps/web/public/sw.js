@@ -1,10 +1,13 @@
 /* global self, caches, fetch, URL */
 // D4.5 / D4.8 — Static-shell-only Service Worker for Maulwurf.
-// Explicitly refuses to cache or intercept any private API endpoint, upload, SSE stream,
-// transcript, search, chat, Calendar, or notification route (G1 / privacy invariant).
+// Cache only the public shell and hashed static assets (allowlist). The private
+// prefix list is a second gate. Keep this aligned with src/lib/pwa.ts.
+// v2 drops entries the previous denylist policy may have stored.
 
-const CACHE_NAME = "maulwurf-shell-v1";
-const SHELL_URLS = ["/", "/manifest.webmanifest", "/icon.svg"];
+const CACHE_NAME = "maulwurf-shell-v2";
+const PRECACHE_URLS = ["/", "/manifest.webmanifest", "/icon.svg"];
+const CACHEABLE_EXACT = new Set(["/", "/index.html", "/manifest.webmanifest", "/icon.svg"]);
+const CACHEABLE_ASSET_EXTENSIONS = [".js", ".css", ".webp", ".svg", ".png", ".woff2"];
 
 const PRIVATE_PATH_PREFIXES = [
   "/auth",
@@ -30,9 +33,26 @@ function isPrivateOrApiPath(pathname) {
   );
 }
 
+function isAllowlistedShellPath(pathname) {
+  if (CACHEABLE_EXACT.has(pathname)) return true;
+  if (!pathname.startsWith("/assets/")) return false;
+  const dot = pathname.lastIndexOf(".");
+  if (dot < 0) return false;
+  return CACHEABLE_ASSET_EXTENSIONS.includes(pathname.slice(dot).toLowerCase());
+}
+
+function responseIsCacheable(response) {
+  if (!response.ok || response.type !== "basic") return false;
+  const cacheControl = (response.headers.get("cache-control") || "").toLowerCase();
+  return !cacheControl.includes("no-store") && !cacheControl.includes("private");
+}
+
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_URLS)).catch(() => undefined),
+    caches
+      .open(CACHE_NAME)
+      .then((cache) => cache.addAll(PRECACHE_URLS))
+      .catch(() => undefined),
   );
   self.skipWaiting();
 });
@@ -52,6 +72,9 @@ self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET") return;
   if (request.cache === "only-if-cached" && request.mode !== "same-origin") return;
+  // The API client sets cache: "no-store". Do not intercept or store those.
+  if (request.cache === "no-store") return;
+  if (request.headers.has("authorization")) return;
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
@@ -61,8 +84,7 @@ self.addEventListener("fetch", (event) => {
   if (accept.includes("text/event-stream")) return;
 
   const isNavigation = request.mode === "navigate";
-  const isCacheable = SHELL_URLS.includes(url.pathname) || url.pathname.startsWith("/assets/");
-  if (!isNavigation && !isCacheable) return;
+  if (!isNavigation && !isAllowlistedShellPath(url.pathname)) return;
 
   // Every SPA route is the same shell, so a navigation is cached once under "/".
   const cacheKey = isNavigation ? "/" : request;
@@ -70,18 +92,15 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     fetch(request)
       .then((response) => {
-        const cacheControl = (response.headers.get("cache-control") || "").toLowerCase();
         const contentType = (response.headers.get("content-type") || "").toLowerCase();
         // A missing asset answered with the SPA fallback must not be cached as HTML.
         const wrongType = !isNavigation && contentType.includes("text/html");
-        if (
-          response.ok &&
-          response.type === "basic" &&
-          !cacheControl.includes("no-store") &&
-          !wrongType
-        ) {
+        if (responseIsCacheable(response) && !wrongType) {
           const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(cacheKey, clone)).catch(() => undefined);
+          caches
+            .open(CACHE_NAME)
+            .then((cache) => cache.put(cacheKey, clone))
+            .catch(() => undefined);
         }
         return response;
       })

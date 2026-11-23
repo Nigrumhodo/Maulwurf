@@ -6,6 +6,13 @@ name: maulwurf
 
 # Shared by worker and scheduler. The `test` command differs (each process has
 # its own queue and health key); the timing budget does not.
+# Bound json-file logs. Without max-size the default driver grows without a cap.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 x-arq-healthcheck: &arq-healthcheck
   interval: 15s
   # `--check` starts an interpreter that imports the app: room for a cold start.
@@ -47,6 +54,7 @@ services:
       timeout: 3s
       retries: 20
     networks: [data]
+    logging: *default-logging
     restart: unless-stopped
 
   redis:
@@ -73,6 +81,7 @@ services:
       # REDIS_PORT permite un segundo entorno local (p. ej. REDIS_PORT=6380).
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     networks: [data]
+    logging: *default-logging
     restart: unless-stopped
 
   api:
@@ -90,6 +99,13 @@ services:
       <<: *api-env
       MAULWURF_INGEST_URL:
       MAULWURF_INGEST_CREDENTIAL_SECRET:
+      # F6-13: YAML null is a pass-through on Compose 5, so `env_file` would still
+      # inject ingest-only NVIDIA/Riva secrets. An empty value overrides that
+      # injection. The API ignores empty environment values.
+      NVIDIA_API_KEY: ""
+      RIVA_SERVER: ""
+      RIVA_FUNCTION_ID: ""
+      RIVA_USE_SSL: ""
     depends_on:
       postgres:
         condition: service_healthy
@@ -109,6 +125,7 @@ services:
       retries: 12
       start_period: 10s
     networks: [edge, data]
+    logging: *default-logging
     restart: unless-stopped
 
   # J1.5: procesos ARQ con colas separadas. El healthcheck `arq ... --check` exige
@@ -124,6 +141,11 @@ services:
       # A2.17: cross-tenant dispatcher/reconciler/index; the explicit jobs policy only
       # applies to this role and still requires app.cross_tenant='on' in code.
       MAULWURF_DATABASE_ROLE: maulwurf_jobs
+      # F6-13: see the api service. Empty overrides env_file for ingest-only secrets.
+      NVIDIA_API_KEY: ""
+      RIVA_SERVER: ""
+      RIVA_FUNCTION_ID: ""
+      RIVA_USE_SSL: ""
     # Solo Redis (y Postgres para el dispatcher): un fallo de la API no debe dejar la
     # cola sin drenar.
     depends_on:
@@ -140,6 +162,7 @@ services:
       <<: *arq-healthcheck
       test: ["CMD", "arq", "app.workers.arq_app.WorkerSettings", "--check"]
     networks: [data]
+    logging: *default-logging
     restart: unless-stopped
 
   scheduler:
@@ -152,6 +175,11 @@ services:
       <<: *api-env
       # A2.17: see the worker service.
       MAULWURF_DATABASE_ROLE: maulwurf_jobs
+      # F6-13: see the api service. Empty overrides env_file for ingest-only secrets.
+      NVIDIA_API_KEY: ""
+      RIVA_SERVER: ""
+      RIVA_FUNCTION_ID: ""
+      RIVA_USE_SSL: ""
     # Solo Redis (y Postgres para el dispatcher): un fallo de la API no debe dejar la
     # cola sin drenar.
     depends_on:
@@ -168,6 +196,7 @@ services:
       <<: *arq-healthcheck
       test: ["CMD", "arq", "app.workers.arq_app.SchedulerSettings", "--check"]
     networks: [data]
+    logging: *default-logging
     restart: unless-stopped
 
   ingest:
@@ -239,6 +268,7 @@ services:
       retries: 12
       start_period: 10s
     networks: [data]
+    logging: *default-logging
     restart: unless-stopped
 
   web:
@@ -262,14 +292,20 @@ services:
       retries: 12
       start_period: 10s
     networks: [edge]
+    logging: *default-logging
     restart: unless-stopped
 
   caddy:
     image: caddy:2.8-alpine@sha256:af32e97399febea808609119bb21544d0265c58a02836576e32a2d082c262c17
     ports:
-      # Configurables para hosts donde 80/443 ya están ocupados (p. ej. 8080/8443).
-      - "${CADDY_HTTP_PORT:-80}:80"
-      - "${CADDY_HTTPS_PORT:-443}:443"
+      # Loopback by default so a laptop stack is not reachable from the LAN.
+      # To exercise it from another host on a trusted network, publish that
+      # interface for the local run only, for example
+      # `"0.0.0.0:${CADDY_HTTPS_PORT:-443}:443"` (and the same for port 80).
+      # Do not do that on a shared or production host. Ports stay configurable
+      # when 80/443 are already taken (for example 8080/8443).
+      - "127.0.0.1:${CADDY_HTTP_PORT:-80}:80"
+      - "127.0.0.1:${CADDY_HTTPS_PORT:-443}:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -280,6 +316,7 @@ services:
       api:
         condition: service_healthy
     networks: [edge]
+    logging: *default-logging
     restart: unless-stopped
 
 networks:

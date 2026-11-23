@@ -415,8 +415,9 @@ async def test_navigation_rejects_cross_site_sec_fetch_site(
         follow_redirects=False,
     )
 
-    assert response.status_code == 302
-    assert response.headers["location"] == "/settings?calendar=error&reason=csrf_invalid"
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "csrf_invalid"
+    assert OAUTH_COOKIE_NAME not in response.cookies
 
 
 async def test_connect_requests_only_the_new_calendar_scopes(

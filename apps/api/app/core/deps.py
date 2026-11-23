@@ -4,7 +4,7 @@ Uso: `Depends(current_session)` en lecturas autenticadas y `Depends(require_muta
 toda ruta `POST/PUT/PATCH/DELETE`, incluido el `PUT` binario de ingesta.
 """
 import hmac
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import Depends, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -16,8 +16,22 @@ from app.models import Session
 from app.services import sessions
 
 COOKIE_NAME = "mw_session"
-# Cookie de estado efímero del login OAuth (A1.3): firma state/nonce/code_verifier.
+# One signed state cookie per OAuth flow. Sharing a single name let a login and a
+# Calendar/Gmail consent overwrite each other. The legacy name is still written so a
+# client that only echoes `mw_oauth` can finish the callback; the flow cookie is the
+# one a later flow cannot clobber. Path covers `/auth/google/callback`, which is where
+# the browser must send every flow's cookie.
 OAUTH_COOKIE_NAME = "mw_oauth"
+OAUTH_LOGIN_COOKIE = "mw_oauth_login"
+OAUTH_CALENDAR_COOKIE = "mw_oauth_calendar"
+OAUTH_GMAIL_COOKIE = "mw_oauth_gmail"
+OAUTH_COOKIE_PATH = "/auth/google"
+OAuthFlow = Literal["login", "calendar", "gmail"]
+_OAUTH_FLOW_COOKIE: dict[OAuthFlow, str] = {
+    "login": OAUTH_LOGIN_COOKIE,
+    "calendar": OAUTH_CALENDAR_COOKIE,
+    "gmail": OAUTH_GMAIL_COOKIE,
+}
 CSRF_HEADER = "X-CSRF-Token"
 MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
@@ -40,22 +54,37 @@ def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(COOKIE_NAME, path="/", secure=True, httponly=True, samesite="lax")
 
 
-def set_oauth_state_cookie(response: Response, token: str, max_age: int) -> None:
+def _write_oauth_cookie(response: Response, name: str, token: str, max_age: int) -> None:
     response.set_cookie(
-        OAUTH_COOKIE_NAME,
+        name,
         token,
         max_age=max_age,
-        path="/auth/google",
+        path=OAUTH_COOKIE_PATH,
         secure=True,
         httponly=True,
         samesite="lax",
     )
 
 
-def clear_oauth_state_cookie(response: Response) -> None:
-    response.delete_cookie(
-        OAUTH_COOKIE_NAME, path="/auth/google", secure=True, httponly=True, samesite="lax"
+def set_oauth_state_cookie(
+    response: Response, token: str, max_age: int, *, flow: OAuthFlow = "login"
+) -> None:
+    """Seal OAuth state for one flow without erasing another flow's cookie."""
+    _write_oauth_cookie(response, _OAUTH_FLOW_COOKIE[flow], token, max_age)
+    _write_oauth_cookie(response, OAUTH_COOKIE_NAME, token, max_age)
+
+
+def clear_oauth_state_cookie(response: Response, *names: str) -> None:
+    targets = names or (
+        OAUTH_COOKIE_NAME,
+        OAUTH_LOGIN_COOKIE,
+        OAUTH_CALENDAR_COOKIE,
+        OAUTH_GMAIL_COOKIE,
     )
+    for name in targets:
+        response.delete_cookie(
+            name, path=OAUTH_COOKIE_PATH, secure=True, httponly=True, samesite="lax"
+        )
 
 
 async def resolve_authenticated_session(db: AsyncSession, request: Request) -> Session:

@@ -49,7 +49,9 @@ class RenderedEmail:
 
 
 def _require_safe_header_text(value: str, *, field: str, allow_empty: bool = False) -> str:
-    if "\r" in value or "\n" in value or "\x00" in value:
+    # C0 and C1 controls can split or hide a header. Reject the whole ranges, not only
+    # CR/LF/NUL, so a tab or a next-line character cannot leave the header block.
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F or 0x80 <= ord(ch) <= 0x9F for ch in value):
         raise NotificationDeliveryRejected(TEMPLATE_INVALID)
     cleaned = value.strip()
     if not cleaned and not allow_empty:

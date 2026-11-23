@@ -45,7 +45,8 @@ orquestador o en un archivo `.env.prod` fuera del control de versiones (`chmod 6
 | `MAULWURF_SECRET_KEY` | Firma HMAC de sesiones | >= 32 bytes aleatorios, distinto al resto |
 | `MAULWURF_ENCRYPTION_KEY` | Cifrado AES-GCM de tokens OAuth | 32 bytes (`base64`), distinto al resto |
 | `MAULWURF_OAUTH_STATE_SECRET` | Firma de states OAuth | >= 32 bytes aleatorios, distinto al resto |
-| `MAULWURF_INGEST_CREDENTIAL_SECRET` | Secreto compartido `api <-> ingest` + `/internal/metrics` de `ingest` | Independiente de `SECRET_KEY` |
+| `MAULWURF_INGEST_CREDENTIAL_SECRET` | Secreto compartido de firma HMAC `api <-> ingest` | Independiente de `SECRET_KEY` y de `INGEST_METRICS_TOKEN` |
+| `INGEST_METRICS_TOKEN` | Bearer de `GET /internal/metrics` en `ingest` | >= 32 bytes, distinto de `MAULWURF_INGEST_CREDENTIAL_SECRET` |
 | `MAULWURF_METRICS_TOKEN` | Bearer de `GET /internal/metrics` en `api` | >= 32 bytes, independiente del resto |
 | `MAULWURF_GOOGLE_CLIENT_ID` / `_SECRET` | OAuth 2.0 web | Redirect URI: `https://$MAULWURF_DOMAIN/auth/google/callback` |
 | `MAULWURF_AUTH_RATE_LIMIT_PER_MINUTE` / `MAULWURF_INTEGRATION_RATE_LIMIT_PER_MINUTE` | Límites por minuto en `/auth/*` e `/integrations/*` | Por defecto `30` en `docker-compose.prod.yml` |
@@ -56,7 +57,7 @@ Si habilitas el perfil `--profile observability`, coloca los tokens en dos fiche
 lectura (`chmod 400`) dentro de `PROMETHEUS_SECRETS_DIR`:
 
 - `api_metrics_token` (igual a `MAULWURF_METRICS_TOKEN`)
-- `ingest_credential_secret` (igual a `MAULWURF_INGEST_CREDENTIAL_SECRET`)
+- `ingest_metrics_token` (igual a `INGEST_METRICS_TOKEN`, nunca el secreto de firma HMAC)
 
 ---
 

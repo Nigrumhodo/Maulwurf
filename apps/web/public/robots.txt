@@ -1,8 +1,8 @@
+# Public entry points only. Private routes stay covered by Disallow: /
+# without listing them.
 User-agent: *
-Allow: /
-Disallow: /auth/
-Disallow: /biblioteca
-Disallow: /chat
-Disallow: /gestion
-Disallow: /settings
-Disallow: /calendario
+Allow: /$
+Allow: /login
+Allow: /register
+Allow: /welcome
+Disallow: /

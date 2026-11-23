@@ -23,7 +23,16 @@ case "$app" in
   web)
     cd "$repo_root/apps/web"
     npm ci --ignore-scripts
-    npx --yes "license-checker@$license_checker_version" --production --json \
+    # The checker is installed at a pinned version. `npx --yes` without a version
+    # would fetch whatever is current; this path refuses an unpinned spec.
+    if [[ ! "$license_checker_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      echo "license_report.sh: license-checker version is not pinned" >&2
+      exit 2
+    fi
+    tool_dir="$(mktemp -d)"
+    npm install --ignore-scripts --prefix "$tool_dir" \
+      "license-checker@${license_checker_version}"
+    "$tool_dir/node_modules/.bin/license-checker" --production --json \
       --excludePackages "maulwurf-web@0.1.0" --out "$out_json"
     ;;
   *)
