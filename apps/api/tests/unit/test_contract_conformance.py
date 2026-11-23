@@ -424,7 +424,7 @@ async def test_patch_me_only_accepts_the_frozen_timezone_field() -> None:
 
 def test_upload_limit_has_a_single_source() -> None:
     agreed = Settings(
-        _env_file=None, **{**_SECRETS, "INGEST_MAX_UPLOAD_BYTES": 209_715_200}
+        _env_file=None, **{**_SECRETS, "INGEST_MAX_UPLOAD_BYTES": 1_073_741_824}
     )
     assert agreed.ingest_max_upload_bytes == agreed.upload_max_bytes
     assert _settings().ingest_max_upload_bytes is None

@@ -7,7 +7,7 @@ import {
   loaderCassetteLavandaStatic,
 } from "@/components/Visual";
 import type { IngestionCapabilities } from "@/lib/capabilities";
-import { acceptedFileExtensions, formatBytes } from "@/lib/upload";
+import { acceptedFileInputAccept, formatBytes } from "@/lib/upload";
 import type { UploadProgress } from "@/lib/upload";
 
 // D2.4 — Panel de envío reutilizable por D2.1/D2.2 y por «volver a subir» de la biblioteca.
@@ -51,7 +51,7 @@ export function AudioUploadPanel({
         <span className="text-mint">&gt; archivo de audio</span>
         <input
           type="file"
-          accept={acceptedFileExtensions(capabilities).join(",")}
+          accept={acceptedFileInputAccept(capabilities)}
           onChange={(event) => onFileChange(event.target.files?.[0] ?? null)}
           disabled={uploading}
           className="bg-surface text-lavender border-2 border-lavender px-3 py-2 file:mr-3 file:border-2 file:border-mint file:bg-transparent file:px-2 file:py-1 file:font-pixel file:text-mint"

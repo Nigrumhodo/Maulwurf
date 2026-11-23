@@ -53,15 +53,15 @@ def _clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 def test_slots_follow_the_environment_and_stay_capped(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("INGEST_SLOTS", raising=False)
     assert Settings().ingest_slots == 1
-    monkeypatch.setenv("INGEST_SLOTS", "2")
-    assert Settings().ingest_slots == 2
-    monkeypatch.setenv("INGEST_SLOTS", "9")
+    monkeypatch.setenv("INGEST_SLOTS", "30")
+    assert Settings().ingest_slots == 30
+    monkeypatch.setenv("INGEST_SLOTS", "31")
     with pytest.raises(ValidationError):
         Settings()
-    monkeypatch.setattr(settings, "ingest_slots", 2)
-    assert active_slot_count() == 2
-    monkeypatch.setattr(settings, "ingest_slots", 9)
-    assert active_slot_count() == 2
+    monkeypatch.setattr(settings, "ingest_slots", 30)
+    assert active_slot_count() == 30
+    monkeypatch.setattr(settings, "ingest_slots", 50)
+    assert active_slot_count() == 30
     monkeypatch.setattr(settings, "ingest_slots", 0)
     assert active_slot_count() == 1
 
@@ -73,7 +73,10 @@ async def test_the_gate_reads_the_configured_slot_count(monkeypatch: pytest.Monk
     assert await _gate.take(second) is False
     await _gate.release(first)
     monkeypatch.setattr(settings, "ingest_slots", 2)
+    assert await _gate.take(first)
     assert await _gate.take(second)
+    # Same attempt cannot double-acquire its own slot.
+    assert await _gate.take(first) is False
 
 
 async def test_a_hung_body_times_out_and_deletes_the_partial_file(tmp_path: Path) -> None:

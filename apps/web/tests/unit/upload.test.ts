@@ -9,6 +9,7 @@ import type { IngestionCapabilities } from "@/lib/capabilities";
 import { clearCsrfToken, setCsrfToken } from "@/lib/csrf";
 import {
   acceptedFileExtensions,
+  acceptedFileInputAccept,
   buildAudioCreate,
   cancelAttempt,
   capabilitiesUsable,
@@ -318,6 +319,7 @@ describe("formatBytes y extensiones aceptadas", () => {
     expect(formatBytes(512)).toBe("512 B");
     expect(formatBytes(2048)).toBe("2 KiB");
     expect(formatBytes(1024 * 1024)).toBe("1.0 MiB");
+    expect(formatBytes(1024 * 1024 * 1024)).toBe("1.0 GiB");
   });
 
   it("deriva las extensiones del input desde los formatos publicados", () => {
@@ -325,6 +327,23 @@ describe("formatBytes y extensiones aceptadas", () => {
       acceptedFileExtensions({ ...CAPABILITIES, accepted_input_formats: ["wav", "MP3"] }),
     ).toEqual([".wav", ".mp3"]);
     expect(acceptedFileExtensions(null)).toEqual([]);
+  });
+
+  it("construye un atributo accept compatible con móviles para m4a y otros formatos", () => {
+    const accept = acceptedFileInputAccept({
+      ...CAPABILITIES,
+      accepted_input_formats: ["wav", "m4a"],
+    });
+    const tokens = accept.split(",");
+    expect(tokens).toContain(".wav");
+    expect(tokens).toContain(".m4a");
+    expect(tokens).toContain("audio/mp4");
+    expect(tokens).toContain("audio/x-m4a");
+    expect(tokens).toContain("audio/m4a");
+    expect(tokens).toContain("audio/aac");
+    expect(tokens).toContain("audio/mp4a-latm");
+    expect(tokens).toContain("audio/*");
+    expect(acceptedFileInputAccept(null)).toBe("");
   });
 });
 
@@ -356,6 +375,26 @@ describe("validateFile", () => {
   it("acepta el formato publicado dentro del máximo", () => {
     const file = new File([new Uint8Array(2)], "clase.wav", { type: "audio/wav" });
     expect(validateFile(file, caps)).toEqual({ ok: true, format: "wav" });
+  });
+
+  it("acepta grabaciones móviles m4a con MIME de Android/iOS, parámetros o MIME vacío", () => {
+    const m4aCaps: IngestionCapabilities = {
+      ...CAPABILITIES,
+      max_upload_bytes: 1024 * 1024 * 1024,
+      accepted_input_formats: ["wav", "mp3", "m4a", "ogg", "webm", "flac", "opus"],
+    };
+    const cases = [
+      new File([new Uint8Array(4)], "nota.m4a", { type: "audio/mp4" }),
+      new File([new Uint8Array(4)], "nota.m4a", { type: "audio/x-m4a" }),
+      new File([new Uint8Array(4)], "nota.m4a", { type: "audio/mp4a-latm" }),
+      new File([new Uint8Array(4)], "nota.m4a", { type: "audio/mp4; codecs=mp4a.40.2" }),
+      new File([new Uint8Array(4)], "nota.m4a", { type: "video/mp4" }),
+      new File([new Uint8Array(4)], "nota.m4a", { type: "" }),
+      new File([new Uint8Array(4)], "nota.opus", { type: "audio/ogg; codecs=opus" }),
+    ];
+    for (const file of cases) {
+      expect(validateFile(file, m4aCaps).ok).toBe(true);
+    }
   });
 });
 

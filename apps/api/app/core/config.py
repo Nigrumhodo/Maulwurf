@@ -171,7 +171,7 @@ class Settings(BaseSettings):
     # allowlist propuesta por S1.A3 y límite de bytes de `.env.example` (200 MiB, no aprobado).
     privacy_notice_version: str = "2026-09-v1"
     ingest_languages: tuple[str, ...] = Field(default=("es", "en", "fr"), min_length=1)
-    upload_max_bytes: int = Field(default=209_715_200, ge=1)
+    upload_max_bytes: int = Field(default=1_073_741_824, ge=1)
     # A2.19: `ingest` owns the reception cut (`INGEST_MAX_UPLOAD_BYTES`) and the shared `.env`
     # reaches this process too. Reading the same name lets startup reject two disagreeing
     # size limits instead of silently cutting bytes with a different value than the API

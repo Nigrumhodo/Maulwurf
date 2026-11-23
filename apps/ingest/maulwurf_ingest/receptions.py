@@ -70,25 +70,25 @@ _TASKS: set[asyncio.Task[object]] = set()
 class _Gate:
     def __init__(self) -> None:
         self._used = 0
-        self._users: set[uuid.UUID] = set()
+        self._attempts: set[uuid.UUID] = set()
         self._lock = asyncio.Lock()
 
     @property
     def slots(self) -> int:
         return active_slot_count()
 
-    async def take(self, user_id: uuid.UUID) -> bool:
+    async def take(self, attempt_id: uuid.UUID) -> bool:
         async with self._lock:
-            if self._used >= self.slots or user_id in self._users:
+            if self._used >= self.slots or attempt_id in self._attempts:
                 return False
             self._used += 1
-            self._users.add(user_id)
+            self._attempts.add(attempt_id)
             return True
 
-    async def release(self, user_id: uuid.UUID) -> None:
+    async def release(self, attempt_id: uuid.UUID) -> None:
         async with self._lock:
-            if user_id in self._users:
-                self._users.remove(user_id)
+            if attempt_id in self._attempts:
+                self._attempts.remove(attempt_id)
                 if self._used:
                     self._used -= 1
 
@@ -97,7 +97,7 @@ class _Gate:
 
     def reset(self) -> None:
         self._used = 0
-        self._users.clear()
+        self._attempts.clear()
 
 
 class _Hold:
@@ -230,10 +230,10 @@ async def open_service_pool(app: object) -> None:
         return
     dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
     try:
-        # Four connections for this process. Compose's budget is
-        # 3 * (pool 5 + overflow 5) for api/worker/scheduler, plus this 4,
-        # under Postgres' default max_connections of 100.
-        created = await asyncpg.create_pool(dsn, min_size=1, max_size=4, timeout=2.0)
+        # Twelve connections cover up to 30 concurrent transcriptions sending periodic lease
+        # heartbeats and fragment progress updates. Compose's total budget stays well under
+        # Postgres' default max_connections of 100 (3 * 10 + 12 = 42).
+        created = await asyncpg.create_pool(dsn, min_size=1, max_size=12, timeout=2.0)
     except Exception as exc:  # noqa: BLE001 — a down database is capacity, and the message may hold the DSN
         logger.warning("reception.pool_failed error=%s", type(exc).__name__)
         return
@@ -290,7 +290,7 @@ async def _cleanup(pool: asyncpg.Pool, hold: _Hold) -> str:
     hold.cleanup_status = recorded
     _remember(hold.lease.attempt_id, recorded)
     _holds.pop(hold.lease.attempt_id, None)
-    await _gate.release(hold.lease.user_id)
+    await _gate.release(hold.lease.attempt_id)
     return recorded
 
 
@@ -325,7 +325,7 @@ async def _abandon(hold: _Hold) -> str:
     hold.cleanup_status = hold.cleanup_status or "failed"
     _remember(hold.lease.attempt_id, hold.cleanup_status)
     _holds.pop(hold.lease.attempt_id, None)
-    await _gate.release(hold.lease.user_id)
+    await _gate.release(hold.lease.attempt_id)
     return hold.cleanup_status
 
 
@@ -390,10 +390,10 @@ async def _open_hold(
             instance=instance, ttl=leases.DEFAULT_LEASE_TTL,
         )
     except Exception:  # noqa: BLE001 — any acquire failure must return the slot
-        await _gate.release(claims.user_id)
+        await _gate.release(claims.attempt_id)
         raise
     if lease is None:
-        await _gate.release(claims.user_id)
+        await _gate.release(claims.attempt_id)
         return _error(409, "attempt_not_active")
     attempt_dir = cleanup.AttemptDir(str(claims.attempt_id), None)
     try:
@@ -416,7 +416,7 @@ async def _open_hold(
             "reception.open_failed attempt_id=%s error=%s",
             claims.attempt_id, type(exc).__name__,
         )
-        await _gate.release(claims.user_id)
+        await _gate.release(claims.attempt_id)
         try:
             await leases.transition(
                 pool, lease, from_status="receiving", to_status="requires_reupload",
@@ -454,11 +454,11 @@ async def put_receive(attempt_id: uuid.UUID, request: Request) -> JSONResponse:
         return checked
     if not admission.uploads_admitted() or not _writable_tmp():
         return _error(503, "capacity_unavailable")
-    if not await _gate.take(checked.user_id):
+    if not await _gate.take(checked.attempt_id):
         return _error(503, "capacity_unavailable")
     pool = await _service_pool(request)
     if pool is None:
-        await _gate.release(checked.user_id)
+        await _gate.release(checked.attempt_id)
         return _error(503, "capacity_unavailable")
     opened = await _open_hold(pool, claims=checked, instance=_instance_id(request))
     if isinstance(opened, JSONResponse):
@@ -519,7 +519,7 @@ async def put_receive(attempt_id: uuid.UUID, request: Request) -> JSONResponse:
                     _safe_terminal(pool, hold, code=failure, from_status="receiving"),
                 )
             finally:
-                await _gate.release(checked.user_id)
+                await _gate.release(checked.attempt_id)
     if disconnected is not None:
         raise disconnected
     spec = CATALOG[failure]
@@ -592,7 +592,7 @@ async def post_admit(attempt_id: uuid.UUID, request: Request) -> JSONResponse:
             )
         finally:
             _holds.pop(attempt_id, None)
-            await _gate.release(hold.lease.user_id)
+            await _gate.release(hold.lease.attempt_id)
 
     _track(asyncio.create_task(_admitted()))
     return JSONResponse(status_code=202, content={"status": "transcribing"})

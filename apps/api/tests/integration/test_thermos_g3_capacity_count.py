@@ -11,7 +11,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import IngestionAttempt
-from app.models.ingestion import ACTIVE_INGESTION_STATES
+from app.models.ingestion import EXECUTING_INGESTION_STATES
 from tests.integration.actors import make_actor, make_attempt
 
 pytestmark = pytest.mark.integration
@@ -22,7 +22,7 @@ COUNT_FUNCTION = select(func.public.count_active_ingestion_attempts())
 TENANT_COUNT = (
     select(func.count())
     .select_from(IngestionAttempt)
-    .where(IngestionAttempt.status.in_(ACTIVE_INGESTION_STATES))
+    .where(IngestionAttempt.status.in_(EXECUTING_INGESTION_STATES))
 )
 
 
@@ -33,15 +33,19 @@ async def _as_app(db: AsyncSession, user_id: uuid.UUID) -> None:
     )
 
 
-async def test_app_role_counts_every_tenant_but_reads_only_its_own(
+async def test_app_role_counts_every_tenant_executing_attempt_and_ignores_reservations(
     db_session: AsyncSession,
 ) -> None:
     alice = await make_actor(db_session)
     bob = await make_actor(db_session)
-    await make_attempt(db_session, alice)
-    await make_attempt(db_session, bob)
-    await make_attempt(db_session, bob)
-    instance_wide = await db_session.scalar(TENANT_COUNT)  # owner session: every row
+    # Idle reservations stay `awaiting_upload` and must not consume global slots.
+    await make_attempt(db_session, alice, status="awaiting_upload")
+    await make_attempt(db_session, bob, status="awaiting_upload")
+    # Executing attempts across both tenants count globally.
+    await make_attempt(db_session, alice, status="receiving")
+    await make_attempt(db_session, bob, status="transcribing")
+    await make_attempt(db_session, bob, status="transcript_committed_cleanup_pending")
+    instance_wide = await db_session.scalar(TENANT_COUNT)  # owner session: every executing row
     assert instance_wide is not None and instance_wide >= 3
 
     await _as_app(db_session, alice.user_id)
@@ -80,8 +84,8 @@ async def test_non_superuser_owner_counts_through_the_gated_policy(
     owner = f"mw_g3_owner_{uuid.uuid4().hex[:8]}"
     alice = await make_actor(db_session)
     bob = await make_actor(db_session)
-    await make_attempt(db_session, alice)
-    await make_attempt(db_session, bob)
+    await make_attempt(db_session, alice, status="transcribing")
+    await make_attempt(db_session, bob, status="receiving")
     instance_wide = await db_session.scalar(TENANT_COUNT)
     await db_session.execute(text(f'CREATE ROLE "{owner}" NOLOGIN NOSUPERUSER NOBYPASSRLS'))
     await db_session.execute(text(f'GRANT SELECT ON ingestion_attempts TO "{owner}"'))

@@ -65,12 +65,11 @@ https://localhost {
 		path /audios/*/content
 	}
 	handle @upload {
-		# J2.10: 220 MB > the provisional 200 MiB API limit (209715200 bytes). The
-		# margin lets the API return its 413 envelope; this ceiling only stops abusive
-		# bodies before they reach the application. Re-check it if D4 publishes a
-		# larger limit.
+		# J2.10: 1100 MB > the 1 GiB API limit (1073741824 bytes). The margin lets the
+		# API return its 413 envelope; this ceiling only stops abusive bodies before they
+		# reach the application.
 		request_body {
-			max_size 220MB
+			max_size 1100MB
 		}
 		reverse_proxy api:8000
 	}

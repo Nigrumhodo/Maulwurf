@@ -103,7 +103,11 @@ async def make_audio(db: AsyncSession, actor: Actor, *, subject: Subject | None 
 
 
 async def make_attempt(
-    db: AsyncSession, actor: Actor, *, audio: Audio | None = None
+    db: AsyncSession,
+    actor: Actor,
+    *,
+    audio: Audio | None = None,
+    status: str = "awaiting_upload",
 ) -> IngestionAttempt:
     """Intento `awaiting_upload` vigente (15 min), como lo deja `POST /audios`."""
     audio = audio or await make_audio(db, actor)
@@ -115,7 +119,7 @@ async def make_attempt(
         cloud_processing_accepted_at=now,
         third_party_voice_acknowledged_at=now,
         declared_providers={"asr": "test"},
-        status="awaiting_upload",
+        status=status,
         owner_instance="test",
         fencing_token=1,
         upload_expires_at=now + timedelta(minutes=15),
