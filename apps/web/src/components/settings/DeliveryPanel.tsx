@@ -210,7 +210,7 @@ export function DeliveryPanel() {
                       </span>
                     )}
                   </div>
-                  <span className="text-xs text-lavender/60">
+                  <span className="text-base text-lavender/60">
                     intentos: {item.attempts} · programado: {formatStamp(item.scheduled_at)}
                   </span>
                 </div>
@@ -219,7 +219,7 @@ export function DeliveryPanel() {
                   {notificationStatusExplanation(item.status, item.last_error_code)}
                 </p>
 
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-lavender/60">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-base text-lavender/60">
                   <span>
                     {item.sent_at !== null
                       ? `enviado: ${formatStamp(item.sent_at)}`
