@@ -2,8 +2,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
+import { RetroVisual } from "@/components/ui/RetroVisual";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import {
+  estadoBusquedaRag,
+  estadoBusquedaRagAnim,
+  estadoLeyendoCitas,
+  estadoLeyendoCitasAnim,
+  iconChatCrt,
+  loaderCassetteAmbar,
+  loaderCassetteAmbarStatic,
+  loaderCassetteLavanda,
+  loaderCassetteLavandaStatic,
+} from "@/components/Visual";
 import { CitationList } from "@/components/chat/Citation";
 import { MarkdownBody } from "@/components/chat/MarkdownBody";
 import { ProposalCard } from "@/components/chat/ProposalCard";
@@ -170,6 +181,8 @@ export function ChatWorkspace({
   const [draft, setDraft] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ChatConversation | null>(null);
+  // Below lg only one pane is visible; both stay mounted so state and the stream survive a toggle.
+  const [showList, setShowList] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const assistantIdRef = useRef<string | null>(null);
@@ -300,6 +313,7 @@ export function ChatWorkspace({
       skipNextHistoryRef.current = created.id;
       setConversations((current) => [created, ...current]);
       setConversationId(created.id);
+      setShowList(false);
       setMessages([]);
       setHistoryCursor(null);
       return created.id;
@@ -468,6 +482,7 @@ export function ChatWorkspace({
   }
 
   function selectConversation(id: string) {
+    setShowList(false);
     if (id === conversationId) return;
     setConversationId(id);
     setMessages([]);
@@ -476,9 +491,10 @@ export function ChatWorkspace({
   }
 
   const sidebar = !generalOnly ? (
-    <Card title="conversaciones">
+    <section aria-label="conversaciones" className="min-w-0">
       <div className="lowercase flex flex-col gap-3">
-        <div className="flex flex-col gap-2 border-2 border-lavender/30 px-3 py-2">
+        <h2 className="capitalize text-lg text-mint">conversaciones</h2>
+        <div className="flex flex-col gap-2 border-b-2 border-lavender/30 pb-3">
           <p className="text-mint">&gt; nueva conversación</p>
           <select
             aria-label="alcance de la conversación"
@@ -487,7 +503,7 @@ export function ChatWorkspace({
               setScopeMode(event.target.value as ChatMode);
               setNotice(null);
             }}
-            className="bg-surface text-lavender border-2 border-lavender px-2 py-1"
+            className="min-h-10 bg-surface text-lavender border-2 border-lavender px-2 py-1"
           >
             <option value="all">todas las clases</option>
             <option value="subject">una materia</option>
@@ -498,7 +514,7 @@ export function ChatWorkspace({
               aria-label="materia de la conversación"
               value={scopeSubjectId}
               onChange={(event) => setScopeSubjectId(event.target.value)}
-              className="bg-surface text-lavender border-2 border-lavender px-2 py-1"
+              className="min-h-10 bg-surface text-lavender border-2 border-lavender px-2 py-1"
             >
               <option value="">selecciona materia</option>
               {subjects.map((subject) => (
@@ -513,7 +529,7 @@ export function ChatWorkspace({
               aria-label="clase de la conversación"
               value={scopeAudioId}
               onChange={(event) => setScopeAudioId(event.target.value)}
-              className="bg-surface text-lavender border-2 border-lavender px-2 py-1"
+              className="min-h-10 bg-surface text-lavender border-2 border-lavender px-2 py-1"
             >
               <option value="">selecciona clase</option>
               {audios.map((audio) => (
@@ -526,6 +542,7 @@ export function ChatWorkspace({
           <Button
             type="button"
             size="sm"
+            variant="secondary"
             disabled={creating}
             onClick={() => void openNewConversation()}
           >
@@ -534,9 +551,9 @@ export function ChatWorkspace({
         </div>
 
         {loadingConversations ? (
-          <p className="text-lavender/60">cargando conversaciones…</p>
+          <p className="text-lavender/80">cargando conversaciones…</p>
         ) : conversations.length === 0 ? (
-          <p className="text-lavender/60">aún no hay conversaciones.</p>
+          <p className="text-lavender/80">aún no hay conversaciones.</p>
         ) : (
           <ul className="flex flex-col gap-1">
             {conversations.map((conversation) => (
@@ -551,7 +568,7 @@ export function ChatWorkspace({
                   }`}
                 >
                   <span className="block truncate">{conversationLabel(conversation)}</span>
-                  <span className="block text-xs text-lavender/50">
+                  <span className="block text-sm text-lavender/60">
                     {conversation.mode === "all" ? "general" : modeLabel(conversation.mode)}
                   </span>
                 </button>
@@ -559,7 +576,7 @@ export function ChatWorkspace({
                   type="button"
                   aria-label={`borrar conversación ${conversationLabel(conversation)}`}
                   onClick={() => setDeleteTarget(conversation)}
-                  className="border-2 border-lavender/30 px-2 text-mint hover:border-mint"
+                  className="min-h-8 border-2 border-lavender/30 px-2 text-mint hover:border-mint"
                 >
                   ×
                 </button>
@@ -573,7 +590,7 @@ export function ChatWorkspace({
           </Button>
         )}
       </div>
-    </Card>
+    </section>
   ) : null;
 
   const chatBody = (
@@ -588,7 +605,7 @@ export function ChatWorkspace({
                 ? conversationLabel(selectedConversation)
                 : "nueva conversación"}
           </p>
-          <p className="text-lavender/50">
+          <p className="text-lavender/60">
             {generalOnly ? "preguntas generales sobre tus apuntes" : "conversación con evidencia"}
           </p>
         </div>
@@ -620,14 +637,32 @@ export function ChatWorkspace({
 
       <div ref={listRef} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
         {loadingHistory ? (
-          <p className="text-lavender/60">cargando mensajes…</p>
+          <p className="text-lavender/80">cargando mensajes…</p>
         ) : messages.length === 0 ? (
-          <p className="text-lavender/60">
-            &gt;{" "}
-            {conversationId === null
-              ? "escribe una pregunta para abrir la conversación."
-              : "sin mensajes todavía."}
-          </p>
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 py-6 text-center">
+            <div className="border-2 border-pure-black bg-dark p-2 shadow-block-sm">
+              <span className="img-dark-only">
+                <RetroVisual
+                  src={estadoBusquedaRagAnim}
+                  staticSrc={estadoBusquedaRag}
+                  className={compact ? "h-24 w-24 object-contain" : "h-36 w-36 object-contain"}
+                />
+              </span>
+              <span className="img-light-only">
+                <RetroVisual
+                  src={estadoLeyendoCitasAnim}
+                  staticSrc={estadoLeyendoCitas}
+                  className={compact ? "h-24 w-24 object-contain" : "h-36 w-36 object-contain"}
+                />
+              </span>
+            </div>
+            <p className="text-lavender/80">
+              &gt;{" "}
+              {conversationId === null
+                ? "escribe una pregunta para abrir la conversación."
+                : "sin mensajes todavía."}
+            </p>
+          </div>
         ) : (
           <>
             {historyCursor !== null && (
@@ -648,7 +683,10 @@ export function ChatWorkspace({
                   message.role === "user" ? "self-end items-end" : "self-start items-start"
                 }`}
               >
-                <div className="flex items-center gap-2 text-xs text-lavender/50">
+                <div className="flex items-center gap-2 text-sm text-lavender/60">
+                  {message.role === "assistant" && (
+                    <RetroVisual src={iconChatCrt} className="h-5 w-5 object-contain" />
+                  )}
                   <span>{message.role === "user" ? "tú" : "asistente"}</span>
                   {message.role === "assistant" && <StatusBadge status={message.status} />}
                 </div>
@@ -666,7 +704,23 @@ export function ChatWorkspace({
                       message.content
                     )
                   ) : message.status === "streaming" ? (
-                    "…"
+                    <span className="inline-flex items-center gap-2">
+                      <span className="img-dark-only">
+                        <RetroVisual
+                          src={loaderCassetteLavanda}
+                          staticSrc={loaderCassetteLavandaStatic}
+                          className="h-6 w-auto object-contain"
+                        />
+                      </span>
+                      <span className="img-light-only">
+                        <RetroVisual
+                          src={loaderCassetteAmbar}
+                          staticSrc={loaderCassetteAmbarStatic}
+                          className="h-6 w-auto object-contain"
+                        />
+                      </span>
+                      <span>…</span>
+                    </span>
                   ) : message.status === "failed" ? (
                     "la respuesta falló; vuelve a preguntar."
                   ) : message.status === "cancelled" ? (
@@ -710,7 +764,7 @@ export function ChatWorkspace({
           className="min-h-16 w-full resize-none border-2 border-lavender bg-surface px-3 py-2 font-pixel text-lavender caret-mint placeholder:text-lavender/40 focus:border-mint focus:outline-none disabled:opacity-50"
         />
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs text-lavender/50">{draft.length}/{MAX_CHAT_CHARS}</span>
+          <span className="text-sm text-lavender/60">{draft.length}/{MAX_CHAT_CHARS}</span>
           <div className="flex items-center gap-2">
             {streaming && (
               <Button type="button" size="sm" variant="danger" onClick={() => void handleCancel()}>
@@ -735,9 +789,25 @@ export function ChatWorkspace({
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
-      {sidebar}
-      <Card title="conversación">{chatBody}</Card>
+    <div className="grid lg:grid-cols-[18rem_minmax(0,1fr)]">
+      <div className="flex items-center gap-2 border-b-2 border-lavender/30 p-3 lg:hidden">
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          aria-expanded={showList}
+          onClick={() => setShowList((open) => !open)}
+        >
+          {showList ? "◂ volver a la conversación" : "▸ ver conversaciones"}
+        </Button>
+      </div>
+      <div className={`p-4 ${showList ? "block" : "hidden"} lg:block`}>{sidebar}</div>
+      <section
+        aria-label="conversación"
+        className={`min-w-0 p-4 lg:border-l-2 lg:border-lavender/30 ${showList ? "hidden" : "block"} lg:block`}
+      >
+        {chatBody}
+      </section>
       <ConfirmDialog
         open={deleteTarget !== null}
         title="borrar conversación"

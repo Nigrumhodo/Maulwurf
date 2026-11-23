@@ -224,9 +224,11 @@ describe("TareasPage", () => {
     );
     await screen.findByText("Resolver la guía");
 
-    fireEvent.change(screen.getByLabelText("estado de la tarea"), {
-      target: { value: "confirmed" },
-    });
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "estado de la tarea" })).getByRole("button", {
+        name: "confirmadas",
+      }),
+    );
     fireEvent.change(screen.getByLabelText("materia de la tarea"), {
       target: { value: "s1" },
     });

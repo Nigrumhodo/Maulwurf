@@ -1,7 +1,6 @@
 import { Link } from "react-router-dom";
 import { TranscriptLink } from "@/components/transcript/TranscriptLink";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { formatTaskDue } from "@/lib/tasks";
 import type { Task, TaskQualityState } from "@/lib/tasks";
@@ -37,10 +36,11 @@ export function ClassItems({
   const items = ordered(Array.isArray(tasks) ? tasks : []);
 
   return (
-    <Card title="elementos detectados">
-      <div className="lowercase flex flex-col gap-3">
+    <section aria-label="elementos detectados" className="lowercase py-5 first:pt-0 last:pb-0">
+      <div className="flex flex-col gap-3">
+        <h2 className="capitalize text-xl text-mint">elementos detectados</h2>
         {loading ? (
-          <p className="text-lavender/60">&gt; cargando elementos detectadosÃ¢â‚¬Â¦</p>
+          <p className="text-base text-lavender/60">&gt; cargando elementos detectados…</p>
         ) : error !== null ? (
           <div className="flex flex-wrap items-center gap-2">
             <p role="alert" className="text-mint">
@@ -51,25 +51,28 @@ export function ClassItems({
             </Button>
           </div>
         ) : items.length === 0 ? (
-          <p className="text-lavender/60">
+          <p className="text-base text-lavender/60">
             &gt; no se detectaron tareas en esta clase.
           </p>
         ) : (
-          <ul aria-label="elementos detectados" className="flex flex-col gap-2">
+          <ul
+            aria-label="elementos detectados"
+            className="flex flex-col divide-y-2 divide-lavender/20"
+          >
             {items.map((task) => {
               const due = formatTaskDue(task);
               const evidence = task.evidence[0];
               return (
                 <li
                   key={task.id}
-                  className="flex flex-col gap-1 border-2 border-lavender/25 px-3 py-2"
+                  className="flex flex-col gap-1 py-3 first:pt-0 last:pb-0"
                 >
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="normal-case text-lavender">{task.titulo}</span>
                     <StatusBadge status={task.status} />
-                    <span className="text-xs text-lavender/60">{task.tipo}</span>
+                    <span className="text-sm text-lavender/60">{task.tipo}</span>
                     {due !== null && (
-                      <time className="text-xs text-lavender/60" dateTime={task.due_date ?? task.due_at ?? undefined}>
+                      <time className="text-sm text-lavender/60" dateTime={task.due_date ?? task.due_at ?? undefined}>
                         {due}
                       </time>
                     )}
@@ -82,7 +85,7 @@ export function ClassItems({
                       <Link
                         to={`/gestion/tareas?status=all&edit=${encodeURIComponent(task.id)}`}
                         aria-label={`editar tarea ${task.titulo}`}
-                        className="inline-flex items-center border-2 border-lavender/40 px-2 py-0.5 text-xs text-lavender hover:border-mint hover:text-mint"
+                        className="inline-flex min-h-8 items-center border-2 border-lavender/40 px-2 py-1.5 text-sm text-lavender hover:border-mint hover:text-mint"
                       >
                         editar
                       </Link>
@@ -94,18 +97,18 @@ export function ClassItems({
           </ul>
         )}
 
-        <Link to="/gestion/tareas" className="text-xs text-mint underline decoration-dotted">
+        <Link to="/gestion/tareas" className="inline-block py-2 text-sm text-mint underline decoration-dotted">
           abrir la bandeja de tareas
         </Link>
 
         {items.some((task) => !ACTIVE_STATUSES.has(task.status)) && (
-          <p className="text-xs text-lavender/50">
+          <p className="text-sm text-lavender/60">
             {items.filter((task) => !ACTIVE_STATUSES.has(task.status)).length} elemento(s)
             cerrado(s) al final.
           </p>
         )}
       </div>
-    </Card>
+    </section>
   );
 }
 

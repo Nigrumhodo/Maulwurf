@@ -7,7 +7,7 @@ const components: Components = {
   p: ({ children }) => <p className="my-0 leading-relaxed">{children}</p>,
   strong: ({ children }) => <strong className="font-bold">{children}</strong>,
   em: ({ children }) => <em className="italic">{children}</em>,
-  del: ({ children }) => <del className="text-lavender/50 line-through">{children}</del>,
+  del: ({ children }) => <del className="text-lavender/60 line-through">{children}</del>,
   h1: ({ children }) => <h3 className="mt-2 text-lg font-bold text-mint">{children}</h3>,
   h2: ({ children }) => <h4 className="mt-2 text-base font-bold text-mint">{children}</h4>,
   h3: ({ children }) => <h5 className="mt-2 text-base font-bold text-mint">{children}</h5>,
@@ -31,7 +31,7 @@ const components: Components = {
   code: ({ children }) => <code className="font-code text-[0.9em] text-mint">{children}</code>,
   table: ({ children }) => (
     <div className="max-w-full overflow-x-auto">
-      <table className="w-full border-collapse text-sm">{children}</table>
+      <table className="w-full border-collapse text-base">{children}</table>
     </div>
   ),
   thead: ({ children }) => <thead className="text-mint">{children}</thead>,
@@ -39,7 +39,7 @@ const components: Components = {
   tr: ({ children }) => <tr className="border-b border-lavender/20">{children}</tr>,
   th: ({ children }) => <th className="border border-lavender/30 px-2 py-1 text-left">{children}</th>,
   td: ({ children }) => <td className="border border-lavender/30 px-2 py-1 text-left">{children}</td>,
-  a: ({ children }) => <span className="text-lavender/70">{children}</span>,
+  a: ({ children }) => <span className="text-lavender/80">{children}</span>,
   img: () => null,
   input: () => null,
 };
@@ -54,7 +54,7 @@ export interface MarkdownBodyProps {
  */
 export function MarkdownBody({ content }: MarkdownBodyProps) {
   return (
-    <div className="normal-case flex flex-col gap-2">
+    <div className="normal-case flex flex-col gap-2 text-lg leading-relaxed">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeSanitize]}

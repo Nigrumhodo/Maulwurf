@@ -1,81 +1,38 @@
-import { NavLink } from "react-router-dom";
-import { useAuth } from "@/components/auth/AuthProvider";
-import { ThemeToggle } from "@/components/ui/ThemeToggle";
-import { folder, folderClaro, madriguera, madrigueraClaro } from "@/components/Visual";
-import { Clock } from "./Clock";
+import type { Ref } from "react";
+import { Link } from "react-router-dom";
 
-function navClass({ isActive }: { isActive: boolean }): string {
-  return `capitalize font-pixel flex items-center gap-2 border-2 border-pure-black px-3 py-1 text-lavender hover:text-mint ${
-    isActive ? "bg-mint text-on-accent" : ""
-  }`;
+export interface HeaderProps {
+  sectionLabel: string;
+  menuOpen: boolean;
+  onToggleMenu: () => void;
+  menuButtonRef?: Ref<HTMLButtonElement>;
 }
 
-// D- (Dashboard) — Header global: brand + reloj a la izquierda, "inicio" y el
-// botón "gestión" (hub académico con menú lateral) centrados y, a la derecha,
-// ajustes, toggle de tema + "salir". El menú desplegable "académico" pasó a ser
-// la página `/gestion` con su propia navegación colapsable.
-export function Header({ onOpenSearch }: { onOpenSearch?: () => void } = {}) {
-  const { logout } = useAuth();
-
+// Mobile-only top bar (< md). Above that width the app menu is a fixed column, so the header
+// tabs and utilities of earlier waves live in the menu instead.
+export function Header({ sectionLabel, menuOpen, onToggleMenu, menuButtonRef }: HeaderProps) {
   return (
-    <header className="sticky top-0 z-50 border-b-2 border-pure-black bg-dark">
-      <div className="mx-auto grid max-w-7xl grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 py-3">
-        <div className="flex items-center gap-4">
-          <NavLink to="/" className="hidden lowercase text-xl text-mint sm:block">
-            maulwurf<span className="text-lavender">@lab</span>
-          </NavLink>
-          <div className="hidden sm:block">
-            <Clock />
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <NavLink to="/" end className={navClass}>
-            <span className="img-dark-only">
-              <img src={madriguera} alt="" className="h-9 w-9 object-contain" style={{ imageRendering: "pixelated" }} />
-            </span>
-            <span className="img-light-only">
-              <img src={madrigueraClaro} alt="" className="h-9 w-9 object-contain" style={{ imageRendering: "pixelated" }} />
-            </span>
-            inicio
-          </NavLink>
-
-          <NavLink to="/gestion" className={navClass}>
-            <span className="img-dark-only">
-              <img src={folder} alt="" className="h-9 w-9 object-contain" style={{ imageRendering: "pixelated" }} />
-            </span>
-            <span className="img-light-only">
-              <img src={folderClaro} alt="" className="h-9 w-9 object-contain" style={{ imageRendering: "pixelated" }} />
-            </span>
-            <span className="capitalize">gestión</span>
-          </NavLink>
-        </div>
-
-        <div className="flex items-center justify-end gap-2">
-          {onOpenSearch !== undefined && (
-            <button
-              type="button"
-              onClick={onOpenSearch}
-              aria-label="buscar con ctrl+k"
-              className="lowercase font-pixel hidden items-center gap-1.5 border-2 border-pure-black px-2.5 py-1 text-lavender hover:border-mint hover:text-mint md:inline-flex"
-            >
-              <span>buscar</span>
-              <kbd className="border border-lavender/40 px-1 text-xs text-mint">ctrl+k</kbd>
-            </button>
-          )}
-          <NavLink to="/settings" className={navClass}>
-            ajustes
-          </NavLink>
-          <ThemeToggle />
-          <button
-            type="button"
-            onClick={() => void logout()}
-            className="capitalize font-pixel border-2 border-pure-black px-3 py-1 text-lavender hover:text-mint active:translate-x-[1px] active:translate-y-[1px]"
-          >
-            salir
-          </button>
-        </div>
-      </div>
+    <header className="sticky top-0 z-40 flex h-14 items-center gap-3 border-b-2 border-pure-black bg-surface px-3 md:hidden">
+      <Link to="/" className="inline-flex min-h-10 shrink-0 items-center lowercase text-xl text-mint">
+        maulwurf<span className="text-lavender">@lab</span>
+      </Link>
+      <p className="capitalize min-w-0 flex-1 truncate text-lavender">
+        <span className="text-mint" aria-hidden="true">
+          ›{" "}
+        </span>
+        {sectionLabel}
+      </p>
+      <button
+        ref={menuButtonRef}
+        type="button"
+        onClick={onToggleMenu}
+        aria-label="menú"
+        aria-expanded={menuOpen}
+        aria-controls="app-menu"
+        className="inline-flex min-h-10 min-w-10 shrink-0 items-center justify-center border-2 border-pure-black text-xl leading-none text-lavender shadow-block-sm hover:text-mint"
+      >
+        <span aria-hidden="true">☰</span>
+      </button>
     </header>
   );
 }

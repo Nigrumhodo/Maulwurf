@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { DateInput } from "@/components/ui/DateInput";
 import { Input } from "@/components/ui/Input";
 import { TimezoneSelect } from "@/components/ui/TimezoneSelect";
@@ -182,7 +181,8 @@ export function TaskCreateForm({
   const canReviewImmediately = dueMode !== "missing" && eventMode !== "none";
 
   return (
-    <Card title="nueva tarea manual" variant="accent" onClose={busy ? undefined : onCancel}>
+    <section aria-label="nueva tarea manual" className="flex flex-col gap-4">
+      <h2 className="lowercase text-xl text-mint">nueva tarea manual</h2>
       <div className="flex flex-col gap-4">
         <div className="grid gap-3 sm:grid-cols-3">
           <div className="sm:col-span-2">
@@ -283,7 +283,7 @@ export function TaskCreateForm({
 
         <fieldset className="flex flex-col gap-3 border-2 border-lavender/30 p-3">
           <legend className="capitalize px-1 text-mint">bloque de agenda (calendar)</legend>
-          <p className="text-xs text-lavender/60">
+          <p className="text-base text-lavender/60">
             se rellena automáticamente con tu fecha de vencimiento; puedes ajustarlo o dejarlo sin
             bloque si aún no quieres agendarla.
           </p>
@@ -353,7 +353,7 @@ export function TaskCreateForm({
                   setDurationMinutes(Math.max(1, Number(event.target.value) || 1));
                 }}
               />
-              <p className="self-end text-sm text-lavender/70">
+              <p className="self-end text-sm text-lavender/80">
                 fin calculado:{" "}
                 {eventEnd === null
                   ? "pendiente de fecha"
@@ -392,6 +392,6 @@ export function TaskCreateForm({
           </Button>
         </div>
       </div>
-    </Card>
+    </section>
   );
 }

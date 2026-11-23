@@ -1,22 +1,97 @@
 import type { ReactNode } from "react";
+import { RetroVisual } from "@/components/ui/RetroVisual";
+import {
+  estadoBibliotecaVacia,
+  estadoBusquedaRag,
+  estadoBusquedaRagAnim,
+  estadoError404,
+  estadoError404Anim,
+  estadoLeyendoCitas,
+  estadoLeyendoCitasAnim,
+  estadoTareasCafe,
+  estadoTareasCafeAnim,
+} from "@/components/Visual";
 
-// D1.5 — Empty state: caja punteada con título, descripción y acción opcional.
-// Se usa donde no hay datos que mostrar (biblioteca vacía, bandeja sin tareas…).
+export type EmptyStateIllustration = "library" | "tasks" | "error" | "reading";
+
+// D1.5 — Empty state: caja punteada con ilustración 16-bit opcional, título, descripción y acción.
+// Se usa donde no hay datos que mostrar (biblioteca vacía, bandeja sin tareas, errores de carga…).
 export interface EmptyStateProps {
   title: string;
   description?: string;
   action?: ReactNode;
+  illustration?: EmptyStateIllustration;
   className?: string;
 }
 
-export function EmptyState({ title, description, action, className = "" }: EmptyStateProps) {
+function Illustration({ kind }: { kind: EmptyStateIllustration }) {
+  if (kind === "library") {
+    return (
+      <div className="border-2 border-pure-black bg-dark p-2 shadow-block-sm">
+        <RetroVisual src={estadoBibliotecaVacia} className="h-36 w-36 object-contain" />
+      </div>
+    );
+  }
+  if (kind === "tasks") {
+    return (
+      <div className="border-2 border-pure-black bg-dark p-2 shadow-block-sm">
+        <RetroVisual
+          src={estadoTareasCafeAnim}
+          staticSrc={estadoTareasCafe}
+          className="h-36 w-36 object-contain"
+        />
+      </div>
+    );
+  }
+  if (kind === "error") {
+    return (
+      <div className="border-2 border-pure-black bg-dark p-2 shadow-block-sm">
+        <RetroVisual
+          src={estadoError404Anim}
+          staticSrc={estadoError404}
+          className="h-36 w-36 object-contain"
+        />
+      </div>
+    );
+  }
+  return (
+    <div className="border-2 border-pure-black bg-dark p-2 shadow-block-sm">
+      <span className="img-dark-only">
+        <RetroVisual
+          src={estadoBusquedaRagAnim}
+          staticSrc={estadoBusquedaRag}
+          className="h-36 w-36 object-contain"
+        />
+      </span>
+      <span className="img-light-only">
+        <RetroVisual
+          src={estadoLeyendoCitasAnim}
+          staticSrc={estadoLeyendoCitas}
+          className="h-36 w-36 object-contain"
+        />
+      </span>
+    </div>
+  );
+}
+
+export function EmptyState({
+  title,
+  description,
+  action,
+  illustration,
+  className = "",
+}: EmptyStateProps) {
   return (
     <div
-      className={`capitalize font-pixel flex flex-col items-center justify-center gap-3 border-2 border-dashed border-lavender/50 px-6 py-10 text-center ${className}`}
+      className={`capitalize font-pixel flex flex-col items-center justify-center gap-3 border-2 border-dashed border-lavender/50 px-6 py-8 text-center ${className}`}
     >
-      <span className="text-4xl leading-none text-mint" aria-hidden="true">
-        ░
-      </span>
+      {illustration !== undefined ? (
+        <Illustration kind={illustration} />
+      ) : (
+        <span className="text-4xl leading-none text-mint" aria-hidden="true">
+          ░
+        </span>
+      )}
       <p className="text-lavender">{title}</p>
       {description != null && <p className="text-lavender/60">{description}</p>}
       {action != null && <div className="mt-1">{action}</div>}

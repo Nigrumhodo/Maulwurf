@@ -1,6 +1,7 @@
 import { useSearchParams } from "react-router-dom";
 import { ChatWorkspace } from "@/components/chat/ChatWorkspace";
 import type { ChatMode, ConversationScope } from "@/lib/chat";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 // D2.6 — Chat académico: todas las clases, una materia o una clase. La ruta acepta
 // `?mode=subject&subject_id=…` / `?mode=class&audio_id=…` para que biblioteca o materias
@@ -10,6 +11,7 @@ function modeFromParam(value: string | null): ChatMode {
 }
 
 export function ChatPage() {
+  useDocumentTitle("chat");
   const [params] = useSearchParams();
   const mode = modeFromParam(params.get("mode"));
   const initialScope: ConversationScope = {
@@ -19,14 +21,14 @@ export function ChatPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-1">
+    <div className="flex flex-col border-2 border-pure-black bg-surface shadow-block">
+      <header className="flex flex-col gap-1 border-b-2 border-lavender/30 p-4 sm:p-6">
         <h1 className="capitalize text-2xl text-mint">chat</h1>
-        <p className="lowercase text-lavender/60">
+        <p className="max-w-prose lowercase text-base text-lavender/80">
           &gt; pregunta sobre todas tus clases, una materia o una clase concreta. Las respuestas
           se apoyan en fragmentos de la biblioteca.
         </p>
-      </div>
+      </header>
       <ChatWorkspace initialScope={initialScope} />
     </div>
   );

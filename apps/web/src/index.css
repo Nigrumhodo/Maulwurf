@@ -1,36 +1,108 @@
 @import "tailwindcss";
 
+/* Self-hosted font faces (Fontsource 5.3.0 latin + latin-ext subsets, SIL OFL 1.1). */
+
+@font-face {
+  font-family: "VT323";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/vt323-latin-400-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "VT323";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/vt323-latin-ext-400-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Fira Code";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/fira-code-latin-400-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Fira Code";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/fira-code-latin-ext-400-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Fira Code";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./fonts/fira-code-latin-500-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Fira Code";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./fonts/fira-code-latin-ext-500-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Fira Code";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./fonts/fira-code-latin-700-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Fira Code";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./fonts/fira-code-latin-ext-700-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
 /*
- * Maulwurf — estética Cyber Y2K / Retro OS / Glitch Terminal, dos temas:
- *   - oscuro (por defecto): fondo #050505, acento #f5c542 (dorado), texto #ffffff.
- *   - claro  (clase `.light` en <html>): fondo #ebebeb, acento #0000ff (cobalto), texto #000000.
+ * Maulwurf — Cyber Y2K / Retro 16-bit RPG Terminal, two WCAG-AA themes:
+ *   - dark  (default — Lavanda Nocturna): canvas #12101a, surface #1c1829, accent #c084fc, ink #cb99ff, text #f5f2ff.
+ *   - light (`.light` on <html> — Ámbar CRT & Pergamino): canvas #efe7da, surface #fcf9f2, accent #b45309, ink #9a4306, text #26180a.
  *
- * Los colores son variables CSS que se sobreescriben bajo `:root.light`; los
- * utilities de Tailwind referencian `var(--color-*)`, así que cambiar la clase
- * de `<html>` basta para conmutar todo el árbol.
- *
- * Semántica de los tokens:
- *   --color-dark        → fondo de página.
- *   --color-mint        → acento primario (cobalto en claro, dorado en oscuro).
- *   --color-lavender    → texto secundario (negro en claro, blanco en oscuro).
- *   --color-pure-black  → tinta / bordes / sombras (negro en claro, blanco en oscuro).
- *   --color-pure-white  → papel / texto sobre superficies oscuras.
- *   --color-on-accent   → texto sobre fondos `mint`/`lavender`.
- *   --color-surface     → superficie de ventanas/cards e inputs.
+ * All colors are CSS custom properties overridden under `:root.light`; Tailwind utilities
+ * reference `var(--color-*)`, so toggling `.light` on `<html>` switches the entire tree.
  */
 @theme {
-  /* Color — modo oscuro (default) */
-  --color-pure-black: #ffffff;
-  --color-dark: #050505;
-  --color-pure-white: #ffffff;
-  --color-mint: #f5c542;
-  --color-lavender: #ffffff;
-  --color-on-accent: #050505;
-  --color-surface: #0a0a0a;
+  /* Color — dark mode (default: Lavanda Nocturna) */
+  --color-pure-black: #dfd6f7;
+  --color-dark: #12101a;
+  --color-pure-white: #f5f2ff;
+  --color-mint: #c084fc;
+  --color-mint-ink: #cb99ff;
+  --color-lavender: #f5f2ff;
+  --color-on-accent: #140b24;
+  --color-surface: #1c1829;
 
-  /* System monospace only: a third-party font host would leak IP and User-Agent. */
-  --font-pixel: ui-monospace, "Cascadia Mono", "Segoe UI Mono", "Courier New", monospace;
-  --font-code: ui-monospace, "Cascadia Mono", "Segoe UI Mono", "Courier New", monospace;
+  /* Tailwind resolves text-*, bg-* and caret-* from these namespaces before --color-*, so
+     text and filled-with-text accents use the AA ink while border/outline/ring keep mint. */
+  --text-color-mint: var(--color-mint-ink);
+  --background-color-mint: var(--color-mint-ink);
+  --caret-color-mint: var(--color-mint-ink);
+
+  /* Self-hosted retro fonts (src/fonts, OFL): a third-party font host would leak IP and
+     User-Agent, so nothing is loaded from outside the origin. System monospace is the fallback. */
+  --font-pixel: "VT323", ui-monospace, "Cascadia Mono", "Segoe UI Mono", "Courier New", monospace;
+  --font-code: "Fira Code", ui-monospace, "Cascadia Mono", "Segoe UI Mono", "Courier New", monospace;
 
   /* Sombras "bloque" (bordes rígidos, sin radio) */
   --shadow-block: 4px 4px 0 0 var(--color-pure-black);
@@ -110,15 +182,16 @@
   }
 }
 
-/* Tema claro: sobrescribe las mismas variables. */
+/* Light theme (Ámbar CRT & Pergamino): overrides the same semantic tokens. */
 :root.light {
-  --color-pure-black: #000000;
-  --color-dark: #ebebeb;
-  --color-pure-white: #ffffff;
-  --color-mint: #0000ff;
-  --color-lavender: #000000;
+  --color-pure-black: #26180a;
+  --color-dark: #efe7da;
+  --color-pure-white: #fcf9f2;
+  --color-mint: #b45309;
+  --color-mint-ink: #9a4306;
+  --color-lavender: #26180a;
   --color-on-accent: #ffffff;
-  --color-surface: #ffffff;
+  --color-surface: #fcf9f2;
 }
 
 /*
@@ -190,13 +263,13 @@
 
   body {
     background-color: var(--color-dark);
-    color: var(--color-mint);
+    color: var(--color-mint-ink);
     font-family: var(--font-pixel);
     -webkit-font-smoothing: none;
   }
 
   ::selection {
-    background-color: var(--color-mint);
+    background-color: var(--color-mint-ink);
     color: var(--color-on-accent);
   }
 
@@ -228,13 +301,19 @@
   }
   .glitch-hover:hover {
     animation: glitch-shake 0.22s steps(2, end) infinite;
-    text-shadow: 1px 0 rgba(245, 197, 66, 0.55), -1px 0 rgba(0, 255, 255, 0.55);
+    text-shadow: 1px 0 rgba(192, 132, 252, 0.55), -1px 0 rgba(223, 214, 247, 0.55);
+  }
+  :root.light .glitch-hover:hover {
+    text-shadow: 1px 0 rgba(180, 83, 9, 0.45), -1px 0 rgba(38, 24, 10, 0.35);
   }
 
   /* Glitch de un solo disparo (p. ej. al entrar como invitado). */
   .glitch-once {
     animation: glitch-shake 0.3s steps(2, end);
-    text-shadow: 1px 0 rgba(245, 197, 66, 0.55), -1px 0 rgba(0, 255, 255, 0.55);
+    text-shadow: 1px 0 rgba(192, 132, 252, 0.55), -1px 0 rgba(223, 214, 247, 0.55);
+  }
+  :root.light .glitch-once {
+    text-shadow: 1px 0 rgba(180, 83, 9, 0.45), -1px 0 rgba(38, 24, 10, 0.35);
   }
 
   /* Imágenes específicas por tema: la oscura es el default, la clara en .light. */
@@ -287,13 +366,13 @@
   --fc-neutral-text-color: var(--color-lavender);
   --fc-today-bg-color: color-mix(in srgb, var(--color-mint) 12%, transparent);
   --fc-button-text-color: var(--color-on-accent);
-  --fc-button-bg-color: var(--color-mint);
+  --fc-button-bg-color: var(--color-mint-ink);
   --fc-button-border-color: var(--color-pure-black);
   --fc-button-hover-bg-color: var(--color-surface);
   --fc-button-hover-border-color: var(--color-mint);
   --fc-button-active-bg-color: var(--color-surface);
   --fc-button-active-border-color: var(--color-mint);
-  --fc-event-bg-color: var(--color-mint);
+  --fc-event-bg-color: var(--color-mint-ink);
   --fc-event-border-color: var(--color-mint);
   --fc-event-text-color: var(--color-on-accent);
   color: var(--color-lavender);
@@ -323,7 +402,7 @@
 }
 
 .calendar-shell .fc-toolbar-title {
-  color: var(--color-mint);
+  color: var(--color-mint-ink);
   font-size: 1.5rem;
   text-transform: capitalize;
 }
@@ -337,7 +416,7 @@
 }
 
 .calendar-shell .fc-button-primary {
-  background-color: var(--color-mint);
+  background-color: var(--color-mint-ink);
   border-color: var(--color-pure-black);
   color: var(--color-on-accent);
 }
@@ -345,14 +424,14 @@
 .calendar-shell .fc-button-primary:hover {
   background-color: var(--color-surface);
   border-color: var(--color-mint);
-  color: var(--color-mint);
+  color: var(--color-mint-ink);
 }
 
 .calendar-shell .fc-button-primary:not(:disabled).fc-button-active,
 .calendar-shell .fc-button-primary:not(:disabled):active {
   background-color: var(--color-surface);
   border-color: var(--color-mint);
-  color: var(--color-mint);
+  color: var(--color-mint-ink);
 }
 
 .calendar-shell .fc-button-group > .fc-button {
@@ -373,7 +452,7 @@
 }
 
 .calendar-shell .fc-col-header-cell-cushion {
-  color: var(--color-mint);
+  color: var(--color-mint-ink);
   padding: 0.35rem 0.25rem;
   text-transform: capitalize;
 }
@@ -406,7 +485,7 @@
 }
 
 .calendar-shell .fc-daygrid-more-link {
-  color: var(--color-mint);
+  color: var(--color-mint-ink);
 }
 
 .calendar-shell .fc-scrollgrid-section-sticky > * {
@@ -433,4 +512,26 @@
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* Pixel-art waves layer (WavesBackground): decorative, static, one pixel-art image per theme. */
+.waves-bg {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 0;
+  aspect-ratio: 320 / 176;
+  max-height: 100vh;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.27;
+  background-image: url("/bg/waves-dark.png");
+  background-repeat: no-repeat;
+  background-position: center bottom;
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+}
+
+:root.light .waves-bg {
+  opacity: 0.18;
+  background-image: url("/bg/waves-light.png");
 }

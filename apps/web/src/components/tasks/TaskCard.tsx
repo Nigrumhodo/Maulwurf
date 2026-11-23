@@ -2,11 +2,7 @@ import { TranscriptLink } from "@/components/transcript/TranscriptLink";
 import { SyncStatus } from "@/components/calendar/SyncStatus";
 import { Button } from "@/components/ui/Button";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import {
-  confidenceLabel,
-  formatTaskDue,
-  qualitySummary,
-} from "@/lib/tasks";
+import { confidenceLabel, formatTaskDue } from "@/lib/tasks";
 import type { Task, TaskQualityState } from "@/lib/tasks";
 
 // D3.1 — one review card. It only presents the server's task shape: the status, date state,
@@ -25,23 +21,21 @@ export function TaskCard({ task, quality, onEdit, onReview, onComplete }: TaskCa
     quality !== null && (quality.unavailable || quality.signals.length > 0);
 
   return (
-    <li className="lowercase flex flex-col gap-3 border-2 border-pure-black bg-surface px-3 py-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="capitalize text-lg text-lavender">{task.titulo}</p>
-          <p className="text-xs text-lavender/60">
-            {task.tipo}
-            {task.subject !== null ? ` · ${task.subject.name}` : " · sin materia"}
-            {` · ${task.source}`}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-1">
+    <li className="lowercase flex flex-col gap-3 px-4 py-4">
+      <div className="flex min-w-0 flex-col gap-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <p className="min-w-0 wrap-anywhere capitalize text-lg text-lavender">{task.titulo}</p>
           <StatusBadge status={task.status} />
           <StatusBadge status={task.calendar_sync_status} />
         </div>
+        <p className="text-sm text-lavender/60">
+          {task.tipo}
+          {task.subject !== null ? ` · ${task.subject.name}` : " · sin materia"}
+          {` · ${task.source}`}
+        </p>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 text-xs text-lavender/70">
+      <div className="flex flex-wrap items-center gap-2 text-sm text-lavender/60">
         <span>fecha</span>
         <StatusBadge status={task.date_status} />
         {due !== null ? (
@@ -54,7 +48,7 @@ export function TaskCard({ task, quality, onEdit, onReview, onComplete }: TaskCa
           </span>
         )}
         {task.date_reason !== null && task.date_reason.trim() !== "" && (
-          <span className="text-lavender/50">({task.date_reason})</span>
+          <span className="text-lavender/60">({task.date_reason})</span>
         )}
         <span
           className="text-lavender/60"
@@ -65,22 +59,14 @@ export function TaskCard({ task, quality, onEdit, onReview, onComplete }: TaskCa
         {task.pending_revision !== null && (
           <span className="border-2 border-mint px-1 text-mint">cambio pendiente</span>
         )}
+        {hasQualityWarning && (
+          <span className="border-2 border-lavender/30 px-1 text-lavender/80" title="calidad ASR: revisa la cita">
+            asr ⚠
+          </span>
+        )}
       </div>
 
       <SyncStatus task={task} />
-
-      {hasQualityWarning && (
-        <div role="status" className="capitalize border-2 border-mint px-2 py-1 text-mint">
-          {quality?.unavailable ? (
-            <span>calidad ASR no disponible; revisa la cita antes de decidir.</span>
-          ) : (
-            <span>
-              calidad ASR baja:{" "}
-              {quality?.signals.map((signal) => qualitySummary(signal)).join(" · ")}
-            </span>
-          )}
-        </div>
-      )}
 
       {task.detalle !== null && task.detalle.trim() !== "" && (
         <p className="text-lavender/80">{task.detalle}</p>
@@ -95,7 +81,7 @@ export function TaskCard({ task, quality, onEdit, onReview, onComplete }: TaskCa
               key={`${evidence.segment_id}-${evidence.char_start}-${evidence.char_end}`}
               className="flex flex-col gap-1 border-l-2 border-lavender/40 pl-3"
             >
-              <blockquote className="text-lavender/80">“{evidence.quote}”</blockquote>
+              <blockquote className="text-base text-lavender/80">“{evidence.quote}”</blockquote>
               <TranscriptLink task={task} evidence={evidence} quality={quality} />
             </li>
           ))}
@@ -108,12 +94,14 @@ export function TaskCard({ task, quality, onEdit, onReview, onComplete }: TaskCa
           task.status === "confirmed") && (
           <div className="flex flex-wrap items-center gap-2">
             {onReview !== undefined && (
-              <Button type="button" size="sm" variant="primary" onClick={onReview}>
+              <Button type="button" size="sm" variant={task.status === "needs_review" ? "primary" : "secondary"}
+                className="min-h-8"
+                onClick={onReview}>
                 revisar
               </Button>
             )}
             {onEdit !== undefined && (
-              <Button type="button" size="sm" variant="secondary" onClick={onEdit}>
+              <Button type="button" size="sm" variant="ghost" className="min-h-8" onClick={onEdit}>
                 editar
               </Button>
             )}
@@ -121,8 +109,8 @@ export function TaskCard({ task, quality, onEdit, onReview, onComplete }: TaskCa
               <Button
                 type="button"
                 size="sm"
-                variant="ghost"
-                className="ml-auto border-2 border-lavender/35 text-lavender/80 hover:border-mint hover:text-mint"
+                variant="secondary"
+                className="ml-auto min-h-8"
                 onClick={onComplete}
               >
                 marcar completada

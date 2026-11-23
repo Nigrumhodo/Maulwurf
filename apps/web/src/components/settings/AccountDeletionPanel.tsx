@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Input } from "@/components/ui/Input";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -83,7 +82,7 @@ export function AccountDeletionPanel() {
   }
 
   return (
-    <Card title="eliminar cuenta" variant="outline">
+    <div>
       <div className="lowercase flex flex-col gap-3 text-lavender">
         <p className="text-lavender/80">
           elimina de forma irreversible tus materias, clases, transcripciones, embeddings,
@@ -93,7 +92,7 @@ export function AccountDeletionPanel() {
 
         {operation === null && operationId === null ? (
           <>
-            <label className="flex cursor-pointer items-start gap-2 border-2 border-lavender/30 p-3">
+            <label className="flex min-h-10 cursor-pointer items-center gap-2">
               <input
                 type="checkbox"
                 checked={deleteEvents}
@@ -209,6 +208,6 @@ export function AccountDeletionPanel() {
           setConfirmWord("");
         }}
       />
-    </Card>
+    </div>
   );
 }

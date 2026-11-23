@@ -180,13 +180,14 @@ export function TaskReviewDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-pure-black/60 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-dark/80 p-4"
       onClick={(event) => {
         if (event.target === event.currentTarget && !busy) {
           onClose();
         }
       }}
     >
+      <div className="w-full max-w-2xl">
       <Card
         title="revisar tarea"
         variant="accent"
@@ -194,7 +195,7 @@ export function TaskReviewDialog({
         aria-modal="true"
         aria-label="revisar tarea"
         onClose={busy ? undefined : onClose}
-        className="max-h-[90vh] w-full max-w-2xl overflow-y-auto"
+        className="max-h-[90vh] w-full overflow-y-auto"
       >
         <div className="min-w-0 flex flex-col gap-4">
           {loading ? (
@@ -215,19 +216,19 @@ export function TaskReviewDialog({
             <h2 className="capitalize text-mint">qué se escribirá</h2>
             <dl className="grid gap-3 sm:grid-cols-2">
               <div className="min-w-0">
-                <dt className="capitalize text-xs text-lavender/60">título</dt>
+                <dt className="capitalize text-sm text-lavender/60">título</dt>
                 <dd className="normal-case wrap-anywhere break-words text-lavender">
                   {effective.titulo}
                 </dd>
               </div>
               <div className="min-w-0">
-                <dt className="capitalize text-xs text-lavender/60">tipo</dt>
+                <dt className="capitalize text-sm text-lavender/60">tipo</dt>
                 <dd className="normal-case wrap-anywhere break-words text-lavender">
                   {effective.tipo}
                 </dd>
               </div>
               <div className="min-w-0">
-                <dt className="capitalize text-xs text-lavender/60">vencimiento</dt>
+                <dt className="capitalize text-sm text-lavender/60">vencimiento</dt>
                 <dd className="normal-case wrap-anywhere break-words text-lavender">
                   {due ??
                     (effective.date_status === "resolved"
@@ -236,20 +237,20 @@ export function TaskReviewDialog({
                 </dd>
               </div>
               <div className="min-w-0">
-                <dt className="capitalize text-xs text-lavender/60">zona horaria</dt>
+                <dt className="capitalize text-sm text-lavender/60">zona horaria</dt>
                 <dd className="normal-case wrap-anywhere break-words text-lavender">
                   {effective.timezone}
                 </dd>
               </div>
               <div className="min-w-0">
-                <dt className="capitalize text-xs text-lavender/60">agenda</dt>
+                <dt className="capitalize text-sm text-lavender/60">agenda</dt>
                 <dd className="normal-case wrap-anywhere break-words text-lavender">
                   {eventModeLabel(effective)}
                   {block !== null ? ` · ${block}` : ""}
                 </dd>
               </div>
               <div className="min-w-0">
-                <dt className="capitalize text-xs text-lavender/60">calendario destino</dt>
+                <dt className="capitalize text-sm text-lavender/60">calendario destino</dt>
                 <dd
                   className="normal-case wrap-anywhere break-words text-lavender"
                   title={google?.calendar_id ?? undefined}
@@ -266,12 +267,12 @@ export function TaskReviewDialog({
               </p>
             )}
             {hasPendingRevision && (
-              <p className="capitalize text-xs text-lavender/60">
+              <p className="capitalize text-sm text-lavender/60">
                 el preview usa los campos de la revisión pendiente, no solo los activos.
               </p>
             )}
             {!closed && effective.date_status !== "resolved" && (
-              <p className="normal-case text-xs text-mint">
+              <p className="normal-case text-base text-mint">
                 &gt; para confirmar esta tarea, primero edítala para definir una fecha resuelta y un
                 bloque de agenda.
               </p>
@@ -295,6 +296,7 @@ export function TaskReviewDialog({
                 type="button"
                 size="sm"
                 variant="primary"
+                className="min-h-8"
                 disabled={busy || loading || !canConfirm}
                 onClick={() => void handleConfirm()}
               >
@@ -306,6 +308,7 @@ export function TaskReviewDialog({
                 type="button"
                 size="sm"
                 variant="secondary"
+                className="min-h-8"
                 disabled={busy || loading}
                 onClick={() => onEdit(currentTask)}
               >
@@ -316,19 +319,28 @@ export function TaskReviewDialog({
               <Button
                 type="button"
                 size="sm"
-                variant="secondary"
+                variant="danger"
+                className="min-h-8 sm:ml-auto"
                 disabled={busy || loading}
                 onClick={() => void handleDismiss()}
               >
                 descartar
               </Button>
             )}
-            <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={onClose}>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="min-h-8"
+              disabled={busy}
+              onClick={onClose}
+            >
               cerrar
             </Button>
           </div>
         </div>
       </Card>
+      </div>
     </div>
   );
 }

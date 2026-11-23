@@ -27,7 +27,7 @@ export function GlitchBackground() {
       const value = getComputedStyle(document.documentElement)
         .getPropertyValue("--color-mint")
         .trim();
-      return value || "#f5c542";
+      return value || "#c084fc";
     };
     let accent = readAccent();
 

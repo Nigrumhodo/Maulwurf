@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -136,9 +135,9 @@ export function DeliveryPanel() {
   }
 
   return (
-    <Card title="entregas de correo">
+    <div>
       <div className="lowercase flex flex-col gap-4">
-        <p className="text-lavender/70">
+        <p className="text-lavender/80">
           gmail no ofrece garantía de entrega única: si una respuesta se pierde o expira el lease,
           la fila queda en <strong>delivery_unknown</strong> (estado terminal, sin reintento
           automático).
@@ -198,23 +197,20 @@ export function DeliveryPanel() {
             description="cuando se programen recordatorios, resúmenes o pruebas verás aquí cada intento auditado."
           />
         ) : (
-          <ul className="flex flex-col gap-2">
+          <ul className="flex flex-col divide-y-2 divide-lavender/20 border-y-2 border-lavender/20">
             {items.map((item) => (
-              <li
-                key={item.id}
-                className="flex flex-col gap-2 border-2 border-pure-black bg-surface p-3"
-              >
+              <li key={item.id} className="flex flex-col gap-2 py-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-bold text-mint">{notificationTypeLabel(item.type)}</span>
                     <StatusBadge status={item.status} />
                     {item.occurrence_seq > 0 && (
-                      <span className="border border-lavender/40 px-1.5 text-xs text-lavender/70">
+                      <span className="border border-lavender/40 px-1.5 text-xs text-lavender/80">
                         sec #{item.occurrence_seq}
                       </span>
                     )}
                   </div>
-                  <span className="text-xs text-lavender/60">
+                  <span className="text-base text-lavender/60">
                     intentos: {item.attempts} · programado: {formatStamp(item.scheduled_at)}
                   </span>
                 </div>
@@ -223,7 +219,7 @@ export function DeliveryPanel() {
                   {notificationStatusExplanation(item.status, item.last_error_code)}
                 </p>
 
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-lavender/50">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-base text-lavender/60">
                   <span>
                     {item.sent_at !== null
                       ? `enviado: ${formatStamp(item.sent_at)}`
@@ -295,6 +291,6 @@ export function DeliveryPanel() {
           setDuplicateAck(false);
         }}
       />
-    </Card>
+    </div>
   );
 }

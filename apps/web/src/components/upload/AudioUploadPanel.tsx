@@ -1,4 +1,11 @@
 import { Button } from "@/components/ui/Button";
+import { RetroVisual } from "@/components/ui/RetroVisual";
+import {
+  loaderCassetteAmbar,
+  loaderCassetteAmbarStatic,
+  loaderCassetteLavanda,
+  loaderCassetteLavandaStatic,
+} from "@/components/Visual";
 import type { IngestionCapabilities } from "@/lib/capabilities";
 import { acceptedFileExtensions, formatBytes } from "@/lib/upload";
 import type { UploadProgress } from "@/lib/upload";
@@ -65,26 +72,44 @@ export function AudioUploadPanel({
       )}
 
       {uploading && progress !== null && (
-        <div className="flex flex-col gap-1">
-          <p className="text-lavender/70">
-            &gt; enviando {formatBytes(progress.sentBytes)} de {formatBytes(progress.totalBytes)}
-          </p>
-          <div
-            role="progressbar"
-            aria-label="audio enviado"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={percent}
-            className="h-3 border-2 border-mint bg-surface"
-          >
-            <div className="h-full bg-mint" style={{ width: `${percent}%` }} />
+        <div className="flex items-center gap-3 border-2 border-lavender/30 bg-dark p-3">
+          <div className="shrink-0">
+            <span className="img-dark-only">
+              <RetroVisual
+                src={loaderCassetteLavanda}
+                staticSrc={loaderCassetteLavandaStatic}
+                className="h-12 w-auto object-contain"
+              />
+            </span>
+            <span className="img-light-only">
+              <RetroVisual
+                src={loaderCassetteAmbar}
+                staticSrc={loaderCassetteAmbarStatic}
+                className="h-12 w-auto object-contain"
+              />
+            </span>
           </div>
-          <p className="text-lavender/50">&gt; progreso real de bytes enviados</p>
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <p className="text-lavender/80">
+              &gt; enviando {formatBytes(progress.sentBytes)} de {formatBytes(progress.totalBytes)}
+            </p>
+            <div
+              role="progressbar"
+              aria-label="audio enviado"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={percent}
+              className="h-3 border-2 border-mint bg-surface"
+            >
+              <div className="h-full bg-mint" style={{ width: `${percent}%` }} />
+            </div>
+            <p className="text-lavender/60">&gt; progreso real de bytes enviados</p>
+          </div>
         </div>
       )}
 
       {formError !== null && (
-        <p role="alert" className="border-2 border-mint px-3 py-2 text-mint">
+        <p role="alert" className="text-mint">
           &gt; {formError}
         </p>
       )}

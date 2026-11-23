@@ -68,7 +68,7 @@ describe("LandingPage & HomeRoute (D1.8)", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByText(/01 · unidad de ingesta de audio/i)).toBeTruthy(),
+      expect(screen.getByRole("heading", { name: /hola, Ana/i })).toBeTruthy(),
     );
     expect(screen.queryByText(/SUBE → ENCUENTRA → DECIDE/)).toBeNull();
   });

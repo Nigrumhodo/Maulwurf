@@ -1,110 +1,47 @@
-import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
-import { fetchAudios } from "@/lib/audios";
-import type { AudioListItemOut } from "@/lib/audios";
-import { computeSubjectStats } from "@/lib/stats";
-import { fetchSubjects } from "@/lib/subjects";
+import { useSubjectStats } from "@/components/subjects/useSubjectStats";
 import type { Subject } from "@/lib/subjects";
-import { fetchTaskPage } from "@/lib/tasks";
-import type { Task } from "@/lib/tasks";
 
 // D4.4 — Metadata & text-only study statistics. Zero audio files, URLs, or playback.
+// Renders as a section inside its view's main window, not as a window of its own.
 
 export interface SubjectStatsProps {
   subjects?: Subject[];
 }
 
 export function SubjectStats({ subjects: initialSubjects }: SubjectStatsProps) {
-  const [subjects, setSubjects] = useState<Subject[]>(initialSubjects ?? []);
-  const [audios, setAudios] = useState<AudioListItemOut[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (initialSubjects !== undefined) setSubjects(initialSubjects);
-  }, [initialSubjects]);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    const [subjectsRes, audiosRes, tasksRes] = await Promise.allSettled([
-      initialSubjects !== undefined ? Promise.resolve(initialSubjects) : fetchSubjects(),
-      fetchAudios(),
-      fetchTaskPage({ status: "all", limit: 200 }),
-    ]);
-    if (subjectsRes.status === "fulfilled" && Array.isArray(subjectsRes.value)) {
-      setSubjects(subjectsRes.value);
-    }
-    if (audiosRes.status === "fulfilled" && Array.isArray(audiosRes.value)) {
-      setAudios(audiosRes.value);
-    }
-    if (tasksRes.status === "fulfilled" && Array.isArray(tasksRes.value?.items)) {
-      setTasks(tasksRes.value.items);
-    }
-    setLoading(false);
-  }, [initialSubjects]);
-
-  useEffect(() => {
-    void load();
-    function onVisible() {
-      if (document.visibilityState === "visible") {
-        void load();
-      }
-    }
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [load]);
-
-  const stats = computeSubjectStats(subjects, audios, tasks);
+  const { stats, loading, reload } = useSubjectStats(initialSubjects);
 
   return (
-    <Card
-      title="estadísticas por materia"
-      footer={
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs text-lavender/70">
-            solo metadatos y texto · audio original no conservado (g1)
-          </span>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            disabled={loading}
-            onClick={() => void load()}
-          >
-            {loading ? "actualizando…" : "actualizar"}
-          </Button>
-        </div>
-      }
-    >
+    <section className="flex flex-col gap-4">
+      <h3 className="lowercase text-lg text-lavender">estadísticas por materia</h3>
+
       {loading && stats.subjectCount === 0 && stats.classCount === 0 ? (
         <p className="lowercase text-lavender/60">&gt; calculando métricas de texto…</p>
       ) : (
         <div className="lowercase flex flex-col gap-4">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div className="border-2 border-pure-black bg-dark p-2">
-              <p className="text-xs text-lavender/60">materias</p>
+            <div className="border-2 border-lavender/30 bg-dark p-2">
+              <p className="text-base text-lavender/80">materias</p>
               <p className="text-2xl text-mint">{stats.subjectCount}</p>
             </div>
-            <div className="border-2 border-pure-black bg-dark p-2">
-              <p className="text-xs text-lavender/60">clases listas / total</p>
+            <div className="border-2 border-lavender/30 bg-dark p-2">
+              <p className="text-base text-lavender/80">clases listas / total</p>
               <p className="text-2xl text-mint">
                 {stats.readyClassCount} / {stats.classCount}
               </p>
             </div>
-            <div className="border-2 border-pure-black bg-dark p-2">
-              <p className="text-xs text-lavender/60">duración transcrita</p>
+            <div className="border-2 border-lavender/30 bg-dark p-2">
+              <p className="text-base text-lavender/80">duración transcrita</p>
               <p className="text-2xl text-mint">{stats.transcribedMinutes} min</p>
             </div>
-            <div className="border-2 border-pure-black bg-dark p-2">
-              <p className="text-xs text-lavender/60">tareas confirmadas / por revisar</p>
+            <div className="border-2 border-lavender/30 bg-dark p-2">
+              <p className="text-base text-lavender/80">tareas confirmadas / por revisar</p>
               <p className="text-2xl text-mint">
                 {stats.confirmedTaskCount} / {stats.pendingTaskCount}
               </p>
               {stats.completedTaskCount > 0 && (
-                <p className="text-xs text-lavender/70">
+                <p className="text-base text-lavender/80">
                   {stats.completedTaskCount} completada(s)
                 </p>
               )}
@@ -112,11 +49,11 @@ export function SubjectStats({ subjects: initialSubjects }: SubjectStatsProps) {
           </div>
 
           {stats.subjects.length > 0 && (
-            <ul className="flex flex-col gap-2">
+            <ul className="flex flex-col divide-y-2 divide-lavender/20">
               {stats.subjects.map((item) => (
                 <li
                   key={item.id}
-                  className="flex flex-wrap items-center justify-between gap-2 border-2 border-pure-black bg-dark px-3 py-2 text-sm text-lavender"
+                  className="flex flex-wrap items-center justify-between gap-2 py-2 text-base text-lavender"
                 >
                   <span className="inline-flex items-center gap-2">
                     <span
@@ -138,6 +75,21 @@ export function SubjectStats({ subjects: initialSubjects }: SubjectStatsProps) {
           )}
         </div>
       )}
-    </Card>
+
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t-2 border-lavender/20 pt-3">
+        <span className="text-base text-lavender/80">
+          solo metadatos y texto · audio original no conservado (g1)
+        </span>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={loading}
+          onClick={() => void reload()}
+        >
+          {loading ? "actualizando…" : "actualizar"}
+        </Button>
+      </div>
+    </section>
   );
 }

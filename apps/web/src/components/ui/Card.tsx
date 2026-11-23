@@ -61,7 +61,7 @@ export function Card({
               type="button"
               aria-label="cerrar ventana"
               onClick={onClose}
-              className="shrink-0 cursor-pointer font-bold hover:opacity-75"
+              className="inline-flex min-h-8 min-w-8 shrink-0 cursor-pointer items-center justify-center font-bold hover:opacity-75"
             >
               [x]
             </button>

@@ -1,8 +1,10 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { AuthProvider, RequireAuth, useAuth } from "@/components/auth/AuthProvider";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { GestionLayout } from "@/components/layout/GestionLayout";
 import { BlinkingCaret } from "@/components/motion/BlinkingCaret";
+import { RetroVisual } from "@/components/ui/RetroVisual";
+import { estadoError404, estadoError404Anim } from "@/components/Visual";
 import { LandingPage } from "@/pages/LandingPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { RegisterPage } from "@/pages/RegisterPage";
@@ -33,7 +35,14 @@ function HomeRoute() {
 
   if (unavailable) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-4 text-center">
+        <div className="border-2 border-pure-black bg-dark p-2 shadow-block">
+          <RetroVisual
+            src={estadoError404Anim}
+            staticSrc={estadoError404}
+            className="h-32 w-32 object-contain"
+          />
+        </div>
         <p className="lowercase text-lavender">no se pudo comprobar la sesión. revisa tu conexión.</p>
         <button
           type="button"
@@ -55,6 +64,13 @@ function HomeRoute() {
       <DashboardPage />
     </AppLayout>
   );
+}
+
+// A12 — Legacy `/biblioteca/:audioId` deep links keep their query string (e.g. `?segment=`).
+function RedirectBibliotecaDetail() {
+  const { audioId = "" } = useParams();
+  const { search } = useLocation();
+  return <Navigate to={`/gestion/biblioteca/${encodeURIComponent(audioId)}${search}`} replace />;
 }
 
 // D1.2/D1.3/D1.8 — Enrutado. `/` muestra la landing pública cuando no hay sesión
@@ -84,7 +100,7 @@ export function App() {
             </Route>
 
             <Route path="/biblioteca" element={<Navigate to="/gestion/biblioteca" replace />} />
-            <Route path="/biblioteca/:audioId" element={<TranscriptReaderPage />} />
+            <Route path="/biblioteca/:audioId" element={<RedirectBibliotecaDetail />} />
             <Route path="/chat" element={<Navigate to="/gestion/chat" replace />} />
             <Route path="/materias" element={<Navigate to="/gestion/materias" replace />} />
           </Route>

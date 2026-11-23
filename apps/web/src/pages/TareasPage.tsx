@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { GoogleReconnect } from "@/components/calendar/GoogleReconnect";
 import { TaskCreateForm } from "@/components/tasks/TaskCreateForm";
 import { TaskEditor } from "@/components/tasks/TaskEditor";
 import { TaskInbox } from "@/components/tasks/TaskInbox";
 import { TaskReviewDialog } from "@/components/tasks/TaskReviewDialog";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { RetroVisual } from "@/components/ui/RetroVisual";
+import { estadoTareasCafe, estadoTareasCafeAnim } from "@/components/Visual";
 import { ApiHttpError } from "@/lib/api";
-import { fetchIntegrationsStatus } from "@/lib/integrations";
+import {
+  fetchIntegrationsStatus,
+  googleConnectHref,
+  googleConnectLabel,
+} from "@/lib/integrations";
 import type { GoogleStatus } from "@/lib/integrations";
 import { fetchAudioDetail } from "@/lib/library";
 import { fetchSubjects } from "@/lib/subjects";
@@ -28,6 +32,7 @@ import type {
   TaskStatusFilter,
   TaskUpdate,
 } from "@/lib/tasks";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 const TASK_PAGE_SIZE = 20;
 
@@ -79,6 +84,7 @@ function parseInitialStatus(value: string | null): TaskStatusFilter {
 }
 
 export function TareasPage() {
+  useDocumentTitle("tareas");
   const [searchParams, setSearchParams] = useSearchParams();
   const initialEditId = searchParams.get("edit");
   const handledEditRef = useRef<string | null>(null);
@@ -280,18 +286,35 @@ export function TareasPage() {
     }
   }
 
+  const tabClasses = (active: boolean) =>
+    `capitalize min-h-10 border-2 px-3 py-1 ${
+      active
+        ? "border-mint bg-mint text-on-accent"
+        : "border-lavender/30 text-lavender hover:border-mint hover:text-mint"
+    }`;
+
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex flex-col gap-1">
-          <h1 className="capitalize text-2xl text-mint">tareas</h1>
-          <p className="lowercase text-lavender/60">
-            &gt; crea tareas propias o revisa propuestas del análisis; confirma para enviarlas a Calendar.
-          </p>
+    <section className="lowercase flex flex-col border-2 border-pure-black bg-surface shadow-block">
+      <header className="flex flex-wrap items-start justify-between gap-3 p-4">
+        <div className="flex items-center gap-3">
+          <div className="hidden shrink-0 border-2 border-pure-black bg-dark p-1 shadow-block-sm sm:block">
+            <RetroVisual
+              src={estadoTareasCafeAnim}
+              staticSrc={estadoTareasCafe}
+              className="h-14 w-14 object-contain"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <h1 className="capitalize text-2xl text-mint">tareas</h1>
+            <p className="lowercase text-base text-lavender/80 max-w-prose">
+              &gt; crea tareas propias o revisa propuestas del análisis; confirma para enviarlas a Calendar.
+            </p>
+          </div>
         </div>
         {!creatingTask && (
           <Button
             type="button"
+            variant={tasks.some((item) => item.status === "needs_review") ? "secondary" : "primary"}
             onClick={() => {
               setSavedNotice(null);
               setError(null);
@@ -302,77 +325,87 @@ export function TareasPage() {
             + nueva tarea
           </Button>
         )}
-      </div>
+      </header>
 
-      {google !== null && !google.calendar_write_ready && (
-        <GoogleReconnect google={google} compact />
-      )}
-
-      {creatingTask && (
-        <TaskCreateForm
-          subjects={subjects}
-          defaultSubjectId={subjectFilter}
-          onCreated={handleCreated}
-          onCancel={() => setCreatingTask(false)}
-        />
-      )}
-
-      <Card title="filtros">
-        <div className="lowercase flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-1">
-            <span className="capitalize text-mint">estado</span>
-            <select
-              aria-label="estado de la tarea"
-              value={statusFilter}
-              onChange={(event) => {
-                setStatusFilter(event.target.value as TaskStatusFilter);
-              }}
-              className="capitalize bg-surface text-lavender border-2 border-lavender px-3 py-2"
+      <div className="flex flex-wrap items-end gap-3 border-t-2 border-lavender/20 px-4 py-3">
+        <div role="group" aria-label="estado de la tarea" className="flex flex-wrap gap-2">
+          {filters.map((filter) => (
+            <button
+              key={filter.value}
+              type="button"
+              aria-pressed={statusFilter === filter.value}
+              onClick={() => setStatusFilter(filter.value)}
+              className={tabClasses(statusFilter === filter.value)}
             >
-              {filters.map((filter) => (
-                <option key={filter.value} value={filter.value}>
-                  {filter.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="capitalize text-mint">materia</span>
-            <select
-              aria-label="materia de la tarea"
-              value={subjectFilter}
-              onChange={(event) => {
-                setSubjectFilter(event.target.value);
-              }}
-              className="capitalize bg-surface text-lavender border-2 border-lavender px-3 py-2"
-            >
-              <option value="">todas las materias</option>
-              {subjects.map((subject) => (
-                <option key={subject.id} value={subject.id}>
-                  {subject.name}
-                </option>
-              ))}
-            </select>
-          </label>
+              {filter.label}
+            </button>
+          ))}
+        </div>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <select
+            aria-label="materia de la tarea"
+            value={subjectFilter}
+            onChange={(event) => {
+              setSubjectFilter(event.target.value);
+            }}
+            className="capitalize min-h-10 bg-surface text-lavender border-2 border-lavender px-3 py-1"
+          >
+            <option value="">todas las materias</option>
+            {subjects.map((subject) => (
+              <option key={subject.id} value={subject.id}>
+                {subject.name}
+              </option>
+            ))}
+          </select>
           <Button
             type="button"
             size="sm"
-            variant="secondary"
+            variant="ghost"
             disabled={loading}
             onClick={() => void loadFirst()}
           >
             actualizar
           </Button>
         </div>
-      </Card>
+      </div>
 
-      {editingTask !== null && (
-        <TaskEditor
-          key={`edit-${editingTask.id}-${editingTask.version}`}
-          task={editingTask}
-          onSaved={handleSaved}
-          onCancel={() => setEditingTask(null)}
-        />
+      {google !== null && !google.calendar_write_ready && (
+        <p
+          role="status"
+          className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t-2 border-lavender/20 px-4 py-2 text-base text-mint"
+        >
+          <span>
+            &gt; calendar no está listo; las confirmadas quedarán bloqueadas hasta conectar google
+            calendar.
+          </span>
+          <a
+            className="inline-flex w-fit items-center border-2 border-lavender/40 px-2 py-0.5 text-mint underline decoration-dotted hover:border-mint hover:bg-mint hover:text-on-accent"
+            href={googleConnectHref(google)}
+          >
+            {googleConnectLabel(google)}
+          </a>
+        </p>
+      )}
+
+      {(creatingTask || editingTask !== null) && (
+        <div className="border-t-2 border-lavender/20 p-4">
+          {creatingTask && (
+            <TaskCreateForm
+              subjects={subjects}
+              defaultSubjectId={subjectFilter}
+              onCreated={handleCreated}
+              onCancel={() => setCreatingTask(false)}
+            />
+          )}
+          {editingTask !== null && (
+            <TaskEditor
+              key={`edit-${editingTask.id}-${editingTask.version}`}
+              task={editingTask}
+              onSaved={handleSaved}
+              onCancel={() => setEditingTask(null)}
+            />
+          )}
+        </div>
       )}
 
       {reviewingTask !== null && (
@@ -391,29 +424,36 @@ export function TareasPage() {
       )}
 
       {savedNotice !== null && (
-        <p role="status" className="normal-case border-2 border-mint px-3 py-2 text-mint">
+        <p
+          role="status"
+          className="normal-case border-t-2 border-lavender/20 px-4 py-2 text-base text-mint"
+        >
           &gt; {savedNotice}
         </p>
       )}
 
       {error !== null && (
-        <p role="alert" className="lowercase border-2 border-mint px-3 py-2 text-mint">
+        <p
+          role="alert"
+          className="lowercase border-t-2 border-lavender/20 px-4 py-2 text-base text-mint"
+        >
           &gt; {error}
         </p>
       )}
 
-      {loading ? (
-        <p className="lowercase text-lavender/60">&gt; cargando tareas…</p>
-      ) : empty ? (
-        <Card title="para confirmar">
-          <EmptyState
-            title="no hay tareas en este estado"
-            description="cuando un análisis proponga una tarea, aparecerá aquí con su cita."
-          />
-        </Card>
-      ) : (
-        <Card title="propuestas">
-          <div aria-busy={loading} className="flex flex-col gap-4">
+      <div aria-busy={loading} className="border-t-2 border-lavender/20">
+        {loading ? (
+          <p className="p-4 lowercase text-lavender/60">&gt; cargando tareas…</p>
+        ) : empty ? (
+          <div className="p-4">
+            <EmptyState
+              illustration="tasks"
+              title="no hay tareas en este estado"
+              description="cuando un análisis proponga una tarea, aparecerá aquí con su cita."
+            />
+          </div>
+        ) : (
+          <>
             <TaskInbox
               tasks={tasks}
               qualityByAudio={qualityByAudio}
@@ -428,19 +468,21 @@ export function TareasPage() {
               onComplete={(target) => void handleCompleteFromCard(target)}
             />
             {nextCursor !== null && (
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                disabled={loadingMore}
-                onClick={() => void loadMore()}
-              >
-                {loadingMore ? "cargando…" : "cargar más"}
-              </Button>
+              <div className="border-t-2 border-lavender/20 p-4">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={loadingMore}
+                  onClick={() => void loadMore()}
+                >
+                  {loadingMore ? "cargando…" : "cargar más"}
+                </Button>
+              </div>
             )}
-          </div>
-        </Card>
-      )}
-    </div>
+          </>
+        )}
+      </div>
+    </section>
   );
 }
