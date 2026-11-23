@@ -18,4 +18,11 @@ describe("WavesBackground", () => {
     expect(container.querySelector("a, button, input, select, textarea, [tabindex]")).toBeNull();
     expect(container.querySelector("[role]")).toBeNull();
   });
+
+  it("renders exactly one layer regardless of theme", () => {
+    document.documentElement.classList.add("light");
+    const { container } = render(<WavesBackground />);
+    expect(container.querySelectorAll(".waves-bg")).toHaveLength(1);
+    document.documentElement.classList.remove("light");
+  });
 });
