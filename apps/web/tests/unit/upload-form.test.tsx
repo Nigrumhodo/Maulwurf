@@ -170,6 +170,14 @@ describe("UploadForm · cancelar subida (U-S2-DA-02)", () => {
     expect(screen.queryByText(/clase\.wav/)).toBeNull();
   });
 
+  it("expone MIME types y audio/* en el input file para compatibilidad móvil", async () => {
+    await reserveClass();
+    const input = screen.getByLabelText(/archivo de audio/i) as HTMLInputElement;
+    expect(input.accept).toContain(".wav");
+    expect(input.accept).toContain("audio/wav");
+    expect(input.accept).toContain("audio/*");
+  });
+
   it("muestra el resultado admitido con los bytes reales recibidos", async () => {
     putMode = "accept";
     await reserveClass();

@@ -219,11 +219,13 @@ async def check_quota(db: AsyncSession, user_id: uuid.UUID) -> None:
 
 
 async def reserve_slot(db: AsyncSession) -> None:
-    """`503 capacity_unavailable` if no slot is free; no published `active_slots` = no limit.
+    """`503 capacity_unavailable` if no executing slot is free; unset `active_slots` = no limit.
 
-    The global advisory lock is taken before the count and released by the reservation's
-    commit, so concurrent `POST /audios` from different users cannot exceed `active_slots`
-    (A2.14). While D4 is blocked nothing locks: there is no published limit to enforce.
+    The global advisory lock serializes capacity admission against executing attempts
+    (`receiving`, `transcribing`, `transcript_committed_cleanup_pending` — migration 0025).
+    Idle `awaiting_upload` reservations are not counted, so abandoned reservations never
+    block other users; `open_reception` calls this again under the same lock before
+    transitioning `awaiting_upload -> receiving`.
     """
     limit = settings.ingestion_capabilities.active_slots
     if limit is None:
@@ -231,7 +233,7 @@ async def reserve_slot(db: AsyncSession) -> None:
         return
     await _lock_capacity(db, _CAPACITY_GLOBAL_KEY)
     # `maulwurf_app` only sees its own attempts under RLS; the SECURITY DEFINER function
-    # (migration 0024) returns the instance-wide count without exposing any row.
+    # (migrations 0024/0025) returns the instance-wide executing count without exposing rows.
     active = await db.scalar(select(func.public.count_active_ingestion_attempts()))
     if (active or 0) >= limit:
         raise ApiError(
@@ -777,6 +779,9 @@ async def open_reception(
         )
         await db.commit()
         raise _upload_expired()
+    # Enforce global executing capacity atomically before entering `receiving`. If full,
+    # this raises 503 without cancelling the `awaiting_upload` reservation so the user can retry.
+    await reserve_slot(db)
     state_machine.transition(attempt, "receiving")
     fencing_token = attempt.fencing_token
     await db.commit()

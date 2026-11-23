@@ -58,7 +58,7 @@
 	}
 	handle @upload {
 		request_body {
-			max_size 220MB
+			max_size 1100MB
 		}
 		reverse_proxy api:8000
 	}

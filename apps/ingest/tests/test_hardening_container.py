@@ -144,7 +144,7 @@ def test_tmpfs_is_bounded_and_does_not_spill(container: str) -> None:
     )
     code, written = result.stdout.split()
     assert code == "ENOSPC", result.stderr[-500:]
-    assert int(written) <= 256 << 20  # INGEST_TMPFS_BYTES provisional (256 MiB)
+    assert int(written) <= 1536 << 20  # INGEST_TMPFS_BYTES local default (1.5 GiB)
     leftover = _run("docker", "exec", container, "ls", "-A", TMP_DIR).stdout.split()
     assert "fill-probe" not in leftover
 

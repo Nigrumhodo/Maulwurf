@@ -46,6 +46,13 @@ ACTIVE_INGESTION_STATES = (
     "transcribing",
     "transcript_committed_cleanup_pending",
 )
+# States that actually consume an ingestion/transcription slot (excludes idle
+# `awaiting_upload` reservations so unuploaded reservations never block the platform).
+EXECUTING_INGESTION_STATES = (
+    "receiving",
+    "transcribing",
+    "transcript_committed_cleanup_pending",
+)
 CLEANUP_STATES = ("pending", "verified", "failed")
 # Solo estos tipos nacen bloqueados hasta cleanup verificado (S1.md §1.3).
 CLEANUP_GATED_EVENT_TYPES = ("index_requested", "analyze_requested")

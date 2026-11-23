@@ -46,9 +46,8 @@ _SSE_ROUTES = (
     ("@chat_sse", "/chat/conversations/*/messages"),
 )
 
-# Provisional default in apps/api/app/core/config.py (S1.A8/A2.2); D4 has not approved
-# a limit, so the published `capabilities` value is still null.
-API_UPLOAD_MAX_BYTES = 209_715_200
+# Default upload limit in apps/api/app/core/config.py (1 GiB).
+API_UPLOAD_MAX_BYTES = 1_073_741_824
 # The API keeps the upload reservation for 15 minutes (provisional `upload_ttl_minutes`).
 API_UPLOAD_TTL_SECONDS = 15 * 60
 

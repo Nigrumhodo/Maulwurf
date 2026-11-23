@@ -9,13 +9,14 @@ from typing import Annotated, Literal
 from pydantic import BeforeValidator, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Wall clock for one reception, and the idle gap that counts as an abandoned body.
-# A slow client must not hold the only admission slot until the edge times out.
-RECEPTION_TIMEOUT_S = 300.0
+# Wall clock for one reception (aligned with the 30 min receive TTL for up to 1 GiB
+# uploads), and the idle gap that counts as an abandoned body. A slow/hung client still
+# releases its slot after RECEPTION_CHUNK_TIMEOUT_S without waiting for the wall clock.
+RECEPTION_TIMEOUT_S = 1_800.0
 RECEPTION_CHUNK_TIMEOUT_S = 30.0
-# Provisional ceiling from the 1 GiB container budget. The gate also clamps.
-SAFE_SLOT_CAP = 2
-# RLIMIT_AS aligned with the ingest container mem_limit (1 GiB), not the old 4 GiB.
+# Platform-wide ceiling for concurrent executing ingestions/transcriptions.
+SAFE_SLOT_CAP = 30
+# RLIMIT_AS per ffmpeg child. Keeps each short-fragment decode bounded inside the container.
 FFMPEG_ADDRESS_SPACE_FLOOR = 768 * 1024 * 1024
 FFMPEG_ADDRESS_SPACE_CEILING = 1024 * 1024 * 1024
 
@@ -50,9 +51,9 @@ class Settings(BaseSettings):
     ingest_hardening: Literal["enforce", "report"] = Field(
         default="enforce", validation_alias="INGEST_HARDENING"
     )
-    # Tope de corte al recibir. Es el provisional de compose, no un máximo aprobado (D4).
+    # Reception hard byte cut. Aligned with API `MAULWURF_UPLOAD_MAX_BYTES` (1 GiB default).
     max_upload_bytes: int = Field(
-        default=209_715_200, ge=1, validation_alias="INGEST_MAX_UPLOAD_BYTES"
+        default=1_073_741_824, ge=1, validation_alias="INGEST_MAX_UPLOAD_BYTES"
     )
     # Solape local entre fragmentos. No es una medida de Riva.
     fragment_overlap_s: float = Field(

@@ -10,19 +10,25 @@ from typing import Any, cast
 
 import pytest
 
-from app.models.ingestion import ACTIVE_INGESTION_STATES
+from app.models.ingestion import ACTIVE_INGESTION_STATES, EXECUTING_INGESTION_STATES
 from app.services import dedupe, uploads
 
-MIGRATION = (
+MIGRATION_0024 = (
     Path(__file__).resolve().parents[2]
     / "alembic"
     / "versions"
     / "0024_s2_global_attempt_count.py"
 )
+MIGRATION_0025 = (
+    Path(__file__).resolve().parents[2]
+    / "alembic"
+    / "versions"
+    / "0025_s2_executing_attempt_count.py"
+)
 
 
-def _load_migration() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("migration_0024", MIGRATION)
+def _load_migration(path: Path, name: str) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -30,7 +36,15 @@ def _load_migration() -> ModuleType:
 
 
 def test_capacity_function_counts_exactly_the_active_states() -> None:
-    assert _load_migration().ACTIVE_STATES == ACTIVE_INGESTION_STATES
+    migration = _load_migration(MIGRATION_0024, "migration_0024")
+    assert migration.ACTIVE_STATES == ACTIVE_INGESTION_STATES
+
+
+def test_executing_capacity_migration_excludes_idle_reservations() -> None:
+    migration = _load_migration(MIGRATION_0025, "migration_0025")
+    assert migration.EXECUTING_STATES == EXECUTING_INGESTION_STATES
+    assert "awaiting_upload" not in EXECUTING_INGESTION_STATES
+    assert set(EXECUTING_INGESTION_STATES) < set(ACTIVE_INGESTION_STATES)
 
 
 class _Sink:

@@ -231,20 +231,46 @@ const MIME_FORMATS: Record<string, string> = {
   "audio/wave": "wav",
   "audio/x-wav": "wav",
   "audio/mpeg": "mp3",
+  "audio/x-mpeg": "mp3",
   "audio/mp3": "mp3",
   "audio/flac": "flac",
   "audio/x-flac": "flac",
   "audio/ogg": "ogg",
+  "audio/x-ogg": "ogg",
+  "audio/opus": "opus",
   "audio/mp4": "m4a",
   "audio/m4a": "m4a",
   "audio/x-m4a": "m4a",
   "audio/aac": "m4a",
+  "audio/aacp": "m4a",
+  "audio/x-aac": "m4a",
+  "audio/mp4a-latm": "m4a",
+  "audio/3gpp": "m4a",
   "audio/webm": "webm",
+};
+
+const FORMAT_ACCEPT_MIMES: Record<string, readonly string[]> = {
+  wav: ["audio/wav", "audio/x-wav", "audio/wave"],
+  mp3: ["audio/mpeg", "audio/mp3"],
+  flac: ["audio/flac", "audio/x-flac"],
+  ogg: ["audio/ogg"],
+  opus: ["audio/opus", "audio/ogg"],
+  m4a: [
+    "audio/mp4",
+    "audio/x-m4a",
+    "audio/m4a",
+    "audio/aac",
+    "audio/mp4a-latm",
+    "audio/x-aac",
+    "audio/aacp",
+  ],
+  webm: ["audio/webm"],
 };
 
 /** Formatea bytes para la UI sin inventar límites (los publica el servidor). */
 export function formatBytes(value: number | null): string {
   if (value === null) return "no publicado";
+  if (value >= 1024 * 1024 * 1024) return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
   if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
   if (value >= 1024) return `${Math.round(value / 1024)} KiB`;
   return `${value} B`;
@@ -258,12 +284,47 @@ export function acceptedFileExtensions(capabilities: IngestionCapabilities | nul
     .map((format) => `.${format}`);
 }
 
-function formatOf(file: File): string | null {
-  const byMime = MIME_FORMATS[file.type.toLowerCase()];
-  if (byMime !== undefined) return byMime;
-  const name = file.name.toLowerCase();
+/**
+ * Value for `<input type="file" accept=...>`: combines extensions, mobile MIME types
+ * (Android/iOS pickers frequently require `audio/mp4`/`audio/x-m4a`/`audio/mp4a-latm` and
+ * `audio/*` to allow selecting `.m4a` recordings), while `validateFile` enforces the exact
+ * published format list.
+ */
+export function acceptedFileInputAccept(capabilities: IngestionCapabilities | null): string {
+  const formats = (capabilities?.accepted_input_formats ?? [])
+    .map((format) => format.trim().toLowerCase())
+    .filter((format) => format !== "");
+  if (formats.length === 0) return "";
+  const tokens = new Set<string>();
+  for (const format of formats) {
+    tokens.add(`.${format}`);
+    for (const mime of FORMAT_ACCEPT_MIMES[format] ?? []) {
+      tokens.add(mime);
+    }
+  }
+  tokens.add("audio/*");
+  return Array.from(tokens).join(",");
+}
+
+function normalizedMime(rawType: string): string {
+  return rawType.toLowerCase().split(";", 1)[0].trim();
+}
+
+function extensionOf(filename: string): string | null {
+  const name = filename.toLowerCase();
   const dot = name.lastIndexOf(".");
   return dot === -1 ? null : name.slice(dot + 1);
+}
+
+function formatOf(file: File, accepted?: readonly string[]): string | null {
+  const byMime = MIME_FORMATS[normalizedMime(file.type)];
+  const byExt = extensionOf(file.name);
+  if (accepted !== undefined && accepted.length > 0) {
+    if (byMime !== undefined && accepted.includes(byMime)) return byMime;
+    if (byExt !== null && accepted.includes(byExt)) return byExt;
+  }
+  if (byMime !== undefined) return byMime;
+  return byExt;
 }
 
 export interface FileCheck {
@@ -303,7 +364,7 @@ export function validateFile(file: File, capabilities: IngestionCapabilities | n
   const accepted = (capabilities?.accepted_input_formats ?? []).map((format) =>
     format.trim().toLowerCase(),
   );
-  const format = formatOf(file);
+  const format = formatOf(file, accepted);
   if (accepted.length > 0 && (format === null || !accepted.includes(format))) {
     return { ok: false, error: `formato no aceptado; usa ${accepted.join(", ")}.` };
   }

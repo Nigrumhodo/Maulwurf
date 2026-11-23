@@ -61,17 +61,17 @@ def _clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 async def test_acquire_failure_releases_the_slot(monkeypatch: pytest.MonkeyPatch) -> None:
-    user_id = uuid.uuid4()
-    claims = _claims(user_id, uuid.uuid4(), uuid.uuid4())
+    user_id, attempt_id = uuid.uuid4(), uuid.uuid4()
+    claims = _claims(user_id, uuid.uuid4(), attempt_id)
 
     async def boom(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("db")
 
     monkeypatch.setattr("maulwurf_ingest.receptions.leases.acquire_bound", boom)
-    assert await _gate.take(user_id)
+    assert await _gate.take(attempt_id)
     with pytest.raises(RuntimeError, match="db"):
         await _open_hold(object(), claims=claims, instance="box")
-    assert await _gate.take(user_id)
+    assert await _gate.take(attempt_id)
 
 
 async def test_discard_without_a_pool_keeps_the_hold(
@@ -96,7 +96,7 @@ async def test_discard_without_a_pool_keeps_the_hold(
         audio_id=audio_id,
     )
     _holds[attempt_id] = stored
-    assert await _gate.take(user_id)
+    assert await _gate.take(attempt_id)
 
     async def no_pool(_request: _Request) -> None:
         return None
@@ -118,7 +118,7 @@ async def test_discard_without_a_pool_keeps_the_hold(
         assert stored.phase == "holding"
         assert stored.finished.is_set() is False
         assert (workdir / "original").is_file()
-        assert await _gate.take(user_id) is False
+        assert await _gate.take(attempt_id) is False
     finally:
         await keeper.stop()
 
@@ -145,7 +145,7 @@ async def test_admit_without_a_pool_keeps_the_hold(
         audio_id=audio_id,
     )
     _holds[attempt_id] = stored
-    assert await _gate.take(user_id)
+    assert await _gate.take(attempt_id)
 
     async def no_pool(_request: _Request) -> None:
         return None
@@ -229,7 +229,7 @@ async def test_probe_cancel_deletes_the_audio(
         )
     assert closed
     assert not (tmp_path / "original").exists()
-    assert await _gate.take(user_id)
+    assert await _gate.take(attempt_id)
 
 
 def test_finished_map_drops_the_oldest(monkeypatch: pytest.MonkeyPatch) -> None:

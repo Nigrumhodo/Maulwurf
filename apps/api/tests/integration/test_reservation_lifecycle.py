@@ -40,7 +40,7 @@ from app.core.config import settings
 from app.core.db import get_session
 from app.main import app
 from app.models import IngestionAttempt
-from app.models.ingestion import ACTIVE_INGESTION_STATES
+from app.models.ingestion import ACTIVE_INGESTION_STATES, EXECUTING_INGESTION_STATES
 from app.schemas.ingestion import IngestionAttemptTtl, IngestionCapabilities
 from app.services import audios as audios_service
 from app.services.audios import expire_stale_reservations
@@ -289,7 +289,7 @@ async def _attempt(
 # --- 1. concurrent POSTs -----------------------------------------------------------------
 
 
-async def test_twenty_concurrent_posts_respect_both_published_limits(
+async def test_concurrent_reservations_and_puts_enforce_limits_only_on_execution(
     client: AsyncClient,
     engine: AsyncEngine,
     session_factory: async_sessionmaker[AsyncSession],
@@ -298,9 +298,11 @@ async def test_twenty_concurrent_posts_respect_both_published_limits(
     alice, alice_subject = await _account(session_factory)
     bob, bob_subject = await _account(session_factory)
     _publish(monkeypatch, active_slots=5)
-    monkeypatch.setattr(audios_service, "per_user_active_limit", 3)
+    monkeypatch.setattr(audios_service, "per_user_active_limit", 4)
 
-    requests = [
+    # Idle `awaiting_upload` reservations do not consume global `active_slots`; each user
+    # can reserve up to `per_user_active_limit` (4 + 4 = 8 > active_slots=5).
+    post_requests = [
         client.post(
             "/audios",
             json=_body(subject_id),
@@ -310,45 +312,64 @@ async def test_twenty_concurrent_posts_respect_both_published_limits(
         for actor, subject_id in [(alice, alice_subject)] * 10
         + [(bob, bob_subject)] * 10
     ]
-    # The requests run as the API's runtime role, so RLS applies exactly as in production:
-    # a tenant-scoped slot count would let 3 + 3 reservations through a cap of 5.
     event.listen(engine.sync_engine, "begin", core_db._apply_tenant_settings)
     try:
-        responses = await asyncio.gather(*requests)
+        post_responses = await asyncio.gather(*post_requests)
     finally:
         event.remove(engine.sync_engine, "begin", core_db._apply_tenant_settings)
 
-    codes = [response.status_code for response in responses]
-    assert codes.count(201) == 5  # exactly the published global capacity
-    assert set(codes) - {201} <= {429, 503}  # only the documented rejections
+    post_codes = [response.status_code for response in post_responses]
+    assert post_codes.count(201) == 8  # 4 per user; idle reservations never block global slots
+    assert set(post_codes) - {201} == {429}
     assert all(
         response.headers.get("Retry-After")
-        for response in responses
-        if response.status_code in {429, 503}
+        for response in post_responses
+        if response.status_code == 429
     )
-    accepted = {
-        response.json()["audio_id"]
-        for response in responses
+
+    reserved_pairs: list[tuple[Actor, str]] = [
+        (alice if idx < 10 else bob, response.json()["upload_url"])
+        for idx, response in enumerate(post_responses)
         if response.status_code == 201
-    }
-    assert len(accepted) == 5
+    ]
+    assert len(reserved_pairs) == 8
+
+    # Starting execution (`PUT /audios/{id}/content`) enforces `active_slots=5` across
+    # tenants under RLS: exactly 5 enter `receiving` and 3 answer 503 with Retry-After.
+    put_requests = [
+        _put(client, actor, upload_url, content=f"RIFF{idx:060d}".encode())
+        for idx, (actor, upload_url) in enumerate(reserved_pairs)
+    ]
+    event.listen(engine.sync_engine, "begin", core_db._apply_tenant_settings)
+    try:
+        put_responses = await asyncio.gather(*put_requests)
+    finally:
+        event.remove(engine.sync_engine, "begin", core_db._apply_tenant_settings)
+
+    put_codes = [response.status_code for response in put_responses]
+    assert put_codes.count(202) == 5
+    assert put_codes.count(503) == 3
+    assert all(
+        response.headers.get("Retry-After")
+        for response in put_responses
+        if response.status_code == 503
+    )
 
     async with session_factory() as db:
-        owners = list(
+        executing_owners = list(
             (
                 await db.execute(
                     select(IngestionAttempt.user_id).where(
-                        IngestionAttempt.status.in_(ACTIVE_INGESTION_STATES)
+                        IngestionAttempt.status.in_(EXECUTING_INGESTION_STATES)
                     )
                 )
             )
             .scalars()
             .all()
         )
-    per_user = Counter(owners)
+    per_user = Counter(executing_owners)
     assert sum(per_user.values()) == 5  # never above active_slots
-    assert max(per_user.values()) <= 3  # never above per_user_active_limit
-    assert set(per_user.values()) == {2, 3}
+    assert max(per_user.values()) <= 4  # never above per_user_active_limit
 
 
 # --- 2. concurrent PUTs ------------------------------------------------------------------
@@ -392,7 +413,7 @@ async def test_two_concurrent_puts_reach_the_sink_exactly_once(
 # --- 3. stale reservations ---------------------------------------------------------------
 
 
-async def test_abandoned_reservation_frees_its_slot_after_upload_expires_at(
+async def test_abandoned_reservation_does_not_block_capacity_and_is_reaped_after_expiry(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -401,14 +422,15 @@ async def test_abandoned_reservation_frees_its_slot_after_upload_expires_at(
     first = await _reserve(client, actor, subject_id)
     _publish(monkeypatch, active_slots=1)
 
-    assert (await _post(client, actor, subject_id)).status_code == 503
+    # An unused `awaiting_upload` reservation never consumes the executing slot cap.
+    second = await _post(client, actor, subject_id)
+    assert second.status_code == 201
+
     async with session_factory() as db:
         attempt = await db.get(IngestionAttempt, uuid.UUID(first["attempt_id"]))
         assert attempt is not None
         attempt.upload_expires_at = datetime.now(UTC) - timedelta(seconds=1)
         await db.commit()
-    # Still counted as active until the reaper runs: that is the abandoned reservation.
-    assert (await _post(client, actor, subject_id)).status_code == 503
 
     async with session_factory() as db:
         now = datetime.now(UTC)
@@ -422,9 +444,6 @@ async def test_abandoned_reservation_frees_its_slot_after_upload_expires_at(
     assert expired is not None
     assert (expired.status, expired.error_code) == ("cancelled", "upload_expired")
     assert expired.lease_expires_at is None
-
-    freed = await _post(client, actor, subject_id)
-    assert freed.status_code == 201
 
 
 async def test_expire_stale_reservations_leaves_rows_that_ingest_owns(
