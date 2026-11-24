@@ -519,6 +519,10 @@
   position: fixed;
   inset: auto 0 0 0;
   z-index: 0;
+  /* An explicit width keeps the layer full-bleed: with an auto width, max-height on a viewport
+     wider than 320:176 is transferred through aspect-ratio and shrinks the layer to the left,
+     leaving an empty band on the right. Cover then crops the faded sky instead of the sea. */
+  width: 100%;
   aspect-ratio: 320 / 176;
   max-height: 100vh;
   overflow: hidden;
@@ -527,7 +531,7 @@
   background-image: url("/bg/waves-dark.png");
   background-repeat: no-repeat;
   background-position: center bottom;
-  background-size: 100% 100%;
+  background-size: cover;
   image-rendering: pixelated;
 }
 
