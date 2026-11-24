@@ -104,17 +104,6 @@
   --font-pixel: "VT323", ui-monospace, "Cascadia Mono", "Segoe UI Mono", "Courier New", monospace;
   --font-code: "Fira Code", ui-monospace, "Cascadia Mono", "Segoe UI Mono", "Courier New", monospace;
 
-  /* Type scale: about +1px on small steps and +8% on headings over the Tailwind defaults,
-     because VT323 and Fira Code render small. Only sizes change; line-height ratios stay. */
-  --text-xs: 0.8125rem;
-  --text-sm: 0.9375rem;
-  --text-base: 1.0625rem;
-  --text-lg: 1.1875rem;
-  --text-xl: 1.3125rem;
-  --text-2xl: 1.625rem;
-  --text-3xl: 2rem;
-  --text-4xl: 2.4375rem;
-
   /* Sombras "bloque" (bordes rígidos, sin radio) */
   --shadow-block: 4px 4px 0 0 var(--color-pure-black);
   --shadow-block-sm: 2px 2px 0 0 var(--color-pure-black);
@@ -276,7 +265,6 @@
     background-color: var(--color-dark);
     color: var(--color-mint-ink);
     font-family: var(--font-pixel);
-    font-size: var(--text-base);
     -webkit-font-smoothing: none;
   }
 
@@ -415,7 +403,7 @@
 
 .calendar-shell .fc-toolbar-title {
   color: var(--color-mint-ink);
-  font-size: 1.625rem;
+  font-size: 1.5rem;
   text-transform: capitalize;
 }
 
@@ -488,7 +476,7 @@
   border: 1px solid var(--color-pure-black);
   border-radius: 0;
   font-family: var(--font-pixel);
-  font-size: 1.0625rem;
+  font-size: 0.95rem;
 }
 
 .calendar-shell .fc-daygrid-event {
@@ -531,10 +519,6 @@
   position: fixed;
   inset: auto 0 0 0;
   z-index: 0;
-  /* An explicit width keeps the layer full-bleed: with an auto width, max-height on a viewport
-     wider than 320:176 is transferred through aspect-ratio and shrinks the layer to the left,
-     leaving an empty band on the right. Cover then crops the faded sky instead of the sea. */
-  width: 100%;
   aspect-ratio: 320 / 176;
   max-height: 100vh;
   overflow: hidden;
@@ -543,7 +527,7 @@
   background-image: url("/bg/waves-dark.png");
   background-repeat: no-repeat;
   background-position: center bottom;
-  background-size: cover;
+  background-size: 100% 100%;
   image-rendering: pixelated;
 }
 
