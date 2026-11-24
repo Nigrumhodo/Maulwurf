@@ -38,7 +38,7 @@ const toggleClasses =
   "min-h-8 min-w-8 shrink-0 items-center justify-center border-2 border-lavender/40 leading-none text-lavender hover:border-mint hover:text-mint";
 
 function rowClasses(rail: boolean, active = false): string {
-  return `capitalize flex min-h-10 w-full items-center gap-3 px-3 text-left ${
+  return `capitalize flex min-h-10 w-full items-center gap-3 px-3 text-left lg:text-lg ${
     active ? "bg-mint text-on-accent" : "text-lavender hover:text-mint"
   } ${rail ? "md:max-lg:justify-center md:max-lg:px-0" : ""}`;
 }
@@ -162,11 +162,11 @@ export function AppSidebar({ onOpenSearch }: AppSidebarProps) {
               <Link
                 to="/"
                 onClick={closeMenus}
-                className="inline-flex min-h-8 items-center lowercase whitespace-nowrap text-xl text-mint"
+                className="inline-flex min-h-8 items-center lowercase whitespace-nowrap text-xl text-mint lg:text-[1.375rem]"
               >
                 maulwurf<span className="text-lavender">@lab</span>
               </Link>
-              <Clock className="text-sm" />
+              <Clock className="text-sm lg:text-base" />
             </div>
             <button
               ref={closeButtonRef}
@@ -199,7 +199,7 @@ export function AppSidebar({ onOpenSearch }: AppSidebarProps) {
               }}
               aria-label="buscar con ctrl+k"
               title="buscar con ctrl+k"
-              className={`lowercase flex min-h-10 w-full items-center gap-3 border-2 border-pure-black px-3 text-lavender hover:border-mint hover:text-mint ${
+              className={`lowercase flex min-h-10 w-full items-center gap-3 border-2 border-pure-black px-3 text-lavender lg:text-lg hover:border-mint hover:text-mint ${
                 rail ? "md:max-lg:justify-center md:max-lg:px-0" : ""
               }`}
             >
@@ -208,7 +208,7 @@ export function AppSidebar({ onOpenSearch }: AppSidebarProps) {
               </span>
               <span className={`flex-1 text-left ${rail ? "md:max-lg:sr-only" : ""}`}>buscar</span>
               <kbd
-                className={`border border-lavender/40 px-1 text-xs text-mint ${rail ? "md:max-lg:hidden" : ""}`}
+                className={`border border-lavender/40 px-1 text-xs text-mint lg:text-sm ${rail ? "md:max-lg:hidden" : ""}`}
               >
                 ctrl+k
               </kbd>
@@ -239,7 +239,7 @@ export function AppSidebar({ onOpenSearch }: AppSidebarProps) {
             >
               <p
                 id={`app-nav-${group.id}`}
-                className={`lowercase px-3 text-sm text-lavender/60 ${rail ? "md:max-lg:sr-only" : ""}`}
+                className={`lowercase px-3 text-sm text-lavender/60 lg:text-base ${rail ? "md:max-lg:sr-only" : ""}`}
               >
                 {group.label}
               </p>
