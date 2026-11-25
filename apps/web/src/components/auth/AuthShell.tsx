@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { LegalLinks } from "@/components/legal/LegalLinks";
 import { Card } from "@/components/ui/Card";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { UiLanguageSwitcher } from "@/components/ui/UiLanguageSwitcher";
@@ -53,6 +54,8 @@ export function AuthShell({ title, children }: AuthShellProps) {
           maulwurf<span className="text-lavender">@lab</span>
         </FlickerText>
       </p>
+
+      <LegalLinks className="relative z-10 mt-4" />
     </div>
   );
 }

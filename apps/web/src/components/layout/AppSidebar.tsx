@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { LegalLinks } from "@/components/legal/LegalLinks";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { UiLanguageSwitcher } from "@/components/ui/UiLanguageSwitcher";
 import {
@@ -286,6 +287,7 @@ export function AppSidebar({ onOpenSearch }: AppSidebarProps) {
             </span>
             <span className={rail ? "md:max-lg:sr-only" : ""}>{t("sidebar.logout")}</span>
           </button>
+          <LegalLinks className={`px-3 pt-1 ${rail ? "md:max-lg:hidden" : ""}`} />
         </div>
 
         {/* Decorative demo telemetry: kept as one quiet footer, not a panel. */}

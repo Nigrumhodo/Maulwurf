@@ -3,6 +3,8 @@ import { Link } from "react-router-dom";
 import { WavesBackground } from "@/components/motion/WavesBackground";
 import { RetroVisual } from "@/components/ui/RetroVisual";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
+import { LegalConsentNotice } from "@/components/legal/LegalConsentNotice";
+import { LegalLinks } from "@/components/legal/LegalLinks";
 import { UiLanguageSwitcher } from "@/components/ui/UiLanguageSwitcher";
 import { buttonClasses } from "@/components/ui/buttonStyles";
 import {
@@ -72,6 +74,7 @@ export function LandingPage() {
                 {t("hero.ctaLogin")}
               </Link>
             </div>
+            <LegalConsentNotice className="lowercase max-w-prose" />
           </div>
 
           <div className="flex items-center justify-center border-2 border-pure-black bg-dark p-3 shadow-block-sm">
@@ -144,6 +147,7 @@ export function LandingPage() {
 
       <footer className="lowercase relative z-10 mx-auto mt-6 flex max-w-5xl flex-wrap items-center justify-between gap-2 border-2 border-pure-black bg-dark px-4 py-2 text-base text-lavender/60">
         <span>{t("footer.privacy")}</span>
+        <LegalLinks />
         <span>maulwurf@lab © 2026</span>
       </footer>
     </div>

@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { GoogleButton } from "@/components/auth/GoogleButton";
+import { LegalConsentNotice } from "@/components/legal/LegalConsentNotice";
 import { Typewriter } from "@/components/motion/Typewriter";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
@@ -48,6 +49,7 @@ export function LoginPage() {
       )}
 
       <GoogleButton label={t("login.google")} />
+      <LegalConsentNotice className="lowercase" />
 
       <div className="lowercase border-t-2 border-lavender/30 pt-4 text-lavender">
         <p className="mb-1">{t("login.noAccount")}</p>
