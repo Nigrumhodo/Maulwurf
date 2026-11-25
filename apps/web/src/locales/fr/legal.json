@@ -1,1 +1,372 @@
-{}
+{
+  "common": {
+    "draftBanner": "brouillon technique · en attente de révision juridique",
+    "updated": "dernière mise à jour : {{date}}",
+    "index": "sommaire",
+    "back": "retour à l'accueil",
+    "placeholder": "[à compléter : {{field}}]",
+    "fields": {
+      "controllerName": "nom légal du responsable",
+      "address": "adresse postale",
+      "email": "e-mail de contact",
+      "dpo": "délégué à la protection des données",
+      "authority": "autorité de contrôle",
+      "law": "droit applicable et juridiction",
+      "minAge": "âge minimum",
+      "sourceUrl": "URL du code source",
+      "lastUpdated": "date de mise à jour",
+      "version": "version de la politique"
+    }
+  },
+  "links": {
+    "label": "informations légales",
+    "privacy": "confidentialité",
+    "terms": "conditions",
+    "license": "licence AGPL-3.0"
+  },
+  "consent": {
+    "before": "en continuant, vous acceptez les ",
+    "terms": "conditions d'utilisation",
+    "middle": " et la ",
+    "privacy": "politique de confidentialité",
+    "after": "."
+  },
+  "privacy": {
+    "title": "Politique de confidentialité",
+    "intro": [
+      "Cette politique décrit les données que Maulwurf traite, pourquoi, avec qui elles sont partagées et quels droits vous avez. C'est un brouillon technique en attente de révision juridique : il décrit ce que l'application fait aujourd'hui et peut changer.",
+      "Maulwurf transforme des enregistrements de cours en texte consultable. Il ne conserve que le texte, jamais l'audio."
+    ],
+    "sections": {
+      "controller": {
+        "title": "Responsable et contact",
+        "p": [
+          "Responsable du traitement : {{controllerName}}.",
+          "Adresse postale : {{address}}.",
+          "Contact pour la confidentialité et l'exercice des droits : {{email}}.",
+          "Délégué à la protection des données : {{dpo}}."
+        ]
+      },
+      "data": {
+        "title": "Données que nous traitons",
+        "p": ["Nous traitons ces catégories de données :"],
+        "items": [
+          {
+            "name": "Compte",
+            "text": "e-mail, nom affiché et identifiant Google, obtenus lors de la connexion avec Google (périmètres openid, email et profile), et le fuseau horaire que vous choisissez dans les réglages."
+          },
+          {
+            "name": "Session",
+            "text": "un cookie de session opaque (HttpOnly, SameSite) et un jeton CSRF. La durée de session par défaut est de 168 heures."
+          },
+          {
+            "name": "Audio de cours",
+            "text": "le fichier que vous envoyez. Il n'existe qu'en mémoire temporaire pendant qu'il est reçu, validé, converti et transcrit, et il est envoyé à NVIDIA Riva pour être transcrit. Il n'est pas conservé."
+          },
+          {
+            "name": "Métadonnées de cours",
+            "text": "matière, date et fuseau horaire du cours, langue de l'audio que vous sélectionnez et, si vous les indiquez, titre et enseignant."
+          },
+          {
+            "name": "Transcription",
+            "text": "texte complet et segments horodatés, fragments de texte et vecteurs de recherche (embeddings). Ils sont stockés chiffrés au repos."
+          },
+          {
+            "name": "Chat",
+            "text": "vos questions et les réponses, avec leur historique. La durée de conservation de l'historique est configurable."
+          },
+          {
+            "name": "Tâches",
+            "text": "propositions de tâches générées à partir de vos transcriptions et votre décision à leur sujet."
+          },
+          {
+            "name": "Google Calendar (facultatif)",
+            "text": "si vous le connectez, avec consentement incrémental : créer et modifier des événements dans un agenda que Maulwurf crée, lire les événements et lire la liste des agendas."
+          },
+          {
+            "name": "Gmail (facultatif)",
+            "text": "si vous l'activez, uniquement l'autorisation d'envoyer des e-mails, pour les rappels ou résumés que vous activez."
+          },
+          {
+            "name": "Jetons Google",
+            "text": "jetons d'accès et d'actualisation, chiffrés avec AES-GCM avec une clé versionnée et utilisés uniquement depuis le serveur."
+          }
+        ]
+      },
+      "purposes": {
+        "title": "Finalités",
+        "p": ["Nous utilisons vos données pour :"],
+        "items": [
+          {
+            "name": "Transcription",
+            "text": "transformer l'audio de vos cours en texte."
+          },
+          {
+            "name": "Recherche et chat",
+            "text": "répondre à des questions sur vos cours avec des citations de segments de la transcription."
+          },
+          {
+            "name": "Propositions de tâches",
+            "text": "repérer les tâches et rendus mentionnés en cours pour que vous les examiniez."
+          },
+          {
+            "name": "Google Calendar (facultatif)",
+            "text": "créer des événements uniquement après votre confirmation explicite."
+          },
+          {
+            "name": "Gmail (facultatif)",
+            "text": "envoyer les rappels que vous avez activés."
+          }
+        ]
+      },
+      "basis": {
+        "title": "Base juridique et consentement",
+        "p": [
+          "Avant d'envoyer un cours, l'avis de confidentialité vous est présenté, avec sa version, et vous devez accepter deux confirmations : que l'audio est traité dans le cloud et qu'il n'y aura ni lecture ni retranscription.",
+          "Vous confirmez aussi disposer du consentement des autres personnes dont la voix apparaît dans l'enregistrement, comme l'enseignant et vos camarades.",
+          "L'attribution définitive d'une base juridique à chaque traitement est en attente de révision juridique."
+        ]
+      },
+      "recipients": {
+        "title": "Destinataires et sous-traitants",
+        "p": ["Nous partageons des données avec ces tiers :"],
+        "items": [
+          {
+            "name": "NVIDIA Riva",
+            "text": "reçoit l'audio du cours pour le transcrire, via une connexion gRPC chiffrée par TLS."
+          },
+          {
+            "name": "Fournisseur de LLM",
+            "text": "reçoit du texte (pas d'audio) de vos transcriptions et questions pour générer des réponses et des propositions de tâches. Il est configurable selon le déploiement."
+          },
+          {
+            "name": "Fournisseur d'embeddings",
+            "text": "reçoit du texte (pas d'audio) pour calculer les vecteurs de recherche. Il est configurable selon le déploiement."
+          },
+          {
+            "name": "Google",
+            "text": "connexion et, si vous les activez, Calendar et Gmail."
+          }
+        ]
+      },
+      "transfers": {
+        "title": "Transferts internationaux",
+        "p": [
+          "Certains de ces fournisseurs peuvent traiter des données en dehors de votre pays ou de l'Espace économique européen. Les garanties applicables à ces transferts restent à définir et à faire examiner juridiquement."
+        ]
+      },
+      "audio": {
+        "title": "Audio éphémère",
+        "p": [
+          "L'audio ne vit qu'en mémoire ou dans un stockage temporaire en RAM pendant qu'il est reçu, validé, converti et transcrit. Il est supprimé à la fin du traitement ou en cas d'abandon.",
+          "Maulwurf ne stocke pas l'audio sur disque, dans un stockage d'objets, dans Redis, dans les journaux ni dans les sauvegardes, et n'offre ni lecture ni retranscription.",
+          "Si l'audio est perdu avant la fin de la transcription, vous devrez l'envoyer à nouveau.",
+          "Ce que NVIDIA conserve de l'audio reçu relève de ses propres conditions ; cette révision reste ouverte."
+        ]
+      },
+      "retention": {
+        "title": "Conservation",
+        "items": [
+          {
+            "name": "Données actives",
+            "text": "conservées jusqu'à ce que vous les supprimiez, qu'il s'agisse d'un cours ou de tout le compte."
+          },
+          {
+            "name": "Sauvegardes",
+            "text": "chiffrées et contenant uniquement du texte et des métadonnées, jusqu'à 30 jours. Les suppressions sont réappliquées lors d'une restauration, donc une donnée supprimée peut subsister dans les sauvegardes jusqu'à 30 jours."
+          },
+          {
+            "name": "Traces résiduelles de suppression",
+            "text": "identifiants distants, état et erreurs expurgées ; elles expirent après 30 jours."
+          },
+          {
+            "name": "Événements Google Calendar",
+            "text": "à la suppression du compte, les événements créés par Maulwurf sont conservés sauf si vous choisissez de les supprimer. Nous ne supprimons jamais les événements d'autres personnes. Sans autorisations Google, nous ne pouvons pas garantir la suppression à distance."
+          },
+          {
+            "name": "Tiers",
+            "text": "les données déjà envoyées à NVIDIA, aux fournisseurs de LLM et d'embeddings et à Google relèvent des conditions de chacun. La révision de leur conservation reste ouverte et nous ne promettons pas une conservation nulle."
+          }
+        ]
+      },
+      "security": {
+        "title": "Sécurité",
+        "items": [
+          {
+            "name": "En transit",
+            "text": "les connexions utilisent TLS."
+          },
+          {
+            "name": "Au repos",
+            "text": "la base de données et les sauvegardes sont chiffrées ; les jetons Google sont chiffrés avec AES-GCM."
+          },
+          {
+            "name": "Isolation",
+            "text": "chaque utilisateur n'accède qu'à ses données grâce à la sécurité au niveau des lignes (RLS) forcée dans PostgreSQL."
+          },
+          {
+            "name": "Journaux",
+            "text": "l'audio, les transcriptions, les prompts, les identifiants et les données personnelles ne sont pas écrits dans les journaux ni les traces."
+          }
+        ],
+        "p": ["Aucune mesure n'élimine tout risque."]
+      },
+      "rights": {
+        "title": "Vos droits",
+        "items": [
+          {
+            "name": "Accès",
+            "text": "vous pouvez consulter vos transcriptions et vos tâches dans l'application."
+          },
+          {
+            "name": "Rectification",
+            "text": "vous pouvez modifier votre fuseau horaire dans les réglages et corriger les données de vos cours."
+          },
+          {
+            "name": "Effacement",
+            "text": "vous pouvez supprimer un cours ou votre compte depuis les réglages. La suppression du compte est une opération observable qui peut être reprise."
+          },
+          {
+            "name": "Opposition et limitation",
+            "text": "demandez-les à {{email}}."
+          },
+          {
+            "name": "Portabilité",
+            "text": "il n'existe pas de fonction d'export ; demandez-la à {{email}}."
+          },
+          {
+            "name": "Retrait du consentement",
+            "text": "déconnectez les intégrations Google (Calendar ou Gmail). Cela n'affecte pas ce qui a déjà été traité."
+          },
+          {
+            "name": "Réclamation",
+            "text": "vous pouvez saisir l'autorité de contrôle : {{authority}}."
+          }
+        ]
+      },
+      "storage": {
+        "title": "Stockage dans le navigateur",
+        "p": [
+          "Le navigateur ne stocke que deux valeurs dans localStorage : le thème (maulwurf-theme) et la langue de l'interface (maulwurf-locale).",
+          "Un service worker ne met en cache que le shell statique de l'application, jamais de données privées de l'API.",
+          "Le cookie de session est technique et nécessaire pour se connecter. Nous n'utilisons ni cookies de suivi, ni cookies publicitaires, ni analytique tierce."
+        ]
+      },
+      "minors": {
+        "title": "Mineurs",
+        "p": [
+          "Âge minimum pour utiliser Maulwurf : {{minAge}}.",
+          "Le traitement des données de mineurs et le consentement parental sont en attente de révision juridique."
+        ]
+      },
+      "changes": {
+        "title": "Modifications et version",
+        "p": [
+          "Version de cette politique : {{version}}. Dernière mise à jour : {{lastUpdated}}.",
+          "En cas de changement, nous publierons la nouvelle version sur cette page avec sa date. L'avis de confidentialité que vous acceptez lors de l'envoi d'un cours a sa propre version sur le serveur, qui doit encore être alignée sur ce texte."
+        ]
+      }
+    }
+  },
+  "terms": {
+    "title": "Conditions d'utilisation",
+    "licenseLinkLabel": "Texte complet de la licence",
+    "sourceLabel": "Code source",
+    "intro": [
+      "Ces conditions régissent l'utilisation de Maulwurf. Elles constituent un brouillon technique en attente de révision juridique."
+    ],
+    "sections": {
+      "service": {
+        "title": "Le service",
+        "p": [
+          "Maulwurf transforme des enregistrements de cours en transcriptions consultables, répond à des questions avec des citations, propose des tâches que vous examinez et, si vous l'activez, écrit dans Google Calendar et envoie des rappels par Gmail.",
+          "L'audio n'est pas conservé : seul le texte est stocké."
+        ]
+      },
+      "account": {
+        "title": "Compte et conditions d'accès",
+        "p": [
+          "Vous vous connectez avec un compte Google. Vous devez avoir l'âge minimum ({{minAge}}) et la capacité d'accepter ces conditions.",
+          "Vous êtes responsable de l'activité réalisée avec votre compte."
+        ]
+      },
+      "use": {
+        "title": "Utilisation acceptable",
+        "p": ["En utilisant Maulwurf, vous vous engagez à :"],
+        "items": [
+          {
+            "name": "Droit d'enregistrer",
+            "text": "avoir le droit et le consentement d'enregistrer et d'envoyer chaque cours, y compris les voix de l'enseignant et de vos camarades. Cette responsabilité vous incombe."
+          },
+          {
+            "name": "Contenu licite",
+            "text": "ne pas envoyer de contenu illégal ou portant atteinte aux droits de tiers."
+          },
+          {
+            "name": "Sécurité",
+            "text": "ne pas tenter de contourner la sécurité du service, d'accéder aux données d'autres utilisateurs ni de le surcharger."
+          }
+        ]
+      },
+      "content": {
+        "title": "Votre contenu",
+        "p": [
+          "Vous conservez la propriété de votre contenu. Vous nous autorisez uniquement à le traiter et à vous l'afficher comme le décrit la politique de confidentialité.",
+          "Les transcriptions reproduisent ce qui a été dit en cours : respectez les droits de ceux qui l'ont dit."
+        ]
+      },
+      "ai": {
+        "title": "Avertissement sur l'IA",
+        "p": [
+          "Les réponses du chat et les propositions de tâches sont générées par des modèles d'IA à partir de vos transcriptions. Elles peuvent être incorrectes ou incomplètes.",
+          "Vérifiez les citations avant de vous fier à une réponse. Ce qui ne peut pas être étayé par la transcription est marqué NO VERIFICADO.",
+          "Elles ne constituent pas un conseil professionnel ou académique."
+        ]
+      },
+      "actions": {
+        "title": "Actions externes",
+        "p": [
+          "Maulwurf n'écrit pas dans Google Calendar et n'envoie pas d'e-mails sans votre confirmation explicite. Gmail est facultatif et vous devez l'activer vous-même.",
+          "Examinez chaque proposition avant de l'accepter."
+        ]
+      },
+      "availability": {
+        "title": "Disponibilité et responsabilité",
+        "p": [
+          "Le service est fourni « en l'état » et selon disponibilité, sans garantie expresse ou implicite dans la mesure permise par la loi. Nous ne garantissons ni qu'il sera ininterrompu, ni exempt d'erreurs, ni que les transcriptions seront exactes.",
+          "Dans la mesure permise, nous ne sommes pas responsables des dommages indirects, de la perte de données ni des décisions prises à partir des réponses. Les limites exactes dépendent de la juridiction : {{law}}."
+        ]
+      },
+      "licencia": {
+        "title": "Licence de logiciel libre (AGPL-3.0)",
+        "p": [
+          "Maulwurf est un logiciel libre publié sous la GNU Affero General Public License version 3 (AGPL-3.0). Vous pouvez utiliser, étudier, modifier et redistribuer le code selon cette licence.",
+          "Si vous proposez une version modifiée à des utilisateurs via un réseau, la section 13 de la licence vous oblige à leur offrir le code source correspondant.",
+          "Le programme est fourni sans aucune garantie, dans la mesure permise par la loi (sections 15 et 16 de la licence). Ces conditions ne remplacent pas la licence."
+        ]
+      },
+      "termination": {
+        "title": "Résiliation et suppression du compte",
+        "p": [
+          "Vous pouvez cesser d'utiliser Maulwurf et supprimer votre compte depuis les réglages à tout moment. Vos transcriptions, vecteurs, tâches, chats et jetons sont supprimés, selon les délais et exceptions de la politique de confidentialité.",
+          "Nous pouvons suspendre les comptes qui ne respectent pas ces conditions."
+        ]
+      },
+      "law": {
+        "title": "Droit applicable",
+        "p": ["Droit applicable et juridiction : {{law}}."]
+      },
+      "changes": {
+        "title": "Modifications",
+        "p": [
+          "Version : {{version}}. Dernière mise à jour : {{lastUpdated}}.",
+          "Nous publierons les modifications sur cette page avec leur date."
+        ]
+      },
+      "contact": {
+        "title": "Contact",
+        "p": ["Écrivez-nous à {{email}}."]
+      }
+    }
+  }
+}
