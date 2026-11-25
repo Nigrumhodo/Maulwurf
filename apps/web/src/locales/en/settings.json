@@ -99,7 +99,9 @@
     "saving": "saving…",
     "saveTimezone": "save zone",
     "timezoneUpdated": "time zone updated for future digests.",
-    "timezoneSaveFailed": "could not save the time zone."
+    "timezoneSaveFailed": "could not save the time zone.",
+    "uiLanguage": "interface language",
+    "uiLanguageHint": "saved only in this browser; it does not change the audio language of your classes."
   },
   "gmail": {
     "title": "gmail connection (opt-in)",

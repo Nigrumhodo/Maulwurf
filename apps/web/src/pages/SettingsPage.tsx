@@ -10,6 +10,7 @@ import { NotificationPreferences } from "@/components/settings/NotificationPrefe
 import { Button } from "@/components/ui/Button";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { TimezoneSelect } from "@/components/ui/TimezoneSelect";
+import { UiLanguageSwitcher } from "@/components/ui/UiLanguageSwitcher";
 import { updateTimezone } from "@/lib/auth";
 import { ApiHttpError } from "@/lib/api";
 import {
@@ -252,7 +253,13 @@ export function SettingsPage() {
         <div className="flex min-w-0 flex-1 flex-col gap-8 divide-y-2 divide-lavender/30 [&>section]:pt-8 [&>section:first-child]:pt-0">
           <section id="perfil" aria-labelledby="ajustes-perfil" className="flex scroll-mt-24 flex-col gap-3">
             <h2 id="ajustes-perfil" className={h2}>{t("sections.profile")}</h2>
-            {/* ui-language-switcher */}
+            <div className="lowercase flex flex-col gap-2 text-lavender">
+              <span className="text-mint">&gt; {t("profile.uiLanguage")}</span>
+              <div className="flex">
+                <UiLanguageSwitcher />
+              </div>
+              <p className="text-base text-lavender/60">{t("profile.uiLanguageHint")}</p>
+            </div>
         {user === null ? (
           <p className="lowercase text-lavender">{t("profile.none")}</p>
         ) : (

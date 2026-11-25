@@ -99,7 +99,9 @@
     "saving": "guardando…",
     "saveTimezone": "guardar zona",
     "timezoneUpdated": "zona horaria actualizada para futuros resúmenes.",
-    "timezoneSaveFailed": "no se pudo guardar la zona horaria."
+    "timezoneSaveFailed": "no se pudo guardar la zona horaria.",
+    "uiLanguage": "idioma de la interfaz",
+    "uiLanguageHint": "se guarda solo en este navegador; no cambia el idioma de audio de tus clases."
   },
   "gmail": {
     "title": "conexión gmail (opt-in)",

@@ -99,7 +99,9 @@
     "saving": "enregistrement…",
     "saveTimezone": "enregistrer le fuseau",
     "timezoneUpdated": "fuseau horaire mis à jour pour les prochains résumés.",
-    "timezoneSaveFailed": "impossible d'enregistrer le fuseau horaire."
+    "timezoneSaveFailed": "impossible d'enregistrer le fuseau horaire.",
+    "uiLanguage": "langue de l'interface",
+    "uiLanguageHint": "enregistrée uniquement dans ce navigateur ; elle ne change pas la langue audio de vos cours."
   },
   "gmail": {
     "title": "connexion gmail (opt-in)",
