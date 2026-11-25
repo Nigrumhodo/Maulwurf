@@ -1,4 +1,5 @@
 import { forwardRef } from "react";
+import { useTranslation } from "react-i18next";
 import type { SelectHTMLAttributes } from "react";
 import { LANGUAGES } from "@/lib/languages";
 
@@ -23,37 +24,40 @@ export const LanguageSelect = forwardRef<HTMLSelectElement, LanguageSelectProps>
       label,
       prompt = true,
       id,
-      placeholder = "selecciona idioma",
+      placeholder,
       className = "",
       options = LANGUAGES,
       ...rest
     },
     ref,
-  ) => (
-    <label className="capitalize font-pixel flex flex-col gap-1">
-      {label != null && (
-        <span className="text-mint">
-          {prompt ? "> " : ""}
-          {label}
-        </span>
-      )}
-      <select
-        ref={ref}
-        id={id}
-        className={`bg-surface text-lavender border-2 border-lavender px-3 py-2 caret-mint focus:border-mint focus:outline-none ${className}`}
-        {...rest}
-      >
-        <option value="" disabled>
-          {placeholder}
-        </option>
-        {options.map((language) => (
-          <option key={language.code} value={language.code}>
-            {language.label}
+  ) => {
+    const { t } = useTranslation("common");
+    return (
+      <label className="capitalize font-pixel flex flex-col gap-1">
+        {label != null && (
+          <span className="text-mint">
+            {prompt ? "> " : ""}
+            {label}
+          </span>
+        )}
+        <select
+          ref={ref}
+          id={id}
+          className={`bg-surface text-lavender border-2 border-lavender px-3 py-2 caret-mint focus:border-mint focus:outline-none ${className}`}
+          {...rest}
+        >
+          <option value="" disabled>
+            {placeholder ?? t("fields.languagePlaceholder")}
           </option>
-        ))}
-      </select>
-    </label>
-  ),
+          {options.map((language) => (
+            <option key={language.code} value={language.code}>
+              {language.label}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  },
 );
 
 LanguageSelect.displayName = "LanguageSelect";

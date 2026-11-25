@@ -1,1 +1,100 @@
-{}
+{
+  "app": {
+    "loading": "loading",
+    "sessionUnavailable": "could not check the session. check your connection.",
+    "retry": "retry"
+  },
+  "nav": {
+    "items": {
+      "home": "home",
+      "panel": "panel",
+      "settings": "settings",
+      "upload": "upload class",
+      "library": "library",
+      "chat": "chat",
+      "subjects": "subjects",
+      "tasks": "tasks",
+      "agenda": "agenda"
+    },
+    "groups": {
+      "study": "study",
+      "planning": "planning"
+    },
+    "breadcrumb": "path",
+    "classDetail": "class"
+  },
+  "sidebar": {
+    "menu": "menu",
+    "closeMenu": "close menu",
+    "expand": "expand menu",
+    "collapse": "collapse menu",
+    "search": "search",
+    "searchShortcut": "search with ctrl+k",
+    "primaryNav": "main",
+    "logout": "log out"
+  },
+  "clock": {
+    "days": ["sun", "mon", "tue", "wed", "thu", "fri", "sat"],
+    "months": ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+  },
+  "theme": {
+    "dark": "dark",
+    "light": "light",
+    "switchTo": "switch to {{mode}} mode"
+  },
+  "uiLanguage": {
+    "label": "interface language"
+  },
+  "google": {
+    "signIn": "sign in with google"
+  },
+  "dialog": {
+    "confirm": "confirm",
+    "cancel": "cancel",
+    "close": "close"
+  },
+  "card": {
+    "closeWindow": "close window"
+  },
+  "toast": {
+    "close": "dismiss notice",
+    "tone": {
+      "info": "info",
+      "success": "ok",
+      "warning": "warn",
+      "error": "error"
+    }
+  },
+  "fields": {
+    "timezonePlaceholder": "select time zone",
+    "languagePlaceholder": "select language"
+  },
+  "motion": {
+    "companion": "companion animation",
+    "sprite": "sprite animation"
+  },
+  "palette": {
+    "dialog": "command palette and global search",
+    "title": "quick search (ctrl+k)",
+    "close": "close palette",
+    "closeKey": "esc",
+    "placeholder": "type to search transcripts or jump to a section…",
+    "input": "search maulwurf",
+    "searching": "searching your classes…",
+    "error": "the search could not be completed.",
+    "noHits": "no transcript matches for «{{query}}».",
+    "noResults": "no results.",
+    "results": "results",
+    "routes": {
+      "upload": { "label": "upload class", "hint": "ephemeral ingest" },
+      "home": { "label": "home", "hint": "dashboard · summary and status" },
+      "gestion": { "label": "workspace", "hint": "hub for subjects, tasks and library" },
+      "library": { "label": "library", "hint": "class transcripts" },
+      "chat": { "label": "chat", "hint": "cited rag · questions with evidence" },
+      "subjects": { "label": "subjects", "hint": "crud and stats" },
+      "tasks": { "label": "tasks", "hint": "tasks to confirm · m4 inbox" },
+      "agenda": { "label": "agenda", "hint": "integrated calendar" },
+      "settings": { "label": "settings", "hint": "time zone, gmail and account" }
+    }
+  }
+}

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
+import { UiLanguageSwitcher } from "@/components/ui/UiLanguageSwitcher";
 import {
   iconCalendario,
   iconCarpeta,
@@ -65,16 +67,18 @@ function ItemIcon({ item }: { item: AppNavItem }) {
 }
 
 function MenuLink({ item, rail, onNavigate }: { item: AppNavItem; rail: boolean; onNavigate: () => void }) {
+  const { t } = useTranslation("common");
+  const label = t(`nav.items.${item.labelKey}`);
   return (
     <NavLink
       to={item.to}
       end={item.end}
-      title={item.label}
+      title={label}
       onClick={onNavigate}
       className={({ isActive }) => rowClasses(rail, isActive)}
     >
       <ItemIcon item={item} />
-      <span className={`truncate ${rail ? "md:max-lg:sr-only" : ""}`}>{item.label}</span>
+      <span className={`truncate ${rail ? "md:max-lg:sr-only" : ""}`}>{label}</span>
     </NavLink>
   );
 }
@@ -88,6 +92,7 @@ export interface AppSidebarProps {
 // tablet (md) shows a 56px glyph rail that expands over the content; mobile shows the Header
 // top bar and opens the same menu as a full-height drawer.
 export function AppSidebar({ onOpenSearch }: AppSidebarProps) {
+  const { t } = useTranslation("common");
   const { logout } = useAuth();
   const { pathname } = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -149,7 +154,7 @@ export function AppSidebar({ onOpenSearch }: AppSidebarProps) {
 
       <aside
         id="app-menu"
-        aria-label="menú"
+        aria-label={t("sidebar.menu")}
         className={`${drawerOpen ? "flex" : "hidden"} fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] flex-col border-r-2 border-pure-black bg-surface shadow-block md:flex md:max-w-none ${
           railExpanded ? "md:w-60" : "md:w-14"
         } lg:z-40 lg:w-60`}
@@ -172,7 +177,7 @@ export function AppSidebar({ onOpenSearch }: AppSidebarProps) {
               ref={closeButtonRef}
               type="button"
               onClick={() => setDrawerOpen(false)}
-              aria-label="cerrar menú"
+              aria-label={t("sidebar.closeMenu")}
               className={`${toggleClasses} inline-flex md:hidden`}
             >
               <span aria-hidden="true">✕</span>
@@ -181,7 +186,7 @@ export function AppSidebar({ onOpenSearch }: AppSidebarProps) {
               ref={railToggleRef}
               type="button"
               onClick={() => setRailExpanded((expanded) => !expanded)}
-              aria-label={railExpanded ? "colapsar menú" : "expandir menú"}
+              aria-label={railExpanded ? t("sidebar.collapse") : t("sidebar.expand")}
               aria-expanded={railExpanded}
               aria-controls="app-menu"
               className={`${toggleClasses} hidden md:inline-flex lg:hidden`}
@@ -197,8 +202,8 @@ export function AppSidebar({ onOpenSearch }: AppSidebarProps) {
                 closeMenus();
                 onOpenSearch();
               }}
-              aria-label="buscar con ctrl+k"
-              title="buscar con ctrl+k"
+              aria-label={t("sidebar.searchShortcut")}
+              title={t("sidebar.searchShortcut")}
               className={`lowercase flex min-h-10 w-full items-center gap-3 border-2 border-pure-black px-3 text-lavender lg:text-lg hover:border-mint hover:text-mint ${
                 rail ? "md:max-lg:justify-center md:max-lg:px-0" : ""
               }`}
@@ -206,7 +211,9 @@ export function AppSidebar({ onOpenSearch }: AppSidebarProps) {
               <span aria-hidden="true" className={GLYPH}>
                 ⌕
               </span>
-              <span className={`flex-1 text-left ${rail ? "md:max-lg:sr-only" : ""}`}>buscar</span>
+              <span className={`flex-1 text-left ${rail ? "md:max-lg:sr-only" : ""}`}>
+                {t("sidebar.search")}
+              </span>
               <kbd
                 className={`border border-lavender/40 px-1 text-xs text-mint lg:text-sm ${rail ? "md:max-lg:hidden" : ""}`}
               >
@@ -217,7 +224,7 @@ export function AppSidebar({ onOpenSearch }: AppSidebarProps) {
         </div>
 
         <nav
-          aria-label="principal"
+          aria-label={t("sidebar.primaryNav")}
           className={`flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden p-3 ${
             rail ? "md:max-lg:px-1.5" : ""
           }`}
@@ -241,7 +248,7 @@ export function AppSidebar({ onOpenSearch }: AppSidebarProps) {
                 id={`app-nav-${group.id}`}
                 className={`lowercase px-3 text-sm text-lavender/60 lg:text-base ${rail ? "md:max-lg:sr-only" : ""}`}
               >
-                {group.label}
+                {t(`nav.groups.${group.labelKey}`)}
               </p>
               <ul aria-labelledby={`app-nav-${group.id}`} className="flex flex-col gap-1">
                 {group.items.map((item) => (
@@ -263,11 +270,21 @@ export function AppSidebar({ onOpenSearch }: AppSidebarProps) {
             glyphClassName={GLYPH}
             labelClassName={rail ? "md:max-lg:sr-only" : ""}
           />
-          <button type="button" onClick={() => void logout()} title="salir" className={rowClasses(rail)}>
+          <UiLanguageSwitcher
+            className={rowClasses(rail)}
+            glyphClassName={GLYPH}
+            labelClassName={`truncate ${rail ? "md:max-lg:sr-only" : ""}`}
+          />
+          <button
+            type="button"
+            onClick={() => void logout()}
+            title={t("sidebar.logout")}
+            className={rowClasses(rail)}
+          >
             <span aria-hidden="true" className={GLYPH}>
               ←
             </span>
-            <span className={rail ? "md:max-lg:sr-only" : ""}>salir</span>
+            <span className={rail ? "md:max-lg:sr-only" : ""}>{t("sidebar.logout")}</span>
           </button>
         </div>
 

@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { formatHitTimestamp, searchHitHref, searchTranscripts } from "@/lib/search";
 import type { SearchHit } from "@/lib/search";
+import type esCommon from "@/locales/es/common.json";
 
 // D4.3 — Global Ctrl+K / Cmd+K Command Palette with quick routes + hybrid transcript search.
+
+type RouteKey = keyof (typeof esCommon)["palette"]["routes"];
 
 interface QuickRouteItem {
   id: string;
@@ -12,16 +16,16 @@ interface QuickRouteItem {
   hint: string;
 }
 
-const QUICK_ROUTES: QuickRouteItem[] = [
-  { id: "route-upload", label: "subir clase", to: "/gestion/subir", hint: "ingesta efímera" },
-  { id: "route-home", label: "inicio", to: "/", hint: "dashboard · resumen y estado" },
-  { id: "route-gestion", label: "gestión", to: "/gestion", hint: "hub de materias, tareas y biblioteca" },
-  { id: "route-library", label: "biblioteca", to: "/gestion/biblioteca", hint: "transcripciones de clases" },
-  { id: "route-chat", label: "chat", to: "/gestion/chat", hint: "rag citado · preguntas con evidencia" },
-  { id: "route-subjects", label: "materias", to: "/gestion/materias", hint: "crud y estadísticas" },
-  { id: "route-tasks", label: "tareas", to: "/gestion/tareas", hint: "tareas por confirmar · bandeja m4" },
-  { id: "route-agenda", label: "agenda", to: "/gestion/agenda", hint: "calendario integrado" },
-  { id: "route-settings", label: "ajustes", to: "/settings", hint: "zona horaria, gmail y cuenta" },
+const QUICK_ROUTES: ReadonlyArray<{ key: RouteKey; to: string }> = [
+  { key: "upload", to: "/gestion/subir" },
+  { key: "home", to: "/" },
+  { key: "gestion", to: "/gestion" },
+  { key: "library", to: "/gestion/biblioteca" },
+  { key: "chat", to: "/gestion/chat" },
+  { key: "subjects", to: "/gestion/materias" },
+  { key: "tasks", to: "/gestion/tareas" },
+  { key: "agenda", to: "/gestion/agenda" },
+  { key: "settings", to: "/settings" },
 ];
 
 type PaletteOption =
@@ -34,12 +38,14 @@ export interface CommandPaletteProps {
 }
 
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
+  const { t } = useTranslation("common");
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // A flag, not a message: the copy is resolved at render time so it follows the UI language.
+  const [failed, setFailed] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
 
   useEffect(() => {
@@ -60,7 +66,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     if (!open) {
       setQuery("");
       setHits([]);
-      setError(null);
+      setFailed(false);
       setActiveIndex(0);
       return;
     }
@@ -73,13 +79,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     if (!open || trimmed.length < 2) {
       setHits([]);
       setLoading(false);
-      setError(null);
+      setFailed(false);
       return;
     }
     const controller = new AbortController();
     const timer = setTimeout(() => {
       setLoading(true);
-      setError(null);
+      setFailed(false);
       searchTranscripts(trimmed, { limit: 8, signal: controller.signal })
         .then((response) => {
           setHits(response.results);
@@ -89,7 +95,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           if (controller.signal.aborted) return;
           if (err instanceof DOMException && err.name === "AbortError") return;
           setHits([]);
-          setError("no se pudo completar la búsqueda.");
+          setFailed(true);
           setLoading(false);
         });
     }, 180);
@@ -100,14 +106,26 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     };
   }, [open, trimmed]);
 
+  // Labels and hints are matched in the active UI language, so the filter follows the switch.
+  const quickRoutes = useMemo<QuickRouteItem[]>(
+    () =>
+      QUICK_ROUTES.map(({ key, to }) => ({
+        id: `route-${key}`,
+        to,
+        label: t(`palette.routes.${key}.label`),
+        hint: t(`palette.routes.${key}.hint`),
+      })),
+    [t],
+  );
+
   const filteredRoutes = useMemo(() => {
     const lower = trimmed.toLowerCase();
-    if (lower === "") return QUICK_ROUTES;
-    return QUICK_ROUTES.filter(
+    if (lower === "") return quickRoutes;
+    return quickRoutes.filter(
       (route) =>
         route.label.toLowerCase().includes(lower) || route.hint.toLowerCase().includes(lower),
     );
-  }, [trimmed]);
+  }, [trimmed, quickRoutes]);
 
   const options = useMemo<PaletteOption[]>(() => {
     const list: PaletteOption[] = hits.map((hit) => ({ kind: "hit", hit }));
@@ -152,21 +170,21 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       className="fixed inset-0 z-[90] flex items-start justify-center bg-black/60 p-4 pt-16"
       role="dialog"
       aria-modal="true"
-      aria-label="paleta de comandos y búsqueda global"
+      aria-label={t("palette.dialog")}
       onClick={(event) => {
         if (event.target === event.currentTarget) onOpenChange(false);
       }}
     >
       <div className="lowercase font-pixel flex w-full max-w-2xl flex-col border-2 border-pure-black bg-surface shadow-block">
         <header className="flex items-center justify-between border-b-2 border-pure-black bg-mint px-3 py-2 text-on-accent">
-          <span className="capitalize font-bold">› búsqueda rápida (ctrl+k)</span>
+          <span className="capitalize font-bold">› {t("palette.title")}</span>
           <button
             type="button"
             onClick={() => onOpenChange(false)}
-            aria-label="cerrar paleta"
+            aria-label={t("palette.close")}
             className="inline-flex min-h-8 min-w-8 items-center justify-center border-2 border-on-accent/40 px-1.5 leading-none hover:bg-on-accent hover:text-mint"
           >
-            esc
+            {t("palette.closeKey")}
           </button>
         </header>
 
@@ -177,27 +195,27 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={handleInputKeyDown}
-            placeholder="escribe para buscar en transcripciones o ir a una sección…"
-            aria-label="buscar en maulwurf"
+            placeholder={t("palette.placeholder")}
+            aria-label={t("palette.input")}
             className="w-full border-2 border-lavender bg-dark px-3 py-2 text-lg text-lavender caret-mint focus:border-mint focus:outline-none"
           />
         </div>
 
         <div className="max-h-96 overflow-y-auto p-3">
-          {loading && <p className="mb-2 text-lavender/60">&gt; buscando en tus clases…</p>}
-          {error !== null && (
+          {loading && <p className="mb-2 text-lavender/60">&gt; {t("palette.searching")}</p>}
+          {failed && (
             <p role="alert" className="mb-2 text-mint">
-              &gt; {error}
+              &gt; {t("palette.error")}
             </p>
           )}
-          {trimmed.length >= 2 && !loading && error === null && hits.length === 0 && (
-            <p className="mb-2 text-lavender/60">sin coincidencias en transcripciones para «{trimmed}».</p>
+          {trimmed.length >= 2 && !loading && !failed && hits.length === 0 && (
+            <p className="mb-2 text-lavender/60">{t("palette.noHits", { query: trimmed })}</p>
           )}
 
           {options.length === 0 ? (
-            <p className="text-lavender/60">sin resultados.</p>
+            <p className="text-lavender/60">{t("palette.noResults")}</p>
           ) : (
-            <ul className="flex flex-col gap-1.5" role="listbox" aria-label="resultados">
+            <ul className="flex flex-col gap-1.5" role="listbox" aria-label={t("palette.results")}>
               {options.map((option, index) => {
                 const selected = index === activeIndex;
                 if (option.kind === "hit") {

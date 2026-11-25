@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { Navigate, Outlet, useNavigate } from "react-router-dom";
 import { fetchMe, postLogout } from "@/lib/auth";
 import type { Me } from "@/lib/auth";
@@ -96,13 +97,14 @@ export function useAuth(): AuthContextValue {
  * Las rutas hijas se renderizan con `<Outlet>`.
  */
 export function RequireAuth() {
+  const { t } = useTranslation("common");
   const { user, loading, unavailable, retrySession } = useAuth();
 
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <p className="lowercase text-lavender">
-          cargando <BlinkingCaret />
+          {t("app.loading")} <BlinkingCaret />
         </p>
       </div>
     );
@@ -111,13 +113,13 @@ export function RequireAuth() {
   if (unavailable) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4">
-        <p className="lowercase text-lavender">no se pudo comprobar la sesión. revisa tu conexión.</p>
+        <p className="lowercase text-lavender">{t("app.sessionUnavailable")}</p>
         <button
           type="button"
           onClick={() => void retrySession()}
           className="lowercase font-pixel border-2 border-mint px-3 py-2 text-mint hover:bg-mint hover:text-on-accent"
         >
-          reintentar
+          {t("app.retry")}
         </button>
       </div>
     );

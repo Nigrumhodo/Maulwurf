@@ -1,1 +1,62 @@
-{}
+{
+  "header": {
+    "login": "se connecter"
+  },
+  "hero": {
+    "title": "ENVOIE → TROUVE → DÉCIDE",
+    "lead": "maulwurf transforme tes enregistrements de cours en texte consultable avec des citations exactes.",
+    "sub": "pour ne perdre ni ce qu'a dit le professeur ni les rendus qu'il a mentionnés, sans garder l'audio.",
+    "ctaGoogle": "se connecter avec google ›",
+    "ctaRegister": "créer un compte",
+    "ctaLogin": "compte existant",
+    "altDark": "terrier souterrain 16 bits de maulwurf",
+    "altLight": "taupe d'étude rétro de maulwurf"
+  },
+  "pipeline": {
+    "label": "flux de travail",
+    "heading": "comment ça marche",
+    "steps": {
+      "upload": {
+        "title": "envoie sans garder l'audio",
+        "desc": "l'audio ne vit qu'en RAM pendant la transcription."
+      },
+      "find": {
+        "title": "trouve avec de vraies citations",
+        "desc": "chaque réponse cite un segment vérifié."
+      },
+      "decide": {
+        "title": "décide avant toute écriture",
+        "desc": "rien n'arrive dans calendar ou gmail sans ta confirmation."
+      }
+    }
+  },
+  "privacy": {
+    "heading": "contrat de confidentialité (g1)",
+    "points": {
+      "ram": "audio éphémère uniquement en RAM (tmpfs borné et non exécutable).",
+      "absence": "vérification stricte de l'absence d'audio temporaire avant d'indexer le texte.",
+      "tenancy": "isolation multitenant par RLS forcé dans PostgreSQL 16.",
+      "cache": "cache local du navigateur et service worker limités au shell statique."
+    }
+  },
+  "faq": {
+    "heading": "questions fréquentes",
+    "items": {
+      "recording": {
+        "q": "mon enregistrement est-il conservé, ou y a-t-il un lecteur ?",
+        "a": "non. L'audio ne vit qu'en mémoire temporaire pendant la transcription et ne passe jamais sur disque, dans S3 ni dans le navigateur."
+      },
+      "writes": {
+        "q": "maulwurf crée-t-il des événements ou envoie-t-il des e-mails tout seul ?",
+        "a": "jamais. Chaque tâche passe en revue et n'est écrite dans Google Calendar qu'après ta confirmation ; Gmail exige un opt-in et une autorisation explicite."
+      },
+      "deletion": {
+        "q": "puis-je supprimer toutes mes données ?",
+        "a": "oui. Depuis Réglages, tu peux lancer la suppression observable de ton compte, de tes transcriptions, embeddings et tâches."
+      }
+    }
+  },
+  "footer": {
+    "privacy": "audio non conservé · seul le texte chiffré est persisté"
+  }
+}
