@@ -25,6 +25,7 @@ export default defineConfig({
     // Unit suites stay DOM-free by default; component tests opt in with the
     // `@vitest-environment jsdom` docblock so the fast suites keep running in node.
     include: ["tests/**/*.test.{ts,tsx}"],
+    setupFiles: ["tests/setup-i18n.ts"],
   },
   build: {
     // `dist/public` para el cliente y `dist/server` para el servidor (tsconfig.server.json),
