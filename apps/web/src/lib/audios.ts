@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { apiFetch } from "./api";
 import { isRecord, readJson } from "./json";
 
@@ -119,11 +120,11 @@ export async function fetchAudios(): Promise<AudioListItemOut[]> {
   const res = await apiFetch("/audios");
   const payload = await readJson(res);
   if (!isRecord(payload) || !Array.isArray(payload.items)) {
-    throw new Error("El listado de clases no coincide con el contrato.");
+    throw new Error(i18n.t("study:audiosLib.listMismatch"));
   }
   return payload.items.map((item) => {
     if (!isAudioListItem(item)) {
-      throw new Error("Una clase del listado no coincide con el contrato.");
+      throw new Error(i18n.t("study:audiosLib.itemMismatch"));
     }
     return item;
   });

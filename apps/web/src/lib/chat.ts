@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { ApiHttpError, apiFetch } from "./api";
 import { createSseParser } from "./stream";
 
@@ -336,7 +337,7 @@ export async function sendChatMessage({
       retries: 0,
     },
   );
-  if (res.body === null) throw new Error("El servidor no devolvió un stream de chat.");
+  if (res.body === null) throw new Error(i18n.t("study:chatLib.noStream"));
 
   let terminal = false;
   const parser = createSseParser((frame) => {
@@ -372,20 +373,24 @@ export async function sendChatMessage({
 
 export function chatActionError(error: unknown): string {
   if (error instanceof Error && error.message === "sse_frame_too_large") {
-    return "la respuesta del chat superó el tamaño máximo de frame SSE.";
+    return i18n.t("study:chatLib.frameTooLarge");
   }
   if (error instanceof ApiHttpError) {
     if (error.status === 429) {
-      return `${error.message} Ya hay demasiados streams abiertos; espera un momento.`;
+      return `${error.message} ${i18n.t("study:chatLib.tooManyStreams")}`;
     }
     if (error.status === 503) {
-      return `${error.message} El servicio está ocupado; reintenta en un momento.`;
+      return `${error.message} ${i18n.t("study:chatLib.busy")}`;
     }
     return error.message;
   }
-  return "la operación de chat falló; revisa tu conexión.";
+  return i18n.t("study:chatLib.failed");
 }
 
 export function modeLabel(mode: ChatMode): string {
-  return mode === "all" ? "todas las clases" : mode === "subject" ? "una materia" : "una clase";
+  return mode === "all"
+    ? i18n.t("study:chatLib.modeAll")
+    : mode === "subject"
+      ? i18n.t("study:chatLib.modeSubject")
+      : i18n.t("study:chatLib.modeClass");
 }

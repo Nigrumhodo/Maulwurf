@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/Button";
 import { RetroVisual } from "@/components/ui/RetroVisual";
 import {
@@ -37,9 +38,10 @@ export function AudioUploadPanel({
   onFileChange,
   onUpload,
   onCancel,
-  uploadLabel = "enviar audio",
-  cancelLabel = "descartar reserva",
+  uploadLabel,
+  cancelLabel,
 }: AudioUploadPanelProps) {
+  const { t } = useTranslation("study");
   const percent =
     progress !== null && progress.totalBytes > 0
       ? Math.min(100, Math.round((progress.sentBytes / progress.totalBytes) * 100))
@@ -48,7 +50,7 @@ export function AudioUploadPanel({
   return (
     <div className="lowercase flex flex-col gap-4">
       <label className="capitalize font-pixel flex flex-col gap-1">
-        <span className="text-mint">&gt; archivo de audio</span>
+        <span className="text-mint">{t("audioUpload.fileLabel")}</span>
         <input
           type="file"
           accept={acceptedFileInputAccept(capabilities)}
@@ -61,7 +63,7 @@ export function AudioUploadPanel({
       {selectedFile !== null && (
         <p className="text-lavender/60">
           &gt; {selectedFile.name} · {formatBytes(selectedFile.size)} ·{" "}
-          {selectedFile.type || "tipo desconocido"}
+          {selectedFile.type || t("audioUpload.unknownType")}
         </p>
       )}
 
@@ -91,11 +93,14 @@ export function AudioUploadPanel({
           </div>
           <div className="flex min-w-0 flex-1 flex-col gap-1">
             <p className="text-lavender/80">
-              &gt; enviando {formatBytes(progress.sentBytes)} de {formatBytes(progress.totalBytes)}
+              {t("audioUpload.sending", {
+                sent: formatBytes(progress.sentBytes),
+                total: formatBytes(progress.totalBytes),
+              })}
             </p>
             <div
               role="progressbar"
-              aria-label="audio enviado"
+              aria-label={t("audioUpload.progressAria")}
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={percent}
@@ -103,7 +108,7 @@ export function AudioUploadPanel({
             >
               <div className="h-full bg-mint" style={{ width: `${percent}%` }} />
             </div>
-            <p className="text-lavender/60">&gt; progreso real de bytes enviados</p>
+            <p className="text-lavender/60">{t("audioUpload.realProgress")}</p>
           </div>
         </div>
       )}
@@ -117,22 +122,22 @@ export function AudioUploadPanel({
       <div className="flex flex-wrap items-center gap-2">
         {uploading ? (
           <Button type="button" variant="danger" onClick={onCancel}>
-            cancelar subida
+            {t("audioUpload.cancelUpload")}
           </Button>
         ) : (
           <>
             <Button type="button" disabled={selectedFile === null} onClick={onUpload}>
-              {uploadLabel}
+              {uploadLabel ?? t("audioUpload.send")}
             </Button>
             <Button type="button" variant="secondary" onClick={onCancel}>
-              {cancelLabel}
+              {cancelLabel ?? t("audioUpload.discard")}
             </Button>
           </>
         )}
       </div>
 
       <p className="text-lavender/60">
-        &gt; audio no conservado · se borra al terminar; solo queda la transcripción.
+        {t("audioUpload.notKept")}
       </p>
     </div>
   );

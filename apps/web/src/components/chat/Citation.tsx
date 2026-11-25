@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import type { ChatCitation } from "@/lib/chat";
 import { safeCitationHref } from "@/lib/markdown";
@@ -10,6 +11,7 @@ export interface CitationLinkProps {
 }
 
 export function CitationLink({ citation }: CitationLinkProps) {
+  const { t } = useTranslation("study");
   const text = `[${citation.index}] ${citation.label}`;
   const href = safeCitationHref(citation.url);
   if (href === null) {
@@ -18,7 +20,7 @@ export function CitationLink({ citation }: CitationLinkProps) {
   return (
     <Link
       to={href}
-      aria-label={`abrir cita ${citation.index} en el lector`}
+      aria-label={t("citation.open", { index: citation.index })}
       className={linkClass}
     >
       {text}
@@ -31,9 +33,10 @@ export interface CitationListProps {
 }
 
 export function CitationList({ citations }: CitationListProps) {
+  const { t } = useTranslation("study");
   if (citations.length === 0) return null;
   return (
-    <ul aria-label="fuentes de la respuesta" className="flex flex-col gap-1 text-base text-lavender/60">
+    <ul aria-label={t("citation.sources")} className="flex flex-col gap-1 text-base text-lavender/60">
       {citations.map((citation) => (
         <li key={citation.index}>
           <CitationLink citation={citation} />
