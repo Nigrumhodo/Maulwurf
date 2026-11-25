@@ -19,6 +19,8 @@ import { AgendaPage } from "@/pages/AgendaPage";
 import { SubirClasePage } from "@/pages/SubirClasePage";
 import { GestionOverview } from "@/pages/GestionOverview";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { PrivacyPage } from "@/pages/legal/PrivacyPage";
+import { TermsPage } from "@/pages/legal/TermsPage";
 
 function HomeRoute() {
   const { user, loading, unavailable, retrySession } = useAuth();
@@ -83,6 +85,8 @@ export function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/welcome" element={<WelcomePage />} />
+        <Route path="/privacidad" element={<PrivacyPage />} />
+        <Route path="/terminos" element={<TermsPage />} />
 
         <Route element={<RequireAuth />}>
           <Route element={<AppLayout />}>
