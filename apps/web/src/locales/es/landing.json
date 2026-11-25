@@ -1,1 +1,62 @@
-{}
+{
+  "header": {
+    "login": "iniciar sesión"
+  },
+  "hero": {
+    "title": "SUBE → ENCUENTRA → DECIDE",
+    "lead": "maulwurf convierte tus grabaciones de clase en texto consultable con citas exactas.",
+    "sub": "para no perder lo que dijo el profesor ni las entregas que mencionó, sin guardar el audio.",
+    "ctaGoogle": "entrar con google ›",
+    "ctaRegister": "crear cuenta",
+    "ctaLogin": "acceso existente",
+    "altDark": "madriguera subterránea 16-bit de maulwurf",
+    "altLight": "topo de estudio retro de maulwurf"
+  },
+  "pipeline": {
+    "label": "flujo de trabajo",
+    "heading": "cómo funciona",
+    "steps": {
+      "upload": {
+        "title": "sube sin guardar audio",
+        "desc": "el audio vive solo en RAM mientras se transcribe."
+      },
+      "find": {
+        "title": "encuentra con citas reales",
+        "desc": "cada respuesta cita un segmento verificado."
+      },
+      "decide": {
+        "title": "decide antes de escribir",
+        "desc": "nada llega a calendar o gmail sin tu confirmación."
+      }
+    }
+  },
+  "privacy": {
+    "heading": "contrato de privacidad (g1)",
+    "points": {
+      "ram": "audio efímero únicamente en RAM (tmpfs acotado y no ejecutable).",
+      "absence": "verificación estricta de ausencia temporal antes de indexar texto.",
+      "tenancy": "aislamiento multitenant mediante RLS forzado en PostgreSQL 16.",
+      "cache": "caché local del navegador y service worker limitados al shell estático."
+    }
+  },
+  "faq": {
+    "heading": "preguntas frecuentes",
+    "items": {
+      "recording": {
+        "q": "¿se conserva mi grabación o hay reproductor?",
+        "a": "no. El audio solo vive en memoria temporal mientras se transcribe y nunca pasa a disco, S3 ni al navegador."
+      },
+      "writes": {
+        "q": "¿maulwurf crea eventos o envía correos solo?",
+        "a": "nunca. Cada tarea entra para revisión y solo escribe en Google Calendar cuando la confirmas; Gmail requiere opt-in y permiso explícito."
+      },
+      "deletion": {
+        "q": "¿puedo borrar todos mis datos?",
+        "a": "sí. Desde Ajustes puedes lanzar el borrado observable de tu cuenta, transcripciones, embeddings y tareas."
+      }
+    }
+  },
+  "footer": {
+    "privacy": "audio no conservado · solo texto cifrado persistido"
+  }
+}

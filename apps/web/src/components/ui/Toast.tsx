@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+
 // D1.5 — Toast (presentacional). Renderiza un único aviso con tono y botón de
 // cierre; el listado/auto-dismiss lo gestiona `ToastProvider`.
 export type ToastTone = "info" | "success" | "warning" | "error";
@@ -15,19 +17,13 @@ const TONE_CLASSES: Record<ToastTone, string> = {
   error: "border-mint bg-mint/20 text-mint",
 };
 
-const TONE_LABEL: Record<ToastTone, string> = {
-  info: "info",
-  success: "ok",
-  warning: "aviso",
-  error: "error",
-};
-
 export interface ToastProps {
   item: ToastItem;
   onDismiss: (id: number) => void;
 }
 
 export function Toast({ item, onDismiss }: ToastProps) {
+  const { t } = useTranslation("common");
   return (
     <div
       role="status"
@@ -38,12 +34,12 @@ export function Toast({ item, onDismiss }: ToastProps) {
       </span>
       <span className="flex-1">{item.message}</span>
       <span className="opacity-60" aria-hidden="true">
-        [{TONE_LABEL[item.tone]}]
+        [{t(`toast.tone.${item.tone}`)}]
       </span>
       <button
         type="button"
         onClick={() => onDismiss(item.id)}
-        aria-label="cerrar aviso"
+        aria-label={t("toast.close")}
         className="inline-flex min-h-8 min-w-8 items-center justify-center border-2 border-pure-black px-1 leading-none hover:bg-mint hover:text-on-accent"
       >
         x

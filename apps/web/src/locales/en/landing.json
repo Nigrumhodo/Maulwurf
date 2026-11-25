@@ -1,1 +1,62 @@
-{}
+{
+  "header": {
+    "login": "log in"
+  },
+  "hero": {
+    "title": "UPLOAD → FIND → DECIDE",
+    "lead": "maulwurf turns your class recordings into searchable text with exact citations.",
+    "sub": "so you never lose what the teacher said or the deadlines they mentioned, without keeping the audio.",
+    "ctaGoogle": "sign in with google ›",
+    "ctaRegister": "create account",
+    "ctaLogin": "existing account",
+    "altDark": "maulwurf's 16-bit underground burrow",
+    "altLight": "maulwurf's retro study mole"
+  },
+  "pipeline": {
+    "label": "workflow",
+    "heading": "how it works",
+    "steps": {
+      "upload": {
+        "title": "upload without keeping audio",
+        "desc": "the audio lives only in RAM while it is transcribed."
+      },
+      "find": {
+        "title": "find it with real citations",
+        "desc": "every answer cites a verified segment."
+      },
+      "decide": {
+        "title": "decide before anything is written",
+        "desc": "nothing reaches calendar or gmail without your confirmation."
+      }
+    }
+  },
+  "privacy": {
+    "heading": "privacy contract (g1)",
+    "points": {
+      "ram": "ephemeral audio in RAM only (bounded, non-executable tmpfs).",
+      "absence": "strict verification that temporary audio is gone before indexing text.",
+      "tenancy": "multitenant isolation through forced RLS in PostgreSQL 16.",
+      "cache": "local browser cache and service worker limited to the static shell."
+    }
+  },
+  "faq": {
+    "heading": "frequently asked questions",
+    "items": {
+      "recording": {
+        "q": "is my recording kept, or is there a player?",
+        "a": "no. The audio only lives in temporary memory while it is transcribed and never reaches disk, S3 or the browser."
+      },
+      "writes": {
+        "q": "does maulwurf create events or send emails on its own?",
+        "a": "never. Every task goes into review and is only written to Google Calendar once you confirm it; Gmail requires opt-in and explicit permission."
+      },
+      "deletion": {
+        "q": "can i delete all my data?",
+        "a": "yes. From Settings you can start the observable deletion of your account, transcripts, embeddings and tasks."
+      }
+    }
+  },
+  "footer": {
+    "privacy": "audio not kept · only encrypted text persisted"
+  }
+}

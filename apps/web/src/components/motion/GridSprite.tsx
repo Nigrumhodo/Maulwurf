@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
+import { useTranslation } from "react-i18next";
 
 // Sprite en rejilla (filas × columnas). A diferencia de `SpriteAnimator`/`AvatarSprite`,
 // avanza por toda la hoja en orden fila por fila, no solo por una fila. Se usa para la
@@ -30,6 +31,7 @@ export function GridSprite({
   loop = true,
   className = "",
 }: GridSpriteProps) {
+  const { t } = useTranslation("common");
   const total = columns * rows;
   const frameWidth = sheetWidth / columns;
   const frameHeight = sheetHeight / rows;
@@ -71,7 +73,7 @@ export function GridSprite({
       className={`inline-block ${className}`}
       style={style}
       role="img"
-      aria-label="animación del compañero"
+      aria-label={t("motion.companion")}
     />
   );
 }

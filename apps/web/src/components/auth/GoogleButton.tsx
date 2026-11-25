@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { GOOGLE_AUTH_START_URL } from "@/lib/auth";
 
 function GoogleG() {
@@ -38,14 +39,15 @@ export interface GoogleButtonProps {
  * `/auth/google/start`, no una petición fetch: la navegación la inicia el
  * backend y el navegador nunca maneja el client secret.
  */
-export function GoogleButton({ label = "entrar con google" }: GoogleButtonProps) {
+export function GoogleButton({ label }: GoogleButtonProps) {
+  const { t } = useTranslation("common");
   return (
     <a
       href={GOOGLE_AUTH_START_URL}
       className="capitalize font-pixel inline-flex items-center justify-center gap-3 border-2 border-[#1f1f1f] bg-[#ffffff] px-6 py-2 text-xl text-[#1f1f1f] shadow-[4px_4px_0_0_#1f1f1f] transition-none hover:bg-[#e6e6e6] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_0_#1f1f1f]"
     >
       <GoogleG />
-      {label}
+      {label ?? t("google.signIn")}
     </a>
   );
 }
