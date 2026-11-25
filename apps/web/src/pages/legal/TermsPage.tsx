@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { LegalLayout } from "@/components/legal/LegalLayout";
 import { LegalSection, useSectionIndex } from "@/components/legal/LegalSection";
+import { UiLanguageSwitcher } from "@/components/ui/UiLanguageSwitcher";
 import { AGPL_URL, LEGAL } from "@/legal/controller";
 import { useLegalValues } from "@/legal/useLegalValues";
 
@@ -28,7 +29,11 @@ export function TermsPage() {
   const sections = useSectionIndex("terms", SECTION_IDS);
   const intro = t("terms.intro", { returnObjects: true }) as unknown as string[];
   return (
-    <LegalLayout title={t("terms.title")} sections={sections}>
+    <LegalLayout
+      title={t("terms.title")}
+      sections={sections}
+      languageSwitcher={<UiLanguageSwitcher labelClassName="hidden sm:inline" />}
+    >
       <div className="flex max-w-prose flex-col gap-3 text-lg leading-relaxed text-lavender">
         {intro.map((paragraph, i) => (
           <p key={i}>{paragraph}</p>
