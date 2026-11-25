@@ -53,7 +53,7 @@ export function LandingPage() {
 
       <main className="relative z-10 mx-auto mt-6 max-w-5xl border-2 border-pure-black bg-surface shadow-block">
         <section className="grid items-center gap-6 p-5 lg:grid-cols-[1fr_auto]">
-          <div className="flex flex-col gap-4">
+          <div className="flex min-w-0 flex-col gap-4">
             <h1 className="text-4xl tracking-wide text-mint sm:text-5xl">
               {t("hero.title")}
             </h1>

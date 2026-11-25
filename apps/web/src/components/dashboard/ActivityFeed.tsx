@@ -26,7 +26,7 @@ function AudioRow({ audio }: { audio: AudioListItemOut }) {
           {audio.duration_seconds !== null ? ` · ${audio.duration_seconds} s` : ""}
         </p>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <StatusBadge status={audio.aggregate_status} />
         <Link
           to="/gestion/biblioteca"

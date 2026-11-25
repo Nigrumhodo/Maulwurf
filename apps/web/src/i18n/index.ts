@@ -73,6 +73,8 @@ void i18n.use(initReactI18next).init({
   // React already escapes text; double escaping would show `&amp;` in the UI.
   interpolation: { escapeValue: false },
   returnNull: false,
+  // No vendor promo line in the browser console.
+  showSupportNotice: false,
 });
 
 syncDocumentLang(initialLocale);
