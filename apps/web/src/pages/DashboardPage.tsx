@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { AccessTiles } from "@/components/dashboard/AccessTiles";
 import { MoleCompanion } from "@/components/dashboard/MoleCompanion";
 import { statusLine, upcomingTasks } from "@/components/dashboard/summary";
@@ -20,13 +21,14 @@ function greetingName(user: { display_name: string | null; email: string } | nul
 // Classes and tasks come from the same endpoints as the gestión pages. Chat lives only at
 // `/gestion/chat`.
 export function DashboardPage() {
-  useDocumentTitle("inicio");
+  const { t } = useTranslation("plan");
+  useDocumentTitle(t("dashboard.title"));
   const { user } = useAuth();
   const audios = useServerList(fetchAudios);
   const tasks = useServerList(fetchTasks);
   const name = greetingName(user);
   const summary =
-    audios.loading || tasks.loading ? "cargando…" : statusLine(audios.items, tasks.items);
+    audios.loading || tasks.loading ? t("dashboard.loading") : statusLine(audios.items, tasks.items);
 
   return (
     <div className="relative">
@@ -62,7 +64,7 @@ export function DashboardPage() {
               </span>
             </div>
             <div className="flex flex-col gap-1">
-              <h1 className="capitalize text-2xl text-mint">{name ? `hola, ${name}` : "hola"}</h1>
+              <h1 className="capitalize text-2xl text-mint">{name ? t("dashboard.greetingNamed", { name }) : t("dashboard.greeting")}</h1>
               <p className="lowercase max-w-prose text-base text-lavender/80" aria-live="polite">
                 {summary}
               </p>
@@ -73,7 +75,7 @@ export function DashboardPage() {
 
           <section aria-labelledby="inicio-siguiente" className="flex flex-col gap-3">
             <h2 id="inicio-siguiente" className="lowercase text-xl text-mint">
-              lo siguiente
+              {t("dashboard.next")}
             </h2>
             <UpcomingTasks
               tasks={upcomingTasks(tasks.items)}

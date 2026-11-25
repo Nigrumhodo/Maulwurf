@@ -1,17 +1,19 @@
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { buttonClasses } from "@/components/ui/buttonStyles";
 
 const TILES = [
-  { to: "/gestion/subir", glyph: "↑", label: "subir clase", hint: "sube una grabación y consérvala como texto", primary: true },
-  { to: "/gestion/biblioteca", glyph: "▸", label: "biblioteca", hint: "lee y busca tus transcripciones", primary: false },
-  { to: "/gestion/chat", glyph: ">", label: "chat", hint: "pregunta con citas exactas", primary: false },
-  { to: "/gestion/tareas", glyph: "!", label: "tareas", hint: "revisa lo que propuso la clase", primary: false },
+  { to: "/gestion/subir", glyph: "↑", id: "upload", primary: true },
+  { to: "/gestion/biblioteca", glyph: "▸", id: "library", primary: false },
+  { to: "/gestion/chat", glyph: ">", id: "chat", primary: false },
+  { to: "/gestion/tareas", glyph: "!", id: "tasks", primary: false },
 ] as const;
 
 // Four large entry points; exactly one is primary so the first step is obvious.
 export function AccessTiles() {
+  const { t } = useTranslation("plan");
   return (
-    <nav aria-label="accesos principales" className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+    <nav aria-label={t("dashboard.tiles.nav")} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
       {TILES.map((tile) => (
         <Link
           key={tile.to}
@@ -24,9 +26,9 @@ export function AccessTiles() {
         >
           <span>
             <span aria-hidden="true">{tile.glyph} </span>
-            {tile.label}
+            {t(`dashboard.tiles.${tile.id}.label`)}
           </span>
-          <span className="lowercase whitespace-normal text-base opacity-80">{tile.hint}</span>
+          <span className="lowercase whitespace-normal text-base opacity-80">{t(`dashboard.tiles.${tile.id}.hint`)}</span>
         </Link>
       ))}
     </nav>

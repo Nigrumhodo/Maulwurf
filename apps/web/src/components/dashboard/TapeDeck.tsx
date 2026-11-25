@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { buttonClasses } from "@/components/ui/buttonStyles";
 
@@ -19,12 +20,13 @@ function Reel({ center }: { center: string }) {
 }
 
 export function TapeDeck() {
+  const { t } = useTranslation("plan");
   return (
     <section className="border-2 border-pure-black bg-surface shadow-block">
       <header className="flex items-center justify-between border-b-2 border-pure-black bg-mint px-3 py-2 text-on-accent">
         <span className="lowercase flex items-center gap-2 font-bold">
           <span aria-hidden="true">■</span>
-          01 · unidad de ingesta de audio
+          {t("tapeDeck.title")}
         </span>
         <span className="lowercase border-2 border-on-accent px-1.5 py-0.5 text-xs">
           ram_tmpfs
@@ -34,10 +36,10 @@ export function TapeDeck() {
       <div className="flex flex-col gap-4 p-4">
         <div className="retro-grid relative flex flex-col items-center justify-center border-2 border-pure-black bg-surface p-3">
           <div className="mb-2 flex w-full items-center justify-between text-xs">
-            <span className="lowercase text-lavender/60">pipeline: stream → tmpfs</span>
+            <span className="lowercase text-lavender/60">{t("tapeDeck.pipeline")}</span>
             <span className="lowercase flex items-center gap-1 text-mint">
               <span className="inline-block h-2 w-2 animate-pulse bg-mint" aria-hidden="true" />
-              listo
+              {t("tapeDeck.ready")}
             </span>
           </div>
 
@@ -47,19 +49,19 @@ export function TapeDeck() {
               <div className="border-2 border-pure-black bg-dark px-2 py-0.5 text-mint">
                 0 B en disco
               </div>
-              <span className="mt-1 lowercase text-xs text-lavender/60">solo texto cifrado</span>
+              <span className="mt-1 lowercase text-xs text-lavender/60">{t("tapeDeck.encryptedOnly")}</span>
             </div>
             <Reel center="bg-lavender" />
           </div>
 
           <div className="lowercase mt-2 flex w-full flex-col gap-1 border-2 border-pure-black bg-surface p-2 text-xs text-lavender/80">
-            <p>&gt; formatos admitidos: wav, mp3, ogg, opus, flac, webm</p>
-            <p>&gt; política g1: limpieza temporal verificada antes de indexar</p>
+            <p>&gt; {t("tapeDeck.formats")}</p>
+            <p>&gt; {t("tapeDeck.policy")}</p>
           </div>
         </div>
 
         <Link to="/gestion/subir" className={buttonClasses("secondary")}>
-          abrir el formulario de subida
+          {t("tapeDeck.openForm")}
         </Link>
       </div>
     </section>

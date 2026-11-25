@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/Button";
 import { DateInput } from "@/components/ui/DateInput";
 import { Input } from "@/components/ui/Input";
 import { TimezoneSelect } from "@/components/ui/TimezoneSelect";
+import i18n, { intlLocale } from "@/i18n";
 import { ApiHttpError } from "@/lib/api";
 import {
   DEFAULT_EVENT_DURATION_MINUTES,
@@ -55,7 +57,7 @@ function timedDuration(task: Task): number {
 
 function fieldError(error: unknown): string {
   if (error instanceof ApiHttpError) return error.firstFieldMessage()?.message ?? error.message;
-  return "no se pudo guardar la tarea; revisa la conexión.";
+  return i18n.t("plan:taskForm.saveFailed");
 }
 
 export interface TaskEditorProps {
@@ -68,6 +70,7 @@ const selectClass =
   "bg-surface text-lavender border-2 border-lavender px-3 py-2 caret-mint focus:border-mint focus:outline-none";
 
 export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
+  const { t } = useTranslation("plan");
   const dueWall = instantToWall(task.due_at, task.timezone);
   const eventStartWall = instantToWall(task.event_block.start_at, task.timezone);
   const initialDueMode = dueModeOf(task);
@@ -135,7 +138,7 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
   }
 
   function buildPatch(): TaskPatch | string {
-    if (titulo.trim() === "") return "el título no puede estar vacío.";
+    if (titulo.trim() === "") return t("taskForm.titleRequired");
     const schedule = buildScheduleFields({
       dueMode,
       dueDate,
@@ -182,36 +185,36 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
 
   return (
     <div ref={containerRef}>
-      <section aria-label="editar tarea" className="flex flex-col gap-4">
-        <h2 className="lowercase text-xl text-mint">editar tarea</h2>
+      <section aria-label={t("taskForm.editLabel")} className="flex flex-col gap-4">
+        <h2 className="lowercase text-xl text-mint">{t("taskForm.editLabel")}</h2>
         <div className="flex flex-col gap-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <Input
-              label="título"
+              label={t("taskForm.title")}
               value={titulo}
               maxLength={200}
               onChange={(event) => setTitulo(event.target.value)}
             />
             <label className="capitalize font-pixel flex flex-col gap-1">
-              <span className="text-mint">&gt; tipo</span>
+              <span className="text-mint">&gt; {t("taskForm.type")}</span>
               <select
-                aria-label="tipo de actividad"
+                aria-label={t("taskForm.typeLabel")}
                 value={tipo}
                 onChange={(event) => setTipo(event.target.value)}
                 className={selectClass}
               >
                 {ACTIVITY_TYPES.map((option) => (
                   <option key={option} value={option}>
-                    {option}
+                    {t(`taskForm.activityTypes.${option}`)}
                   </option>
                 ))}
               </select>
             </label>
           </div>
           <label className="capitalize font-pixel flex flex-col gap-1">
-            <span className="text-mint">&gt; detalle</span>
+            <span className="text-mint">&gt; {t("taskForm.detail")}</span>
             <textarea
-              aria-label="detalle"
+              aria-label={t("taskForm.detail")}
               rows={3}
               maxLength={2000}
               value={detalle}
@@ -221,44 +224,45 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
           </label>
 
         <fieldset className="flex flex-col gap-3 border-2 border-lavender/30 p-3">
-          <legend className="capitalize px-1 text-mint">fecha de vencimiento</legend>
+          <legend className="capitalize px-1 text-mint">{t("taskForm.dueDate")}</legend>
           <label className="flex flex-col gap-1">
-            <span className="text-lavender/60">modo</span>
+            <span className="text-lavender/60">{t("taskForm.mode")}</span>
             <select
-              aria-label="modo de vencimiento"
+              aria-label={t("taskForm.dueModeLabel")}
               value={dueMode}
               onChange={(event) => setDueMode(event.target.value as DueMode)}
               className={selectClass}
             >
-              <option value="missing">sin fecha</option>
-              <option value="all_day">todo el día</option>
-              <option value="timed">con hora</option>
+              <option value="missing">{t("taskForm.noDate")}</option>
+              <option value="all_day">{t("taskForm.allDay")}</option>
+              <option value="timed">{t("taskForm.timed")}</option>
             </select>
           </label>
           {ambiguousOriginal && (
             <p role="status" className="text-mint">
-              la fecha original era ambigua: “{task.date_text}”
-              {task.date_reason !== null ? ` (${task.date_reason})` : ""}. Elige una fecha
-              concreta o guárdala sin fecha.
+              {t("taskForm.ambiguous", {
+                text: task.date_text,
+                reason: task.date_reason !== null ? ` (${task.date_reason})` : "",
+              })}
             </p>
           )}
           {dueMode !== "missing" && (
             <div className="grid gap-3 sm:grid-cols-2">
               <DateInput
-                label="fecha"
+                label={t("taskForm.date")}
                 value={dueDate}
                 onChange={(event) => setDueDate(event.target.value)}
               />
               {dueMode === "timed" && (
                 <Input
                   type="time"
-                  label="hora"
+                  label={t("taskForm.time")}
                   value={dueTime}
                   onChange={(event) => setDueTime(event.target.value)}
                 />
               )}
               <TimezoneSelect
-                label="zona horaria"
+                label={t("taskForm.timezone")}
                 value={timezone}
                 onChange={(event) => setTimezone(event.target.value)}
               />
@@ -267,32 +271,32 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
         </fieldset>
 
         <fieldset className="flex flex-col gap-3 border-2 border-lavender/30 p-3">
-          <legend className="capitalize px-1 text-mint">bloque de agenda</legend>
+          <legend className="capitalize px-1 text-mint">{t("taskForm.agendaBlock")}</legend>
           <p className="text-base text-lavender/60">
-            propuesta editable de Maulwurf; no proviene del docente.
+            {t("taskForm.agendaProposal")}
           </p>
           <label className="flex flex-col gap-1">
-            <span className="text-lavender/60">modo</span>
+            <span className="text-lavender/60">{t("taskForm.mode")}</span>
             <select
-              aria-label="modo de agenda"
+              aria-label={t("taskForm.agendaModeLabel")}
               value={eventMode}
               onChange={(event) => changeEventMode(event.target.value as EventMode)}
               className={selectClass}
             >
-              <option value="none">sin bloque</option>
-              <option value="all_day">todo el día</option>
-              <option value="timed">con hora</option>
+              <option value="none">{t("taskForm.noBlock")}</option>
+              <option value="all_day">{t("taskForm.allDay")}</option>
+              <option value="timed">{t("taskForm.timed")}</option>
             </select>
           </label>
           {eventMode === "all_day" && (
             <div className="grid gap-3 sm:grid-cols-2">
               <DateInput
-                label="inicio de agenda"
+                label={t("taskForm.agendaStart")}
                 value={eventStartDate}
                 onChange={(event) => setEventStartDate(event.target.value)}
               />
               <DateInput
-                label="fin de agenda (exclusivo)"
+                label={t("taskForm.agendaEndExclusive")}
                 value={eventEndDate}
                 onChange={(event) => setEventEndDate(event.target.value)}
               />
@@ -301,19 +305,19 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
           {eventMode === "timed" && (
             <div className="grid gap-3 sm:grid-cols-2">
               <DateInput
-                label="inicio de agenda"
+                label={t("taskForm.agendaStart")}
                 value={eventStartDate}
                 onChange={(event) => setEventStartDate(event.target.value)}
               />
               <Input
                 type="time"
-                label="hora de inicio de agenda"
+                label={t("taskForm.agendaStartTime")}
                 value={eventStartTime}
                 onChange={(event) => setEventStartTime(event.target.value)}
               />
               <Input
                 type="number"
-                label="duración de agenda (minutos)"
+                label={t("taskForm.agendaDuration")}
                 min={1}
                 max={1440}
                 value={durationMinutes}
@@ -322,10 +326,10 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
                 }
               />
               <p className="self-end text-sm text-lavender/80">
-                fin calculado:{" "}
+                {t("taskForm.computedEnd")}{" "}
                 {eventEnd === null
-                  ? "hora inválida"
-                  : new Intl.DateTimeFormat("es", {
+                  ? t("taskForm.invalidTime")
+                  : new Intl.DateTimeFormat(intlLocale(), {
                       dateStyle: "short",
                       timeStyle: "short",
                       timeZone: timezone,
@@ -335,7 +339,7 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
           )}
           {eventMode === "all_day" && (
             <p className="text-base text-lavender/60">
-              fin exclusivo: el día indicado no se muestra en el evento.
+              {t("taskForm.exclusiveEndHint")}
             </p>
           )}
         </fieldset>
@@ -347,21 +351,21 @@ export function TaskEditor({ task, onSaved, onCancel }: TaskEditorProps) {
         )}
         {savedRevision !== null && (
           <p role="status" className="border-2 border-mint px-3 py-2 text-mint">
-            &gt; cambio pendiente de confirmación; la tarea activa no se modificó.
+            &gt; {t("taskForm.revisionPending")}
           </p>
         )}
         {savedDirect && (
           <p role="status" className="border-2 border-mint px-3 py-2 text-mint">
-            &gt; cambios guardados.
+            &gt; {t("taskForm.changesSaved")}
           </p>
         )}
 
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" disabled={busy} onClick={() => void handleSubmit()}>
-            {busy ? "guardando…" : "guardar cambios"}
+            {busy ? t("taskForm.saving") : t("taskForm.saveChanges")}
           </Button>
           <Button type="button" variant="secondary" disabled={busy} onClick={onCancel}>
-            cancelar
+            {t("taskForm.cancel")}
           </Button>
         </div>
       </div>

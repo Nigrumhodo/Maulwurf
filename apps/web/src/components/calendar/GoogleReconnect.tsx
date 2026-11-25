@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
   calendarTargetLabel,
@@ -19,6 +20,7 @@ const LINK_CLASSES =
   "inline-flex w-fit items-center gap-1 border-2 border-lavender/40 px-2 py-0.5 text-mint underline decoration-dotted hover:border-mint hover:bg-mint hover:text-on-accent";
 
 export function GoogleReconnect({ google, compact = false }: GoogleReconnectProps) {
+  const { t } = useTranslation("plan");
   const href = googleConnectHref(google);
   const label = googleConnectLabel(google);
 
@@ -29,8 +31,7 @@ export function GoogleReconnect({ google, compact = false }: GoogleReconnectProp
         className="lowercase flex flex-wrap items-center justify-between gap-2 border-2 border-mint px-3 py-2 text-mint"
       >
         <p>
-          &gt; calendar no está listo; las tareas confirmadas quedarán bloqueadas hasta
-          conectar o reconectar google calendar.
+          &gt; {t("reconnect.notReady")}
         </p>
         <a className={LINK_CLASSES} href={href}>
           {label}
@@ -44,7 +45,7 @@ export function GoogleReconnect({ google, compact = false }: GoogleReconnectProp
       <div className="flex flex-wrap items-center gap-2">
         <StatusBadge status={google.status} />
         <span className="lowercase text-base text-lavender/80">
-          {google.calendar_write_ready ? "listo para escribir" : "sin escritura lista"}
+          {google.calendar_write_ready ? t("reconnect.writeReady") : t("reconnect.writeNotReady")}
         </span>
       </div>
       <p className="lowercase text-lavender/80">{calendarTargetLabel(google)}</p>

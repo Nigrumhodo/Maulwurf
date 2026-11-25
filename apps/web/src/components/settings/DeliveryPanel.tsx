@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import i18n, { intlLocale } from "@/i18n";
 import { ApiHttpError } from "@/lib/api";
 import {
   NOTIFICATION_STATUSES,
@@ -24,7 +26,7 @@ function formatStamp(iso: string | null): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   try {
-    return new Intl.DateTimeFormat("es", {
+    return new Intl.DateTimeFormat(intlLocale(), {
       dateStyle: "medium",
       timeStyle: "short",
     }).format(date);
@@ -34,6 +36,7 @@ function formatStamp(iso: string | null): string {
 }
 
 export function DeliveryPanel() {
+  const { t } = useTranslation("settings");
   const [filter, setFilter] = useState<NotificationStatus | "all">("all");
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -72,7 +75,7 @@ export function DeliveryPanel() {
       setError(
         err instanceof ApiHttpError
           ? err.message
-          : "no se pudo cargar el historial de notificaciones.",
+          : i18n.t("settings:deliveries.loadFailed"),
       );
     } finally {
       if (mountedRef.current && generation === loadGenRef.current) {
@@ -101,7 +104,7 @@ export function DeliveryPanel() {
       setNextCursor(page.next_cursor);
     } catch {
       if (!mountedRef.current || generation !== loadGenRef.current) return;
-      setError("no se pudieron cargar más entregas.");
+      setError(t("deliveries.loadMoreFailed"));
     } finally {
       if (mountedRef.current && generation === loadGenRef.current) {
         setLoadingMore(false);
@@ -125,7 +128,7 @@ export function DeliveryPanel() {
       setError(
         err instanceof ApiHttpError
           ? err.message
-          : "no se pudo registrar el reenvío manual.",
+          : t("deliveries.resendFailed"),
       );
       setPendingTarget(null);
       setDuplicateAck(false);
@@ -138,20 +141,22 @@ export function DeliveryPanel() {
     <div>
       <div className="lowercase flex flex-col gap-4">
         <p className="text-lavender/80">
-          gmail no ofrece garantía de entrega única: si una respuesta se pierde o expira el lease,
-          la fila queda en <strong>delivery_unknown</strong> (estado terminal, sin reintento
-          automático).
+          <Trans
+            t={t}
+            i18nKey="deliveries.explainer"
+            components={{ strong: <strong /> }}
+          />
         </p>
 
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="filtrar por estado">
+          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t("deliveries.filterLabel")}>
             <Button
               type="button"
               size="sm"
               variant={filter === "all" ? "primary" : "secondary"}
               onClick={() => setFilter("all")}
             >
-              todos
+              {t("deliveries.all")}
             </Button>
             {NOTIFICATION_STATUSES.map((status) => (
               <Button
@@ -173,7 +178,7 @@ export function DeliveryPanel() {
             disabled={loading}
             onClick={() => void loadInitial(filter)}
           >
-            actualizar
+            {t("deliveries.refresh")}
           </Button>
         </div>
 
@@ -190,11 +195,11 @@ export function DeliveryPanel() {
         )}
 
         {loading ? (
-          <p className="text-lavender/60">&gt; cargando historial de notificaciones…</p>
+          <p className="text-lavender/60">&gt; {t("deliveries.loading")}</p>
         ) : items.length === 0 ? (
           <EmptyState
-            title="sin notificaciones registradas"
-            description="cuando se programen recordatorios, resúmenes o pruebas verás aquí cada intento auditado."
+            title={t("deliveries.emptyTitle")}
+            description={t("deliveries.emptyHint")}
           />
         ) : (
           <ul className="flex flex-col divide-y-2 divide-lavender/20 border-y-2 border-lavender/20">
@@ -206,12 +211,15 @@ export function DeliveryPanel() {
                     <StatusBadge status={item.status} />
                     {item.occurrence_seq > 0 && (
                       <span className="border border-lavender/40 px-1.5 text-xs text-lavender/80">
-                        sec #{item.occurrence_seq}
+                        {t("deliveries.seq", { seq: item.occurrence_seq })}
                       </span>
                     )}
                   </div>
                   <span className="text-base text-lavender/60">
-                    intentos: {item.attempts} · programado: {formatStamp(item.scheduled_at)}
+                    {t("deliveries.attempts", {
+                      attempts: item.attempts,
+                      scheduled: formatStamp(item.scheduled_at),
+                    })}
                   </span>
                 </div>
 
@@ -222,8 +230,8 @@ export function DeliveryPanel() {
                 <div className="flex flex-wrap items-center justify-between gap-2 text-base text-lavender/60">
                   <span>
                     {item.sent_at !== null
-                      ? `enviado: ${formatStamp(item.sent_at)}`
-                      : `ocurrencia: ${item.occurrence ?? "—"}`}
+                      ? t("deliveries.sentAt", { at: formatStamp(item.sent_at) })
+                      : t("deliveries.occurrence", { occurrence: item.occurrence ?? "—" })}
                   </span>
                   {canResendNotification(item.status) && (
                     <Button
@@ -236,7 +244,7 @@ export function DeliveryPanel() {
                         setPendingTarget(item);
                       }}
                     >
-                      {resendingId === item.id ? "registrando…" : "reenviar manualmente"}
+                      {resendingId === item.id ? t("deliveries.recording") : t("deliveries.resend")}
                     </Button>
                   )}
                 </div>
@@ -254,7 +262,7 @@ export function DeliveryPanel() {
               disabled={loadingMore}
               onClick={() => void handleLoadMore()}
             >
-              {loadingMore ? "cargando…" : "cargar más"}
+              {loadingMore ? t("deliveries.loadingMore") : t("deliveries.loadMore")}
             </Button>
           </div>
         )}
@@ -262,17 +270,20 @@ export function DeliveryPanel() {
 
       <ConfirmDialog
         open={pendingTarget !== null}
-        title="confirmar reenvío con riesgo de duplicado"
-        confirmLabel="crear nuevo envío"
-        cancelLabel="cancelar"
+        title={t("deliveries.dialog.title")}
+        confirmLabel={t("deliveries.dialog.confirm")}
+        cancelLabel={t("deliveries.dialog.cancel")}
         confirmDisabled={!duplicateAck || resendingId !== null}
         description={
           pendingTarget !== null ? (
             <div className="flex flex-col gap-3">
               <p>
-                se creará una <strong>nueva ocurrencia</strong> pendiente sin modificar el registro
-                original ({pendingTarget.status}). si gmail procesó la entrega anterior, podrías
-                recibir un correo duplicado.
+                <Trans
+                  t={t}
+                  i18nKey="deliveries.dialog.body"
+                  values={{ status: pendingTarget.status }}
+                  components={{ strong: <strong /> }}
+                />
               </p>
               <label className="flex cursor-pointer items-start gap-2 border-2 border-lavender/40 p-2 text-lavender">
                 <input
@@ -280,7 +291,7 @@ export function DeliveryPanel() {
                   checked={duplicateAck}
                   onChange={(event) => setDuplicateAck(event.target.checked)}
                 />
-                <span>entiendo el riesgo de envío duplicado y deseo registrar un nuevo intento</span>
+                <span>{t("deliveries.dialog.ack")}</span>
               </label>
             </div>
           ) : undefined

@@ -1,1 +1,459 @@
-{}
+{
+  "freshness": {
+    "lastSync": "last sync:",
+    "partial": "partial coverage:",
+    "coverage": "coverage:",
+    "stale": "outdated data"
+  },
+  "reconnect": {
+    "notReady": "calendar is not ready; confirmed tasks will be blocked until you connect or reconnect google calendar.",
+    "writeReady": "ready to write",
+    "writeNotReady": "no write ready"
+  },
+  "calendar": {
+    "synced": "calendar synced ({{inserted}} updated, {{removed}} removed).",
+    "loadFailed": "could not load the calendar; check your connection.",
+    "tasksTruncated": "only the first 200 tasks are shown; the agenda may be incomplete.",
+    "tasksFailed": "could not load the tasks; only Google events are shown.",
+    "agendaLabel": "agenda",
+    "calendarLabel": "calendar",
+    "legend": "legend:",
+    "syncing": "syncing…",
+    "syncGoogle": "sync google",
+    "pickReadCalendars": "pick read calendars in settings",
+    "reviewIntegration": "review the calendar integration",
+    "inRange": "in range",
+    "drawn": "drawn",
+    "withoutBlock": "without block",
+    "retry": "retry",
+    "noBlockTitle": "tasks without an agenda block",
+    "noBlockHint": "they are not drawn on the calendar because they have no confirmed block.",
+    "noDate": "no date",
+    "review": "review"
+  },
+  "dashboard": {
+    "title": "home",
+    "loading": "loading…",
+    "greetingNamed": "hi, {{name}}",
+    "greeting": "hi",
+    "next": "up next",
+    "tiles": {
+      "nav": "main shortcuts",
+      "upload": {
+        "label": "upload class",
+        "hint": "upload a recording and keep it as text"
+      },
+      "library": {
+        "label": "library",
+        "hint": "read and search your transcripts"
+      },
+      "chat": {
+        "label": "chat",
+        "hint": "ask with exact citations"
+      },
+      "tasks": {
+        "label": "tasks",
+        "hint": "review what the class proposed"
+      }
+    },
+    "status": {
+      "ready_one": "{{count}} class ready",
+      "ready_other": "{{count}} classes ready",
+      "processing_one": "{{count}} processing",
+      "processing_other": "{{count}} processing",
+      "review_one": "{{count}} task to review",
+      "review_other": "{{count}} tasks to review",
+      "empty": "no classes or tasks yet"
+    }
+  },
+  "overview": {
+    "title": "manage",
+    "subtitle": "academic panel: subjects, classes, tasks and agenda.",
+    "upload": "↑ upload class",
+    "newSubject": "+ new subject",
+    "newTask": "+ new task",
+    "sections": {
+      "status": "status",
+      "week": "week",
+      "activity": "activity",
+      "recentClasses": "recent classes",
+      "taskLog": "task log",
+      "system": "system"
+    }
+  },
+  "agenda": {
+    "title": "agenda",
+    "subtitle": "google events and maulwurf tasks; each linked task is drawn only once."
+  },
+  "activity": {
+    "untitled": "untitled class",
+    "viewInLibrary": "view in the library",
+    "loading": "loading…",
+    "empty": "no classes yet",
+    "goToLibrary": "go to the library →"
+  },
+  "mole": {
+    "label": "maulwurf companion",
+    "speech": "upload a class and I will keep the text.",
+    "privacy": "ephemeral audio in ram · 0 bytes on disk"
+  },
+  "ticker": {
+    "session": "session active",
+    "noAudio": "audio not kept",
+    "flow": "upload → find → decide"
+  },
+  "taskLog": {
+    "viewTasks": "view tasks"
+  },
+  "upcoming": {
+    "loading": "loading…",
+    "empty": "nothing pending for now",
+    "noSubject": "no subject",
+    "noDate": "no date",
+    "viewAll": "view all tasks →"
+  },
+  "tapeDeck": {
+    "title": "01 · audio ingest unit",
+    "pipeline": "pipeline: stream → tmpfs",
+    "ready": "ready",
+    "encryptedOnly": "encrypted text only",
+    "formats": "accepted formats: wav, mp3, ogg, opus, flac, webm",
+    "policy": "g1 policy: temporary cleanup verified before indexing",
+    "openForm": "open the upload form"
+  },
+  "telemetry": {
+    "online": "online",
+    "demo": "demo",
+    "session": "session active",
+    "metrics": {
+      "ingested": "audio ingested",
+      "activeClasses": "active classes",
+      "notes": "notes .md"
+    }
+  },
+  "weekStrip": {
+    "label": "days of the current week"
+  },
+  "integrations": {
+    "connectLabel": "connect google calendar",
+    "reconnectLabel": "reconnect google calendar",
+    "sync": {
+      "notRequested": "not sent to Calendar; it is only written after you confirm.",
+      "pending": "Calendar write queued; the worker will write it.",
+      "synced": "event written to the Maulwurf calendar.",
+      "failed": "the event changed in Google or could not be updated; check it in Google, it is not retried automatically.",
+      "blocked": "no Calendar ready; the task stays blocked until you reconnect."
+    },
+    "target": {
+      "notReady": "(not ready; it will be blocked)",
+      "none": "no calendar connected; the task will be blocked"
+    },
+    "calendarErrors": {
+      "generic": "Could not connect Google Calendar.",
+      "not_configured": "The Google integration is not configured on the server.",
+      "csrf_invalid": "The request came from another site; open it from Maulwurf.",
+      "not_connected": "There is no Google integration to reconnect.",
+      "rate_limited": "Too many attempts; wait a moment and try again.",
+      "capacity_unavailable": "The service is unavailable; try again later.",
+      "invalid_state": "The consent session is not valid; try again.",
+      "access_denied": "You did not authorize access to Calendar.",
+      "missing_params": "Google did not return the expected data.",
+      "state_mismatch": "The consent belongs to another session.",
+      "oauth_failed": "Google rejected the token exchange.",
+      "wrong_account": "The Google account does not match your session.",
+      "scope_required": "Calendar permissions are missing; the integration was not saved.",
+      "invalid_grant": "Google revoked access; reconnect the integration.",
+      "api_not_enabled": "The Google Calendar API is disabled in Google Cloud Console; enable it in your project and try again.",
+      "calendar_unavailable": "Google Calendar did not respond; try again later.",
+      "calendar_error": "Google Calendar returned an error while preparing the calendar."
+    },
+    "gmailErrors": {
+      "generic": "Could not connect the Gmail permission.",
+      "not_configured": "The Gmail integration is not configured on the server.",
+      "csrf_invalid": "The request came from another site; open it from Maulwurf.",
+      "rate_limited": "Too many attempts; wait a moment and try again.",
+      "capacity_unavailable": "The service is unavailable; try again later.",
+      "invalid_state": "The consent session expired; try again.",
+      "access_denied": "You did not authorize the optional gmail.send permission.",
+      "missing_params": "Google did not return the expected data.",
+      "state_mismatch": "The consent belongs to another session.",
+      "oauth_failed": "Google rejected the token exchange.",
+      "wrong_account": "The Google account does not match your current session.",
+      "scope_required": "The gmail.send permission was not granted.",
+      "invalid_grant": "Google revoked access; connect again."
+    }
+  },
+  "calendarLib": {
+    "neverSynced": "never synced",
+    "invalidSyncDate": "invalid sync date",
+    "syncErrors": {
+      "noReadCalendars": "no read calendars selected; pick at least one (e.g. primary) in settings.",
+      "notConnected": "connect or reconnect google calendar in settings before syncing.",
+      "invalidGrant": "google revoked access; reconnect google calendar in settings.",
+      "apiNotEnabled": "the Google Calendar API is disabled in Google Cloud Console; enable it in your project and try again.",
+      "cooldown": "you synced a few seconds ago; wait a moment before syncing again.",
+      "generic": "could not sync Google Calendar."
+    },
+    "coverage": {
+      "neverSynced": "never synced",
+      "noReadCalendars": "no read calendars",
+      "calendarSetChanged": "the set of calendars changed",
+      "outsideCoverage": "outside the synced window",
+      "stale": "outdated data",
+      "full": "full coverage"
+    }
+  },
+  "subjectsLib": {
+    "subjectMismatch": "The subject does not match the contract.",
+    "listMismatch": "The subject list does not match the contract.",
+    "itemMismatch": "A subject in the list does not match the contract.",
+    "nameRequired": "the subject needs a name",
+    "colorFormat": "use a #rrggbb color (e.g. #6366f1)"
+  },
+  "review": {
+    "opFailed": "could not complete the operation; check your connection.",
+    "notice": {
+      "dismissed": "Task dismissed.",
+      "completed": "Task completed.",
+      "blocked": "Confirmed; syncing stays blocked until you connect Calendar.",
+      "pending": "Confirmed; the Calendar write is pending.",
+      "synced": "Confirmed and synced.",
+      "confirmed": "Task confirmed."
+    },
+    "checkFailed": "Could not check the calendar; close and try again.",
+    "conflictConfirm": "The task changed; the view was refreshed. Check the preview before confirming.",
+    "conflictDismiss": "The task changed; the view was refreshed. Check before continuing.",
+    "eventKept": "The Calendar event is kept.",
+    "title": "review task",
+    "checking": "checking the task and the calendar…",
+    "willConfirm": "the pending change will be confirmed",
+    "whatWillBeWritten": "what will be written",
+    "fields": {
+      "title": "title",
+      "type": "type",
+      "due": "due",
+      "timezone": "time zone",
+      "agenda": "agenda",
+      "target": "target calendar"
+    },
+    "invalidDate": "invalid date",
+    "noResolvedDate": "no resolved date",
+    "calendarUnknown": "could not check the calendar",
+    "previewHint": "the preview uses the fields of the pending revision, not only the active ones.",
+    "needsDate": "to confirm this task, edit it first to set a resolved date and an agenda block.",
+    "confirm": "confirm",
+    "edit": "edit",
+    "dismiss": "dismiss",
+    "close": "close"
+  },
+  "subjects": {
+    "title": "subjects",
+    "subtitle": "your subjects, with the status of their classes and tasks.",
+    "new": "new subject",
+    "subjectCount_one": "{{count}} subject",
+    "subjectCount_other": "{{count}} subjects",
+    "summary": "{{subjects}} · {{ready}}/{{total}} classes ready · {{minutes}} min · {{confirmed}} confirmed / {{pending}} pending",
+    "editing": "edit · {{name}}",
+    "save": "save",
+    "create": "create",
+    "loading": "loading…",
+    "loadFailed": "could not load the subjects",
+    "loadFailedHint": "check your connection and try again.",
+    "retry": "retry",
+    "emptyTitle": "you have no subjects yet",
+    "emptyHint": "create the first one to start uploading classes.",
+    "createSubject": "create subject",
+    "columns": {
+      "subject": "subject",
+      "classes": "classes",
+      "stats": "ready · minutes · tasks",
+      "actions": "actions"
+    },
+    "classCount_one": "{{count}} class",
+    "classCount_other": "{{count}} classes",
+    "noData": "no data",
+    "rowStats": "{{ready}}/{{total}} ready · {{minutes}} min · {{confirmed}} confirmed / {{pending}} pending",
+    "edit": "edit",
+    "delete": "delete",
+    "privacy": "metadata and text only · original audio not kept (g1)",
+    "refresh": "refresh",
+    "refreshing": "refreshing…",
+    "created": "subject created",
+    "updated": "subject updated",
+    "deleted": "subject deleted",
+    "deleteFailed": "could not delete the subject",
+    "activeDialog": {
+      "title": "subject with active classes",
+      "description_one": "«{{name}}» has {{count}} active class. delete or move those classes first; forced deletion will be available later.",
+      "description_other": "«{{name}}» has {{count}} active classes. delete or move those classes first; forced deletion will be available later.",
+      "confirm": "got it",
+      "cancel": "close"
+    }
+  },
+  "subjectForm": {
+    "saveFailed": "could not save the subject",
+    "name": "name",
+    "namePlaceholder": "calculus i",
+    "color": "color",
+    "teacher": "teacher (optional)",
+    "cancel": "cancel"
+  },
+  "subjectStats": {
+    "title": "statistics by subject",
+    "calculating": "calculating text metrics…",
+    "subjects": "subjects",
+    "readyTotal": "classes ready / total",
+    "duration": "transcribed duration",
+    "tasks": "tasks confirmed / to review",
+    "completed": "{{count}} completed",
+    "row": "{{ready}}/{{total}} classes ready · {{minutes}} min · {{confirmed}} confirmed / {{pending}} pending",
+    "rowWithCompleted": "{{ready}}/{{total}} classes ready · {{minutes}} min · {{confirmed}} confirmed · {{completed}} completed / {{pending}} pending",
+    "privacy": "metadata and text only · original audio not kept (g1)",
+    "refresh": "refresh",
+    "refreshing": "refreshing…"
+  },
+  "taskCard": {
+    "noSubject": "no subject",
+    "date": "date",
+    "dateUnresolved": "date not resolved",
+    "confidenceHint": "uncalibrated signal; it does not authorize confirming or scheduling automatically",
+    "pendingChange": "pending change",
+    "asrHint": "ASR quality: check the quote",
+    "asrBadge": "asr ⚠",
+    "noQuote": "no literal quote; it is not presented as an extraction.",
+    "review": "review",
+    "edit": "edit",
+    "complete": "mark completed"
+  },
+  "taskInbox": {
+    "lowQuality": "low ASR quality: {{signals}}",
+    "qualityUnavailable": "ASR quality unavailable for some classes; check the quote before deciding.",
+    "listLabel": "tasks to review"
+  },
+  "taskList": {
+    "subject": "subject:",
+    "noSubject": "no subject",
+    "loading": "loading…",
+    "empty": "no tasks yet"
+  },
+  "taskForm": {
+    "createFailed": "could not create the task; check your connection.",
+    "saveFailed": "could not save the task; check your connection.",
+    "titleRequired": "the title cannot be empty.",
+    "createLabel": "new manual task",
+    "editLabel": "edit task",
+    "title": "title",
+    "titlePlaceholder": "e.g. Submit the simulation workshop",
+    "type": "type",
+    "typeLabel": "activity type",
+    "typeLabelNew": "new activity type",
+    "activityTypes": {
+      "tarea": "task",
+      "entrega": "submission",
+      "examen": "exam",
+      "lectura": "reading",
+      "proyecto": "project",
+      "recordatorio": "reminder",
+      "recomendacion": "recommendation"
+    },
+    "subjectOptional": "subject (optional)",
+    "subjectLabelNew": "subject of the new task",
+    "noSubject": "no subject",
+    "timezone": "time zone",
+    "detail": "detail",
+    "detailOptional": "detail (optional)",
+    "detailLabelNew": "detail of the new task",
+    "dueDate": "due date",
+    "mode": "mode",
+    "dueModeLabel": "due mode",
+    "dueModeLabelNew": "due mode new task",
+    "allDay": "all day",
+    "timed": "with time",
+    "noDate": "no date",
+    "date": "date",
+    "time": "time",
+    "ambiguous": "the original date was ambiguous: “{{text}}”{{reason}}. Pick a specific date or save it without a date.",
+    "agendaBlock": "agenda block",
+    "agendaBlockCalendar": "agenda block (calendar)",
+    "agendaProposal": "editable Maulwurf proposal; it does not come from the teacher.",
+    "agendaAutoFill": "filled in automatically from your due date; you can adjust it or leave it without a block if you do not want to schedule it yet.",
+    "agendaModeLabel": "agenda mode",
+    "agendaModeLabelNew": "agenda mode new task",
+    "noBlock": "no block",
+    "agendaStart": "agenda start",
+    "agendaEndExclusive": "agenda end (exclusive)",
+    "agendaStartTime": "agenda start time",
+    "agendaDuration": "agenda duration (minutes)",
+    "computedEnd": "computed end:",
+    "pendingDate": "waiting for a date",
+    "invalidTime": "invalid time",
+    "exclusiveEndHint": "exclusive end: the day given is not shown in the event.",
+    "revisionPending": "change pending confirmation; the active task was not modified.",
+    "changesSaved": "changes saved.",
+    "saving": "saving…",
+    "saveChanges": "save changes",
+    "creating": "creating…",
+    "createAndReview": "create and review",
+    "saveTask": "save task",
+    "cancel": "cancel"
+  },
+  "tasksLib": {
+    "quality": {
+      "low_confidence": "low confidence",
+      "empty_segments": "empty segments",
+      "repetition": "repetitions",
+      "repeatedNoCount": "{{label}} ({{occurrences}} stretches)",
+      "repeatedWords": "{{label}} in {{occurrences}} stretches ({{count}} words)",
+      "warningsNoCount": "{{label}} ({{occurrences}} warnings)",
+      "repeatedCount": "{{label}} in {{occurrences}} stretches ({{count}})"
+    },
+    "noConfidence": "no confidence",
+    "confidence": "confidence {{score}}",
+    "status": {
+      "all": "all",
+      "needs_review": "to confirm",
+      "pending": "pending",
+      "confirmed": "confirmed",
+      "dismissed": "dismissed",
+      "completed": "completed"
+    },
+    "exclusiveEnd": "(exclusive end)",
+    "eventMode": {
+      "timed": "with time",
+      "allDay": "all day",
+      "none": "no agenda block"
+    },
+    "scheduleErrors": {
+      "dueDateOrMissing": "pick the due date (or switch the mode to «no date»).",
+      "dueDate": "pick the due date.",
+      "dueTimeInvalid": "the due time does not exist in this time zone.",
+      "blockNeedsDates": "the agenda block needs a start and end date.",
+      "blockEndAfterStart": "the agenda end must be after the start.",
+      "blockStartDate": "pick the agenda start date.",
+      "blockStartTimeInvalid": "the agenda start time does not exist in this zone.",
+      "durationInvalid": "the agenda duration is not valid."
+    }
+  },
+  "tasksPage": {
+    "title": "tasks",
+    "loadFailed": "could not load the tasks; check your connection.",
+    "createdNeedsReview": "task «{{title}}» created in state «to confirm».",
+    "created": "task «{{title}}» created.",
+    "revisionPending": "change pending confirmation in «{{title}}»; use review to apply it.",
+    "saved": "changes saved in «{{title}}».",
+    "completedKept": "Task «{{title}}» marked as completed. The Calendar event is kept.",
+    "completed": "Task «{{title}}» marked as completed.",
+    "subtitle": "create your own tasks or review proposals from the analysis; confirm to send them to Calendar.",
+    "new": "+ new task",
+    "statusGroup": "task status",
+    "subjectSelect": "task subject",
+    "allSubjects": "all subjects",
+    "refresh": "refresh",
+    "calendarNotReady": "calendar is not ready; confirmed tasks will be blocked until you connect google calendar.",
+    "loading": "loading tasks…",
+    "emptyTitle": "no tasks in this state",
+    "emptyHint": "when an analysis proposes a task, it will appear here with its citation.",
+    "loadingMore": "loading…",
+    "loadMore": "load more"
+  }
+}

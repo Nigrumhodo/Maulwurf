@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { apiFetch } from "./api";
 import type { ApiHttpError } from "./api";
 import { isRecord, readJson } from "./json";
@@ -26,7 +27,7 @@ function isSubject(value: unknown): value is Subject {
 async function readSubject(res: Response): Promise<Subject> {
   const payload = await readJson(res);
   if (!isSubject(payload)) {
-    throw new Error("La materia no coincide con el contrato.");
+    throw new Error(i18n.t("plan:subjectsLib.subjectMismatch"));
   }
   return payload;
 }
@@ -36,11 +37,11 @@ export async function fetchSubjects(): Promise<Subject[]> {
   const res = await apiFetch("/subjects");
   const payload = await readJson(res);
   if (!isRecord(payload) || !Array.isArray(payload.items)) {
-    throw new Error("El listado de materias no coincide con el contrato.");
+    throw new Error(i18n.t("plan:subjectsLib.listMismatch"));
   }
   return payload.items.map((item) => {
     if (!isSubject(item)) {
-      throw new Error("Una materia del listado no coincide con el contrato.");
+      throw new Error(i18n.t("plan:subjectsLib.itemMismatch"));
     }
     return item;
   });
@@ -76,10 +77,10 @@ export function subjectPayload(draft: SubjectDraft): {
 export function validateSubject(draft: SubjectDraft): Partial<Record<SubjectField, string>> {
   const errors: Partial<Record<SubjectField, string>> = {};
   if (draft.name.trim().length === 0) {
-    errors.name = "la materia necesita un nombre";
+    errors.name = i18n.t("plan:subjectsLib.nameRequired");
   }
   if (!COLOR_PATTERN.test(draft.color)) {
-    errors.color = "usa un color #rrggbb (ej. #6366f1)";
+    errors.color = i18n.t("plan:subjectsLib.colorFormat");
   }
   return errors;
 }

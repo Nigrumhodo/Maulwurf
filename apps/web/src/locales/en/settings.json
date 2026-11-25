@@ -1,1 +1,205 @@
-{}
+{
+  "deletion": {
+    "confirmWord": "DELETE",
+    "startFailed": "could not start the account deletion.",
+    "statusAfterStartFailed": "the deletion started, but its status could not be checked; refresh it.",
+    "statusFailed": "could not check the deletion status.",
+    "resumeFailed": "could not resume the account deletion.",
+    "explainer": "irreversibly deletes your subjects, classes, transcripts, embeddings, conversations, tasks and OAuth tokens. only a residual audit record, with no profile or text, is kept for 30 days.",
+    "deleteEvents": "also delete the events maulwurf created in google calendar (if you leave this unchecked, those events stay in your calendar)",
+    "request": "request account deletion",
+    "operation": "operation {{id}}",
+    "calendarEvents": "google calendar events:",
+    "eventsDeleted": "deletion authorized",
+    "eventsKept": "kept",
+    "remoteDetail": "remote detail:",
+    "checkStatus": "check status",
+    "resume": "resume deletion",
+    "logout": "sign out",
+    "dialogTitle": "delete account permanently",
+    "dialogConfirm": "delete account",
+    "dialogCancel": "cancel",
+    "dialogBody": "this action will lock your session immediately and purge all texts, quotes and credentials.",
+    "dialogEventsDeleted": "the events created by Maulwurf in Google Calendar will also be deleted if possible.",
+    "dialogEventsKept": "your events in Google Calendar will be kept.",
+    "typeToConfirm": "type {{word}} to confirm"
+  },
+  "deliveries": {
+    "loadFailed": "could not load the notification history.",
+    "loadMoreFailed": "could not load more deliveries.",
+    "resendFailed": "could not record the manual resend.",
+    "explainer": "gmail does not guarantee single delivery: if a response is lost or the lease expires, the row ends up in <strong>delivery_unknown</strong> (terminal state, no automatic retry).",
+    "filterLabel": "filter by status",
+    "all": "all",
+    "refresh": "refresh",
+    "loading": "loading notification history…",
+    "emptyTitle": "no notifications recorded",
+    "emptyHint": "when reminders, digests or tests are scheduled you will see each audited attempt here.",
+    "seq": "seq #{{seq}}",
+    "attempts": "attempts: {{attempts}} · scheduled: {{scheduled}}",
+    "sentAt": "sent: {{at}}",
+    "occurrence": "occurrence: {{occurrence}}",
+    "recording": "recording…",
+    "resend": "resend manually",
+    "loadingMore": "loading…",
+    "loadMore": "load more",
+    "dialog": {
+      "title": "confirm resend with duplicate risk",
+      "confirm": "create new send",
+      "cancel": "cancel",
+      "body": "a pending <strong>new occurrence</strong> will be created without changing the original record ({{status}}). if gmail processed the previous delivery, you could receive a duplicate email.",
+      "ack": "I understand the risk of a duplicate send and want to record a new attempt"
+    },
+    "title": "email deliveries"
+  },
+  "notificationsLib": {
+    "historyMismatch": "The notification history does not match the contract.",
+    "deliveryMismatch": "A notification delivery does not match the contract.",
+    "resendMismatch": "The resend response does not match the contract.",
+    "warningMismatch": "The resend warning does not match the contract.",
+    "types": {
+      "reminder_t48": "reminder T-48 h",
+      "reminder_t24": "reminder T-24 h",
+      "reminder_t2": "reminder T-2 h",
+      "reminder_t3d": "reminder T-3 d",
+      "reminder_t1d": "reminder T-1 d",
+      "digest_daily": "daily digest",
+      "digest_weekly": "weekly digest",
+      "test": "test send"
+    },
+    "status": {
+      "pending": "scheduled, waiting for the send window.",
+      "sending": "claimed by the delivery worker right now.",
+      "sent": "accepted by Gmail for your verified email.",
+      "failedApiDisabled": "could not send: the Gmail API is disabled in Google Cloud Console (gmail_api_disabled); enable it and resend manually.",
+      "failed": "could not send{{codeNote}}; the system does not retry automatically.",
+      "deliveryUnknown": "terminal state: Gmail does not guarantee single delivery and the response was lost or the lease expired{{codeNote}}. It is not retried automatically; resending creates a new occurrence and may duplicate the email.",
+      "cancelled": "cancelled by a change of date, preference or task status.",
+      "other": "recorded status: {{status}}{{codeNote}}."
+    }
+  },
+  "page": {
+    "title": "settings",
+    "subtitle": "profile, notifications and google integrations.",
+    "sectionsLabel": "settings sections",
+    "statusCheckFailed": "could not check the Google Calendar status."
+  },
+  "sections": {
+    "profile": "profile",
+    "notifications": "notifications",
+    "deliveries": "deliveries",
+    "account": "account",
+    "privacy": "privacy and legal"
+  },
+  "profile": {
+    "none": "no profile loaded.",
+    "email": "email",
+    "timezone": "time zone",
+    "changeTimezone": "change time zone",
+    "saving": "saving…",
+    "saveTimezone": "save zone",
+    "timezoneUpdated": "time zone updated for future digests.",
+    "timezoneSaveFailed": "could not save the time zone."
+  },
+  "gmail": {
+    "title": "gmail connection (opt-in)",
+    "connected": "gmail.send permission connected for your opt-in reminders.",
+    "explainer": "it only grants sending (`gmail.send`) to your verified address; it never reads your inbox and sends no email until you turn on the opt-in above.",
+    "granted": "gmail.send permission granted",
+    "notGranted": "no gmail.send permission",
+    "reconnect": "reconnect gmail.send",
+    "connect": "connect gmail (opt-in)"
+  },
+  "calendars": {
+    "title": "google calendar",
+    "connected": "google calendar connected.",
+    "unblocked": "blocked tasks went back to pending; nothing was confirmed automatically.",
+    "checking": "checking Google Calendar…",
+    "readTitle": "read calendars for your agenda",
+    "readExplainer": "maulwurf writes confirmed tasks only to the secondary <strong>Maulwurf</strong> calendar; here you choose which of your calendars to read in the agenda.",
+    "primary": "primary calendar (primary)",
+    "saving": "saving…",
+    "saveRead": "save read calendars",
+    "loading": "loading…",
+    "viewOthers": "view other calendars",
+    "syncing": "syncing…",
+    "syncNow": "sync now",
+    "readSaved": "read calendars saved.",
+    "mirrorSynced": "calendar mirror synced ({{inserted}} updated, {{removed}} removed)."
+  },
+  "account": {
+    "dangerZone": "danger zone · delete account"
+  },
+  "privacy": {
+    "deletion": "deleting your account, above in <acct>account</acct>, erases your data.",
+    "backups": "encrypted backups contain only text and metadata and are kept for up to 30 days; deletions are re-applied when a backup is restored."
+  },
+  "preferences": {
+    "noThresholds": "no thresholds: no reminders of this kind will be sent.",
+    "thresholdLabel": "threshold {{index}} ({{unit}})",
+    "remove": "remove",
+    "addThreshold": "add threshold",
+    "loadFailed": "could not load the notification preferences.",
+    "noChanges": "there are no changes to save.",
+    "saved": "preferences saved.",
+    "testNeedsOptIn": "turn on the Gmail opt-in and save the changes before sending a test.",
+    "testNeedsSave": "save the changes before sending a test.",
+    "testRecorded": "test recorded; {{message}}",
+    "loading": "loading preferences…",
+    "retry": "retry",
+    "gmailOptIn": "turn on the Gmail opt-in",
+    "whatIsSent": "what is sent: reminders for timed tasks (48 h, 24 h and 2 h before) and all-day tasks (3 and 1 days before at 09:00 local); a daily digest at the chosen time; a weekly digest on the chosen day.",
+    "toEmail": "to which email: {{email}}.",
+    "yourGoogleAccount": "your Google account",
+    "howToDisable": "how to turn it off: uncheck this box; without the opt-in no send is recorded. the actual send is controlled by the server; Gmail does not guarantee exactly one send and it is not retried automatically.",
+    "timedTitle": "timed reminders",
+    "timedHint": "hours before the due time; they are normalized from largest to smallest.",
+    "allDayTitle": "all-day reminders",
+    "allDayHint": "days before the date, at 09:00 local; they are normalized from largest to smallest.",
+    "dailyTitle": "daily digest",
+    "dailyEnable": "turn on the daily digest",
+    "localTime": "local time",
+    "profileTimezone": "profile time zone: {{timezone}}.",
+    "noProfile": "no profile",
+    "weeklyTitle": "weekly digest",
+    "weeklyEnable": "turn on the weekly digest",
+    "day": "day",
+    "weeklyDayLabel": "weekly digest day",
+    "saving": "saving…",
+    "save": "save preferences",
+    "testing": "recording test…",
+    "sendTest": "send test",
+    "testHint": "turn on the opt-in and save to be able to send a test.",
+    "unsaved": "there are unsaved changes."
+  },
+  "weekdays": {
+    "sunday": "sunday",
+    "monday": "monday",
+    "tuesday": "tuesday",
+    "wednesday": "wednesday",
+    "thursday": "thursday",
+    "friday": "friday",
+    "saturday": "saturday"
+  },
+  "preferencesLib": {
+    "units": {
+      "hours": "hours",
+      "days": "days"
+    },
+    "maxThresholds": "at most {{max}} {{unit}} thresholds.",
+    "thresholdRange": "each {{unit}} threshold must be an integer between {{min}} and {{max}}.",
+    "invalidDailyTime": "pick a valid time for the daily digest (HH:MM).",
+    "invalidWeekday": "pick a valid day for the weekly digest.",
+    "responseMismatch": "The preferences response does not match the contract.",
+    "testResponseMismatch": "The test send response does not match the contract.",
+    "sessionInvalid": "the session is not valid; reload the page.",
+    "sessionExpired": "the session expired; sign in again.",
+    "saveFailed": "could not save the preferences; check your connection.",
+    "testReasons": {
+      "gmail_not_opted_in": "turn on the Gmail opt-in and save the changes before sending a test.",
+      "recipient_unverified": "your Google email is not verified; the test cannot be sent."
+    },
+    "testUnavailable": "the test send is not available in the current state.",
+    "testFailed": "could not record the test; check your connection."
+  }
+}

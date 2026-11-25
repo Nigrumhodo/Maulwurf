@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { buttonClasses } from "@/components/ui/buttonStyles";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -6,7 +7,8 @@ import type { AudioListItemOut } from "@/lib/audios";
 import { useServerList } from "@/lib/useServerList";
 
 function AudioRow({ audio }: { audio: AudioListItemOut }) {
-  const title = audio.title ?? "clase sin título";
+  const { t } = useTranslation("plan");
+  const title = audio.title ?? t("activity.untitled");
   return (
     <li className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3">
       <div className="lowercase flex min-w-0 flex-col">
@@ -30,7 +32,7 @@ function AudioRow({ audio }: { audio: AudioListItemOut }) {
           to="/gestion/biblioteca"
           className={buttonClasses("ghost", "sm", "min-h-8 border-lavender/30")}
         >
-          ver en la biblioteca
+          {t("activity.viewInLibrary")}
         </Link>
       </div>
     </li>
@@ -39,19 +41,20 @@ function AudioRow({ audio }: { audio: AudioListItemOut }) {
 
 // Recent classes from `GET /audios`. No invented percentages: the list has no progress ratio.
 export function ActivityFeed() {
+  const { t } = useTranslation("plan");
   const { items, loading, error } = useServerList(fetchAudios);
 
   return (
     <div className="flex flex-col gap-3">
       {loading ? (
-        <p className="lowercase text-base text-lavender/60">&gt; cargando…</p>
+        <p className="lowercase text-base text-lavender/60">&gt; {t("activity.loading")}</p>
       ) : error !== null ? (
         <p role="alert" className="lowercase text-base text-mint">
           &gt; {error}
         </p>
       ) : items.length === 0 ? (
         <p className="lowercase border-2 border-dashed border-lavender/50 px-3 py-6 text-center text-base text-lavender">
-          aún no hay clases
+          {t("activity.empty")}
         </p>
       ) : (
         <ul className="divide-y-2 divide-lavender/20 border-y-2 border-lavender/20">
@@ -65,7 +68,7 @@ export function ActivityFeed() {
         to="/gestion/biblioteca"
         className={buttonClasses("secondary", "sm", "min-h-10 self-start")}
       >
-        ir a la biblioteca →
+        {t("activity.goToLibrary")}
       </Link>
     </div>
   );

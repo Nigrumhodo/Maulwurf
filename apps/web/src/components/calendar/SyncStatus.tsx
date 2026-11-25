@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import {
   GOOGLE_CONNECT_PATH,
   GOOGLE_RECONNECT_PATH,
@@ -16,11 +17,14 @@ export interface SyncStatusProps {
 }
 
 export function SyncStatus({ task, showAction = true }: SyncStatusProps) {
+  const { t } = useTranslation("plan");
   const description = syncStatusDescription(task.calendar_sync_status);
   const blocked = task.calendar_sync_status === "blocked";
   const href = task.calendar_id === null ? GOOGLE_CONNECT_PATH : GOOGLE_RECONNECT_PATH;
   const label =
-    task.calendar_id === null ? "conectar google calendar" : "reconectar google calendar";
+    task.calendar_id === null
+      ? t("integrations.connectLabel")
+      : t("integrations.reconnectLabel");
 
   if (description === null && !blocked) return null;
 

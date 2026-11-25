@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { FormEvent } from "react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -30,6 +31,7 @@ export function SubjectForm({
   onSubmit,
   onCancel,
 }: SubjectFormProps) {
+  const { t } = useTranslation("plan");
   const [name, setName] = useState(initial?.name ?? "");
   const [color, setColor] = useState(initial?.color ?? DEFAULT_SUBJECT_COLOR);
   const [teacher, setTeacher] = useState(initial?.teacher ?? "");
@@ -58,7 +60,7 @@ export function SubjectForm({
           setErrors({ [mapped.field]: mapped.message });
         }
       } else {
-        setFormError("no se pudo guardar la materia");
+        setFormError(t("subjectForm.saveFailed"));
       }
     }
   }
@@ -66,15 +68,15 @@ export function SubjectForm({
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-3">
       <Input
-        label="nombre"
+        label={t("subjectForm.name")}
         value={name}
         onChange={(event) => setName(event.target.value)}
-        placeholder="cálculo i"
+        placeholder={t("subjectForm.namePlaceholder")}
       />
       {errors.name != null && <p className="lowercase text-mint">&gt; {errors.name}</p>}
 
       <Input
-        label="color"
+        label={t("subjectForm.color")}
         value={color}
         onChange={(event) => setColor(event.target.value)}
         placeholder="#6366f1"
@@ -82,7 +84,7 @@ export function SubjectForm({
       {errors.color != null && <p className="lowercase text-mint">&gt; {errors.color}</p>}
 
       <Input
-        label="profesor (opcional)"
+        label={t("subjectForm.teacher")}
         value={teacher}
         onChange={(event) => setTeacher(event.target.value)}
         placeholder=""
@@ -96,7 +98,7 @@ export function SubjectForm({
         </Button>
         {onCancel != null && (
           <Button type="button" variant="secondary" onClick={onCancel}>
-            cancelar
+            {t("subjectForm.cancel")}
           </Button>
         )}
       </div>
