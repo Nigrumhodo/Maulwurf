@@ -22,7 +22,8 @@
     "label": "legal information",
     "privacy": "privacy",
     "terms": "terms",
-    "license": "AGPL-3.0 license"
+    "license": "AGPL-3.0 license",
+    "licenseShort": "agpl-3.0"
   },
   "consent": {
     "before": "by continuing you accept the ",

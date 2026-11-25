@@ -37,6 +37,9 @@ const NAV_ICONS: Record<string, string> = {
 
 const GLYPH = "w-6 shrink-0 text-center";
 
+const SQUARE =
+  "relative inline-flex h-10 w-10 shrink-0 items-center justify-center border-2 border-lavender/40 text-lavender hover:border-mint hover:text-mint lg:text-lg";
+
 const toggleClasses =
   "min-h-8 min-w-8 shrink-0 items-center justify-center border-2 border-lavender/40 leading-none text-lavender hover:border-mint hover:text-mint";
 
@@ -263,31 +266,25 @@ export function AppSidebar({ onOpenSearch }: AppSidebarProps) {
         </nav>
 
         <div
-          className={`flex flex-col gap-1 border-t-2 border-lavender/20 p-3 ${rail ? "md:max-lg:px-1.5" : ""}`}
+          className={`flex flex-col gap-2 border-t-2 border-lavender/20 px-3 py-2 ${rail ? "md:max-lg:px-1.5" : ""}`}
         >
           <MenuLink item={SETTINGS_ITEM} rail={rail} onNavigate={closeMenus} />
-          <ThemeToggle
-            className={rowClasses(rail)}
-            glyphClassName={GLYPH}
-            labelClassName={rail ? "md:max-lg:sr-only" : ""}
-          />
-          <UiLanguageSwitcher
-            className={rowClasses(rail)}
-            glyphClassName={GLYPH}
-            labelClassName={`truncate ${rail ? "md:max-lg:sr-only" : ""}`}
-          />
-          <button
-            type="button"
-            onClick={() => void logout()}
-            title={t("sidebar.logout")}
-            className={rowClasses(rail)}
-          >
-            <span aria-hidden="true" className={GLYPH}>
-              ←
-            </span>
-            <span className={rail ? "md:max-lg:sr-only" : ""}>{t("sidebar.logout")}</span>
-          </button>
-          <LegalLinks className={`px-3 pt-1 ${rail ? "md:max-lg:hidden" : ""}`} />
+          {/* Theme and language are glyph-only squares (their names live in aria-label/title)
+              so the three account controls share one row instead of three. */}
+          <div className={`flex items-center gap-2 ${rail ? "md:max-lg:flex-col" : ""}`}>
+            <ThemeToggle className={SQUARE} labelClassName="sr-only" />
+            <UiLanguageSwitcher className={SQUARE} labelClassName="sr-only" />
+            <button
+              type="button"
+              onClick={() => void logout()}
+              title={t("sidebar.logout")}
+              className={`${rowClasses(rail)} min-w-0 flex-1 gap-2 px-2`}
+            >
+              <span aria-hidden="true">←</span>
+              <span className={`truncate ${rail ? "md:max-lg:sr-only" : ""}`}>{t("sidebar.logout")}</span>
+            </button>
+          </div>
+          <LegalLinks compact className={`px-1 ${rail ? "md:max-lg:hidden" : ""}`} />
         </div>
 
         {/* Decorative demo telemetry: kept as one quiet footer, not a panel. */}
