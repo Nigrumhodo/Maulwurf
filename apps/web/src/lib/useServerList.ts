@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export interface ServerList<T> {
@@ -27,7 +28,7 @@ export function useServerList<T>(load: () => Promise<T[]>): ServerList<T> {
     } catch (caught) {
       if (current !== generation.current) return;
       setItems([]);
-      setError(caught instanceof Error ? caught.message : "no se pudo cargar la lista.");
+      setError(caught instanceof Error ? caught.message : i18n.t("common:errors.listLoad"));
     } finally {
       if (current === generation.current) setLoading(false);
     }

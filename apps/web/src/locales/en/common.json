@@ -34,8 +34,29 @@
     "logout": "log out"
   },
   "clock": {
-    "days": ["sun", "mon", "tue", "wed", "thu", "fri", "sat"],
-    "months": ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+    "days": [
+      "sun",
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri",
+      "sat"
+    ],
+    "months": [
+      "jan",
+      "feb",
+      "mar",
+      "apr",
+      "may",
+      "jun",
+      "jul",
+      "aug",
+      "sep",
+      "oct",
+      "nov",
+      "dec"
+    ]
   },
   "theme": {
     "dark": "dark",
@@ -86,15 +107,48 @@
     "noResults": "no results.",
     "results": "results",
     "routes": {
-      "upload": { "label": "upload class", "hint": "ephemeral ingest" },
-      "home": { "label": "home", "hint": "dashboard · summary and status" },
-      "gestion": { "label": "workspace", "hint": "hub for subjects, tasks and library" },
-      "library": { "label": "library", "hint": "class transcripts" },
-      "chat": { "label": "chat", "hint": "cited rag · questions with evidence" },
-      "subjects": { "label": "subjects", "hint": "crud and stats" },
-      "tasks": { "label": "tasks", "hint": "tasks to confirm · m4 inbox" },
-      "agenda": { "label": "agenda", "hint": "integrated calendar" },
-      "settings": { "label": "settings", "hint": "time zone, gmail and account" }
+      "upload": {
+        "label": "upload class",
+        "hint": "ephemeral ingest"
+      },
+      "home": {
+        "label": "home",
+        "hint": "dashboard · summary and status"
+      },
+      "gestion": {
+        "label": "workspace",
+        "hint": "hub for subjects, tasks and library"
+      },
+      "library": {
+        "label": "library",
+        "hint": "class transcripts"
+      },
+      "chat": {
+        "label": "chat",
+        "hint": "cited rag · questions with evidence"
+      },
+      "subjects": {
+        "label": "subjects",
+        "hint": "crud and stats"
+      },
+      "tasks": {
+        "label": "tasks",
+        "hint": "tasks to confirm · m4 inbox"
+      },
+      "agenda": {
+        "label": "agenda",
+        "hint": "integrated calendar"
+      },
+      "settings": {
+        "label": "settings",
+        "hint": "time zone, gmail and account"
+      }
     }
+  },
+  "errors": {
+    "requestFailed": "Request failed ({{status}}).",
+    "notJson": "The response is not JSON.",
+    "jsonUnreadable": "The JSON response could not be read.",
+    "listLoad": "the list could not be loaded."
   }
 }

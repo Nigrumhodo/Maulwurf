@@ -34,8 +34,29 @@
     "logout": "salir"
   },
   "clock": {
-    "days": ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"],
-    "months": ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+    "days": [
+      "dom",
+      "lun",
+      "mar",
+      "mié",
+      "jue",
+      "vie",
+      "sáb"
+    ],
+    "months": [
+      "ene",
+      "feb",
+      "mar",
+      "abr",
+      "may",
+      "jun",
+      "jul",
+      "ago",
+      "sep",
+      "oct",
+      "nov",
+      "dic"
+    ]
   },
   "theme": {
     "dark": "oscuro",
@@ -86,15 +107,48 @@
     "noResults": "sin resultados.",
     "results": "resultados",
     "routes": {
-      "upload": { "label": "subir clase", "hint": "ingesta efímera" },
-      "home": { "label": "inicio", "hint": "dashboard · resumen y estado" },
-      "gestion": { "label": "gestión", "hint": "hub de materias, tareas y biblioteca" },
-      "library": { "label": "biblioteca", "hint": "transcripciones de clases" },
-      "chat": { "label": "chat", "hint": "rag citado · preguntas con evidencia" },
-      "subjects": { "label": "materias", "hint": "crud y estadísticas" },
-      "tasks": { "label": "tareas", "hint": "tareas por confirmar · bandeja m4" },
-      "agenda": { "label": "agenda", "hint": "calendario integrado" },
-      "settings": { "label": "ajustes", "hint": "zona horaria, gmail y cuenta" }
+      "upload": {
+        "label": "subir clase",
+        "hint": "ingesta efímera"
+      },
+      "home": {
+        "label": "inicio",
+        "hint": "dashboard · resumen y estado"
+      },
+      "gestion": {
+        "label": "gestión",
+        "hint": "hub de materias, tareas y biblioteca"
+      },
+      "library": {
+        "label": "biblioteca",
+        "hint": "transcripciones de clases"
+      },
+      "chat": {
+        "label": "chat",
+        "hint": "rag citado · preguntas con evidencia"
+      },
+      "subjects": {
+        "label": "materias",
+        "hint": "crud y estadísticas"
+      },
+      "tasks": {
+        "label": "tareas",
+        "hint": "tareas por confirmar · bandeja m4"
+      },
+      "agenda": {
+        "label": "agenda",
+        "hint": "calendario integrado"
+      },
+      "settings": {
+        "label": "ajustes",
+        "hint": "zona horaria, gmail y cuenta"
+      }
     }
+  },
+  "errors": {
+    "requestFailed": "Solicitud fallida ({{status}}).",
+    "notJson": "La respuesta no es JSON.",
+    "jsonUnreadable": "La respuesta JSON no se pudo leer.",
+    "listLoad": "no se pudo cargar la lista."
   }
 }
