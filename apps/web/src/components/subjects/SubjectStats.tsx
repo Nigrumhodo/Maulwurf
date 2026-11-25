@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/Button";
 import { useSubjectStats } from "@/components/subjects/useSubjectStats";
 import type { Subject } from "@/lib/subjects";
@@ -10,39 +11,40 @@ export interface SubjectStatsProps {
 }
 
 export function SubjectStats({ subjects: initialSubjects }: SubjectStatsProps) {
+  const { t } = useTranslation("plan");
   const { stats, loading, reload } = useSubjectStats(initialSubjects);
 
   return (
     <section className="flex flex-col gap-4">
-      <h3 className="lowercase text-lg text-lavender">estadísticas por materia</h3>
+      <h3 className="lowercase text-lg text-lavender">{t("subjectStats.title")}</h3>
 
       {loading && stats.subjectCount === 0 && stats.classCount === 0 ? (
-        <p className="lowercase text-lavender/60">&gt; calculando métricas de texto…</p>
+        <p className="lowercase text-lavender/60">&gt; {t("subjectStats.calculating")}</p>
       ) : (
         <div className="lowercase flex flex-col gap-4">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="border-2 border-lavender/30 bg-dark p-2">
-              <p className="text-base text-lavender/80">materias</p>
+              <p className="text-base text-lavender/80">{t("subjectStats.subjects")}</p>
               <p className="text-2xl text-mint">{stats.subjectCount}</p>
             </div>
             <div className="border-2 border-lavender/30 bg-dark p-2">
-              <p className="text-base text-lavender/80">clases listas / total</p>
+              <p className="text-base text-lavender/80">{t("subjectStats.readyTotal")}</p>
               <p className="text-2xl text-mint">
                 {stats.readyClassCount} / {stats.classCount}
               </p>
             </div>
             <div className="border-2 border-lavender/30 bg-dark p-2">
-              <p className="text-base text-lavender/80">duración transcrita</p>
+              <p className="text-base text-lavender/80">{t("subjectStats.duration")}</p>
               <p className="text-2xl text-mint">{stats.transcribedMinutes} min</p>
             </div>
             <div className="border-2 border-lavender/30 bg-dark p-2">
-              <p className="text-base text-lavender/80">tareas confirmadas / por revisar</p>
+              <p className="text-base text-lavender/80">{t("subjectStats.tasks")}</p>
               <p className="text-2xl text-mint">
                 {stats.confirmedTaskCount} / {stats.pendingTaskCount}
               </p>
               {stats.completedTaskCount > 0 && (
                 <p className="text-base text-lavender/80">
-                  {stats.completedTaskCount} completada(s)
+                  {t("subjectStats.completed", { count: stats.completedTaskCount })}
                 </p>
               )}
             </div>
@@ -64,10 +66,19 @@ export function SubjectStats({ subjects: initialSubjects }: SubjectStatsProps) {
                     <span className="font-bold text-mint">{item.name}</span>
                   </span>{" "}
                   <span className="text-lavender/80">
-                    {item.readyClasses}/{item.totalClasses} clases listas · {item.transcribedMinutes}{" "}
-                    min · {item.confirmedTasks} confirmadas
-                    {item.completedTasks > 0 ? ` · ${item.completedTasks} completadas` : ""} /{" "}
-                    {item.pendingTasks} pendientes
+                    {t(
+                      item.completedTasks > 0
+                        ? "subjectStats.rowWithCompleted"
+                        : "subjectStats.row",
+                      {
+                        ready: item.readyClasses,
+                        total: item.totalClasses,
+                        minutes: item.transcribedMinutes,
+                        confirmed: item.confirmedTasks,
+                        completed: item.completedTasks,
+                        pending: item.pendingTasks,
+                      },
+                    )}
                   </span>
                 </li>
               ))}
@@ -78,7 +89,7 @@ export function SubjectStats({ subjects: initialSubjects }: SubjectStatsProps) {
 
       <div className="flex flex-wrap items-center justify-between gap-2 border-t-2 border-lavender/20 pt-3">
         <span className="text-base text-lavender/80">
-          solo metadatos y texto · audio original no conservado (g1)
+          {t("subjectStats.privacy")}
         </span>
         <Button
           type="button"
@@ -87,7 +98,7 @@ export function SubjectStats({ subjects: initialSubjects }: SubjectStatsProps) {
           disabled={loading}
           onClick={() => void reload()}
         >
-          {loading ? "actualizando…" : "actualizar"}
+          {loading ? t("subjectStats.refreshing") : t("subjectStats.refresh")}
         </Button>
       </div>
     </section>

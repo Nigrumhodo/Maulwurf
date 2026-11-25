@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { qualitySummary } from "@/lib/tasks";
 import type { Task, TaskQualityState } from "@/lib/tasks";
@@ -19,6 +20,7 @@ export function TaskInbox({
   onReview,
   onComplete,
 }: TaskInboxProps) {
+  const { t } = useTranslation("plan");
   const qualities = tasks.flatMap((task) => {
     const state = task.audio_id === null ? undefined : qualityByAudio[task.audio_id];
     return state === undefined ? [] : [state];
@@ -37,13 +39,13 @@ export function TaskInbox({
           role="status"
           className="capitalize border-b-2 border-lavender/20 px-4 py-2 text-base text-mint"
         >
-          {signals.length > 0 && <p>calidad ASR baja: {signals.join(" · ")}</p>}
+          {signals.length > 0 && <p>{t("taskInbox.lowQuality", { signals: signals.join(" · ") })}</p>}
           {anyUnavailable && (
-            <p>calidad ASR no disponible en algunas clases; revisa la cita antes de decidir.</p>
+            <p>{t("taskInbox.qualityUnavailable")}</p>
           )}
         </div>
       )}
-      <ul aria-label="tareas para revisar" className="flex flex-col divide-y-2 divide-lavender/20">
+      <ul aria-label={t("taskInbox.listLabel")} className="flex flex-col divide-y-2 divide-lavender/20">
         {tasks.map((task) => (
           <TaskCard
             key={task.id}

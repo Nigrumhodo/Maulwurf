@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { GridSprite } from "@/components/motion/GridSprite";
 import { RetroVisual } from "@/components/ui/RetroVisual";
 import {
@@ -13,8 +14,9 @@ import {
 const LISTENING_SHEET = { width: 636, height: 224, columns: 4, rows: 1 };
 
 export function MoleCompanion() {
+  const { t } = useTranslation("plan");
   return (
-    <aside aria-label="compañero maulwurf" className="flex flex-col gap-3">
+    <aside aria-label={t("mole.label")} className="flex flex-col gap-3">
       <div className="flex flex-col items-center gap-3 border-2 border-pure-black bg-dark p-3 shadow-block-sm">
         <span className="img-dark-only w-full">
           <RetroVisual
@@ -37,7 +39,7 @@ export function MoleCompanion() {
           </div>
         </span>
         <p className="lowercase text-center text-base text-lavender/80">
-          &gt; sube una clase y yo guardo el texto.
+          &gt; {t("mole.speech")}
         </p>
       </div>
 
@@ -50,7 +52,7 @@ export function MoleCompanion() {
           />
         </div>
         <p className="lowercase text-sm leading-tight text-lavender/75">
-          audio efímero en ram · 0 bytes en disco
+          {t("mole.privacy")}
         </p>
       </div>
     </aside>

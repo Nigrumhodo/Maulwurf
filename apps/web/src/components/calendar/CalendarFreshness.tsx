@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { calendarCoverageLabel, formatLastSyncedAt } from "@/lib/calendar";
 
 // D3.6 - never present a partial or stale mirror as "the calendar". The freshness line is
@@ -16,18 +17,19 @@ export function CalendarFreshness({
   coverageNotice,
   stale,
 }: CalendarFreshnessProps) {
+  const { t } = useTranslation("plan");
   const warning = stale || !coverageOk;
   return (
     <p className="lowercase text-sm text-lavender/80">
       <span>
-        última sincronización:{" "}
+        {t("freshness.lastSync")}{" "}
         <span className="text-lavender">{formatLastSyncedAt(lastSyncedAt)}</span>
       </span>
       {" · "}
       <span role={warning ? "status" : undefined} className={warning ? "text-mint" : undefined}>
-        {warning ? "cobertura parcial: " : "cobertura: "}
+        {warning ? t("freshness.partial") : t("freshness.coverage")}{" "}
         {calendarCoverageLabel(coverageNotice)}
-        {stale ? " · datos desactualizados" : ""}
+        {stale ? ` · ${t("freshness.stale")}` : ""}
       </span>
     </p>
   );

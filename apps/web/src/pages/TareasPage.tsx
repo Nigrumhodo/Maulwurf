@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { TaskCreateForm } from "@/components/tasks/TaskCreateForm";
 import { TaskEditor } from "@/components/tasks/TaskEditor";
@@ -8,6 +9,7 @@ import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { RetroVisual } from "@/components/ui/RetroVisual";
 import { estadoTareasCafe, estadoTareasCafeAnim } from "@/components/Visual";
+import i18n from "@/i18n";
 import { ApiHttpError } from "@/lib/api";
 import {
   fetchIntegrationsStatus,
@@ -39,7 +41,7 @@ const TASK_PAGE_SIZE = 20;
 function errorMessage(error: unknown): string {
   return error instanceof ApiHttpError
     ? error.message
-    : "no se pudieron cargar las tareas; revisa tu conexión.";
+    : i18n.t("plan:tasksPage.loadFailed");
 }
 
 async function loadQuality(tasks: Task[]): Promise<Record<string, TaskQualityState>> {
@@ -84,7 +86,8 @@ function parseInitialStatus(value: string | null): TaskStatusFilter {
 }
 
 export function TareasPage() {
-  useDocumentTitle("tareas");
+  const { t } = useTranslation("plan");
+  useDocumentTitle(t("tasksPage.title"));
   const [searchParams, setSearchParams] = useSearchParams();
   const initialEditId = searchParams.get("edit");
   const handledEditRef = useRef<string | null>(null);
@@ -231,8 +234,8 @@ export function TareasPage() {
     } else {
       setSavedNotice(
         statusFilter !== "all" && created.status !== statusFilter
-          ? `tarea «${created.titulo}» creada en estado «por confirmar».`
-          : `tarea «${created.titulo}» creada.`,
+          ? t("tasksPage.createdNeedsReview", { title: created.titulo })
+          : t("tasksPage.created", { title: created.titulo }),
       );
     }
   }
@@ -244,8 +247,8 @@ export function TareasPage() {
     setEditingTask(null);
     setSavedNotice(
       update.revision_id !== null
-        ? `cambio pendiente de confirmación en «${update.task.titulo}»; usa revisar para aplicarlo.`
-        : `cambios guardados en «${update.task.titulo}».`,
+        ? t("tasksPage.revisionPending", { title: update.task.titulo })
+        : t("tasksPage.saved", { title: update.task.titulo }),
     );
   }
 
@@ -278,8 +281,8 @@ export function TareasPage() {
       );
       setSavedNotice(
         result.calendar_event_kept
-          ? `Tarea «${result.task.titulo}» marcada como completada. El evento de Calendar se conserva.`
-          : `Tarea «${result.task.titulo}» marcada como completada.`,
+          ? t("tasksPage.completedKept", { title: result.task.titulo })
+          : t("tasksPage.completed", { title: result.task.titulo }),
       );
     } catch (cause) {
       setError(errorMessage(cause));
@@ -305,9 +308,9 @@ export function TareasPage() {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <h1 className="capitalize text-2xl text-mint">tareas</h1>
+            <h1 className="capitalize text-2xl text-mint">{t("tasksPage.title")}</h1>
             <p className="lowercase text-base text-lavender/80 max-w-prose">
-              &gt; crea tareas propias o revisa propuestas del análisis; confirma para enviarlas a Calendar.
+              &gt; {t("tasksPage.subtitle")}
             </p>
           </div>
         </div>
@@ -322,13 +325,13 @@ export function TareasPage() {
               setCreatingTask(true);
             }}
           >
-            + nueva tarea
+            {t("tasksPage.new")}
           </Button>
         )}
       </header>
 
       <div className="flex flex-wrap items-end gap-3 border-t-2 border-lavender/20 px-4 py-3">
-        <div role="group" aria-label="estado de la tarea" className="flex flex-wrap gap-2">
+        <div role="group" aria-label={t("tasksPage.statusGroup")} className="flex flex-wrap gap-2">
           {filters.map((filter) => (
             <button
               key={filter.value}
@@ -343,14 +346,14 @@ export function TareasPage() {
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <select
-            aria-label="materia de la tarea"
+            aria-label={t("tasksPage.subjectSelect")}
             value={subjectFilter}
             onChange={(event) => {
               setSubjectFilter(event.target.value);
             }}
             className="capitalize min-h-10 bg-surface text-lavender border-2 border-lavender px-3 py-1"
           >
-            <option value="">todas las materias</option>
+            <option value="">{t("tasksPage.allSubjects")}</option>
             {subjects.map((subject) => (
               <option key={subject.id} value={subject.id}>
                 {subject.name}
@@ -364,7 +367,7 @@ export function TareasPage() {
             disabled={loading}
             onClick={() => void loadFirst()}
           >
-            actualizar
+            {t("tasksPage.refresh")}
           </Button>
         </div>
       </div>
@@ -375,8 +378,7 @@ export function TareasPage() {
           className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t-2 border-lavender/20 px-4 py-2 text-base text-mint"
         >
           <span>
-            &gt; calendar no está listo; las confirmadas quedarán bloqueadas hasta conectar google
-            calendar.
+            &gt; {t("tasksPage.calendarNotReady")}
           </span>
           <a
             className="inline-flex w-fit items-center border-2 border-lavender/40 px-2 py-0.5 text-mint underline decoration-dotted hover:border-mint hover:bg-mint hover:text-on-accent"
@@ -443,13 +445,13 @@ export function TareasPage() {
 
       <div aria-busy={loading} className="border-t-2 border-lavender/20">
         {loading ? (
-          <p className="p-4 lowercase text-lavender/60">&gt; cargando tareas…</p>
+          <p className="p-4 lowercase text-lavender/60">&gt; {t("tasksPage.loading")}</p>
         ) : empty ? (
           <div className="p-4">
             <EmptyState
               illustration="tasks"
-              title="no hay tareas en este estado"
-              description="cuando un análisis proponga una tarea, aparecerá aquí con su cita."
+              title={t("tasksPage.emptyTitle")}
+              description={t("tasksPage.emptyHint")}
             />
           </div>
         ) : (
@@ -476,7 +478,7 @@ export function TareasPage() {
                   disabled={loadingMore}
                   onClick={() => void loadMore()}
                 >
-                  {loadingMore ? "cargando…" : "cargar más"}
+                  {loadingMore ? t("tasksPage.loadingMore") : t("tasksPage.loadMore")}
                 </Button>
               </div>
             )}

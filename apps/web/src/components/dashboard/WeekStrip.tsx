@@ -1,4 +1,6 @@
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
+import { intlLocale } from "@/i18n";
 
 // Dashboard-only horizontal strip: the current week at a glance, no event data. The
 // full duplicate-free agenda stays on /gestion/agenda.
@@ -20,6 +22,8 @@ function sameLocalDay(left: Date, right: Date): boolean {
 }
 
 export function WeekStrip() {
+  const { t } = useTranslation("plan");
+  const locale = intlLocale();
   const { days, monthLabel } = useMemo(() => {
     const start = startOfCurrentWeek();
     const next = Array.from({ length: 7 }, (_, index) => {
@@ -29,17 +33,17 @@ export function WeekStrip() {
     });
     return {
       days: next,
-      monthLabel: new Intl.DateTimeFormat("es", {
+      monthLabel: new Intl.DateTimeFormat(locale, {
         month: "long",
         year: "numeric",
       }).format(start),
     };
-  }, []);
+  }, [locale]);
   const today = new Date();
-  const weekday = new Intl.DateTimeFormat("es", { weekday: "short" });
+  const weekday = new Intl.DateTimeFormat(locale, { weekday: "short" });
 
   return (
-    <section aria-label="días de la semana actual" className="flex flex-col gap-2">
+    <section aria-label={t("weekStrip.label")} className="flex flex-col gap-2">
       <p className="lowercase text-base text-lavender/60">{monthLabel}</p>
       <ol className="grid grid-cols-7 gap-1">
         {days.map((day) => {

@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { apiFetch } from "./api";
 
 // D3.3: the review dialog must show the Calendar target before confirming. The backend
@@ -42,8 +43,8 @@ export function googleConnectHref(google: GoogleStatus | null): string {
 
 export function googleConnectLabel(google: GoogleStatus | null): string {
   return googleConnectHref(google) === GOOGLE_RECONNECT_PATH
-    ? "reconectar google calendar"
-    : "conectar google calendar";
+    ? i18n.t("plan:integrations.reconnectLabel")
+    : i18n.t("plan:integrations.connectLabel");
 }
 
 /**
@@ -54,15 +55,15 @@ export function googleConnectLabel(google: GoogleStatus | null): string {
 export function syncStatusDescription(status: string): string | null {
   switch (status) {
     case "not_requested":
-      return "sin envío a Calendar; solo se escribe tras confirmar.";
+      return i18n.t("plan:integrations.sync.notRequested");
     case "pending":
-      return "envío a Calendar en cola; el worker lo escribirá.";
+      return i18n.t("plan:integrations.sync.pending");
     case "synced":
-      return "evento escrito en el calendario Maulwurf.";
+      return i18n.t("plan:integrations.sync.synced");
     case "failed":
-      return "el evento cambió en Google o no se pudo actualizar; revísalo en Google, no se reintenta automáticamente.";
+      return i18n.t("plan:integrations.sync.failed");
     case "blocked":
-      return "sin Calendar listo; la tarea quedó bloqueada hasta reconectar.";
+      return i18n.t("plan:integrations.sync.blocked");
     default:
       return null;
   }
@@ -82,54 +83,69 @@ export function calendarTargetLabel(google: GoogleStatus): string {
     return `Maulwurf · ${compactCalendarId(google.calendar_id)}`;
   }
   if (google.calendar_id !== null) {
-    return `Maulwurf · ${compactCalendarId(google.calendar_id)} (no listo; quedará bloqueada)`;
+    return `Maulwurf · ${compactCalendarId(google.calendar_id)} ${i18n.t("plan:integrations.target.notReady")}`;
   }
-  return "sin calendario conectado; la tarea quedará bloqueada";
+  return i18n.t("plan:integrations.target.none");
 }
 
 // Closed reason vocabulary produced by the Calendar start/callback redirects. Unknown
 // values fall back to a generic message instead of echoing the query string.
-const CALENDAR_ERRORS: Record<string, string> = {
-  not_configured: "La integración con Google no está configurada en el servidor.",
-  csrf_invalid: "La petición vino de otro sitio; ábrela desde Maulwurf.",
-  not_connected: "No hay una integración de Google que reconectar.",
-  rate_limited: "Demasiados intentos; espera un momento y vuelve a intentar.",
-  capacity_unavailable: "El servicio no está disponible; inténtalo más tarde.",
-  invalid_state: "La sesión de consentimiento no es válida; vuelve a intentarlo.",
-  access_denied: "No autorizaste el acceso a Calendar.",
-  missing_params: "Google no devolvió los datos esperados.",
-  state_mismatch: "El consentimiento pertenece a otra sesión.",
-  oauth_failed: "Google rechazó el intercambio de tokens.",
-  wrong_account: "La cuenta de Google no coincide con tu sesión.",
-  scope_required: "Faltan permisos de Calendar; la integración no se guardó.",
-  invalid_grant: "Google revocó el acceso; reconecta la integración.",
-  api_not_enabled:
-    "La API de Google Calendar está deshabilitada en Google Cloud Console; habilítala en tu proyecto y vuelve a intentar.",
-  calendar_unavailable: "Google Calendar no respondió; inténtalo más tarde.",
-  calendar_error: "Google Calendar devolvió un error al preparar el calendario.",
-};
+const CALENDAR_ERROR_REASONS = [
+  "not_configured",
+  "csrf_invalid",
+  "not_connected",
+  "rate_limited",
+  "capacity_unavailable",
+  "invalid_state",
+  "access_denied",
+  "missing_params",
+  "state_mismatch",
+  "oauth_failed",
+  "wrong_account",
+  "scope_required",
+  "invalid_grant",
+  "api_not_enabled",
+  "calendar_unavailable",
+  "calendar_error",
+] as const;
 
-export function calendarErrorCopy(reason: string | null): string {
-  if (reason === null) return "No se pudo conectar Google Calendar.";
-  return CALENDAR_ERRORS[reason] ?? "No se pudo conectar Google Calendar.";
+type CalendarErrorReason = (typeof CALENDAR_ERROR_REASONS)[number];
+
+function isCalendarErrorReason(reason: string): reason is CalendarErrorReason {
+  return (CALENDAR_ERROR_REASONS as readonly string[]).includes(reason);
 }
 
-const GMAIL_ERRORS: Record<string, string> = {
-  not_configured: "La integración con Gmail no está configurada en el servidor.",
-  csrf_invalid: "La petición vino de otro sitio; ábrela desde Maulwurf.",
-  rate_limited: "Demasiados intentos; espera un momento y vuelve a intentar.",
-  capacity_unavailable: "El servicio no está disponible; inténtalo más tarde.",
-  invalid_state: "La sesión de consentimiento expiró; vuelve a intentarlo.",
-  access_denied: "No autorizaste el permiso opcional gmail.send.",
-  missing_params: "Google no devolvió los datos esperados.",
-  state_mismatch: "El consentimiento pertenece a otra sesión.",
-  oauth_failed: "Google rechazó el intercambio de tokens.",
-  wrong_account: "La cuenta de Google no coincide con tu sesión actual.",
-  scope_required: "No se concedió el permiso gmail.send.",
-  invalid_grant: "Google revocó el acceso; vuelve a conectar.",
-};
+export function calendarErrorCopy(reason: string | null): string {
+  if (reason === null || !isCalendarErrorReason(reason)) {
+    return i18n.t("plan:integrations.calendarErrors.generic");
+  }
+  return i18n.t(`plan:integrations.calendarErrors.${reason}`);
+}
+
+const GMAIL_ERROR_REASONS = [
+  "not_configured",
+  "csrf_invalid",
+  "rate_limited",
+  "capacity_unavailable",
+  "invalid_state",
+  "access_denied",
+  "missing_params",
+  "state_mismatch",
+  "oauth_failed",
+  "wrong_account",
+  "scope_required",
+  "invalid_grant",
+] as const;
+
+type GmailErrorReason = (typeof GMAIL_ERROR_REASONS)[number];
+
+function isGmailErrorReason(reason: string): reason is GmailErrorReason {
+  return (GMAIL_ERROR_REASONS as readonly string[]).includes(reason);
+}
 
 export function gmailErrorCopy(reason: string | null): string {
-  if (reason === null) return "No se pudo conectar el permiso de Gmail.";
-  return GMAIL_ERRORS[reason] ?? "No se pudo conectar el permiso de Gmail.";
+  if (reason === null || !isGmailErrorReason(reason)) {
+    return i18n.t("plan:integrations.gmailErrors.generic");
+  }
+  return i18n.t(`plan:integrations.gmailErrors.${reason}`);
 }
