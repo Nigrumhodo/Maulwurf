@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ClassItems } from "@/components/transcript/ClassItems";
 import { ClassStatus } from "@/components/transcript/ClassStatus";
@@ -26,7 +27,8 @@ function messageFor(error: unknown, fallback: string): string {
 }
 
 export function TranscriptReaderPage() {
-  useDocumentTitle("clase");
+  const { t } = useTranslation("study");
+  useDocumentTitle(t("readerPage.docTitle"));
   const { audioId = "" } = useParams();
   const [searchParams] = useSearchParams();
   const [detail, setDetail] = useState<LibraryAudioDetail | null>(null);
@@ -55,8 +57,8 @@ export function TranscriptReaderPage() {
         if (cancelled) return;
         setError(
           cause instanceof ApiHttpError && cause.status === 404
-            ? "la clase o su transcripción no existen."
-            : messageFor(cause, "no se pudo cargar la transcripción; revisa tu conexión."),
+            ? t("readerPage.notFound")
+            : messageFor(cause, t("readerPage.loadFailed")),
         );
       })
       .finally(() => {
@@ -80,7 +82,7 @@ export function TranscriptReaderPage() {
         if (cancelled) return;
         setTasks([]);
         setTasksError(
-          messageFor(cause, "no se pudieron cargar los elementos detectados."),
+          messageFor(cause, t("readerPage.itemsFailed")),
         );
       })
       .finally(() => {
@@ -98,12 +100,12 @@ export function TranscriptReaderPage() {
       const result = await backfillAnalysis(audioId);
       setNotice(
         result.status === "already_analyzed"
-          ? "el análisis actual ya está completo."
-          : "análisis encolado; el estado se actualizará en esta página.",
+          ? t("readerPage.alreadyAnalyzed")
+          : t("readerPage.analysisQueued"),
       );
       setReloadKey((value) => value + 1);
     } catch (cause) {
-      setNotice(messageFor(cause, "no se pudo encolar el análisis."));
+      setNotice(messageFor(cause, t("readerPage.queueFailed")));
     } finally {
       setActionBusy(false);
     }
@@ -115,10 +117,10 @@ export function TranscriptReaderPage() {
     setNotice(null);
     try {
       await retryAudio(audioId, ["index"], transcript.version);
-      setNotice("índice encolado; el estado se actualizará en esta página.");
+      setNotice(t("readerPage.indexQueued"));
       setReloadKey((value) => value + 1);
     } catch (cause) {
-      setNotice(messageFor(cause, "no se pudo reintentar el índice."));
+      setNotice(messageFor(cause, t("readerPage.indexRetryFailed")));
     } finally {
       setActionBusy(false);
     }
@@ -127,7 +129,7 @@ export function TranscriptReaderPage() {
   if (loading) {
     return (
       <p className="lowercase font-pixel min-w-0 max-w-full border-2 border-pure-black bg-surface shadow-block p-4 text-base text-lavender/60 sm:p-6">
-        &gt; cargando transcripción…
+        {t("readerPage.loading")}
       </p>
     );
   }
@@ -135,18 +137,18 @@ export function TranscriptReaderPage() {
   if (error !== null || detail === null || transcript === null) {
     return (
       <section className="lowercase font-pixel min-w-0 max-w-full border-2 border-pure-black bg-surface shadow-block flex flex-col items-start gap-3 p-4 sm:p-6">
-        <h1 className="capitalize text-2xl text-mint">transcripción</h1>
+        <h1 className="capitalize text-2xl text-mint">{t("readerPage.title")}</h1>
         <p role="alert" className="lowercase text-mint">
-          &gt; {error ?? "la transcripción no está disponible."}
+          &gt; {error ?? t("readerPage.unavailable")}
         </p>
         <Link
           to="/gestion/biblioteca"
           className="lowercase font-pixel border-2 border-mint px-3 py-2 text-mint hover:bg-mint hover:text-on-accent"
         >
-          volver a la biblioteca
+          {t("readerPage.backToLibrary")}
         </Link>
         <Button type="button" variant="secondary" onClick={() => window.location.reload()}>
-          reintentar
+          {t("readerPage.retry")}
         </Button>
       </section>
     );

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { IngestProgress } from "@/components/IngestProgress";
 import { AudioUploadPanel } from "@/components/upload/AudioUploadPanel";
@@ -10,6 +11,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Input } from "@/components/ui/Input";
 import { LanguageSelect } from "@/components/ui/LanguageSelect";
 import { TimezoneSelect } from "@/components/ui/TimezoneSelect";
+import { intlLocale } from "@/i18n";
 import { ApiHttpError } from "@/lib/api";
 import { fetchCapabilities } from "@/lib/capabilities";
 import type { IngestionCapabilities } from "@/lib/capabilities";
@@ -65,6 +67,7 @@ const EMPTY_DRAFT: UploadDraft = {
 };
 
 export function UploadForm() {
+  const { t } = useTranslation("study");
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [capabilities, setCapabilities] = useState<IngestionCapabilities | null>(null);
   const [loading, setLoading] = useState(true);
@@ -102,7 +105,7 @@ export function UploadForm() {
       setLoadError(
         error instanceof ApiHttpError || (error instanceof Error && !(error instanceof TypeError))
           ? error.message
-          : "no se pudieron cargar los datos de subida; revisa tu conexión.",
+          : t("uploadForm.loadFailed"),
       );
     } finally {
       if (generation === loadGeneration.current) setLoading(false);
@@ -173,7 +176,7 @@ export function UploadForm() {
           form:
             error instanceof Error && !(error instanceof TypeError)
               ? error.message
-              : "no se pudo reservar la subida; revisa tu conexión.",
+              : t("uploadForm.reserveFailed"),
         });
         return null;
       }
@@ -258,7 +261,7 @@ export function UploadForm() {
       }
       setErrors({
         fields: {},
-        form: "no se pudo enviar el audio; revisa tu conexión.",
+        form: t("libraryPage.sendFailed"),
       });
       setPhase("ready");
     } finally {
@@ -304,7 +307,7 @@ export function UploadForm() {
   }
 
   if (loading) {
-    return <p className="lowercase text-base text-lavender/60">&gt; cargando datos de subida…</p>;
+    return <p className="lowercase text-base text-lavender/60">{t("uploadForm.loading")}</p>;
   }
 
   if (loadError != null) {
@@ -314,7 +317,7 @@ export function UploadForm() {
           &gt; {loadError}
         </p>
         <Button type="button" variant="secondary" onClick={() => void load()}>
-          reintentar
+          {t("uploadForm.retry")}
         </Button>
       </div>
     );
@@ -329,20 +332,17 @@ export function UploadForm() {
     return (
       <div className="lowercase flex flex-col gap-3">
         <p className="text-mint">
-          &gt;{" "}
-          {accepted
-            ? "contenido admitido · la transcripción empezará en breve"
-            : "este audio ya estaba en la biblioteca"}
+          {accepted ? t("uploadForm.acceptedMsg") : t("uploadForm.duplicateMsg")}
         </p>
         <dl className="grid gap-1 text-lavender/80">
           {accepted ? (
             <>
               <div className="flex gap-2">
-                <dt className="text-lavender/60">intento</dt>
+                <dt className="text-lavender/60">{t("uploadForm.attempt")}</dt>
                 <dd>{result.attemptId ?? "—"}</dd>
               </div>
               <div className="flex gap-2">
-                <dt className="text-lavender/60">bytes recibidos</dt>
+                <dt className="text-lavender/60">{t("uploadForm.receivedBytes")}</dt>
                 <dd>
                   {result.receivedBytes !== null ? formatBytes(result.receivedBytes) : "—"}
                 </dd>
@@ -350,24 +350,24 @@ export function UploadForm() {
             </>
           ) : (
             <div className="flex gap-2">
-              <dt className="text-lavender/60">clase existente</dt>
+              <dt className="text-lavender/60">{t("uploadForm.existingClass")}</dt>
               <dd>{result.audioId ?? "—"}</dd>
             </div>
           )}
         </dl>
         <p className="text-lavender/60">
-          &gt; el audio no se conserva; solo queda el texto de la transcripción.
+          {t("uploadForm.notKept")}
         </p>
         {progressAudioId !== null && <IngestProgress audioId={progressAudioId} />}
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="secondary" onClick={reset}>
-            subir otra clase
+            {t("uploadForm.uploadAnother")}
           </Button>
           <Link
             to="/gestion/biblioteca"
             className="lowercase font-pixel border-2 border-mint px-3 py-2 text-mint hover:bg-mint hover:text-on-accent"
           >
-            ir a la biblioteca
+            {t("uploadForm.goToLibrary")}
           </Link>
         </div>
       </div>
@@ -376,16 +376,20 @@ export function UploadForm() {
 
   if (reservation !== null) {
     const uploading = phase === "uploading";
-    const subjectName = subjects.find((subject) => subject.id === draft.subjectId)?.name ?? "clase";
+    const subjectName = subjects.find((subject) => subject.id === draft.subjectId)?.name ?? t("uploadForm.defaultSubject");
     return (
       <div className="lowercase flex flex-col gap-4">
         <div className="flex flex-col gap-1 text-base text-lavender/80">
           <p>
-            &gt; reserva creada · {subjectName} · {draft.classDate || "sin fecha"}
+            {t("uploadForm.reserved", {
+              subject: subjectName,
+              date: draft.classDate || t("uploadForm.noDate"),
+            })}
           </p>
           <p className="text-lavender/60">
-            &gt; expira {new Date(reservation.upload_expires_at).toLocaleString()} · solo falta el
-            archivo
+            {t("uploadForm.expires", {
+              date: new Date(reservation.upload_expires_at).toLocaleString(intlLocale()),
+            })}
           </p>
         </div>
 
@@ -405,16 +409,14 @@ export function UploadForm() {
 
         <ConfirmDialog
           open={confirmOpen}
-          title="contenido ya registrado"
+          title={t("uploadForm.variantTitle")}
           description={
             variant !== null ? (
-              <span>
-                existe una clase con el mismo audio en otro contexto ({variant.existingAudioId}).
-                Si confirmas, se enviará como variante de esa clase.
-              </span>
+              <span>{t("uploadForm.variantDescription", { id: variant.existingAudioId })}</span>
             ) : null
           }
-          confirmLabel="enviar variante"
+          confirmLabel={t("uploadForm.variantConfirm")}
+          cancelLabel={t("shared.cancel")}
           onConfirm={() => void handleConfirmVariant()}
           onCancel={() => {
             setConfirmOpen(false);
@@ -428,14 +430,14 @@ export function UploadForm() {
   if (subjects.length === 0) {
     return (
       <EmptyState
-        title="aún no tienes materias"
-        description="crea la primera para poder reservar una clase."
+        title={t("uploadForm.noSubjectsTitle")}
+        description={t("uploadForm.noSubjectsDescription")}
         action={
           <Link
             to="/gestion/materias"
             className="lowercase font-pixel border-2 border-mint px-3 py-2 text-mint hover:bg-mint hover:text-on-accent"
           >
-            crear materia
+            {t("uploadForm.createSubject")}
           </Link>
         }
       />
@@ -448,35 +450,38 @@ export function UploadForm() {
       className="flex flex-col divide-y-2 divide-lavender/20"
       noValidate
     >
-      <section aria-label="límites" className="lowercase flex flex-col gap-1 pb-5 text-base">
+      <section aria-label={t("uploadForm.limitsAria")} className="lowercase flex flex-col gap-1 pb-5 text-base">
         {usable ? (
           <p className="text-lavender/80">
-            &gt; límites publicados · máx {formatBytes(capabilities?.max_upload_bytes ?? null)} ·{" "}
-            {capabilities?.max_duration_seconds ?? "?"} s ·{" "}
-            {(capabilities?.accepted_input_formats ?? []).join(", ") || "sin formatos"} ·{" "}
-            {capabilities?.active_slots ?? "?"} slot(s)
+            {t("uploadForm.limits", {
+              max: formatBytes(capabilities?.max_upload_bytes ?? null),
+              seconds: capabilities?.max_duration_seconds ?? "?",
+              formats:
+                (capabilities?.accepted_input_formats ?? []).join(", ") ||
+                t("uploadForm.noFormats"),
+              slots: capabilities?.active_slots ?? "?",
+            })}
           </p>
         ) : (
           <p role="status" className="text-mint">
-            &gt; sin límites publicados · la subida aún no está disponible; no se aceptarán
-            archivos hasta que el spike publique sus límites.
+            {t("uploadForm.noLimits")}
           </p>
         )}
       </section>
 
       <section className="flex flex-col gap-3 py-5">
-        <h3 className="text-lg text-mint">&gt; qué</h3>
+        <h3 className="text-lg text-mint">{t("uploadForm.secWhat")}</h3>
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-1">
             <label className="lowercase font-pixel flex flex-col gap-1">
-              <span className="text-mint">&gt; materia</span>
+              <span className="text-mint">{t("uploadForm.subject")}</span>
               <select
                 className={selectClass}
                 value={draft.subjectId}
                 onChange={(event) => update("subjectId", event.target.value)}
               >
                 <option value="" disabled>
-                  selecciona materia
+                  {t("uploadForm.selectSubject")}
                 </option>
                 {subjects.map((subject) => (
                   <option key={subject.id} value={subject.id}>
@@ -491,13 +496,13 @@ export function UploadForm() {
           </div>
 
           <Input
-            label="título (opcional)"
-            placeholder="clase 03 — integrales"
+            label={t("uploadForm.titleLabel")}
+            placeholder={t("uploadForm.titlePlaceholder")}
             value={draft.title}
             onChange={(event) => update("title", event.target.value)}
           />
           <Input
-            label="profesor (opcional)"
+            label={t("uploadForm.teacherLabel")}
             placeholder=""
             value={draft.teacher}
             onChange={(event) => update("teacher", event.target.value)}
@@ -506,11 +511,11 @@ export function UploadForm() {
       </section>
 
       <section className="flex flex-col gap-3 py-5">
-        <h3 className="text-lg text-mint">&gt; cuándo</h3>
+        <h3 className="text-lg text-mint">{t("uploadForm.secWhen")}</h3>
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-1">
             <DateInput
-              label="fecha de clase"
+              label={t("uploadForm.classDate")}
               value={draft.classDate}
               onChange={(event) => update("classDate", event.target.value)}
             />
@@ -521,7 +526,7 @@ export function UploadForm() {
 
           <div className="flex flex-col gap-1">
             <TimezoneSelect
-              label="zona horaria"
+              label={t("uploadForm.timezone")}
               value={draft.classTimezone}
               onChange={(event) => update("classTimezone", event.target.value)}
             />
@@ -533,11 +538,11 @@ export function UploadForm() {
       </section>
 
       <section className="flex flex-col gap-3 py-5">
-        <h3 className="text-lg text-mint">&gt; idioma</h3>
+        <h3 className="text-lg text-mint">{t("uploadForm.secLanguage")}</h3>
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-1">
             <LanguageSelect
-              label="idioma del audio"
+              label={t("uploadForm.audioLanguage")}
               options={languages}
               value={draft.languageCode}
               onChange={(event) => update("languageCode", event.target.value)}
@@ -550,13 +555,21 @@ export function UploadForm() {
       </section>
 
       <section className="lowercase flex flex-col gap-2 py-5">
-        <h3 className="text-lg text-mint">&gt; privacidad</h3>
+        <h3 className="text-lg text-mint">{t("uploadForm.secPrivacy")}</h3>
         <p className="text-base text-lavender">
-          aviso de privacidad · versión {noticeVersion ?? "no publicada"}
+          {/* A new tab keeps the in-progress draft: the form lives only in component state. */}
+          <Link
+            to="/privacidad"
+            target="_blank"
+            rel="noopener"
+            className="text-mint hover:underline"
+          >
+            {t("uploadForm.privacyNotice")}
+          </Link>{" "}
+          · {t("uploadForm.version", { version: noticeVersion ?? t("uploadForm.notPublished") })}
         </p>
-        <p className="text-base text-lavender/80">
-          el audio se envía a un proveedor en la nube para transcribirlo y se borra al terminar.
-        </p>
+        <p className="text-base text-lavender/80">{t("uploadForm.cloudNote")}</p>
+        <p className="text-base text-lavender/80">{t("uploadForm.thirdPartyConsent")}</p>
 
         <label className="flex min-h-8 items-start gap-2 text-base text-lavender">
           <input
@@ -565,7 +578,7 @@ export function UploadForm() {
             onChange={(event) => update("cloudAccepted", event.target.checked)}
             className="mt-1 accent-mint"
           />
-          <span>acepto el tratamiento en la nube para transcribir este audio</span>
+          <span>{t("uploadForm.cloudCheckbox")}</span>
         </label>
 
         <label className="flex min-h-8 items-start gap-2 text-base text-lavender">
@@ -575,7 +588,7 @@ export function UploadForm() {
             onChange={(event) => update("voiceAcknowledged", event.target.checked)}
             className="mt-1 accent-mint"
           />
-          <span>reconozco que no habrá reproducción ni retranscripción del audio</span>
+          <span>{t("uploadForm.voiceCheckbox")}</span>
         </label>
 
         {errors.consent != null && (
@@ -585,7 +598,7 @@ export function UploadForm() {
         )}
 
         <p className="text-base text-lavender/60">
-          &gt; audio no conservado · el audio se borra; solo se guarda el texto de la transcripción.
+          {t("uploadForm.notKeptForm")}
         </p>
       </section>
 
@@ -598,16 +611,16 @@ export function UploadForm() {
 
         <div className="flex flex-wrap items-center gap-2">
           <Button type="submit" disabled={!canSubmit}>
-            reservar subida
+            {t("uploadForm.reserve")}
           </Button>
           {!usable ? (
             <span className="lowercase text-base text-lavender/60">
-              &gt; esperando límites publicados por el servidor
+              {t("uploadForm.waitingLimits")}
             </span>
           ) : (
             !consentReady && (
               <span className="lowercase text-base text-lavender/60">
-                &gt; acepta el consentimiento para continuar
+                {t("uploadForm.acceptConsent")}
               </span>
             )
           )}
@@ -616,16 +629,14 @@ export function UploadForm() {
 
       <ConfirmDialog
         open={confirmOpen}
-        title="contenido ya registrado"
+        title={t("uploadForm.variantTitle")}
         description={
           variant !== null ? (
-            <span>
-              existe una clase con el mismo audio en otro contexto ({variant.existingAudioId}).
-              Si confirmas, se enviará como variante de esa clase.
-            </span>
+            <span>{t("uploadForm.variantDescription", { id: variant.existingAudioId })}</span>
           ) : null
         }
-        confirmLabel="enviar variante"
+        confirmLabel={t("uploadForm.variantConfirm")}
+          cancelLabel={t("shared.cancel")}
         onConfirm={() => void handleConfirmVariant()}
         onCancel={() => {
           setConfirmOpen(false);

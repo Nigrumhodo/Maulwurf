@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { apiFetch } from "./api";
 import { parseProgressEvent, snapshotFromDetail } from "./progress";
 import type { ProgressEvent, ProgressSnapshot } from "./progress";
@@ -138,7 +139,7 @@ export function createProgressSource(
       pollFailures += 1;
       if (pollFailures >= maxPollFailures) {
         handlers.onTransportError?.(
-          "no se pudo consultar el progreso; reintenta cuando recuperes la conexión.",
+          i18n.t("study:progressLib.pollFailed"),
         );
         return;
       }

@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { ApiHttpError, apiFetch } from "./api";
 import type { LibraryAudioDetail } from "./library";
 
@@ -83,7 +84,7 @@ export function segmentLabelFromTimes(
 ): string {
   return validTimes(tStart, tEnd, timestampPrecision, durationSeconds)
     ? formatClock(tStart ?? 0)
-    : `segmento ${ordinal}`;
+    : i18n.t("study:reader.segmentLabel", { ordinal });
 }
 
 export function segmentLabel(
@@ -105,14 +106,14 @@ export function summaryState(
   transcript: ReaderTranscript,
 ): { text: string | null; note: string | null } {
   if (detail.stages.analyze === "not_requested") {
-    return { text: null, note: "resumen no solicitado para esta clase" };
+    return { text: null, note: i18n.t("study:reader.summaryNotRequested") };
   }
   const text = transcript.summary?.trim() ?? "";
   if (text !== "") return { text, note: null };
   if (detail.stages.analyze === "pending" || detail.stages.analyze === "running") {
-    return { text: null, note: "el resumen todavía se está generando" };
+    return { text: null, note: i18n.t("study:reader.summaryGenerating") };
   }
-  return { text: null, note: "el resumen no está disponible" };
+  return { text: null, note: i18n.t("study:reader.summaryUnavailable") };
 }
 
 export type SrtDownloadResult = "downloaded" | "unavailable";

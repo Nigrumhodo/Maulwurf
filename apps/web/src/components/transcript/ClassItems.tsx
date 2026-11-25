@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { TranscriptLink } from "@/components/transcript/TranscriptLink";
 import { Button } from "@/components/ui/Button";
@@ -33,30 +34,31 @@ export function ClassItems({
   error,
   onRefresh,
 }: ClassItemsProps) {
+  const { t } = useTranslation("study");
   const items = ordered(Array.isArray(tasks) ? tasks : []);
 
   return (
-    <section aria-label="elementos detectados" className="lowercase py-5 first:pt-0 last:pb-0">
+    <section aria-label={t("classItems.title")} className="lowercase py-5 first:pt-0 last:pb-0">
       <div className="flex flex-col gap-3">
-        <h2 className="capitalize text-xl text-mint">elementos detectados</h2>
+        <h2 className="capitalize text-xl text-mint">{t("classItems.title")}</h2>
         {loading ? (
-          <p className="text-base text-lavender/60">&gt; cargando elementos detectados…</p>
+          <p className="text-base text-lavender/60">{t("classItems.loading")}</p>
         ) : error !== null ? (
           <div className="flex flex-wrap items-center gap-2">
             <p role="alert" className="text-mint">
               &gt; {error}
             </p>
             <Button type="button" size="sm" variant="secondary" onClick={onRefresh}>
-              reintentar
+              {t("classItems.retry")}
             </Button>
           </div>
         ) : items.length === 0 ? (
           <p className="text-base text-lavender/60">
-            &gt; no se detectaron tareas en esta clase.
+            {t("classItems.empty")}
           </p>
         ) : (
           <ul
-            aria-label="elementos detectados"
+            aria-label={t("classItems.title")}
             className="flex flex-col divide-y-2 divide-lavender/20"
           >
             {items.map((task) => {
@@ -84,10 +86,10 @@ export function ClassItems({
                     {ACTIVE_STATUSES.has(task.status) && (
                       <Link
                         to={`/gestion/tareas?status=all&edit=${encodeURIComponent(task.id)}`}
-                        aria-label={`editar tarea ${task.titulo}`}
+                        aria-label={t("classItems.editAria", { title: task.titulo })}
                         className="inline-flex min-h-8 items-center border-2 border-lavender/40 px-2 py-1.5 text-sm text-lavender hover:border-mint hover:text-mint"
                       >
-                        editar
+                        {t("classItems.edit")}
                       </Link>
                     )}
                   </div>
@@ -98,13 +100,14 @@ export function ClassItems({
         )}
 
         <Link to="/gestion/tareas" className="inline-block py-2 text-sm text-mint underline decoration-dotted">
-          abrir la bandeja de tareas
+          {t("classItems.openInbox")}
         </Link>
 
         {items.some((task) => !ACTIVE_STATUSES.has(task.status)) && (
           <p className="text-sm text-lavender/60">
-            {items.filter((task) => !ACTIVE_STATUSES.has(task.status)).length} elemento(s)
-            cerrado(s) al final.
+            {t("classItems.closedAtEnd", {
+              count: items.filter((task) => !ACTIVE_STATUSES.has(task.status)).length,
+            })}
           </p>
         )}
       </div>

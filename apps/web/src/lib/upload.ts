@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import {
   ApiHttpError,
   CSRF_HEADER,
@@ -81,26 +82,26 @@ export function validateUpload(
   if (!capabilitiesUsable(capabilities)) {
     return {
       fields,
-      form: "el servidor no ha publicado límites de ingesta; la subida aún no está disponible.",
+      form: i18n.t("study:uploadLib.noLimits"),
     };
   }
   const languageCodes = publishedLanguageCodes(capabilities);
   if (languageCodes.length === 0) {
     return {
       fields,
-      form: "el servidor no ha publicado idiomas de audio; la subida aún no está disponible.",
+      form: i18n.t("study:uploadLib.noLanguages"),
     };
   }
-  if (draft.subjectId === "") fields.subjectId = "elige una materia";
-  if (draft.classDate === "") fields.classDate = "indica la fecha de clase";
-  if (draft.classTimezone === "") fields.classTimezone = "elige la zona horaria";
+  if (draft.subjectId === "") fields.subjectId = i18n.t("study:uploadLib.pickSubject");
+  if (draft.classDate === "") fields.classDate = i18n.t("study:uploadLib.pickDate");
+  if (draft.classTimezone === "") fields.classTimezone = i18n.t("study:uploadLib.pickTimezone");
   if (draft.languageCode === "") {
-    fields.languageCode = "elige el idioma del audio";
+    fields.languageCode = i18n.t("study:uploadLib.pickLanguage");
   } else if (!languageCodes.includes(draft.languageCode)) {
-    fields.languageCode = "elige uno de los idiomas publicados por el servidor";
+    fields.languageCode = i18n.t("study:uploadLib.pickPublishedLanguage");
   }
   if (!draft.cloudAccepted || !draft.voiceAcknowledged) {
-    return { fields, consent: "acepta ambos consentimientos para continuar" };
+    return { fields, consent: i18n.t("study:uploadLib.acceptConsents") };
   }
   return { fields };
 }
@@ -170,7 +171,7 @@ export async function createAudio(body: AudioCreateBody): Promise<AudioCreated> 
   });
   const payload = await readJson(res);
   if (!isAudioCreated(payload)) {
-    throw new Error("La reserva de audio no coincide con el contrato.");
+    throw new Error(i18n.t("study:library.reservationMismatch"));
   }
   return payload;
 }
@@ -209,13 +210,13 @@ export function uploadFormError(error: ApiHttpError): UploadFormError {
   if (error.status === 429) {
     return {
       field: "form",
-      message: `${error.message} Has alcanzado el límite; inténtalo de nuevo en unos segundos.`,
+      message: `${error.message} ${i18n.t("study:uploadLib.rateLimited")}`,
     };
   }
   if (error.status === 503) {
     return {
       field: "form",
-      message: `${error.message} La ingesta está ocupada; reintenta en un momento.`,
+      message: `${error.message} ${i18n.t("study:uploadLib.ingestBusy")}`,
     };
   }
   return { field: "form", message: error.message };
@@ -269,7 +270,7 @@ const FORMAT_ACCEPT_MIMES: Record<string, readonly string[]> = {
 
 /** Formatea bytes para la UI sin inventar límites (los publica el servidor). */
 export function formatBytes(value: number | null): string {
-  if (value === null) return "no publicado";
+  if (value === null) return i18n.t("study:uploadLib.notPublished");
   if (value >= 1024 * 1024 * 1024) return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
   if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
   if (value >= 1024) return `${Math.round(value / 1024)} KiB`;
@@ -348,17 +349,17 @@ export function pickUploadFile(
   const check = validateFile(file, capabilities);
   return check.ok
     ? { file, error: null }
-    : { file: null, error: check.error ?? "archivo no válido." };
+    : { file: null, error: check.error ?? i18n.t("study:uploadLib.invalidFile") };
 }
 
 /** Comprueba archivo vacío, tamaño máximo publicado y formato aceptado. */
 export function validateFile(file: File, capabilities: IngestionCapabilities | null): FileCheck {
-  if (file.size === 0) return { ok: false, error: "el archivo está vacío." };
+  if (file.size === 0) return { ok: false, error: i18n.t("study:uploadLib.emptyFile") };
   const max = capabilities?.max_upload_bytes ?? null;
   if (max !== null && file.size > max) {
     return {
       ok: false,
-      error: `el archivo supera el máximo publicado (${formatBytes(max)}).`,
+      error: i18n.t("study:uploadLib.tooLarge", { max: formatBytes(max) }),
     };
   }
   const accepted = (capabilities?.accepted_input_formats ?? []).map((format) =>
@@ -366,7 +367,7 @@ export function validateFile(file: File, capabilities: IngestionCapabilities | n
   );
   const format = formatOf(file, accepted);
   if (accepted.length > 0 && (format === null || !accepted.includes(format))) {
-    return { ok: false, error: `formato no aceptado; usa ${accepted.join(", ")}.` };
+    return { ok: false, error: i18n.t("study:uploadLib.badFormat", { formats: accepted.join(", ") }) };
   }
   return { ok: true, format: format ?? undefined };
 }
@@ -591,7 +592,7 @@ export async function uploadContent({
   onProgress,
 }: UploadContentOptions): Promise<UploadResult> {
   if (!isSameOriginApiPath(uploadUrl)) {
-    throw new Error(`La URL de subida debe ser una ruta relativa del mismo origen: ${uploadUrl}`);
+    throw new Error(i18n.t("study:uploadLib.badUploadUrl", { url: uploadUrl }));
   }
   if (!supportsStreamingFetchBody()) {
     return uploadWithXhr({ uploadUrl, file, signal, onProgress });
@@ -677,30 +678,37 @@ export interface UploadErrorView {
 export function mapUploadError(error: ApiHttpError): UploadErrorView {
   if (error.code === "payload_too_large") {
     const max = typeof error.details.max_bytes === "number" ? error.details.max_bytes : null;
-    const limit = max !== null ? ` (máximo ${formatBytes(max)})` : "";
+    const limit =
+      max !== null ? ` (${i18n.t("study:uploadLib.maxSuffix", { max: formatBytes(max) })})` : "";
     return { message: `${error.message}${limit}` };
   }
   if (error.code === "upload_expired") {
-    return { message: `${error.message} Vuelve a reservar la clase.`, resetReservation: true };
+    return {
+      message: `${error.message} ${i18n.t("study:uploadLib.reserveAgain")}`,
+      resetReservation: true,
+    };
   }
   if (error.code === "attempt_not_active") {
-    return { message: `${error.message} Vuelve a reservar la clase.`, resetReservation: true };
+    return {
+      message: `${error.message} ${i18n.t("study:uploadLib.reserveAgain")}`,
+      resetReservation: true,
+    };
   }
   if (error.code === "variant_hash_mismatch") {
     return { message: error.message, resetReservation: true };
   }
   if (error.status === 404) {
-    return { message: "la clase ya no existe; vuelve a reservarla.", resetReservation: true };
+    return { message: i18n.t("study:uploadLib.classGone"), resetReservation: true };
   }
   if (error.status === 503 || error.status === 429) {
-    return { message: `${error.message} Reintenta en un momento.`, retry: true };
+    return { message: `${error.message} ${i18n.t("study:library.errRetryLater")}`, retry: true };
   }
   if (error.status === 413) {
     return { message: error.message };
   }
   if (error.status === 415) {
     return {
-      message: `${error.message} Vuelve a reservar e inténtalo de nuevo.`,
+      message: `${error.message} ${i18n.t("study:uploadLib.reserveAndRetry")}`,
       resetReservation: true,
     };
   }
