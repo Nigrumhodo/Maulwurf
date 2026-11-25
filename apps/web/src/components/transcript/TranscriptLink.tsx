@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { segmentLabelFromTimes } from "@/lib/reader";
 import { taskEvidenceHref } from "@/lib/tasks";
@@ -14,6 +15,7 @@ export interface TranscriptLinkProps {
 }
 
 export function TranscriptLink({ task, evidence, quality }: TranscriptLinkProps) {
+  const { t } = useTranslation("study");
   const href = taskEvidenceHref(task, evidence);
   if (href === null) return null;
 
@@ -29,10 +31,10 @@ export function TranscriptLink({ task, evidence, quality }: TranscriptLinkProps)
     <Link
       to={href}
       className="inline-flex items-center gap-1 border-2 border-lavender/40 px-2 py-0.5 text-xs text-mint underline decoration-dotted hover:border-mint hover:bg-mint hover:text-on-accent"
-      aria-label={`ver segmento ${evidence.ordinal} en la clase`}
-      title="abrir este segmento en la clase"
+      aria-label={t("transcriptLink.aria", { ordinal: evidence.ordinal })}
+      title={t("transcriptLink.title")}
     >
-      <span aria-hidden="true">ver</span>{" "}
+      <span aria-hidden="true">{t("transcriptLink.view")}</span>{" "}
       <span className="normal-case">{label}</span>
     </Link>
   );

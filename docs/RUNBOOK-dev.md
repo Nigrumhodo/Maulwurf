@@ -347,6 +347,12 @@ placeholders; no NVIDIA, LLM or Google credential is involved. Details and limit
 
 ```bash
 # From the repository root: the override defaults E2E_TLS_DIR to ../.e2e-tls.
+# The override hardcodes non-production credentials, so it requires an explicit opt-in.
+export E2E_ALLOW_EPHEMERAL_CREDENTIALS=1
+# The server key is mode 640; its group must match the e2e-asr container's extra group.
+export E2E_TLS_GID="$(id -g)"
+# Only while the main stack (§2) is up: both publish Redis on 127.0.0.1:6379.
+export REDIS_PORT=6380
 bash scripts/e2e/gen_riva_tls.sh .e2e-tls
 cd infra
 docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
@@ -354,8 +360,14 @@ docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
 docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
   exec -T api python - < ../scripts/e2e/smoke_pipeline.py
 docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v
+# Shell variables beat `--env-file`: clear them before driving the main stack again.
+unset E2E_ALLOW_EPHEMERAL_CREDENTIALS E2E_TLS_GID REDIS_PORT
 ```
 
+Without `E2E_ALLOW_EPHEMERAL_CREDENTIALS=1` Compose stops with `required variable
+E2E_ALLOW_EPHEMERAL_CREDENTIALS is missing a value`. Without `REDIS_PORT` and with the main
+stack running, `up` fails with `Bind for 127.0.0.1:6379 failed: port is already allocated`.
+The project name is `maulwurf-e2e`, so `down -v` does not touch the main stack's volumes.
 The doubles are not provider-contract evidence and D3-Texto stays open; the smoke only
 indexes its synthetic fixture.
 

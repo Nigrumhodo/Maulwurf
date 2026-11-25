@@ -1,6 +1,14 @@
+import { useTranslation } from "react-i18next";
+
 // Status marquee. Session text does not include a guest mode.
 export function StatusTicker() {
-  const items = ["maulwurf.os v0.1", "sesión activa", "audio no conservado", "sube → encuentra → decide"];
+  const { t } = useTranslation("plan");
+  const items = [
+    "maulwurf.os v0.1",
+    t("ticker.session"),
+    t("ticker.noAudio"),
+    t("ticker.flow"),
+  ];
   const line = items.join("  ·  ");
 
   return (

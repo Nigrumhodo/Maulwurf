@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/Button";
 import { DateInput } from "@/components/ui/DateInput";
 import { Input } from "@/components/ui/Input";
 import { TimezoneSelect } from "@/components/ui/TimezoneSelect";
+import i18n, { intlLocale } from "@/i18n";
 import { ApiHttpError } from "@/lib/api";
 import type { Subject } from "@/lib/subjects";
 import {
@@ -43,7 +45,7 @@ function defaultTimezone(): string {
 
 function fieldError(error: unknown): string {
   if (error instanceof ApiHttpError) return error.firstFieldMessage()?.message ?? error.message;
-  return "no se pudo crear la tarea; revisa la conexión.";
+  return i18n.t("plan:taskForm.createFailed");
 }
 
 export interface TaskCreateFormProps {
@@ -59,6 +61,7 @@ export function TaskCreateForm({
   onCreated,
   onCancel,
 }: TaskCreateFormProps) {
+  const { t } = useTranslation("plan");
   const [titulo, setTitulo] = useState("");
   const [tipo, setTipo] = useState<string>("tarea");
   const [subjectId, setSubjectId] = useState<string>(defaultSubjectId);
@@ -135,7 +138,7 @@ export function TaskCreateForm({
   }
 
   function buildPayload(): TaskCreateInput | string {
-    if (titulo.trim() === "") return "el título no puede estar vacío.";
+    if (titulo.trim() === "") return t("taskForm.titleRequired");
 
     const schedule = buildScheduleFields({
       dueMode,
@@ -181,30 +184,30 @@ export function TaskCreateForm({
   const canReviewImmediately = dueMode !== "missing" && eventMode !== "none";
 
   return (
-    <section aria-label="nueva tarea manual" className="flex flex-col gap-4">
-      <h2 className="lowercase text-xl text-mint">nueva tarea manual</h2>
+    <section aria-label={t("taskForm.createLabel")} className="flex flex-col gap-4">
+      <h2 className="lowercase text-xl text-mint">{t("taskForm.createLabel")}</h2>
       <div className="flex flex-col gap-4">
         <div className="grid gap-3 sm:grid-cols-3">
           <div className="sm:col-span-2">
             <Input
-              label="título"
-              placeholder="ej. Entregar taller de simulación"
+              label={t("taskForm.title")}
+              placeholder={t("taskForm.titlePlaceholder")}
               value={titulo}
               maxLength={200}
               onChange={(event) => setTitulo(event.target.value)}
             />
           </div>
           <label className="capitalize font-pixel flex flex-col gap-1">
-            <span className="text-mint">&gt; tipo</span>
+            <span className="text-mint">&gt; {t("taskForm.type")}</span>
             <select
-              aria-label="tipo de actividad nueva"
+              aria-label={t("taskForm.typeLabelNew")}
               value={tipo}
               onChange={(event) => setTipo(event.target.value)}
               className={selectClass}
             >
               {ACTIVITY_TYPES.map((option) => (
                 <option key={option} value={option}>
-                  {option}
+                  {t(`taskForm.activityTypes.${option}`)}
                 </option>
               ))}
             </select>
@@ -213,14 +216,14 @@ export function TaskCreateForm({
 
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="capitalize font-pixel flex flex-col gap-1">
-            <span className="text-mint">&gt; materia (opcional)</span>
+            <span className="text-mint">&gt; {t("taskForm.subjectOptional")}</span>
             <select
-              aria-label="materia de la nueva tarea"
+              aria-label={t("taskForm.subjectLabelNew")}
               value={subjectId}
               onChange={(event) => setSubjectId(event.target.value)}
               className={selectClass}
             >
-              <option value="">sin materia</option>
+              <option value="">{t("taskForm.noSubject")}</option>
               {subjects.map((subject) => (
                 <option key={subject.id} value={subject.id}>
                   {subject.name}
@@ -229,16 +232,16 @@ export function TaskCreateForm({
             </select>
           </label>
           <TimezoneSelect
-            label="zona horaria"
+            label={t("taskForm.timezone")}
             value={timezone}
             onChange={(event) => setTimezone(event.target.value)}
           />
         </div>
 
         <label className="capitalize font-pixel flex flex-col gap-1">
-          <span className="text-mint">&gt; detalle (opcional)</span>
+          <span className="text-mint">&gt; {t("taskForm.detailOptional")}</span>
           <textarea
-            aria-label="detalle de la nueva tarea"
+            aria-label={t("taskForm.detailLabelNew")}
             rows={2}
             maxLength={2000}
             value={detalle}
@@ -248,24 +251,24 @@ export function TaskCreateForm({
         </label>
 
         <fieldset className="flex flex-col gap-3 border-2 border-lavender/30 p-3">
-          <legend className="capitalize px-1 text-mint">fecha de vencimiento</legend>
+          <legend className="capitalize px-1 text-mint">{t("taskForm.dueDate")}</legend>
           <div className="grid gap-3 sm:grid-cols-3">
             <label className="flex flex-col gap-1">
-              <span className="text-lavender/60">modo</span>
+              <span className="text-lavender/60">{t("taskForm.mode")}</span>
               <select
-                aria-label="modo de vencimiento nueva tarea"
+                aria-label={t("taskForm.dueModeLabelNew")}
                 value={dueMode}
                 onChange={(event) => handleDueModeChange(event.target.value as DueMode)}
                 className={selectClass}
               >
-                <option value="all_day">todo el día</option>
-                <option value="timed">con hora</option>
-                <option value="missing">sin fecha</option>
+                <option value="all_day">{t("taskForm.allDay")}</option>
+                <option value="timed">{t("taskForm.timed")}</option>
+                <option value="missing">{t("taskForm.noDate")}</option>
               </select>
             </label>
             {dueMode !== "missing" && (
               <DateInput
-                label="fecha"
+                label={t("taskForm.date")}
                 value={dueDate}
                 onChange={(event) => handleDueDateChange(event.target.value)}
               />
@@ -273,7 +276,7 @@ export function TaskCreateForm({
             {dueMode === "timed" && (
               <Input
                 type="time"
-                label="hora"
+                label={t("taskForm.time")}
                 value={dueTime}
                 onChange={(event) => handleDueTimeChange(event.target.value)}
               />
@@ -282,28 +285,27 @@ export function TaskCreateForm({
         </fieldset>
 
         <fieldset className="flex flex-col gap-3 border-2 border-lavender/30 p-3">
-          <legend className="capitalize px-1 text-mint">bloque de agenda (calendar)</legend>
+          <legend className="capitalize px-1 text-mint">{t("taskForm.agendaBlockCalendar")}</legend>
           <p className="text-base text-lavender/60">
-            se rellena automáticamente con tu fecha de vencimiento; puedes ajustarlo o dejarlo sin
-            bloque si aún no quieres agendarla.
+            {t("taskForm.agendaAutoFill")}
           </p>
           <label className="flex flex-col gap-1">
-            <span className="text-lavender/60">modo</span>
+            <span className="text-lavender/60">{t("taskForm.mode")}</span>
             <select
-              aria-label="modo de agenda nueva tarea"
+              aria-label={t("taskForm.agendaModeLabelNew")}
               value={eventMode}
               onChange={(event) => handleEventModeChange(event.target.value as EventMode)}
               className={selectClass}
             >
-              <option value="all_day">todo el día</option>
-              <option value="timed">con hora</option>
-              <option value="none">sin bloque</option>
+              <option value="all_day">{t("taskForm.allDay")}</option>
+              <option value="timed">{t("taskForm.timed")}</option>
+              <option value="none">{t("taskForm.noBlock")}</option>
             </select>
           </label>
           {eventMode === "all_day" && (
             <div className="grid gap-3 sm:grid-cols-2">
               <DateInput
-                label="inicio de agenda"
+                label={t("taskForm.agendaStart")}
                 value={eventStartDate}
                 onChange={(event) => {
                   setEventTouched(true);
@@ -314,7 +316,7 @@ export function TaskCreateForm({
                 }}
               />
               <DateInput
-                label="fin de agenda (exclusivo)"
+                label={t("taskForm.agendaEndExclusive")}
                 value={eventEndDate}
                 onChange={(event) => {
                   setEventTouched(true);
@@ -326,7 +328,7 @@ export function TaskCreateForm({
           {eventMode === "timed" && (
             <div className="grid gap-3 sm:grid-cols-2">
               <DateInput
-                label="inicio de agenda"
+                label={t("taskForm.agendaStart")}
                 value={eventStartDate}
                 onChange={(event) => {
                   setEventTouched(true);
@@ -335,7 +337,7 @@ export function TaskCreateForm({
               />
               <Input
                 type="time"
-                label="hora de inicio de agenda"
+                label={t("taskForm.agendaStartTime")}
                 value={eventStartTime}
                 onChange={(event) => {
                   setEventTouched(true);
@@ -344,7 +346,7 @@ export function TaskCreateForm({
               />
               <Input
                 type="number"
-                label="duración de agenda (minutos)"
+                label={t("taskForm.agendaDuration")}
                 min={1}
                 max={1440}
                 value={durationMinutes}
@@ -354,10 +356,10 @@ export function TaskCreateForm({
                 }}
               />
               <p className="self-end text-sm text-lavender/80">
-                fin calculado:{" "}
+                {t("taskForm.computedEnd")}{" "}
                 {eventEnd === null
-                  ? "pendiente de fecha"
-                  : new Intl.DateTimeFormat("es", {
+                  ? t("taskForm.pendingDate")
+                  : new Intl.DateTimeFormat(intlLocale(), {
                       dateStyle: "short",
                       timeStyle: "short",
                       timeZone: timezone,
@@ -376,7 +378,7 @@ export function TaskCreateForm({
         <div className="flex flex-wrap items-center gap-2">
           {canReviewImmediately && (
             <Button type="button" disabled={busy} onClick={() => void submit(true)}>
-              {busy ? "creando…" : "crear y revisar"}
+              {busy ? t("taskForm.creating") : t("taskForm.createAndReview")}
             </Button>
           )}
           <Button
@@ -385,10 +387,10 @@ export function TaskCreateForm({
             disabled={busy}
             onClick={() => void submit(false)}
           >
-            {busy ? "creando…" : "guardar tarea"}
+            {busy ? t("taskForm.creating") : t("taskForm.saveTask")}
           </Button>
           <Button type="button" variant="ghost" disabled={busy} onClick={onCancel}>
-            cancelar
+            {t("taskForm.cancel")}
           </Button>
         </div>
       </div>

@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { apiFetch } from "./api";
 import { isRecord, readJson } from "./json";
 
@@ -72,11 +73,11 @@ export async function searchTranscripts(
     !Array.isArray(payload.results) ||
     typeof payload.took_ms !== "number"
   ) {
-    throw new Error("La respuesta de búsqueda no coincide con el contrato.");
+    throw new Error(i18n.t("study:searchLib.responseMismatch"));
   }
   const results = payload.results.map((hit) => {
     if (!isSearchHit(hit)) {
-      throw new Error("Un resultado de búsqueda no coincide con el contrato.");
+      throw new Error(i18n.t("study:searchLib.hitMismatch"));
     }
     return hit;
   });
@@ -99,7 +100,7 @@ export function searchHitHref(hit: SearchHit): string {
 /** Honest timestamp formatting: never invents `00:00` when timestamps are withheld (G2-X). */
 export function formatHitTimestamp(tStart: number | null): string {
   if (tStart === null || !Number.isFinite(tStart) || tStart < 0) {
-    return "sin marca temporal";
+    return i18n.t("study:searchLib.noTimestamp");
   }
   const totalSeconds = Math.floor(tStart);
   const hours = Math.floor(totalSeconds / 3600);

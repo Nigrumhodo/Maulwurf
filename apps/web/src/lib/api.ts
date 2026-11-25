@@ -9,6 +9,7 @@
 // El token se obtiene con `bootstrapCsrf()` (`GET /me`, `cache: "no-store"`) y se
 // conserva solo en memoria (`lib/csrf.ts`). La identidad la fija el backend
 // (cookie opaca), nunca un payload del cliente (ADR-0006).
+import i18n from "@/i18n";
 import { clearCsrfToken, getCsrfToken, setCsrfToken } from "./csrf";
 import { isRecord } from "./json";
 import type { Me, SessionProbe } from "./auth";
@@ -111,7 +112,7 @@ export class ApiHttpError extends Error {
   readonly details: Record<string, unknown>;
 
   constructor(status: number, body: ParsedApiError | null) {
-    super(body?.message ?? `Solicitud fallida (${status}).`);
+    super(body?.message ?? i18n.t("common:errors.requestFailed", { status }));
     this.name = "ApiHttpError";
     this.status = status;
     this.code = body?.code ?? null;

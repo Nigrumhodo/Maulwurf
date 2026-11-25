@@ -1,0 +1,154 @@
+{
+  "app": {
+    "loading": "chargement",
+    "sessionUnavailable": "impossible de vérifier la session. vérifie ta connexion.",
+    "retry": "réessayer"
+  },
+  "nav": {
+    "items": {
+      "home": "accueil",
+      "panel": "panneau",
+      "settings": "réglages",
+      "upload": "envoyer un cours",
+      "library": "bibliothèque",
+      "chat": "chat",
+      "subjects": "matières",
+      "tasks": "tâches",
+      "agenda": "agenda"
+    },
+    "groups": {
+      "study": "étude",
+      "planning": "planification"
+    },
+    "breadcrumb": "chemin",
+    "classDetail": "cours"
+  },
+  "sidebar": {
+    "menu": "menu",
+    "closeMenu": "fermer le menu",
+    "expand": "déplier le menu",
+    "collapse": "replier le menu",
+    "search": "rechercher",
+    "searchShortcut": "rechercher avec ctrl+k",
+    "primaryNav": "principal",
+    "logout": "quitter"
+  },
+  "clock": {
+    "days": [
+      "dim",
+      "lun",
+      "mar",
+      "mer",
+      "jeu",
+      "ven",
+      "sam"
+    ],
+    "months": [
+      "janv",
+      "févr",
+      "mars",
+      "avr",
+      "mai",
+      "juin",
+      "juil",
+      "août",
+      "sept",
+      "oct",
+      "nov",
+      "déc"
+    ]
+  },
+  "theme": {
+    "dark": "sombre",
+    "light": "clair",
+    "switchTo": "passer en mode {{mode}}"
+  },
+  "uiLanguage": {
+    "label": "langue de l'interface"
+  },
+  "google": {
+    "signIn": "se connecter avec google"
+  },
+  "dialog": {
+    "confirm": "confirmer",
+    "cancel": "annuler",
+    "close": "fermer"
+  },
+  "card": {
+    "closeWindow": "fermer la fenêtre"
+  },
+  "toast": {
+    "close": "fermer l'avis",
+    "tone": {
+      "info": "info",
+      "success": "ok",
+      "warning": "alerte",
+      "error": "erreur"
+    }
+  },
+  "fields": {
+    "timezonePlaceholder": "choisis un fuseau horaire",
+    "languagePlaceholder": "choisis une langue"
+  },
+  "motion": {
+    "companion": "animation du compagnon",
+    "sprite": "animation de sprite"
+  },
+  "palette": {
+    "dialog": "palette de commandes et recherche globale",
+    "title": "recherche rapide (ctrl+k)",
+    "close": "fermer la palette",
+    "closeKey": "échap",
+    "placeholder": "tape pour chercher dans les transcriptions ou aller à une section…",
+    "input": "rechercher dans maulwurf",
+    "searching": "recherche dans tes cours…",
+    "error": "la recherche n'a pas pu aboutir.",
+    "noHits": "aucune correspondance dans les transcriptions pour «{{query}}».",
+    "noResults": "aucun résultat.",
+    "results": "résultats",
+    "routes": {
+      "upload": {
+        "label": "envoyer un cours",
+        "hint": "ingestion éphémère"
+      },
+      "home": {
+        "label": "accueil",
+        "hint": "tableau de bord · résumé et état"
+      },
+      "gestion": {
+        "label": "gestion",
+        "hint": "hub des matières, tâches et bibliothèque"
+      },
+      "library": {
+        "label": "bibliothèque",
+        "hint": "transcriptions des cours"
+      },
+      "chat": {
+        "label": "chat",
+        "hint": "rag cité · questions avec preuves"
+      },
+      "subjects": {
+        "label": "matières",
+        "hint": "crud et statistiques"
+      },
+      "tasks": {
+        "label": "tâches",
+        "hint": "tâches à confirmer · boîte m4"
+      },
+      "agenda": {
+        "label": "agenda",
+        "hint": "calendrier intégré"
+      },
+      "settings": {
+        "label": "réglages",
+        "hint": "fuseau horaire, gmail et compte"
+      }
+    }
+  },
+  "errors": {
+    "requestFailed": "Échec de la requête ({{status}}).",
+    "notJson": "La réponse n'est pas du JSON.",
+    "jsonUnreadable": "La réponse JSON est illisible.",
+    "listLoad": "impossible de charger la liste."
+  }
+}

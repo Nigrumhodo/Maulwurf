@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent } from "react";
+import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/Button";
 import { RetroVisual } from "@/components/ui/RetroVisual";
@@ -15,6 +16,7 @@ import {
   loaderCassetteLavanda,
   loaderCassetteLavandaStatic,
 } from "@/components/Visual";
+import i18n from "@/i18n";
 import { CitationList } from "@/components/chat/Citation";
 import { MarkdownBody } from "@/components/chat/MarkdownBody";
 import { ProposalCard } from "@/components/chat/ProposalCard";
@@ -149,11 +151,11 @@ function scopeFor(
   if (generalOnly || mode === "all") return { scope: { mode: "all" } };
   if (mode === "subject") {
     return subjectId === ""
-      ? { error: "elige una materia para la conversación" }
+      ? { error: i18n.t("study:chatWorkspace.pickSubject") }
       : { scope: { mode: "subject", subjectId } };
   }
   return audioId === ""
-    ? { error: "elige una clase para la conversación" }
+    ? { error: i18n.t("study:chatWorkspace.pickClass") }
     : { scope: { mode: "class", audioId } };
 }
 
@@ -163,6 +165,7 @@ export function ChatWorkspace({
   initialScope,
   onClose,
 }: ChatWorkspaceProps) {
+  const { t } = useTranslation("study");
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [nextConversations, setNextConversations] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -288,13 +291,13 @@ export function ChatWorkspace({
       return conversation.title;
     }
     if (conversation.mode === "subject") {
-      return subjectNames.get(conversation.subject_id ?? "") ?? "materia";
+      return subjectNames.get(conversation.subject_id ?? "") ?? t("chatWorkspace.subjectFallback");
     }
     if (conversation.mode === "class") {
       const audio = audios.find((item) => item.id === conversation.audio_id);
-      return audio !== undefined ? audioLabel(audio) : "clase";
+      return audio !== undefined ? audioLabel(audio) : t("chatWorkspace.classFallback");
     }
-    return "todas las clases";
+    return t("chatWorkspace.allClasses");
   }
 
   const selectedConversation =
@@ -303,7 +306,7 @@ export function ChatWorkspace({
   async function openNewConversation(): Promise<string | null> {
     const built = scopeFor(generalOnly, scopeMode, scopeSubjectId, scopeAudioId);
     if (built.error !== undefined || built.scope === undefined) {
-      setNotice(built.error ?? "alcance de conversación inválido");
+      setNotice(built.error ?? t("chatWorkspace.invalidScope"));
       return null;
     }
     setCreating(true);
@@ -341,7 +344,7 @@ export function ChatWorkspace({
     const content = draft.trim();
     if (content === "" || streaming || creating) return;
     if (content.length > MAX_CHAT_CHARS) {
-      setNotice("la pregunta supera el máximo de " + MAX_CHAT_CHARS + " caracteres.");
+      setNotice(t("chatWorkspace.tooLong", { max: MAX_CHAT_CHARS }));
       return;
     }
 
@@ -491,13 +494,13 @@ export function ChatWorkspace({
   }
 
   const sidebar = !generalOnly ? (
-    <section aria-label="conversaciones" className="min-w-0">
+    <section aria-label={t("chatWorkspace.conversations")} className="min-w-0">
       <div className="lowercase flex flex-col gap-3">
-        <h2 className="capitalize text-lg text-mint">conversaciones</h2>
+        <h2 className="capitalize text-lg text-mint">{t("chatWorkspace.conversations")}</h2>
         <div className="flex flex-col gap-2 border-b-2 border-lavender/30 pb-3">
-          <p className="text-mint">&gt; nueva conversación</p>
+          <p className="text-mint">{t("chatWorkspace.newConversationHeading")}</p>
           <select
-            aria-label="alcance de la conversación"
+            aria-label={t("chatWorkspace.scopeAria")}
             value={scopeMode}
             onChange={(event) => {
               setScopeMode(event.target.value as ChatMode);
@@ -505,18 +508,18 @@ export function ChatWorkspace({
             }}
             className="min-h-10 bg-surface text-lavender border-2 border-lavender px-2 py-1"
           >
-            <option value="all">todas las clases</option>
-            <option value="subject">una materia</option>
-            <option value="class">una clase</option>
+            <option value="all">{t("chatLib.modeAll")}</option>
+            <option value="subject">{t("chatLib.modeSubject")}</option>
+            <option value="class">{t("chatLib.modeClass")}</option>
           </select>
           {scopeMode === "subject" && (
             <select
-              aria-label="materia de la conversación"
+              aria-label={t("chatWorkspace.subjectAria")}
               value={scopeSubjectId}
               onChange={(event) => setScopeSubjectId(event.target.value)}
               className="min-h-10 bg-surface text-lavender border-2 border-lavender px-2 py-1"
             >
-              <option value="">selecciona materia</option>
+              <option value="">{t("chatWorkspace.selectSubject")}</option>
               {subjects.map((subject) => (
                 <option key={subject.id} value={subject.id}>
                   {subject.name}
@@ -526,12 +529,12 @@ export function ChatWorkspace({
           )}
           {scopeMode === "class" && (
             <select
-              aria-label="clase de la conversación"
+              aria-label={t("chatWorkspace.classAria")}
               value={scopeAudioId}
               onChange={(event) => setScopeAudioId(event.target.value)}
               className="min-h-10 bg-surface text-lavender border-2 border-lavender px-2 py-1"
             >
-              <option value="">selecciona clase</option>
+              <option value="">{t("chatWorkspace.selectClass")}</option>
               {audios.map((audio) => (
                 <option key={audio.id} value={audio.id}>
                   {audio.subject.name} · {audioLabel(audio)}
@@ -546,14 +549,14 @@ export function ChatWorkspace({
             disabled={creating}
             onClick={() => void openNewConversation()}
           >
-            crear y abrir
+            {t("chatWorkspace.createAndOpen")}
           </Button>
         </div>
 
         {loadingConversations ? (
-          <p className="text-lavender/80">cargando conversaciones…</p>
+          <p className="text-lavender/80">{t("chatWorkspace.loadingConversations")}</p>
         ) : conversations.length === 0 ? (
-          <p className="text-lavender/80">aún no hay conversaciones.</p>
+          <p className="text-lavender/80">{t("chatWorkspace.noConversations")}</p>
         ) : (
           <ul className="flex flex-col gap-1">
             {conversations.map((conversation) => (
@@ -569,12 +572,14 @@ export function ChatWorkspace({
                 >
                   <span className="block truncate">{conversationLabel(conversation)}</span>
                   <span className="block text-sm text-lavender/60">
-                    {conversation.mode === "all" ? "general" : modeLabel(conversation.mode)}
+                    {conversation.mode === "all"
+                      ? t("chatWorkspace.general")
+                      : modeLabel(conversation.mode)}
                   </span>
                 </button>
                 <button
                   type="button"
-                  aria-label={`borrar conversación ${conversationLabel(conversation)}`}
+                  aria-label={t("chatWorkspace.deleteAria", { label: conversationLabel(conversation) })}
                   onClick={() => setDeleteTarget(conversation)}
                   className="min-h-8 border-2 border-lavender/30 px-2 text-mint hover:border-mint"
                 >
@@ -586,7 +591,7 @@ export function ChatWorkspace({
         )}
         {nextConversations !== null && (
           <Button type="button" size="sm" variant="secondary" onClick={() => void loadMoreConversations()}>
-            cargar más
+            {t("chatWorkspace.loadMore")}
           </Button>
         )}
       </div>
@@ -600,13 +605,13 @@ export function ChatWorkspace({
           <p className="truncate capitalize text-mint">
             &gt;{" "}
             {generalOnly
-              ? "chat general · todas las clases"
+              ? t("chatWorkspace.generalChat")
               : selectedConversation !== null
                 ? conversationLabel(selectedConversation)
-                : "nueva conversación"}
+                : t("chatWorkspace.newConversation")}
           </p>
           <p className="text-lavender/60">
-            {generalOnly ? "preguntas generales sobre tus apuntes" : "conversación con evidencia"}
+            {generalOnly ? t("chatWorkspace.generalSub") : t("chatWorkspace.evidenceSub")}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -618,12 +623,12 @@ export function ChatWorkspace({
               disabled={creating}
               onClick={() => void openNewConversation()}
             >
-              nueva
+              {t("chatWorkspace.new")}
             </Button>
           )}
           {onClose !== undefined && (
             <Button type="button" size="sm" variant="secondary" onClick={onClose}>
-              cerrar
+              {t("chatWorkspace.close")}
             </Button>
           )}
         </div>
@@ -637,7 +642,7 @@ export function ChatWorkspace({
 
       <div ref={listRef} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
         {loadingHistory ? (
-          <p className="text-lavender/80">cargando mensajes…</p>
+          <p className="text-lavender/80">{t("chatWorkspace.loadingMessages")}</p>
         ) : messages.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 py-6 text-center">
             <div className="border-2 border-pure-black bg-dark p-2 shadow-block-sm">
@@ -657,10 +662,9 @@ export function ChatWorkspace({
               </span>
             </div>
             <p className="text-lavender/80">
-              &gt;{" "}
               {conversationId === null
-                ? "escribe una pregunta para abrir la conversación."
-                : "sin mensajes todavía."}
+                ? t("chatWorkspace.emptyNew")
+                : t("chatWorkspace.emptyNoMessages")}
             </p>
           </div>
         ) : (
@@ -673,7 +677,7 @@ export function ChatWorkspace({
                 disabled={loadingOlder}
                 onClick={() => void loadOlder()}
               >
-                {loadingOlder ? "cargando…" : "cargar mensajes anteriores"}
+                {loadingOlder ? t("chatWorkspace.loading") : t("chatWorkspace.loadOlder")}
               </Button>
             )}
             {messages.map((message) => (
@@ -687,7 +691,7 @@ export function ChatWorkspace({
                   {message.role === "assistant" && (
                     <RetroVisual src={iconChatCrt} className="h-5 w-5 object-contain" />
                   )}
-                  <span>{message.role === "user" ? "tú" : "asistente"}</span>
+                  <span>{message.role === "user" ? t("chatWorkspace.you") : t("chatWorkspace.assistant")}</span>
                   {message.role === "assistant" && <StatusBadge status={message.status} />}
                 </div>
                 <div
@@ -722,9 +726,9 @@ export function ChatWorkspace({
                       <span>…</span>
                     </span>
                   ) : message.status === "failed" ? (
-                    "la respuesta falló; vuelve a preguntar."
+                    t("chatWorkspace.answerFailed")
                   ) : message.status === "cancelled" ? (
-                    "respuesta cancelada."
+                    t("chatWorkspace.answerCancelled")
                   ) : (
                     "-"
                   )}
@@ -753,14 +757,14 @@ export function ChatWorkspace({
 
       <form ref={formRef} onSubmit={(event) => void handleSend(event)} className="flex flex-col gap-2">
         <textarea
-          aria-label="pregunta"
+          aria-label={t("chatWorkspace.question")}
           value={draft}
           maxLength={MAX_CHAT_CHARS}
           rows={compact ? 2 : 3}
           disabled={streaming || loadingHistory || loadingConversations}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={handleComposerKey}
-          placeholder="pregunta sobre tus clases…"
+          placeholder={t("chatWorkspace.placeholder")}
           className="min-h-16 w-full resize-none border-2 border-lavender bg-surface px-3 py-2 font-pixel text-lavender caret-mint placeholder:text-lavender/40 focus:border-mint focus:outline-none disabled:opacity-50"
         />
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -768,7 +772,7 @@ export function ChatWorkspace({
           <div className="flex items-center gap-2">
             {streaming && (
               <Button type="button" size="sm" variant="danger" onClick={() => void handleCancel()}>
-                cancelar
+                {t("chatWorkspace.cancel")}
               </Button>
             )}
             <Button
@@ -776,7 +780,7 @@ export function ChatWorkspace({
               size="sm"
               disabled={streaming || creating || draft.trim() === ""}
             >
-              enviar
+              {t("chatWorkspace.send")}
             </Button>
           </div>
         </div>
@@ -798,21 +802,22 @@ export function ChatWorkspace({
           aria-expanded={showList}
           onClick={() => setShowList((open) => !open)}
         >
-          {showList ? "◂ volver a la conversación" : "▸ ver conversaciones"}
+          {showList ? t("chatWorkspace.backToConversation") : t("chatWorkspace.showConversations")}
         </Button>
       </div>
       <div className={`p-4 ${showList ? "block" : "hidden"} lg:block`}>{sidebar}</div>
       <section
-        aria-label="conversación"
+        aria-label={t("chatWorkspace.conversation")}
         className={`min-w-0 p-4 lg:border-l-2 lg:border-lavender/30 ${showList ? "hidden" : "block"} lg:block`}
       >
         {chatBody}
       </section>
       <ConfirmDialog
         open={deleteTarget !== null}
-        title="borrar conversación"
-        description="se borrarán sus mensajes y fuentes. esta acción no se puede deshacer."
-        confirmLabel="borrar"
+        title={t("chatWorkspace.deleteTitle")}
+        description={t("chatWorkspace.deleteDescription")}
+        confirmLabel={t("chatWorkspace.deleteConfirm")}
+        cancelLabel={t("shared.cancel")}
         destructive
         onConfirm={() => void confirmDelete()}
         onCancel={() => setDeleteTarget(null)}

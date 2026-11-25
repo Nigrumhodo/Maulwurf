@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/Button";
 
 // D1.6 — Diálogo de confirmación/movimiento (contrato A1.6): borrar una materia
@@ -20,13 +21,14 @@ export function ConfirmDialog({
   open,
   title,
   description,
-  confirmLabel = "confirmar",
-  cancelLabel = "cancelar",
+  confirmLabel,
+  cancelLabel,
   destructive = false,
   confirmDisabled = false,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  const { t } = useTranslation("common");
   if (!open) return null;
 
   return (
@@ -42,7 +44,7 @@ export function ConfirmDialog({
           <button
             type="button"
             onClick={onCancel}
-            aria-label="cerrar"
+            aria-label={t("dialog.close")}
             className="inline-flex min-h-8 min-w-8 items-center justify-center border-2 border-on-accent/40 px-1 leading-none hover:bg-on-accent hover:text-mint"
           >
             x
@@ -51,7 +53,7 @@ export function ConfirmDialog({
         <div className="p-4 text-lavender">{description}</div>
         <footer className="flex items-center justify-end gap-2 border-t-2 border-pure-black px-3 py-2">
           <Button type="button" variant="secondary" onClick={onCancel}>
-            {cancelLabel}
+            {cancelLabel ?? t("dialog.cancel")}
           </Button>
           <Button
             type="button"
@@ -59,7 +61,7 @@ export function ConfirmDialog({
             disabled={confirmDisabled}
             onClick={onConfirm}
           >
-            {confirmLabel}
+            {confirmLabel ?? t("dialog.confirm")}
           </Button>
         </footer>
       </div>

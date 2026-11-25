@@ -1,3 +1,4 @@
+import i18n, { intlLocale } from "@/i18n";
 import { apiFetch } from "./api";
 import { isRecord } from "./json";
 import type { LibraryAudioDetail } from "./library";
@@ -118,11 +119,9 @@ export interface TaskQualityState {
   duration_seconds: number | null;
 }
 
-const QUALITY_LABELS: Record<TaskQualitySignal["code"], string> = {
-  low_confidence: "baja confianza",
-  empty_segments: "segmentos vacíos",
-  repetition: "repeticiones",
-};
+function qualityLabel(code: TaskQualitySignal["code"]): string {
+  return i18n.t(`plan:tasksLib.quality.${code}`);
+}
 
 export async function fetchTask(taskId: string): Promise<Task> {
   const res = await apiFetch(`/tasks/${encodeURIComponent(taskId)}`);
@@ -190,14 +189,14 @@ export function qualitySignals(detail: LibraryAudioDetail | null): TaskQualitySi
       entry.occurrences > 1
         ? {
             code,
-            label: QUALITY_LABELS[code],
+            label: qualityLabel(code),
             count: entry.count,
             total: entry.total,
             occurrences: entry.occurrences,
           }
         : {
             code,
-            label: QUALITY_LABELS[code],
+            label: qualityLabel(code),
             count: entry.count,
             total: entry.total,
           },
@@ -207,27 +206,30 @@ export function qualitySignals(detail: LibraryAudioDetail | null): TaskQualitySi
 }
 
 export function qualitySummary(signal: TaskQualitySignal): string {
-  if ((signal.occurrences ?? 1) > 1) {
+  const { label, count, occurrences } = signal;
+  if ((occurrences ?? 1) > 1) {
     if (signal.code === "repetition") {
-      return signal.count === null
-        ? `${signal.label} (${signal.occurrences} tramos)`
-        : `${signal.label} en ${signal.occurrences} tramos (${signal.count} palabras)`;
+      return count === null
+        ? i18n.t("plan:tasksLib.quality.repeatedNoCount", { label, occurrences })
+        : i18n.t("plan:tasksLib.quality.repeatedWords", { label, occurrences, count });
     }
-    return signal.count === null
-      ? `${signal.label} (${signal.occurrences} avisos)`
-      : `${signal.label} en ${signal.occurrences} tramos (${signal.count})`;
+    return count === null
+      ? i18n.t("plan:tasksLib.quality.warningsNoCount", { label, occurrences })
+      : i18n.t("plan:tasksLib.quality.repeatedCount", { label, occurrences, count });
   }
   const counts =
-    signal.count === null
+    count === null
       ? ""
       : signal.total === null
-        ? ` (${signal.count})`
-        : ` (${signal.count}/${signal.total})`;
-  return `${signal.label}${counts}`;
+        ? ` (${count})`
+        : ` (${count}/${signal.total})`;
+  return `${label}${counts}`;
 }
 
 export function confidenceLabel(score: number | null): string {
-  return score === null ? "sin confianza" : `confianza ${score.toFixed(2)}`;
+  return score === null
+    ? i18n.t("plan:tasksLib.noConfidence")
+    : i18n.t("plan:tasksLib.confidence", { score: score.toFixed(2) });
 }
 
 export function formatTaskDue(task: Task): string | null {
@@ -241,7 +243,7 @@ export function formatTaskDue(task: Task): string | null {
   const instant = new Date(task.due_at);
   if (Number.isNaN(instant.getTime())) return null;
   try {
-    return new Intl.DateTimeFormat("es", {
+    return new Intl.DateTimeFormat(intlLocale(), {
       dateStyle: "medium",
       timeStyle: "short",
       timeZone: task.timezone,
@@ -266,23 +268,12 @@ export function taskEvidenceHref(task: Task, evidence: TaskEvidence): string | n
 }
 
 export function taskStatusLabel(status: TaskStatus): string {
-  switch (status) {
-    case "needs_review":
-      return "por confirmar";
-    case "pending":
-      return "pendientes";
-    case "confirmed":
-      return "confirmadas";
-    case "dismissed":
-      return "descartadas";
-    case "completed":
-      return "completadas";
-  }
+  return i18n.t(`plan:tasksLib.status.${status}`);
 }
 
 export function taskStatusFilters(): Array<{ value: TaskStatusFilter; label: string }> {
   return [
-    { value: "all", label: "todas" },
+    { value: "all", label: i18n.t("plan:tasksLib.status.all") },
     ...TASK_STATUSES.map((status) => ({ value: status, label: taskStatusLabel(status) })),
   ];
 }
@@ -528,7 +519,7 @@ function formatInstant(value: string, timeZone: string): string | null {
   const instant = new Date(value);
   if (Number.isNaN(instant.getTime())) return null;
   try {
-    return new Intl.DateTimeFormat("es", {
+    return new Intl.DateTimeFormat(intlLocale(), {
       dateStyle: "medium",
       timeStyle: "short",
       timeZone,
@@ -549,22 +540,22 @@ export function formatEventBlock(task: Task): string | null {
   if (block.start_date !== null && block.end_date_exclusive !== null) {
     const start = formatDateOnly(block.start_date);
     const end = formatDateOnly(block.end_date_exclusive);
-    if (start !== null && end !== null) return `${start} – ${end} (fin exclusivo)`;
+    if (start !== null && end !== null) return `${start} – ${end} ${i18n.t("plan:tasksLib.exclusiveEnd")}`;
   }
   return null;
 }
 
 export function eventModeLabel(task: Task): string {
   if (task.event_block.start_at !== null || task.event_block.end_at !== null) {
-    return "con hora";
+    return i18n.t("plan:tasksLib.eventMode.timed");
   }
   if (
     task.event_block.start_date !== null ||
     task.event_block.end_date_exclusive !== null
   ) {
-    return "todo el día";
+    return i18n.t("plan:tasksLib.eventMode.allDay");
   }
-  return "sin bloque de agenda";
+  return i18n.t("plan:tasksLib.eventMode.none");
 }
 
 function wallParts(instant: Date, timeZone: string): Record<string, string> | null {
@@ -707,19 +698,19 @@ export interface ScheduleFields {
   event_block: TaskEventBlockPatch | null;
 }
 
-/** Validate the due/agenda form state. Returns the wire fields or a Spanish error message. */
+/** Validate the due/agenda form state. Returns the wire fields or a translated error message. */
 export function buildScheduleFields(values: ScheduleFormValues): ScheduleFields | string {
   const { dueMode, dueDate, dueTime, timezone, eventMode } = values;
   let dueFields: Pick<ScheduleFields, "due_date" | "due_at" | "all_day">;
   if (dueMode === "all_day") {
     if (dueDate === "") {
-      return "elige la fecha de vencimiento (o cambia el modo a «sin fecha»).";
+      return i18n.t("plan:tasksLib.scheduleErrors.dueDateOrMissing");
     }
     dueFields = { due_date: dueDate, due_at: null, all_day: true };
   } else if (dueMode === "timed") {
-    if (dueDate === "") return "elige la fecha de vencimiento.";
+    if (dueDate === "") return i18n.t("plan:tasksLib.scheduleErrors.dueDate");
     const dueAt = wallTimeToInstant(dueDate, dueTime, timezone);
-    if (dueAt === null) return "la hora de vencimiento no existe en esta zona horaria.";
+    if (dueAt === null) return i18n.t("plan:tasksLib.scheduleErrors.dueTimeInvalid");
     dueFields = { due_date: null, due_at: dueAt, all_day: false };
   } else {
     dueFields = { due_date: null, due_at: null, all_day: false };
@@ -728,10 +719,10 @@ export function buildScheduleFields(values: ScheduleFormValues): ScheduleFields 
   let eventBlock: TaskEventBlockPatch | null = null;
   if (eventMode === "all_day") {
     if (values.eventStartDate === "" || values.eventEndDate === "") {
-      return "el bloque de agenda necesita fecha de inicio y fin.";
+      return i18n.t("plan:tasksLib.scheduleErrors.blockNeedsDates");
     }
     if (values.eventEndDate <= values.eventStartDate) {
-      return "el fin de agenda debe ser posterior al inicio.";
+      return i18n.t("plan:tasksLib.scheduleErrors.blockEndAfterStart");
     }
     eventBlock = {
       start_at: null,
@@ -740,11 +731,11 @@ export function buildScheduleFields(values: ScheduleFormValues): ScheduleFields 
       end_date_exclusive: values.eventEndDate,
     };
   } else if (eventMode === "timed") {
-    if (values.eventStartDate === "") return "elige la fecha de inicio de agenda.";
+    if (values.eventStartDate === "") return i18n.t("plan:tasksLib.scheduleErrors.blockStartDate");
     const startAt = wallTimeToInstant(values.eventStartDate, values.eventStartTime, timezone);
-    if (startAt === null) return "la hora de inicio de agenda no existe en esta zona.";
+    if (startAt === null) return i18n.t("plan:tasksLib.scheduleErrors.blockStartTimeInvalid");
     const endAt = addMinutes(startAt, values.durationMinutes);
-    if (endAt === null) return "la duración de agenda no es válida.";
+    if (endAt === null) return i18n.t("plan:tasksLib.scheduleErrors.durationInvalid");
     eventBlock = { start_at: startAt, end_at: endAt, start_date: null, end_date_exclusive: null };
   }
 

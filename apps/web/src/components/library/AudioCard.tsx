@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { IngestProgress } from "@/components/IngestProgress";
 import { Button } from "@/components/ui/Button";
@@ -34,6 +35,7 @@ export function AudioCard({
   onReupload,
   onDelete,
 }: AudioCardProps) {
+  const { t } = useTranslation("study");
   const cleanupPending = isCleanupPending(audio);
   const retryStages = failedStages(audio);
   const partial = audio.aggregate_status === "partial";
@@ -45,14 +47,34 @@ export function AudioCard({
     partial || audio.aggregate_status === "ready" || audio.attempt?.status === "succeeded";
   const retryLabel =
     retryStages.length === 1
-      ? `reintentar ${stageLabel(retryStages[0])}`
-      : "reintentar etapas fallidas";
+      ? t("audioCard.retryOne", { stage: stageLabel(retryStages[0]) })
+      : t("audioCard.retryMany");
 
   const pendingStages = [
-    { label: "audio", status: audio.attempt?.status ?? null, missing: "sin intento" },
-    { label: "limpieza", status: audio.attempt?.cleanup_status ?? null, missing: "sin intento" },
-    { label: "index", status: audio.stages.index ?? null, missing: "sin estado" },
-    { label: "análisis", status: audio.stages.analyze ?? null, missing: "sin estado" },
+    {
+      key: "audio",
+      label: t("audioCard.stageAudio"),
+      status: audio.attempt?.status ?? null,
+      missing: t("audioCard.noAttempt"),
+    },
+    {
+      key: "cleanup",
+      label: t("audioCard.stageCleanup"),
+      status: audio.attempt?.cleanup_status ?? null,
+      missing: t("audioCard.noAttempt"),
+    },
+    {
+      key: "index",
+      label: t("audioCard.stageIndex"),
+      status: audio.stages.index ?? null,
+      missing: t("audioCard.noState"),
+    },
+    {
+      key: "analyze",
+      label: t("audioCard.stageAnalysis"),
+      status: audio.stages.analyze ?? null,
+      missing: t("audioCard.noState"),
+    },
   ].filter((stage) => stage.status === null || !SETTLED_STATUSES.has(stage.status));
   const title = audioLabel(audio);
 
@@ -72,11 +94,11 @@ export function AudioCard({
       </div>
 
       {pendingStages.length === 0 ? (
-        <p className="text-sm text-lavender/60">todo ok</p>
+        <p className="text-sm text-lavender/60">{t("audioCard.allOk")}</p>
       ) : (
         <div className="flex flex-wrap items-center gap-2 text-lavender/60">
           {pendingStages.map((stage) => (
-            <span key={stage.label} className="flex items-center gap-1">
+            <span key={stage.key} className="flex items-center gap-1">
               <span>{stage.label}:</span>
               {stage.status !== null ? (
                 <StatusBadge status={stage.status} />
@@ -90,30 +112,33 @@ export function AudioCard({
 
       {cleanupPending && (
         <p role="status" className="border-2 border-mint px-2 py-1 text-mint">
-          &gt; limpieza pendiente · no es un éxito; la indexación sigue bloqueada hasta verificar
-          el borrado del audio.
+          {t("audioCard.cleanupPending")}
         </p>
       )}
 
       {partial && (
         <p role="status" className="text-mint">
-          &gt; parcial ·{" "}
-          {retryStages.length > 0
-            ? `falló ${retryStages.map(stageLabel).join(" y ")}`
-            : "no se identificó una etapa reintentable"}
+          {t("audioCard.partial", {
+            detail:
+              retryStages.length > 0
+                ? t("audioCard.failedStages", {
+                    stages: retryStages.map(stageLabel).join(t("audioCard.and")),
+                  })
+                : t("audioCard.noRetryable"),
+          })}
         </p>
       )}
 
       {failed && (
         <p className="text-lavender/60">
-          &gt; sin transcripción utilizable · vuelve a subir el audio original.
+          {t("audioCard.failed")}
         </p>
       )}
 
       <div className="flex flex-wrap items-center gap-2">
         {(processing || cleanupPending) && (
           <Button type="button" size="sm" variant="secondary" onClick={onToggleProgress}>
-            {expanded ? "ocultar progreso" : "ver progreso"}
+            {expanded ? t("audioCard.hideProgress") : t("audioCard.showProgress")}
           </Button>
         )}
 
@@ -122,7 +147,7 @@ export function AudioCard({
             to={`/gestion/biblioteca/${encodeURIComponent(audio.id)}`}
             className={buttonClasses("secondary", "sm")}
           >
-            abrir transcripción
+            {t("audioCard.openTranscript")}
           </Link>
         )}
 
@@ -131,7 +156,7 @@ export function AudioCard({
             to={`/gestion/chat?mode=class&audio_id=${encodeURIComponent(audio.id)}`}
             className={buttonClasses("ghost", "sm")}
           >
-            chat
+            {t("audioCard.chat")}
           </Link>
         )}
 
@@ -148,12 +173,12 @@ export function AudioCard({
 
         {failed && (
           <Button type="button" size="sm" disabled={busy} onClick={onReupload}>
-            volver a subir
+            {t("audioCard.reupload")}
           </Button>
         )}
 
         <Button type="button" size="sm" variant="danger" disabled={busy} onClick={onDelete}>
-          eliminar
+          {t("audioCard.delete")}
         </Button>
       </div>
 

@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/Button";
+import { intlLocale } from "@/i18n";
 import { qualitySignals, qualitySummary } from "@/lib/tasks";
 import { summaryState } from "@/lib/reader";
 import type { LibraryAudioDetail } from "@/lib/library";
@@ -16,6 +18,7 @@ export interface ClassSummaryProps {
 }
 
 export function ClassSummary({ detail, transcript }: ClassSummaryProps) {
+  const { t } = useTranslation("study");
   const [showAllTopics, setShowAllTopics] = useState(false);
   const summary = summaryState(detail, transcript);
   const warnings = qualitySignals(detail);
@@ -25,7 +28,7 @@ export function ClassSummary({ detail, transcript }: ClassSummaryProps) {
     for (const raw of transcript.topics) {
       const cleaned = raw.trim();
       if (cleaned === "") continue;
-      const key = cleaned.toLocaleLowerCase("es");
+      const key = cleaned.toLocaleLowerCase(intlLocale());
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(cleaned);
@@ -41,24 +44,24 @@ export function ClassSummary({ detail, transcript }: ClassSummaryProps) {
 
   return (
     <>
-      <section aria-label="resumen" className={sectionClass}>
-        <h2 className="capitalize text-xl text-mint">resumen</h2>
+      <section aria-label={t("classSummary.summary")} className={sectionClass}>
+        <h2 className="capitalize text-xl text-mint">{t("classSummary.summary")}</h2>
         {summary.text !== null ? (
           <p className="normal-case text-base leading-relaxed text-lavender">{summary.text}</p>
         ) : (
           <p className="text-base text-lavender/60">
-            &gt; {summary.note ?? "resumen no disponible"}
+            &gt; {summary.note ?? t("classSummary.unavailable")}
           </p>
         )}
         {transcript.analysis_version !== null && (
-          <p className="text-sm text-lavender/60">análisis v{transcript.analysis_version}</p>
+          <p className="text-sm text-lavender/60">{t("classSummary.analysisVersion", { version: transcript.analysis_version })}</p>
         )}
       </section>
 
       {uniqueTopics.length > 0 && (
-        <section aria-label="temas" className={`${sectionClass} items-start`}>
-          <h2 className="capitalize text-xl text-mint">temas</h2>
-          <ul aria-label="temas de la clase" className="flex flex-wrap gap-2">
+        <section aria-label={t("classSummary.topics")} className={`${sectionClass} items-start`}>
+          <h2 className="capitalize text-xl text-mint">{t("classSummary.topics")}</h2>
+          <ul aria-label={t("classSummary.classTopics")} className="flex flex-wrap gap-2">
             {visibleTopics.map((topic) => (
               <li
                 key={topic}
@@ -75,20 +78,24 @@ export function ClassSummary({ detail, transcript }: ClassSummaryProps) {
               variant="ghost"
               onClick={() => setShowAllTopics((prev) => !prev)}
             >
-              {showAllTopics ? "mostrar menos temas" : `ver ${hiddenTopicsCount} temas más`}
+              {showAllTopics
+                ? t("classSummary.showLess")
+                : t("classSummary.showMore", { count: hiddenTopicsCount })}
             </Button>
           )}
         </section>
       )}
 
-      <section aria-label="calidad" className={sectionClass}>
-        <h2 className="capitalize text-xl text-mint">calidad</h2>
+      <section aria-label={t("classSummary.quality")} className={sectionClass}>
+        <h2 className="capitalize text-xl text-mint">{t("classSummary.quality")}</h2>
         {warnings.length > 0 ? (
           <p role="status" className="normal-case text-mint">
-            calidad ASR baja: {warnings.map((signal) => qualitySummary(signal)).join(" · ")}
+            {t("classSummary.lowQuality", {
+              signals: warnings.map((signal) => qualitySummary(signal)).join(" · "),
+            })}
           </p>
         ) : (
-          <p className="text-base text-lavender/60">sin señales de calidad ASR registradas.</p>
+          <p className="text-base text-lavender/60">{t("classSummary.noSignals")}</p>
         )}
       </section>
     </>

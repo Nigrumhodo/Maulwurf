@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { gestionBreadcrumb } from "./gestionNav";
 
@@ -5,13 +6,15 @@ import { gestionBreadcrumb } from "./gestionNav";
 // the route-derived breadcrumb above the routed page. The breadcrumb sits on an opaque strip
 // because nothing may be read directly over the background layer.
 export function GestionLayout() {
+  // Subscribes to language changes; the breadcrumb helper resolves its labels at call time.
+  const { t } = useTranslation("common");
   const { pathname } = useLocation();
   const crumbs = gestionBreadcrumb(pathname);
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
       {crumbs.length > 1 && (
-        <nav aria-label="ruta" className="self-start border-2 border-lavender/30 bg-surface px-3 py-1">
+        <nav aria-label={t("nav.breadcrumb")} className="self-start border-2 border-lavender/30 bg-surface px-3 py-1">
           <ol className="lowercase flex flex-wrap items-center gap-1 text-sm text-lavender/60">
             {crumbs.map((crumb, i) => (
               <li key={`${i}-${crumb.label}`} className="flex items-center gap-1">

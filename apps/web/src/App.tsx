@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { AuthProvider, RequireAuth, useAuth } from "@/components/auth/AuthProvider";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -19,15 +20,18 @@ import { AgendaPage } from "@/pages/AgendaPage";
 import { SubirClasePage } from "@/pages/SubirClasePage";
 import { GestionOverview } from "@/pages/GestionOverview";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { PrivacyPage } from "@/pages/legal/PrivacyPage";
+import { TermsPage } from "@/pages/legal/TermsPage";
 
 function HomeRoute() {
+  const { t } = useTranslation("common");
   const { user, loading, unavailable, retrySession } = useAuth();
 
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <p className="lowercase text-lavender">
-          cargando <BlinkingCaret />
+          {t("app.loading")} <BlinkingCaret />
         </p>
       </div>
     );
@@ -43,13 +47,13 @@ function HomeRoute() {
             className="h-32 w-32 object-contain"
           />
         </div>
-        <p className="lowercase text-lavender">no se pudo comprobar la sesión. revisa tu conexión.</p>
+        <p className="lowercase text-lavender">{t("app.sessionUnavailable")}</p>
         <button
           type="button"
           onClick={() => void retrySession()}
           className="lowercase font-pixel border-2 border-mint px-3 py-2 text-mint hover:bg-mint hover:text-on-accent"
         >
-          reintentar
+          {t("app.retry")}
         </button>
       </div>
     );
@@ -83,6 +87,8 @@ export function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/welcome" element={<WelcomePage />} />
+        <Route path="/privacidad" element={<PrivacyPage />} />
+        <Route path="/terminos" element={<TermsPage />} />
 
         <Route element={<RequireAuth />}>
           <Route element={<AppLayout />}>

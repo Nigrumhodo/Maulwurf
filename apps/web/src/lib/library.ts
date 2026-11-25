@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { apiFetch } from "./api";
 import type { ApiHttpError } from "./api";
 import { readJson } from "./json";
@@ -130,7 +131,7 @@ export async function reuploadAudio(audioId: string): Promise<AudioCreated> {
   });
   const payload = await readJson(res);
   if (!isAudioCreated(payload)) {
-    throw new Error("La reserva de audio no coincide con el contrato.");
+    throw new Error(i18n.t("study:library.reservationMismatch"));
   }
   return payload;
 }
@@ -191,11 +192,11 @@ export function isCleanupPending(audio: LibraryAudio): boolean {
 
 export function audioLabel(audio: LibraryAudio): string {
   const title = audio.title?.trim();
-  return title !== undefined && title !== "" ? title : "clase sin título";
+  return title !== undefined && title !== "" ? title : i18n.t("study:library.untitled");
 }
 
 export function stageLabel(stage: RetryStage): string {
-  return stage === "index" ? "índice" : "análisis";
+  return stage === "index" ? i18n.t("study:library.stageIndex") : i18n.t("study:library.stageAnalysis");
 }
 
 export interface LibraryActionError {
@@ -208,21 +209,21 @@ export interface LibraryActionError {
 export function libraryActionError(error: ApiHttpError): LibraryActionError {
   if (error.code === "transcript_unavailable") {
     return {
-      message: `${error.message} La clase ya no tiene texto utilizable; vuelve a subir el audio.`,
+      message: `${error.message} ${i18n.t("study:library.errTranscriptUnavailable")}`,
       refresh: true,
     };
   }
   if (error.code === "invalid_transition") {
     return {
-      message: `${error.message} Actualiza la biblioteca para ver el estado real.`,
+      message: `${error.message} ${i18n.t("study:library.errInvalidTransition")}`,
       refresh: true,
     };
   }
   if (error.code === "not_found") {
-    return { message: "la clase ya no existe; actualiza la biblioteca.", refresh: true };
+    return { message: i18n.t("study:library.errNotFound"), refresh: true };
   }
   if (error.status === 429 || error.status === 503) {
-    return { message: `${error.message} Reintenta en un momento.` };
+    return { message: `${error.message} ${i18n.t("study:library.errRetryLater")}` };
   }
   return { message: error.message };
 }

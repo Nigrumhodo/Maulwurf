@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
+import { LegalLinks } from "@/components/legal/LegalLinks";
 import { Card } from "@/components/ui/Card";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
+import { UiLanguageSwitcher } from "@/components/ui/UiLanguageSwitcher";
 import { FlickerText } from "@/components/motion/FlickerText";
 import { WavesBackground } from "@/components/motion/WavesBackground";
 import { loginup, loginuposcuro } from "@/components/Visual";
@@ -21,7 +23,8 @@ export function AuthShell({ title, children }: AuthShellProps) {
       <WavesBackground />
       <div className="crt-overlay" aria-hidden="true" />
 
-      <div className="absolute right-4 top-4 z-10">
+      <div className="absolute right-4 top-4 z-10 flex gap-2">
+        <UiLanguageSwitcher labelClassName="hidden sm:inline" />
         <ThemeToggle />
       </div>
 
@@ -51,6 +54,8 @@ export function AuthShell({ title, children }: AuthShellProps) {
           maulwurf<span className="text-lavender">@lab</span>
         </FlickerText>
       </p>
+
+      <LegalLinks className="relative z-10 mt-4" />
     </div>
   );
 }

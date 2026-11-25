@@ -47,7 +47,8 @@ describe("Client G1 privacy invariants (D4.8)", () => {
       }
       expect(content, `${rel} must never use IndexedDB`).not.toMatch(/\bindexedDB\b/);
 
-      if (rel !== "lib/theme.ts") {
+      // Only non-private UI preferences may persist: the theme and the UI language.
+      if (rel !== "lib/theme.ts" && rel !== "i18n/index.ts") {
         expect(content, `${rel} must not persist state in localStorage`).not.toMatch(
           /\blocalStorage\b/,
         );

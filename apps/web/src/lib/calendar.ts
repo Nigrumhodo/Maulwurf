@@ -1,3 +1,4 @@
+import i18n, { intlLocale } from "@/i18n";
 import { ApiHttpError, apiFetch } from "./api";
 import { isRecord } from "./json";
 import type { Task } from "./tasks";
@@ -146,49 +147,41 @@ export function calendarSyncErrorCopy(err: unknown): string {
     const reason = isRecord(err.details) && typeof err.details.reason === "string"
       ? err.details.reason
       : null;
-    if (reason === "no_read_calendars") {
-      return "no hay calendarios de lectura seleccionados; elige al menos uno (p. ej. principal) en settings.";
-    }
+    if (reason === "no_read_calendars") return i18n.t("plan:calendarLib.syncErrors.noReadCalendars");
     if (reason === "google_not_connected" || reason === "missing_calendar_scopes") {
-      return "conecta o reconecta google calendar en settings antes de sincronizar.";
+      return i18n.t("plan:calendarLib.syncErrors.notConnected");
     }
-    if (reason === "google_invalid_grant") {
-      return "google revocó el acceso; reconecta google calendar en settings.";
-    }
-    if (reason === "api_not_enabled") {
-      return "la API de Google Calendar está deshabilitada en Google Cloud Console; habilítala en tu proyecto y vuelve a intentar.";
-    }
-    if (reason === "calendar_sync_cooldown") {
-      return "ya sincronizaste hace unos segundos; espera un momento antes de volver a sincronizar.";
-    }
+    if (reason === "google_invalid_grant") return i18n.t("plan:calendarLib.syncErrors.invalidGrant");
+    if (reason === "api_not_enabled") return i18n.t("plan:calendarLib.syncErrors.apiNotEnabled");
+    if (reason === "calendar_sync_cooldown") return i18n.t("plan:calendarLib.syncErrors.cooldown");
     return err.message;
   }
-  return "no se pudo sincronizar Google Calendar.";
+  return i18n.t("plan:calendarLib.syncErrors.generic");
 }
 
 export function calendarCoverageLabel(notice: string | null): string {
   switch (notice) {
     case "never_synced":
-      return "nunca sincronizado";
+      return i18n.t("plan:calendarLib.coverage.neverSynced");
     case "no_read_calendars":
-      return "no hay calendarios de lectura";
+      return i18n.t("plan:calendarLib.coverage.noReadCalendars");
     case "calendar_set_changed":
-      return "cambió el conjunto de calendarios";
+      return i18n.t("plan:calendarLib.coverage.calendarSetChanged");
     case "outside_coverage":
-      return "fuera de la ventana sincronizada";
+      return i18n.t("plan:calendarLib.coverage.outsideCoverage");
     case "stale":
-      return "datos desactualizados";
+      return i18n.t("plan:calendarLib.coverage.stale");
     default:
-      return "cobertura completa";
+      return i18n.t("plan:calendarLib.coverage.full");
   }
 }
 
 export function formatLastSyncedAt(value: string | null): string {
-  if (value === null) return "nunca sincronizado";
+  if (value === null) return i18n.t("plan:calendarLib.neverSynced");
   const instant = new Date(value);
-  if (Number.isNaN(instant.getTime())) return "fecha de sincronización inválida";
+  if (Number.isNaN(instant.getTime())) return i18n.t("plan:calendarLib.invalidSyncDate");
   try {
-    return new Intl.DateTimeFormat("es", {
+    return new Intl.DateTimeFormat(intlLocale(), {
       dateStyle: "medium",
       timeStyle: "short",
     }).format(instant);

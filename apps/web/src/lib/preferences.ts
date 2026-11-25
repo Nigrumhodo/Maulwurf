@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { ApiHttpError, apiFetch } from "./api";
 import { isRecord, readJson } from "./json";
 
@@ -23,26 +24,34 @@ export type NotificationPreferencesDraft = Omit<NotificationPreferences, "update
 
 export type NotificationPreferencesPatch = Partial<NotificationPreferencesDraft>;
 
-/** 0 = Sunday is frozen by `apps/api/app/services/digests.py`; do not reorder. */
-export const WEEKDAYS = [
-  "domingo",
-  "lunes",
-  "martes",
-  "miércoles",
-  "jueves",
-  "viernes",
-  "sábado",
+const WEEKDAY_KEYS = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
 ] as const;
+
+/** 0 = Sunday is frozen by `apps/api/app/services/digests.py`; do not reorder. */
+export function weekdayLabels(): string[] {
+  return WEEKDAY_KEYS.map((key) => i18n.t(`settings:weekdays.${key}`));
+}
 
 export type ThresholdKind = "hours" | "days";
 
 export const THRESHOLD_LIMITS: Record<
   ThresholdKind,
-  { min: number; max: number; maxCount: number; label: string }
+  { min: number; max: number; maxCount: number }
 > = {
-  hours: { min: 1, max: 24 * 366, maxCount: 10, label: "horas" },
-  days: { min: 1, max: 366, maxCount: 10, label: "días" },
+  hours: { min: 1, max: 24 * 366, maxCount: 10 },
+  days: { min: 1, max: 366, maxCount: 10 },
 };
+
+export function thresholdUnitLabel(kind: ThresholdKind): string {
+  return i18n.t(`settings:preferencesLib.units.${kind}`);
+}
 
 export interface NotificationTestWarning {
   code: "delivery_uncertain" | "duplicate_risk_acknowledged";
@@ -58,7 +67,8 @@ export interface NotificationTestResult {
 }
 
 export function weekdayLabel(value: number): string {
-  return WEEKDAYS[value] ?? WEEKDAYS[0];
+  const labels = weekdayLabels();
+  return labels[value] ?? labels[0]!;
 }
 
 export function normalizeThresholds(values: number[]): number[] {
@@ -71,11 +81,18 @@ export function validateThresholds(
 ): string | null {
   const limits = THRESHOLD_LIMITS[kind];
   if (values.length > limits.maxCount) {
-    return `máximo ${limits.maxCount} umbrales de ${limits.label}.`;
+    return i18n.t("settings:preferencesLib.maxThresholds", {
+      max: limits.maxCount,
+      unit: thresholdUnitLabel(kind),
+    });
   }
   for (const value of values) {
     if (!Number.isInteger(value) || value < limits.min || value > limits.max) {
-      return `cada umbral de ${limits.label} debe ser un entero entre ${limits.min} y ${limits.max}.`;
+      return i18n.t("settings:preferencesLib.thresholdRange", {
+        unit: thresholdUnitLabel(kind),
+        min: limits.min,
+        max: limits.max,
+      });
     }
   }
   return null;
@@ -85,18 +102,18 @@ export function validatePreferencesDraft(
   draft: NotificationPreferencesDraft,
 ): string | null {
   if (!/^\d{2}:\d{2}$/.test(draft.digest_daily_time)) {
-    return "elige una hora válida para el resumen diario (HH:MM).";
+    return i18n.t("settings:preferencesLib.invalidDailyTime");
   }
   const [hours, minutes] = draft.digest_daily_time.split(":").map(Number);
   if (hours > 23 || minutes > 59) {
-    return "elige una hora válida para el resumen diario (HH:MM).";
+    return i18n.t("settings:preferencesLib.invalidDailyTime");
   }
   if (
     !Number.isInteger(draft.digest_weekday) ||
     draft.digest_weekday < 0 ||
     draft.digest_weekday > 6
   ) {
-    return "elige un día válido para el resumen semanal.";
+    return i18n.t("settings:preferencesLib.invalidWeekday");
   }
   return (
     validateThresholds(draft.reminder_offsets_hours, "hours") ??
@@ -186,7 +203,7 @@ export async function fetchNotificationPreferences(): Promise<NotificationPrefer
   const res = await apiFetch("/me/notifications");
   const payload = await readJson(res);
   if (!isNotificationPreferences(payload)) {
-    throw new Error("La respuesta de preferencias no coincide con el contrato.");
+    throw new Error(i18n.t("settings:preferencesLib.responseMismatch"));
   }
   return payload;
 }
@@ -202,7 +219,7 @@ export async function updateNotificationPreferences(
   });
   const payload = await readJson(res);
   if (!isNotificationPreferences(payload)) {
-    throw new Error("La respuesta de preferencias no coincide con el contrato.");
+    throw new Error(i18n.t("settings:preferencesLib.responseMismatch"));
   }
   return payload;
 }
@@ -214,37 +231,33 @@ export async function sendTestNotification(): Promise<NotificationTestResult> {
   });
   const payload = await readJson(res);
   if (!isNotificationTestResult(payload)) {
-    throw new Error("La respuesta del envío de prueba no coincide con el contrato.");
+    throw new Error(i18n.t("settings:preferencesLib.testResponseMismatch"));
   }
   return payload;
 }
 
 export function preferencesErrorMessage(error: unknown): string {
   if (error instanceof ApiHttpError) {
-    if (error.status === 403) return "la sesión no es válida; recarga la página.";
-    if (error.status === 401) return "la sesión expiró; vuelve a iniciar sesión.";
+    if (error.status === 403) return i18n.t("settings:preferencesLib.sessionInvalid");
+    if (error.status === 401) return i18n.t("settings:preferencesLib.sessionExpired");
   }
-  return "no se pudieron guardar las preferencias; revisa la conexión.";
+  return i18n.t("settings:preferencesLib.saveFailed");
 }
-
-const TEST_REASONS: Record<string, string> = {
-  gmail_not_opted_in:
-    "activa el opt-in de Gmail y guarda los cambios antes de enviar una prueba.",
-  recipient_unverified:
-    "tu email de Google no está verificado; no se puede enviar la prueba.",
-};
 
 export function notificationTestErrorMessage(error: unknown): string {
   if (error instanceof ApiHttpError) {
     if (error.status === 409 && error.code === "notifications_test_unavailable") {
       const reason = error.details.reason;
-      if (typeof reason === "string" && reason in TEST_REASONS) {
-        return TEST_REASONS[reason];
+      if (reason === "gmail_not_opted_in") {
+        return i18n.t("settings:preferencesLib.testReasons.gmail_not_opted_in");
       }
-      return "el envío de prueba no está disponible en el estado actual.";
+      if (reason === "recipient_unverified") {
+        return i18n.t("settings:preferencesLib.testReasons.recipient_unverified");
+      }
+      return i18n.t("settings:preferencesLib.testUnavailable");
     }
-    if (error.status === 403) return "la sesión no es válida; recarga la página.";
-    if (error.status === 401) return "la sesión expiró; vuelve a iniciar sesión.";
+    if (error.status === 403) return i18n.t("settings:preferencesLib.sessionInvalid");
+    if (error.status === 401) return i18n.t("settings:preferencesLib.sessionExpired");
   }
-  return "no se pudo registrar la prueba; revisa la conexión.";
+  return i18n.t("settings:preferencesLib.testFailed");
 }

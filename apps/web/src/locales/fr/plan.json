@@ -1,0 +1,459 @@
+{
+  "freshness": {
+    "lastSync": "dernière synchronisation :",
+    "partial": "couverture partielle :",
+    "coverage": "couverture :",
+    "stale": "données obsolètes"
+  },
+  "reconnect": {
+    "notReady": "calendar n'est pas prêt ; les tâches confirmées resteront bloquées jusqu'à la connexion ou reconnexion de google calendar.",
+    "writeReady": "prêt à écrire",
+    "writeNotReady": "écriture non prête"
+  },
+  "calendar": {
+    "synced": "calendrier synchronisé ({{inserted}} mis à jour, {{removed}} retirés).",
+    "loadFailed": "impossible de charger le calendrier ; vérifie ta connexion.",
+    "tasksTruncated": "seules les 200 premières tâches sont affichées ; l'agenda peut être incomplet.",
+    "tasksFailed": "impossible de charger les tâches ; seuls les événements Google sont affichés.",
+    "agendaLabel": "agenda",
+    "calendarLabel": "calendrier",
+    "legend": "légende :",
+    "syncing": "synchronisation…",
+    "syncGoogle": "synchroniser google",
+    "pickReadCalendars": "choisir les calendriers de lecture dans les réglages",
+    "reviewIntegration": "vérifier l'intégration calendar",
+    "inRange": "dans la période",
+    "drawn": "affichées",
+    "withoutBlock": "sans bloc",
+    "retry": "réessayer",
+    "noBlockTitle": "tâches sans bloc d'agenda",
+    "noBlockHint": "elles ne sont pas affichées dans le calendrier car elles n'ont pas de bloc confirmé.",
+    "noDate": "sans date",
+    "review": "vérifier"
+  },
+  "dashboard": {
+    "title": "accueil",
+    "loading": "chargement…",
+    "greetingNamed": "salut, {{name}}",
+    "greeting": "salut",
+    "next": "à suivre",
+    "tiles": {
+      "nav": "accès principaux",
+      "upload": {
+        "label": "envoyer un cours",
+        "hint": "envoie un enregistrement et garde-le sous forme de texte"
+      },
+      "library": {
+        "label": "bibliothèque",
+        "hint": "lis et cherche tes transcriptions"
+      },
+      "chat": {
+        "label": "chat",
+        "hint": "pose des questions avec des citations exactes"
+      },
+      "tasks": {
+        "label": "tâches",
+        "hint": "vérifie ce que le cours a proposé"
+      }
+    },
+    "status": {
+      "ready_one": "{{count}} cours prêt",
+      "ready_other": "{{count}} cours prêts",
+      "processing_one": "{{count}} en traitement",
+      "processing_other": "{{count}} en traitement",
+      "review_one": "{{count}} tâche à vérifier",
+      "review_other": "{{count}} tâches à vérifier",
+      "empty": "pas encore de cours ni de tâches"
+    }
+  },
+  "overview": {
+    "title": "gestion",
+    "subtitle": "panneau académique : matières, cours, tâches et agenda.",
+    "upload": "↑ envoyer un cours",
+    "newSubject": "+ nouvelle matière",
+    "newTask": "+ nouvelle tâche",
+    "sections": {
+      "status": "état",
+      "week": "semaine",
+      "activity": "activité",
+      "recentClasses": "cours récents",
+      "taskLog": "journal des tâches",
+      "system": "système"
+    }
+  },
+  "agenda": {
+    "title": "agenda",
+    "subtitle": "événements google et tâches maulwurf ; chaque tâche liée n'est dessinée qu'une fois."
+  },
+  "activity": {
+    "untitled": "cours sans titre",
+    "viewInLibrary": "voir dans la bibliothèque",
+    "loading": "chargement…",
+    "empty": "pas encore de cours",
+    "goToLibrary": "aller à la bibliothèque →"
+  },
+  "mole": {
+    "label": "compagnon maulwurf",
+    "speech": "envoie un cours et je garde le texte.",
+    "privacy": "audio éphémère en ram · 0 octet sur disque"
+  },
+  "ticker": {
+    "session": "session active",
+    "noAudio": "audio non conservé",
+    "flow": "envoie → trouve → décide"
+  },
+  "taskLog": {
+    "viewTasks": "voir les tâches"
+  },
+  "upcoming": {
+    "loading": "chargement…",
+    "empty": "rien en attente pour le moment",
+    "noSubject": "sans matière",
+    "noDate": "sans date",
+    "viewAll": "voir toutes les tâches →"
+  },
+  "tapeDeck": {
+    "title": "01 · unité d'ingestion audio",
+    "pipeline": "pipeline : flux → tmpfs",
+    "ready": "prêt",
+    "encryptedOnly": "texte chiffré uniquement",
+    "formats": "formats acceptés : wav, mp3, ogg, opus, flac, webm",
+    "policy": "politique g1 : nettoyage temporaire vérifié avant l'indexation",
+    "openForm": "ouvrir le formulaire d'envoi"
+  },
+  "telemetry": {
+    "online": "en ligne",
+    "demo": "démo",
+    "session": "session active",
+    "metrics": {
+      "ingested": "audio ingéré",
+      "activeClasses": "cours actifs",
+      "notes": "notes .md"
+    }
+  },
+  "weekStrip": {
+    "label": "jours de la semaine en cours"
+  },
+  "integrations": {
+    "connectLabel": "connecter google calendar",
+    "reconnectLabel": "reconnecter google calendar",
+    "sync": {
+      "notRequested": "pas d'envoi vers Calendar ; l'écriture n'a lieu qu'après confirmation.",
+      "pending": "envoi vers Calendar en file d'attente ; le worker l'écrira.",
+      "synced": "événement écrit dans le calendrier Maulwurf.",
+      "failed": "l'événement a changé dans Google ou n'a pas pu être mis à jour ; vérifie-le dans Google, il n'est pas relancé automatiquement.",
+      "blocked": "aucun Calendar prêt ; la tâche reste bloquée jusqu'à la reconnexion."
+    },
+    "target": {
+      "notReady": "(pas prêt ; elle sera bloquée)",
+      "none": "aucun calendrier connecté ; la tâche sera bloquée"
+    },
+    "calendarErrors": {
+      "generic": "Impossible de connecter Google Calendar.",
+      "not_configured": "L'intégration Google n'est pas configurée sur le serveur.",
+      "csrf_invalid": "La requête vient d'un autre site ; ouvre-la depuis Maulwurf.",
+      "not_connected": "Aucune intégration Google à reconnecter.",
+      "rate_limited": "Trop de tentatives ; attends un instant et réessaie.",
+      "capacity_unavailable": "Le service est indisponible ; réessaie plus tard.",
+      "invalid_state": "La session de consentement n'est pas valide ; réessaie.",
+      "access_denied": "Tu n'as pas autorisé l'accès à Calendar.",
+      "missing_params": "Google n'a pas renvoyé les données attendues.",
+      "state_mismatch": "Le consentement appartient à une autre session.",
+      "oauth_failed": "Google a refusé l'échange de jetons.",
+      "wrong_account": "Le compte Google ne correspond pas à ta session.",
+      "scope_required": "Des autorisations Calendar manquent ; l'intégration n'a pas été enregistrée.",
+      "invalid_grant": "Google a révoqué l'accès ; reconnecte l'intégration.",
+      "api_not_enabled": "L'API Google Calendar est désactivée dans Google Cloud Console ; active-la dans ton projet et réessaie.",
+      "calendar_unavailable": "Google Calendar n'a pas répondu ; réessaie plus tard.",
+      "calendar_error": "Google Calendar a renvoyé une erreur lors de la préparation du calendrier."
+    },
+    "gmailErrors": {
+      "generic": "Impossible de connecter l'autorisation Gmail.",
+      "not_configured": "L'intégration Gmail n'est pas configurée sur le serveur.",
+      "csrf_invalid": "La requête vient d'un autre site ; ouvre-la depuis Maulwurf.",
+      "rate_limited": "Trop de tentatives ; attends un instant et réessaie.",
+      "capacity_unavailable": "Le service est indisponible ; réessaie plus tard.",
+      "invalid_state": "La session de consentement a expiré ; réessaie.",
+      "access_denied": "Tu n'as pas autorisé la permission facultative gmail.send.",
+      "missing_params": "Google n'a pas renvoyé les données attendues.",
+      "state_mismatch": "Le consentement appartient à une autre session.",
+      "oauth_failed": "Google a refusé l'échange de jetons.",
+      "wrong_account": "Le compte Google ne correspond pas à ta session actuelle.",
+      "scope_required": "La permission gmail.send n'a pas été accordée.",
+      "invalid_grant": "Google a révoqué l'accès ; reconnecte-toi."
+    }
+  },
+  "calendarLib": {
+    "neverSynced": "jamais synchronisé",
+    "invalidSyncDate": "date de synchronisation invalide",
+    "syncErrors": {
+      "noReadCalendars": "aucun calendrier de lecture sélectionné ; choisis-en au moins un (p. ex. principal) dans les réglages.",
+      "notConnected": "connecte ou reconnecte google calendar dans les réglages avant de synchroniser.",
+      "invalidGrant": "google a révoqué l'accès ; reconnecte google calendar dans les réglages.",
+      "apiNotEnabled": "l'API Google Calendar est désactivée dans Google Cloud Console ; active-la dans ton projet et réessaie.",
+      "cooldown": "tu as synchronisé il y a quelques secondes ; attends un instant avant de relancer.",
+      "generic": "impossible de synchroniser Google Calendar."
+    },
+    "coverage": {
+      "neverSynced": "jamais synchronisé",
+      "noReadCalendars": "aucun calendrier de lecture",
+      "calendarSetChanged": "l'ensemble des calendriers a changé",
+      "outsideCoverage": "hors de la fenêtre synchronisée",
+      "stale": "données obsolètes",
+      "full": "couverture complète"
+    }
+  },
+  "subjectsLib": {
+    "subjectMismatch": "La matière ne correspond pas au contrat.",
+    "listMismatch": "La liste des matières ne correspond pas au contrat.",
+    "itemMismatch": "Une matière de la liste ne correspond pas au contrat.",
+    "nameRequired": "la matière a besoin d'un nom",
+    "colorFormat": "utilise une couleur #rrggbb (ex. #6366f1)"
+  },
+  "review": {
+    "opFailed": "impossible de terminer l'opération ; vérifie ta connexion.",
+    "notice": {
+      "dismissed": "Tâche écartée.",
+      "completed": "Tâche terminée.",
+      "blocked": "Confirmée ; la synchronisation reste bloquée jusqu'à la connexion de Calendar.",
+      "pending": "Confirmée ; l'envoi vers Calendar est en attente.",
+      "synced": "Confirmée et synchronisée.",
+      "confirmed": "Tâche confirmée."
+    },
+    "checkFailed": "Impossible de vérifier le calendrier ; ferme et réessaie.",
+    "conflictConfirm": "La tâche a changé ; la vue a été actualisée. Vérifie l'aperçu avant de confirmer.",
+    "conflictDismiss": "La tâche a changé ; la vue a été actualisée. Vérifie avant de continuer.",
+    "eventKept": "L'événement Calendar est conservé.",
+    "title": "vérifier la tâche",
+    "checking": "vérification de la tâche et du calendrier…",
+    "willConfirm": "la modification en attente sera confirmée",
+    "whatWillBeWritten": "ce qui sera écrit",
+    "fields": {
+      "title": "titre",
+      "type": "type",
+      "due": "échéance",
+      "timezone": "fuseau horaire",
+      "agenda": "agenda",
+      "target": "calendrier cible"
+    },
+    "invalidDate": "date invalide",
+    "noResolvedDate": "sans date résolue",
+    "calendarUnknown": "impossible de vérifier le calendrier",
+    "previewHint": "l'aperçu utilise les champs de la révision en attente, pas seulement les champs actifs.",
+    "needsDate": "pour confirmer cette tâche, modifie-la d'abord pour définir une date résolue et un bloc d'agenda.",
+    "confirm": "confirmer",
+    "edit": "modifier",
+    "dismiss": "écarter",
+    "close": "fermer"
+  },
+  "subjects": {
+    "title": "matières",
+    "subtitle": "tes matières, avec l'état de leurs cours et tâches.",
+    "new": "nouvelle matière",
+    "subjectCount_one": "{{count}} matière",
+    "subjectCount_other": "{{count}} matières",
+    "summary": "{{subjects}} · {{ready}}/{{total}} cours prêts · {{minutes}} min · {{confirmed}} confirmées / {{pending}} en attente",
+    "editing": "modifier · {{name}}",
+    "save": "enregistrer",
+    "create": "créer",
+    "loading": "chargement…",
+    "loadFailed": "impossible de charger les matières",
+    "loadFailedHint": "vérifie ta connexion et réessaie.",
+    "retry": "réessayer",
+    "emptyTitle": "tu n'as pas encore de matières",
+    "emptyHint": "crée la première pour commencer à envoyer des cours.",
+    "createSubject": "créer une matière",
+    "columns": {
+      "subject": "matière",
+      "classes": "cours",
+      "stats": "prêts · minutes · tâches",
+      "actions": "actions"
+    },
+    "classCount_one": "{{count}} cours",
+    "classCount_other": "{{count}} cours",
+    "noData": "aucune donnée",
+    "rowStats": "{{ready}}/{{total}} prêts · {{minutes}} min · {{confirmed}} confirmées / {{pending}} en attente",
+    "edit": "modifier",
+    "delete": "supprimer",
+    "privacy": "métadonnées et texte uniquement · audio d'origine non conservé (g1)",
+    "refresh": "actualiser",
+    "refreshing": "actualisation…",
+    "created": "matière créée",
+    "updated": "matière mise à jour",
+    "deleted": "matière supprimée",
+    "deleteFailed": "impossible de supprimer la matière",
+    "activeDialog": {
+      "title": "matière avec des cours actifs",
+      "description_one": "« {{name}} » a {{count}} cours actif. supprime ou déplace d'abord ces cours ; la suppression forcée sera disponible plus tard.",
+      "description_other": "« {{name}} » a {{count}} cours actifs. supprime ou déplace d'abord ces cours ; la suppression forcée sera disponible plus tard.",
+      "confirm": "compris",
+      "cancel": "fermer"
+    }
+  },
+  "subjectForm": {
+    "saveFailed": "impossible d'enregistrer la matière",
+    "name": "nom",
+    "namePlaceholder": "analyse i",
+    "color": "couleur",
+    "teacher": "professeur (facultatif)",
+    "cancel": "annuler"
+  },
+  "subjectStats": {
+    "title": "statistiques par matière",
+    "calculating": "calcul des métriques de texte…",
+    "subjects": "matières",
+    "readyTotal": "cours prêts / total",
+    "duration": "durée transcrite",
+    "tasks": "tâches confirmées / à vérifier",
+    "completed": "{{count}} terminée(s)",
+    "row": "{{ready}}/{{total}} cours prêts · {{minutes}} min · {{confirmed}} confirmées / {{pending}} en attente",
+    "rowWithCompleted": "{{ready}}/{{total}} cours prêts · {{minutes}} min · {{confirmed}} confirmées · {{completed}} terminées / {{pending}} en attente",
+    "privacy": "métadonnées et texte uniquement · audio d'origine non conservé (g1)",
+    "refresh": "actualiser",
+    "refreshing": "actualisation…"
+  },
+  "taskCard": {
+    "noSubject": "sans matière",
+    "date": "date",
+    "dateUnresolved": "date non résolue",
+    "confidenceHint": "signal non calibré ; n'autorise pas la confirmation ni la planification automatique",
+    "pendingChange": "modification en attente",
+    "asrHint": "qualité ASR : vérifie la citation",
+    "asrBadge": "asr ⚠",
+    "noQuote": "pas de citation littérale ; elle n'est pas présentée comme une extraction.",
+    "review": "vérifier",
+    "edit": "modifier",
+    "complete": "marquer comme terminée"
+  },
+  "taskInbox": {
+    "lowQuality": "qualité ASR faible : {{signals}}",
+    "qualityUnavailable": "qualité ASR indisponible pour certains cours ; vérifie la citation avant de décider.",
+    "listLabel": "tâches à vérifier"
+  },
+  "taskList": {
+    "subject": "matière :",
+    "noSubject": "sans matière",
+    "loading": "chargement…",
+    "empty": "pas encore de tâches"
+  },
+  "taskForm": {
+    "createFailed": "impossible de créer la tâche ; vérifie ta connexion.",
+    "saveFailed": "impossible d'enregistrer la tâche ; vérifie ta connexion.",
+    "titleRequired": "le titre ne peut pas être vide.",
+    "createLabel": "nouvelle tâche manuelle",
+    "editLabel": "modifier la tâche",
+    "title": "titre",
+    "titlePlaceholder": "ex. Rendre l'atelier de simulation",
+    "type": "type",
+    "typeLabel": "type d'activité",
+    "typeLabelNew": "type de la nouvelle activité",
+    "activityTypes": {
+      "tarea": "tâche",
+      "entrega": "remise",
+      "examen": "examen",
+      "lectura": "lecture",
+      "proyecto": "projet",
+      "recordatorio": "rappel",
+      "recomendacion": "recommandation"
+    },
+    "subjectOptional": "matière (facultatif)",
+    "subjectLabelNew": "matière de la nouvelle tâche",
+    "noSubject": "sans matière",
+    "timezone": "fuseau horaire",
+    "detail": "détail",
+    "detailOptional": "détail (facultatif)",
+    "detailLabelNew": "détail de la nouvelle tâche",
+    "dueDate": "date d'échéance",
+    "mode": "mode",
+    "dueModeLabel": "mode d'échéance",
+    "dueModeLabelNew": "mode d'échéance nouvelle tâche",
+    "allDay": "toute la journée",
+    "timed": "avec heure",
+    "noDate": "sans date",
+    "date": "date",
+    "time": "heure",
+    "ambiguous": "la date d'origine était ambiguë : « {{text}} »{{reason}}. Choisis une date précise ou enregistre-la sans date.",
+    "agendaBlock": "bloc d'agenda",
+    "agendaBlockCalendar": "bloc d'agenda (calendar)",
+    "agendaProposal": "proposition modifiable de Maulwurf ; elle ne vient pas de l'enseignant.",
+    "agendaAutoFill": "rempli automatiquement avec ta date d'échéance ; tu peux l'ajuster ou le laisser sans bloc si tu ne veux pas encore la planifier.",
+    "agendaModeLabel": "mode d'agenda",
+    "agendaModeLabelNew": "mode d'agenda nouvelle tâche",
+    "noBlock": "sans bloc",
+    "agendaStart": "début de l'agenda",
+    "agendaEndExclusive": "fin de l'agenda (exclue)",
+    "agendaStartTime": "heure de début de l'agenda",
+    "agendaDuration": "durée de l'agenda (minutes)",
+    "computedEnd": "fin calculée :",
+    "pendingDate": "en attente de date",
+    "invalidTime": "heure invalide",
+    "exclusiveEndHint": "fin exclue : le jour indiqué n'apparaît pas dans l'événement.",
+    "revisionPending": "modification en attente de confirmation ; la tâche active n'a pas été modifiée.",
+    "changesSaved": "modifications enregistrées.",
+    "saving": "enregistrement…",
+    "saveChanges": "enregistrer les modifications",
+    "creating": "création…",
+    "createAndReview": "créer et vérifier",
+    "saveTask": "enregistrer la tâche",
+    "cancel": "annuler"
+  },
+  "tasksLib": {
+    "quality": {
+      "low_confidence": "faible confiance",
+      "empty_segments": "segments vides",
+      "repetition": "répétitions",
+      "repeatedNoCount": "{{label}} ({{occurrences}} passages)",
+      "repeatedWords": "{{label}} dans {{occurrences}} passages ({{count}} mots)",
+      "warningsNoCount": "{{label}} ({{occurrences}} avertissements)",
+      "repeatedCount": "{{label}} dans {{occurrences}} passages ({{count}})"
+    },
+    "noConfidence": "sans confiance",
+    "confidence": "confiance {{score}}",
+    "status": {
+      "all": "toutes",
+      "needs_review": "à confirmer",
+      "pending": "en attente",
+      "confirmed": "confirmées",
+      "dismissed": "écartées",
+      "completed": "terminées"
+    },
+    "exclusiveEnd": "(fin exclue)",
+    "eventMode": {
+      "timed": "avec heure",
+      "allDay": "toute la journée",
+      "none": "sans bloc d'agenda"
+    },
+    "scheduleErrors": {
+      "dueDateOrMissing": "choisis la date d'échéance (ou passe le mode sur « sans date »).",
+      "dueDate": "choisis la date d'échéance.",
+      "dueTimeInvalid": "l'heure d'échéance n'existe pas dans ce fuseau horaire.",
+      "blockNeedsDates": "le bloc d'agenda a besoin d'une date de début et de fin.",
+      "blockEndAfterStart": "la fin de l'agenda doit être postérieure au début.",
+      "blockStartDate": "choisis la date de début de l'agenda.",
+      "blockStartTimeInvalid": "l'heure de début de l'agenda n'existe pas dans ce fuseau.",
+      "durationInvalid": "la durée de l'agenda n'est pas valide."
+    }
+  },
+  "tasksPage": {
+    "title": "tâches",
+    "loadFailed": "impossible de charger les tâches ; vérifie ta connexion.",
+    "createdNeedsReview": "tâche « {{title}} » créée à l'état « à confirmer ».",
+    "created": "tâche « {{title}} » créée.",
+    "revisionPending": "modification en attente de confirmation dans « {{title}} » ; utilise vérifier pour l'appliquer.",
+    "saved": "modifications enregistrées dans « {{title}} ».",
+    "completedKept": "Tâche « {{title}} » marquée comme terminée. L'événement Calendar est conservé.",
+    "completed": "Tâche « {{title}} » marquée comme terminée.",
+    "subtitle": "crée tes propres tâches ou vérifie les propositions de l'analyse ; confirme pour les envoyer à Calendar.",
+    "new": "+ nouvelle tâche",
+    "statusGroup": "état de la tâche",
+    "subjectSelect": "matière de la tâche",
+    "allSubjects": "toutes les matières",
+    "refresh": "actualiser",
+    "calendarNotReady": "calendar n'est pas prêt ; les tâches confirmées resteront bloquées jusqu'à la connexion de google calendar.",
+    "loading": "chargement des tâches…",
+    "emptyTitle": "aucune tâche dans cet état",
+    "emptyHint": "quand une analyse proposera une tâche, elle apparaîtra ici avec sa citation.",
+    "loadingMore": "chargement…",
+    "loadMore": "charger plus"
+  }
+}

@@ -2,8 +2,11 @@ import FullCalendar from "@fullcalendar/react";
 import dayGridPlugin from "@fullcalendar/daygrid";
 import timeGridPlugin from "@fullcalendar/timegrid";
 import esLocale from "@fullcalendar/core/locales/es";
+import frLocale from "@fullcalendar/core/locales/fr";
+import type { LocaleSingularArg } from "@fullcalendar/core";
 import type { DatesSetArg } from "@fullcalendar/core";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { CalendarFreshness } from "@/components/calendar/CalendarFreshness";
 import { Button } from "@/components/ui/Button";
@@ -32,6 +35,13 @@ export interface CalendarViewProps {
 interface Range {
   from: string;
   to: string;
+}
+
+// English is FullCalendar's built-in default locale.
+function calendarLocale(language: string): LocaleSingularArg {
+  if (language === "es") return esLocale;
+  if (language === "fr") return frLocale;
+  return "en";
 }
 
 function dateOnly(value: Date): string {
@@ -68,6 +78,7 @@ function activeSubjects(tasks: Task[], subjects: Subject[]): Subject[] {
 }
 
 export function CalendarView({ compact = false }: CalendarViewProps) {
+  const { t, i18n } = useTranslation("plan");
   const [range, setRange] = useState<Range>(() => monthRange());
   const [data, setData] = useState<CalendarEventsResponse | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -88,7 +99,7 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
     try {
       const synced = await syncCalendarMirror();
       setSyncNotice(
-        `calendario sincronizado (${synced.inserted} actualizados, ${synced.removed} retirados).`,
+        t("calendar.synced", { inserted: synced.inserted, removed: synced.removed }),
       );
       setReloadKey((value) => value + 1);
     } catch (err) {
@@ -109,11 +120,7 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
       .catch((cause: unknown) => {
         if (cancelled) return;
         setData(null);
-        setError(
-          cause instanceof Error
-            ? cause.message
-            : "no se pudo cargar el calendario; revisa tu conexión.",
-        );
+        setError(cause instanceof Error ? cause.message : t("calendar.loadFailed"));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -121,7 +128,7 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
     return () => {
       cancelled = true;
     };
-  }, [range.from, range.to, reloadKey]);
+  }, [range.from, range.to, reloadKey, t]);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,13 +139,13 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
         setTasksWarning(
           page.next_cursor === null
             ? null
-            : "solo se muestran las primeras 200 tareas; la agenda puede estar incompleta.",
+            : t("calendar.tasksTruncated"),
         );
       })
       .catch(() => {
         if (cancelled) return;
         setTasks([]);
-        setTasksWarning("no se pudieron cargar las tareas; solo se muestran eventos de Google.");
+        setTasksWarning(t("calendar.tasksFailed"));
       });
     fetchSubjects()
       .then((items) => {
@@ -150,7 +157,7 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
     return () => {
       cancelled = true;
     };
-  }, [reloadKey]);
+  }, [reloadKey, t]);
 
   const subjectColors = useMemo(
     () => new Map(subjects.map((subject) => [subject.id, subject.color])),
@@ -164,7 +171,7 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
   const withoutBlock = useMemo(() => activeTasksWithoutBlock(tasks), [tasks]);
 
   return (
-    <section aria-label={compact ? "agenda" : "calendario"}>
+    <section aria-label={compact ? t("calendar.agendaLabel") : t("calendar.calendarLabel")}>
       <div className="flex flex-col gap-3">
         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
           <CalendarFreshness
@@ -174,7 +181,7 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
             stale={data?.stale ?? false}
           />
           <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="lowercase text-lavender/60">leyenda:</span>
+            <span className="lowercase text-lavender/60">{t("calendar.legend")}</span>
             <span className="border-2 border-[#64748b] bg-[#64748b] px-1.5 py-0.5 text-white">
               Google
             </span>
@@ -194,7 +201,7 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
               disabled={syncing}
               onClick={() => void handleSyncNow()}
             >
-              {syncing ? "sincronizando…" : "sincronizar google"}
+              {syncing ? t("calendar.syncing") : t("calendar.syncGoogle")}
             </Button>
           </div>
           {data !== null && !data.coverage_ok && (
@@ -203,10 +210,10 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
               className="lowercase text-base text-mint underline decoration-dotted"
             >
               {data.coverage_notice === "never_synced"
-                ? "conectar google calendar"
+                ? t("integrations.connectLabel")
                 : data.coverage_notice === "no_read_calendars"
-                  ? "elegir calendarios de lectura en settings"
-                  : "revisar la integración de calendar"}
+                  ? t("calendar.pickReadCalendars")
+                  : t("calendar.reviewIntegration")}
             </Link>
           )}
         </div>
@@ -224,11 +231,12 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
         )}
 
         <p className="lowercase text-sm text-lavender/80">
-          <span className="text-mint">{built.events.length}</span> en rango ·{" "}
+          <span className="text-mint">{built.events.length}</span> {t("calendar.inRange")} ·{" "}
           <span className="text-mint">
             {built.events.filter((event) => event.extendedProps.kind === "task").length}
           </span>{" "}
-          dibujadas · <span className="text-mint">{withoutBlock.length}</span> sin bloque
+          {t("calendar.drawn")} · <span className="text-mint">{withoutBlock.length}</span>{" "}
+          {t("calendar.withoutBlock")}
         </p>
 
         {error !== null && (
@@ -242,7 +250,7 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
               variant="secondary"
               onClick={() => setReloadKey((value) => value + 1)}
             >
-              reintentar
+              {t("calendar.retry")}
             </Button>
           </div>
         )}
@@ -257,7 +265,7 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
           <FullCalendar
             plugins={[dayGridPlugin, timeGridPlugin]}
             initialView="dayGridMonth"
-            locale={esLocale}
+            locale={calendarLocale(i18n.resolvedLanguage ?? "es")}
             headerToolbar={{
               left: "prev,next today",
               center: "title",
@@ -277,9 +285,9 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
 
         {withoutBlock.length > 0 && (
           <section className="flex flex-col gap-2 border-t-2 border-lavender/30 pt-4">
-            <h3 className="capitalize text-lg text-mint">tareas sin bloque de agenda</h3>
+            <h3 className="capitalize text-lg text-mint">{t("calendar.noBlockTitle")}</h3>
             <p className="lowercase text-base text-lavender/80">
-              no se dibujan en el calendario porque no tienen un bloque confirmado.
+              {t("calendar.noBlockHint")}
             </p>
             <ul className="flex flex-col divide-y-2 divide-lavender/20">
               {withoutBlock.map((task) => {
@@ -293,13 +301,13 @@ export function CalendarView({ compact = false }: CalendarViewProps) {
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
                       <StatusBadge status={task.status} />
                       <span className="text-lavender/60">
-                        {due ?? task.date_text ?? "sin fecha"}
+                        {due ?? task.date_text ?? t("calendar.noDate")}
                       </span>
                       <Link
                         to="/gestion/tareas"
                         className="ml-auto inline-flex min-h-8 items-center text-mint underline decoration-dotted"
                       >
-                        revisar
+                        {t("calendar.review")}
                       </Link>
                     </div>
                   </li>

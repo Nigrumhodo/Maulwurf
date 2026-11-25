@@ -1,4 +1,5 @@
 import type { HTMLAttributes, ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 
 export type CardVariant = 'default' | 'outline' | 'accent'
 
@@ -46,6 +47,7 @@ export function Card({
   children,
   ...rest
 }: CardProps) {
+  const { t } = useTranslation('common')
   return (
     <Tag
       className={`lowercase font-pixel min-w-0 max-w-full border-2 ${variants[variant]} ${className}`}
@@ -59,7 +61,7 @@ export function Card({
           {onClose !== undefined ? (
             <button
               type="button"
-              aria-label="cerrar ventana"
+              aria-label={t('card.closeWindow')}
               onClick={onClose}
               className="inline-flex min-h-8 min-w-8 shrink-0 cursor-pointer items-center justify-center font-bold hover:opacity-75"
             >

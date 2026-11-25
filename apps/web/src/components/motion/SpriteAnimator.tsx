@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react'
+import { useTranslation } from 'react-i18next'
 
 export interface SpriteAnimatorProps {
   /** image source (url or data uri) of the sprite sheet */
@@ -31,6 +32,7 @@ export function SpriteAnimator({
   scale = 1,
   className = '',
 }: SpriteAnimatorProps) {
+  const { t } = useTranslation('common')
   const w = frameWidth * scale
   const h = frameHeight * scale
   const sheetW = frameWidth * frames * scale
@@ -64,7 +66,7 @@ export function SpriteAnimator({
       className={`sprite-anim inline-block ${className}`}
       style={style}
       role="img"
-      aria-label="sprite animation"
+      aria-label={t('motion.sprite')}
     />
   )
 }

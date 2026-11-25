@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { apiFetch } from "./api";
 import { isRecord, readJson } from "./json";
 
@@ -101,11 +102,11 @@ export async function fetchNotifications(
     !Array.isArray(payload.items) ||
     (payload.next_cursor !== null && typeof payload.next_cursor !== "string")
   ) {
-    throw new Error("El historial de notificaciones no coincide con el contrato.");
+    throw new Error(i18n.t("settings:notificationsLib.historyMismatch"));
   }
   const items: NotificationItem[] = payload.items.map((item) => {
     if (!isNotificationItem(item)) {
-      throw new Error("Una entrega de notificación no coincide con el contrato.");
+      throw new Error(i18n.t("settings:notificationsLib.deliveryMismatch"));
     }
     return item;
   });
@@ -125,7 +126,7 @@ export async function resendNotification(
   const payload = await readJson(res);
   const rawWarning = isRecord(payload) ? payload.warning : undefined;
   if (!isNotificationItem(payload) || !isRecord(rawWarning)) {
-    throw new Error("La respuesta de reenvío no coincide con el contrato.");
+    throw new Error(i18n.t("settings:notificationsLib.resendMismatch"));
   }
   const code = rawWarning.code;
   const message = rawWarning.message;
@@ -133,7 +134,7 @@ export async function resendNotification(
     (code !== "delivery_uncertain" && code !== "duplicate_risk_acknowledged") ||
     typeof message !== "string"
   ) {
-    throw new Error("La advertencia de reenvío no coincide con el contrato.");
+    throw new Error(i18n.t("settings:notificationsLib.warningMismatch"));
   }
   return { ...payload, warning: { code, message } };
 }
@@ -145,21 +146,21 @@ export function canResendNotification(status: string): boolean {
 export function notificationTypeLabel(type: string): string {
   switch (type) {
     case "reminder_t48":
-      return "recordatorio T-48 h";
+      return i18n.t("settings:notificationsLib.types.reminder_t48");
     case "reminder_t24":
-      return "recordatorio T-24 h";
+      return i18n.t("settings:notificationsLib.types.reminder_t24");
     case "reminder_t2":
-      return "recordatorio T-2 h";
+      return i18n.t("settings:notificationsLib.types.reminder_t2");
     case "reminder_t3d":
-      return "recordatorio T-3 d";
+      return i18n.t("settings:notificationsLib.types.reminder_t3d");
     case "reminder_t1d":
-      return "recordatorio T-1 d";
+      return i18n.t("settings:notificationsLib.types.reminder_t1d");
     case "digest_daily":
-      return "resumen diario";
+      return i18n.t("settings:notificationsLib.types.digest_daily");
     case "digest_weekly":
-      return "resumen semanal";
+      return i18n.t("settings:notificationsLib.types.digest_weekly");
     case "test":
-      return "envío de prueba";
+      return i18n.t("settings:notificationsLib.types.test");
     default:
       return type;
   }
@@ -172,21 +173,21 @@ export function notificationStatusExplanation(
   const codeNote = lastErrorCode !== null ? ` (${lastErrorCode})` : "";
   switch (status) {
     case "pending":
-      return "programada en espera de la ventana de envío.";
+      return i18n.t("settings:notificationsLib.status.pending");
     case "sending":
-      return "reclamada por el worker de entrega en este instante.";
+      return i18n.t("settings:notificationsLib.status.sending");
     case "sent":
-      return "aceptada por Gmail para tu correo verificado.";
+      return i18n.t("settings:notificationsLib.status.sent");
     case "failed":
       if (lastErrorCode === "gmail_api_disabled") {
-        return "no se pudo enviar: la API de Gmail está deshabilitada en Google Cloud Console (gmail_api_disabled); habilítala y reenvía manualmente.";
+        return i18n.t("settings:notificationsLib.status.failedApiDisabled");
       }
-      return `no se pudo enviar${codeNote}; el sistema no reintenta automáticamente.`;
+      return i18n.t("settings:notificationsLib.status.failed", { codeNote });
     case "delivery_unknown":
-      return `estado terminal: Gmail no confirma entrega única y se perdió la respuesta o expiró el lease${codeNote}. No se reintenta automáticamente; reenviar crea una nueva ocurrencia y puede duplicar el correo.`;
+      return i18n.t("settings:notificationsLib.status.deliveryUnknown", { codeNote });
     case "cancelled":
-      return "cancelada por cambio de fecha, preferencia o estado de la tarea.";
+      return i18n.t("settings:notificationsLib.status.cancelled");
     default:
-      return `estado registrado: ${status}${codeNote}.`;
+      return i18n.t("settings:notificationsLib.status.other", { status, codeNote });
   }
 }

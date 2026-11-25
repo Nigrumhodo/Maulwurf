@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { TranscriptLink } from "@/components/transcript/TranscriptLink";
 import { SyncStatus } from "@/components/calendar/SyncStatus";
 import { Button } from "@/components/ui/Button";
@@ -16,6 +17,7 @@ export interface TaskCardProps {
 }
 
 export function TaskCard({ task, quality, onEdit, onReview, onComplete }: TaskCardProps) {
+  const { t } = useTranslation("plan");
   const due = formatTaskDue(task);
   const hasQualityWarning =
     quality !== null && (quality.unavailable || quality.signals.length > 0);
@@ -30,13 +32,13 @@ export function TaskCard({ task, quality, onEdit, onReview, onComplete }: TaskCa
         </div>
         <p className="text-sm text-lavender/60">
           {task.tipo}
-          {task.subject !== null ? ` · ${task.subject.name}` : " · sin materia"}
+          {task.subject !== null ? ` · ${task.subject.name}` : ` · ${t("taskCard.noSubject")}`}
           {` · ${task.source}`}
         </p>
       </div>
 
       <div className="flex flex-wrap items-center gap-2 text-sm text-lavender/60">
-        <span>fecha</span>
+        <span>{t("taskCard.date")}</span>
         <StatusBadge status={task.date_status} />
         {due !== null ? (
           <time dateTime={task.due_date ?? task.due_at ?? undefined}>{due}</time>
@@ -44,7 +46,7 @@ export function TaskCard({ task, quality, onEdit, onReview, onComplete }: TaskCa
           <span>
             {task.date_text !== null && task.date_text.trim() !== ""
               ? task.date_text
-              : "fecha no resuelta"}
+              : t("taskCard.dateUnresolved")}
           </span>
         )}
         {task.date_reason !== null && task.date_reason.trim() !== "" && (
@@ -52,16 +54,16 @@ export function TaskCard({ task, quality, onEdit, onReview, onComplete }: TaskCa
         )}
         <span
           className="text-lavender/60"
-          title="señal no calibrada; no autoriza confirmar ni programar automáticamente"
+          title={t("taskCard.confidenceHint")}
         >
           {confidenceLabel(task.confidence_score)}
         </span>
         {task.pending_revision !== null && (
-          <span className="border-2 border-mint px-1 text-mint">cambio pendiente</span>
+          <span className="border-2 border-mint px-1 text-mint">{t("taskCard.pendingChange")}</span>
         )}
         {hasQualityWarning && (
-          <span className="border-2 border-lavender/30 px-1 text-lavender/80" title="calidad ASR: revisa la cita">
-            asr ⚠
+          <span className="border-2 border-lavender/30 px-1 text-lavender/80" title={t("taskCard.asrHint")}>
+            {t("taskCard.asrBadge")}
           </span>
         )}
       </div>
@@ -73,7 +75,7 @@ export function TaskCard({ task, quality, onEdit, onReview, onComplete }: TaskCa
       )}
 
       {task.evidence.length === 0 ? (
-        <p className="text-lavender/60">sin cita textual; no se presenta como extracción.</p>
+        <p className="text-lavender/60">{t("taskCard.noQuote")}</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {task.evidence.map((evidence) => (
@@ -97,12 +99,12 @@ export function TaskCard({ task, quality, onEdit, onReview, onComplete }: TaskCa
               <Button type="button" size="sm" variant={task.status === "needs_review" ? "primary" : "secondary"}
                 className="min-h-8"
                 onClick={onReview}>
-                revisar
+                {t("taskCard.review")}
               </Button>
             )}
             {onEdit !== undefined && (
               <Button type="button" size="sm" variant="ghost" className="min-h-8" onClick={onEdit}>
-                editar
+                {t("taskCard.edit")}
               </Button>
             )}
             {onComplete !== undefined && task.status === "confirmed" && (
@@ -113,7 +115,7 @@ export function TaskCard({ task, quality, onEdit, onReview, onComplete }: TaskCa
                 className="ml-auto min-h-8"
                 onClick={onComplete}
               >
-                marcar completada
+                {t("taskCard.complete")}
               </Button>
             )}
           </div>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "react-router-dom";
 import { ClassSummary } from "@/components/transcript/ClassSummary";
 import { Button } from "@/components/ui/Button";
@@ -37,6 +38,7 @@ export function TranscriptReader({
   status,
   aside,
 }: TranscriptReaderProps) {
+  const { t } = useTranslation("study");
   const location = useLocation();
   const [srtBusy, setSrtBusy] = useState(false);
   const [srtUnavailable, setSrtUnavailable] = useState(false);
@@ -66,7 +68,7 @@ export function TranscriptReader({
       const result = await downloadSrt(detail.id);
       if (result === "unavailable") setSrtUnavailable(true);
     } catch {
-      setSrtError("no se pudo descargar el SRT; reintenta en un momento.");
+      setSrtError(t("transcriptReader.srtFailed"));
     } finally {
       setSrtBusy(false);
     }
@@ -79,7 +81,7 @@ export function TranscriptReader({
           to="/gestion/biblioteca"
           className="self-start lowercase font-pixel text-base text-mint hover:underline"
         >
-          ← biblioteca
+          {t("transcriptReader.back")}
         </Link>
         <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
           <div className="flex items-center gap-3">
@@ -95,7 +97,7 @@ export function TranscriptReader({
               to={`/gestion/chat?mode=class&audio_id=${encodeURIComponent(detail.id)}`}
               className={buttonClasses("secondary", "sm")}
             >
-              chat sobre esta clase
+              {t("transcriptReader.chatClass")}
             </Link>
             {detail.exports.txt ? (
               <a
@@ -103,11 +105,11 @@ export function TranscriptReader({
                 download="transcript.txt"
                 className={buttonClasses("secondary", "sm")}
               >
-                descargar txt
+                {t("transcriptReader.downloadTxt")}
               </a>
             ) : (
               <Button type="button" size="sm" variant="secondary" disabled>
-                descargar txt
+                {t("transcriptReader.downloadTxt")}
               </Button>
             )}
             <Button
@@ -117,7 +119,7 @@ export function TranscriptReader({
               disabled={srtDisabled || srtBusy}
               onClick={() => void handleSrt()}
             >
-              {srtBusy ? "preparando srt…" : "descargar srt"}
+              {srtBusy ? t("transcriptReader.preparingSrt") : t("transcriptReader.downloadSrt")}
             </Button>
           </div>
         </div>
@@ -127,17 +129,16 @@ export function TranscriptReader({
         </p>
         {status}
         <p className="lowercase text-base text-lavender/60">
-          &gt; audio no conservado · solo se guarda el texto de la transcripción.
+          {t("transcriptReader.audioNotKept")}
         </p>
         {!detail.exports.srt && (
           <p className="lowercase text-base text-lavender/60">
-            &gt; srt no disponible: la transcripción no tiene tiempos fiables dentro de la
-            duración.
+            {t("transcriptReader.srtNoTimes")}
           </p>
         )}
         {srtUnavailable && (
           <p role="status" className="lowercase text-base text-mint">
-            &gt; srt no disponible para esta versión; el texto sigue completo.
+            {t("transcriptReader.srtVersion")}
           </p>
         )}
         {srtError !== null && (
@@ -152,18 +153,18 @@ export function TranscriptReader({
           role="alert"
           className="lowercase border-b-2 border-lavender/30 px-4 py-3 text-mint sm:px-6"
         >
-          &gt; segmento no encontrado en esta transcripción; se muestra el texto completo.
+          {t("transcriptReader.segmentMissing")}
         </p>
       )}
 
       <div className="grid lg:grid-cols-[minmax(0,1fr)_22rem]">
-        <section aria-label="transcripción" className="min-w-0 p-4 sm:p-6">
+        <section aria-label={t("transcriptReader.transcript")} className="min-w-0 p-4 sm:p-6">
           <h2 className="capitalize mb-3 text-xl text-mint">
-            segmentos · {transcript.segments.length}
+            {t("transcriptReader.segments", { count: transcript.segments.length })}
           </h2>
           {transcript.segments.length === 0 ? (
             <p className="lowercase text-lavender/60">
-              &gt; esta transcripción no tiene segmentos publicados.
+              {t("transcriptReader.noSegments")}
             </p>
           ) : (
             <ol className="divide-y-2 divide-lavender/20">
@@ -183,7 +184,7 @@ export function TranscriptReader({
                       <Link
                         to={{ pathname: location.pathname, search: `?segment=${segment.id}` }}
                         className="text-sm text-lavender/60 outline-offset-2 hover:text-mint hover:underline focus-visible:outline-2 focus-visible:outline-mint"
-                        aria-label={`enlazar segmento ${segment.ordinal}`}
+                        aria-label={t("transcriptReader.linkSegment", { ordinal: segment.ordinal })}
                       >
                         #{segment.ordinal}
                       </Link>
@@ -194,7 +195,7 @@ export function TranscriptReader({
                           detail.duration_seconds,
                         )}
                       </span>
-                      {active && <span className="text-mint">· enlazado</span>}
+                      {active && <span className="text-mint">{t("transcriptReader.linked")}</span>}
                     </div>
                     <p className="max-w-prose normal-case text-lg leading-relaxed text-lavender">
                       {segment.text}
@@ -207,7 +208,7 @@ export function TranscriptReader({
         </section>
 
         <aside
-          aria-label="detalles"
+          aria-label={t("transcriptReader.details")}
           className="flex min-w-0 flex-col divide-y-2 divide-lavender/20 border-t-2 border-lavender/30 p-4 sm:p-6 lg:border-l-2 lg:border-t-0"
         >
           <ClassSummary detail={detail} transcript={transcript} />

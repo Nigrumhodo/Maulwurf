@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { AudioCard } from "@/components/library/AudioCard";
 import { AudioUploadPanel } from "@/components/upload/AudioUploadPanel";
@@ -6,6 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { buttonClasses } from "@/components/ui/buttonStyles";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { intlLocale } from "@/i18n";
 import { ApiHttpError } from "@/lib/api";
 import { fetchCapabilities } from "@/lib/capabilities";
 import type { IngestionCapabilities } from "@/lib/capabilities";
@@ -47,7 +49,8 @@ interface Notice {
 }
 
 export function BibliotecaPage() {
-  useDocumentTitle("biblioteca");
+  const { t } = useTranslation("study");
+  useDocumentTitle(t("libraryPage.docTitle"));
   const [items, setItems] = useState<LibraryAudio[]>([]);
   const [capabilities, setCapabilities] = useState<IngestionCapabilities | null>(null);
   const [loading, setLoading] = useState(true);
@@ -80,7 +83,7 @@ export function BibliotecaPage() {
       setLoadError(
         error instanceof ApiHttpError
           ? error.message
-          : "no se pudo cargar la biblioteca; revisa tu conexión.",
+          : t("libraryPage.loadFailed"),
       );
     } finally {
       setLoading(false);
@@ -111,7 +114,7 @@ export function BibliotecaPage() {
       if (mapped.refresh === true) void load();
       return;
     }
-    setNotice({ tone: "error", message: "la acción falló; revisa tu conexión." });
+    setNotice({ tone: "error", message: t("libraryPage.actionFailed") });
   }
 
   async function startReupload(audioId: string) {
@@ -155,7 +158,7 @@ export function BibliotecaPage() {
       if (detail.transcript === null) {
         setNotice({
           tone: "error",
-          message: "la clase ya no tiene una transcripción utilizable; vuelve a subir el audio.",
+          message: t("libraryPage.noUsableTranscript"),
         });
         await load();
         return;
@@ -164,7 +167,7 @@ export function BibliotecaPage() {
       if (stages.length === 0) {
         setNotice({
           tone: "info",
-          message: "la clase ya no tiene etapas fallidas; se actualizó la biblioteca.",
+          message: t("libraryPage.noFailedStages"),
         });
         await load();
         return;
@@ -173,7 +176,7 @@ export function BibliotecaPage() {
       setExpandedId(audio.id);
       setNotice({
         tone: "info",
-        message: "etapas encoladas · el progreso real aparecerá en esta clase.",
+        message: t("libraryPage.stagesQueued"),
       });
       await load();
     } catch (error) {
@@ -201,7 +204,7 @@ export function BibliotecaPage() {
       if (expandedId === target.id) setExpandedId(null);
       setNotice({
         tone: "info",
-        message: deleted.notice || "clase eliminada de tu biblioteca.",
+        message: deleted.notice || t("libraryPage.deleted"),
       });
       await load();
     } catch (error) {
@@ -240,8 +243,8 @@ export function BibliotecaPage() {
         tone: "info",
         message:
           result.outcome === "accepted"
-            ? "audio recibido · la transcripción continuará en esta clase."
-            : "el audio ya estaba en la biblioteca; se actualizó la lista.",
+            ? t("libraryPage.audioReceived")
+            : t("libraryPage.audioAlready"),
       });
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -253,8 +256,7 @@ export function BibliotecaPage() {
           setReupload(null);
           setNotice({
             tone: "error",
-            message:
-              "este contenido coincide con otra clase en otro contexto; confírmalo desde «subir clase».",
+            message: t("libraryPage.variantConflict"),
           });
           await load();
           return;
@@ -268,7 +270,7 @@ export function BibliotecaPage() {
         }
         return;
       }
-      setUploadError("no se pudo enviar el audio; revisa tu conexión.");
+      setUploadError(t("libraryPage.sendFailed"));
     } finally {
       setUploading(false);
       abortRef.current = null;
@@ -284,10 +286,9 @@ export function BibliotecaPage() {
       <section className="lowercase font-pixel min-w-0 max-w-full border-2 border-pure-black bg-surface shadow-block">
         <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 p-4 sm:p-6">
           <div className="flex min-w-0 flex-col gap-1">
-            <h1 className="capitalize text-2xl text-mint">biblioteca</h1>
+            <h1 className="capitalize text-2xl text-mint">{t("libraryPage.title")}</h1>
             <p className="text-base text-lavender/80 max-w-prose">
-              &gt; audio no conservado · el audio se borra tras transcribir; solo se guarda el
-              texto.
+              {t("libraryPage.audioNotKept")}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -298,10 +299,10 @@ export function BibliotecaPage() {
               disabled={loading}
               onClick={() => void load()}
             >
-              actualizar
+              {t("libraryPage.refresh")}
             </Button>
             <Link to="/gestion/subir" className={buttonClasses("primary", "sm")}>
-              subir clase
+              {t("libraryPage.upload")}
             </Link>
           </div>
         </header>
@@ -324,17 +325,21 @@ export function BibliotecaPage() {
                 &gt; {loadError}
               </p>
               <Button type="button" size="sm" variant="secondary" onClick={() => void load()}>
-                reintentar
+                {t("libraryPage.retry")}
               </Button>
             </div>
           )}
 
           {reupload !== null && (
-            <section aria-label="volver a subir" className="flex flex-col gap-3 p-4 sm:p-6">
-              <h2 className="capitalize text-xl text-mint">volver a subir</h2>
+            <section aria-label={t("libraryPage.reupload")} className="flex flex-col gap-3 p-4 sm:p-6">
+              <h2 className="capitalize text-xl text-mint">{t("libraryPage.reupload")}</h2>
               <p className="text-base text-lavender/80">
-                &gt; clase {reuploadTarget !== null ? audioLabel(reuploadTarget) : reupload.audioId}{" "}
-                · reserva hasta {new Date(reupload.reservation.upload_expires_at).toLocaleString()}
+                {t("libraryPage.reuploadInfo", {
+                  title: reuploadTarget !== null ? audioLabel(reuploadTarget) : reupload.audioId,
+                  until: new Date(reupload.reservation.upload_expires_at).toLocaleString(
+                    intlLocale(),
+                  ),
+                })}
               </p>
               <AudioUploadPanel
                 capabilities={capabilities}
@@ -352,17 +357,17 @@ export function BibliotecaPage() {
 
           {loading && items.length === 0 ? (
             <p role="status" className="p-4 text-base text-lavender/60 sm:p-6">
-              &gt; cargando biblioteca…
+              {t("libraryPage.loading")}
             </p>
           ) : loadError !== null && items.length === 0 ? (
             <div role="alert" className="p-4 sm:p-6">
               <EmptyState
                 illustration="error"
-                title="no se pudo cargar la biblioteca"
+                title={t("libraryPage.loadFailed")}
                 description={loadError}
                 action={
                   <Button type="button" size="sm" variant="secondary" onClick={() => void load()}>
-                    reintentar
+                    {t("libraryPage.retry")}
                   </Button>
                 }
               />
@@ -371,11 +376,11 @@ export function BibliotecaPage() {
             <div className="p-4 sm:p-6">
               <EmptyState
                 illustration="library"
-                title="aún no hay clases"
-                description="sube la primera para ver aquí su transcripción y el estado de cada etapa."
+                title={t("libraryPage.emptyTitle")}
+                description={t("libraryPage.emptyDescription")}
                 action={
                   <Link to="/gestion/subir" className={buttonClasses("primary", "sm")}>
-                    subir clase
+                    {t("libraryPage.upload")}
                   </Link>
                 }
               />
@@ -413,8 +418,7 @@ export function BibliotecaPage() {
               ))}
               {items.length >= LIBRARY_LIMIT && (
                 <p className="px-4 py-3 text-base text-lavender/60 sm:px-6">
-                  &gt; se muestran hasta {LIBRARY_LIMIT} clases · el contrato S2 aún no ofrece
-                  paginación.
+                  {t("libraryPage.limitNote", { limit: LIBRARY_LIMIT })}
                 </p>
               )}
             </>
@@ -424,16 +428,14 @@ export function BibliotecaPage() {
 
       <ConfirmDialog
         open={deleteTarget !== null}
-        title="eliminar clase"
+        title={t("libraryPage.deleteTitle")}
         description={
           deleteTarget !== null ? (
-            <span>
-              se eliminará «{audioLabel(deleteTarget)}» junto con su transcripción, fragmentos, citas
-              y tareas locales. los eventos ya creados en Google Calendar se conservan.
-            </span>
+            <span>{t("libraryPage.deleteDescription", { title: audioLabel(deleteTarget) })}</span>
           ) : null
         }
-        confirmLabel="sí, eliminar"
+        confirmLabel={t("libraryPage.deleteConfirm")}
+        cancelLabel={t("shared.cancel")}
         destructive
         onConfirm={() => void handleConfirmDelete()}
         onCancel={() => setDeleteTarget(null)}

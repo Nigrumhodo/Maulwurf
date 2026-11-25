@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -17,6 +18,8 @@ import type { DeletionOperation } from "@/lib/auth";
 // the initiating session becomes restricted to status checks, resume, and logout.
 
 export function AccountDeletionPanel() {
+  const { t } = useTranslation("settings");
+  const confirmWordExpected = t("deletion.confirmWord");
   const { logout } = useAuth();
   const [deleteEvents, setDeleteEvents] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -27,7 +30,7 @@ export function AccountDeletionPanel() {
   const [operationId, setOperationId] = useState<string | null>(null);
 
   async function handleConfirmDeletion(): Promise<void> {
-    if (confirmWord.trim().toUpperCase() !== "ELIMINAR") return;
+    if (confirmWord.trim().toUpperCase() !== confirmWordExpected) return;
     setBusy(true);
     setError(null);
     let accepted: Awaited<ReturnType<typeof requestAccountDeletion>>;
@@ -37,7 +40,7 @@ export function AccountDeletionPanel() {
       setError(
         err instanceof ApiHttpError
           ? err.message
-          : "no se pudo iniciar el borrado de cuenta.",
+          : t("deletion.startFailed"),
       );
       setDialogOpen(false);
       setBusy(false);
@@ -49,7 +52,7 @@ export function AccountDeletionPanel() {
     try {
       setOperation(await fetchDeletionStatus(accepted.deletion_operation_id));
     } catch {
-      setError("el borrado se inició, pero no se pudo consultar el estado; actualízalo.");
+      setError(t("deletion.statusAfterStartFailed"));
     } finally {
       setBusy(false);
     }
@@ -62,7 +65,7 @@ export function AccountDeletionPanel() {
     try {
       setOperation(await fetchDeletionStatus(operationId));
     } catch {
-      setError("no se pudo consultar el estado del borrado.");
+      setError(t("deletion.statusFailed"));
     } finally {
       setBusy(false);
     }
@@ -75,7 +78,7 @@ export function AccountDeletionPanel() {
     try {
       setOperation(await resumeAccountDeletion(operationId));
     } catch {
-      setError("no se pudo reanudar el borrado de cuenta.");
+      setError(t("deletion.resumeFailed"));
     } finally {
       setBusy(false);
     }
@@ -85,9 +88,7 @@ export function AccountDeletionPanel() {
     <div>
       <div className="lowercase flex flex-col gap-3 text-lavender">
         <p className="text-lavender/80">
-          elimina de forma irreversible tus materias, clases, transcripciones, embeddings,
-          conversaciones, tareas y tokens OAuth. se conserva solo un registro residual de auditoría
-          sin perfil ni texto durante 30 días.
+          {t("deletion.explainer")}
         </p>
 
         {operation === null && operationId === null ? (
@@ -100,8 +101,7 @@ export function AccountDeletionPanel() {
                 onChange={(event) => setDeleteEvents(event.target.checked)}
               />
               <span>
-                eliminar también los eventos creados por maulwurf en google calendar (si no lo
-                marcas, esos eventos permanecerán en tu calendario)
+                {t("deletion.deleteEvents")}
               </span>
             </label>
 
@@ -116,26 +116,29 @@ export function AccountDeletionPanel() {
                   setDialogOpen(true);
                 }}
               >
-                solicitar eliminación de cuenta
+                {t("deletion.request")}
               </Button>
             </div>
           </>
         ) : (
           <div className="flex flex-col gap-3 border-2 border-mint bg-surface p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="font-bold text-mint">operación {operationId}</span>
+              <span className="font-bold text-mint">{t("deletion.operation", { id: operationId })}</span>
               {operation !== null && <StatusBadge status={operation.status} />}
             </div>
 
             {operation !== null && (
               <>
                 <p className="text-sm text-lavender/80">
-                  eventos de google calendar:{" "}
-                  {operation.delete_maulwurf_events ? "borrado autorizado" : "conservados"}.
+                  {t("deletion.calendarEvents")}{" "}
+                  {operation.delete_maulwurf_events
+                    ? t("deletion.eventsDeleted")
+                    : t("deletion.eventsKept")}
+                  .
                 </p>
                 {operation.error_summary !== null && (
                   <p role="alert" className="text-sm text-mint">
-                    &gt; detalle remoto: {operation.error_summary}
+                    &gt; {t("deletion.remoteDetail")} {operation.error_summary}
                   </p>
                 )}
               </>
@@ -149,7 +152,7 @@ export function AccountDeletionPanel() {
                 disabled={busy}
                 onClick={() => void handleRefreshStatus()}
               >
-                comprobar estado
+                {t("deletion.checkStatus")}
               </Button>
               {(operation === null ||
                 operation.status === "pending" ||
@@ -161,11 +164,11 @@ export function AccountDeletionPanel() {
                   disabled={busy}
                   onClick={() => void handleResume()}
                 >
-                  reanudar borrado
+                  {t("deletion.resume")}
                 </Button>
               )}
               <Button type="button" size="sm" variant="danger" onClick={() => void logout()}>
-                cerrar sesión
+                {t("deletion.logout")}
               </Button>
             </div>
           </div>
@@ -181,24 +184,21 @@ export function AccountDeletionPanel() {
       <ConfirmDialog
         open={dialogOpen}
         destructive
-        title="eliminar cuenta definitivamente"
-        confirmLabel="eliminar cuenta"
-        cancelLabel="cancelar"
-        confirmDisabled={confirmWord.trim().toUpperCase() !== "ELIMINAR" || busy}
+        title={t("deletion.dialogTitle")}
+        confirmLabel={t("deletion.dialogConfirm")}
+        cancelLabel={t("deletion.dialogCancel")}
+        confirmDisabled={confirmWord.trim().toUpperCase() !== confirmWordExpected || busy}
         description={
           <div className="flex flex-col gap-3">
             <p>
-              esta acción bloqueará tu sesión de inmediato y purgará todos los textos, citas y
-              credenciales.{" "}
-              {deleteEvents
-                ? "se intentará borrar también los eventos creados por Maulwurf en Google Calendar."
-                : "tus eventos en Google Calendar se conservarán."}
+              {t("deletion.dialogBody")}{" "}
+              {deleteEvents ? t("deletion.dialogEventsDeleted") : t("deletion.dialogEventsKept")}
             </p>
             <Input
-              label="escribe ELIMINAR para confirmar"
+              label={t("deletion.typeToConfirm", { word: confirmWordExpected })}
               value={confirmWord}
               onChange={(event) => setConfirmWord(event.target.value)}
-              placeholder="ELIMINAR"
+              placeholder={confirmWordExpected}
             />
           </div>
         }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -17,7 +18,8 @@ import { useDocumentTitle } from "@/lib/useDocumentTitle";
 type FormState = { mode: "create" } | { mode: "edit"; subject: Subject } | null;
 
 export function MateriasPage() {
-  useDocumentTitle("materias");
+  const { t } = useTranslation("plan");
+  useDocumentTitle(t("subjects.title"));
   const { toast } = useToast();
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [loading, setLoading] = useState(true);
@@ -44,11 +46,11 @@ export function MateriasPage() {
     } catch (error) {
       if (generation !== loadGeneration.current) return;
       setLoadFailed(true);
-      toast(error instanceof Error ? error.message : "no se pudieron cargar las materias", "error");
+      toast(error instanceof Error ? error.message : t("subjects.loadFailed"), "error");
     } finally {
       if (generation === loadGeneration.current) setLoading(false);
     }
-  }, [toast]);
+  }, [toast, t]);
 
   useEffect(() => {
     void load();
@@ -63,7 +65,7 @@ export function MateriasPage() {
       const created = await createSubject(draft);
       setSubjects((current) => [...current.filter((subject) => subject.id !== created.id), created]);
       setForm(null);
-      toast("materia creada", "success");
+      toast(t("subjects.created"), "success");
     } finally {
       setBusy(false);
     }
@@ -79,7 +81,7 @@ export function MateriasPage() {
         current.map((subject) => (subject.id === updated.id ? updated : subject)),
       );
       setForm(null);
-      toast("materia actualizada", "success");
+      toast(t("subjects.updated"), "success");
     } finally {
       setBusy(false);
     }
@@ -90,14 +92,14 @@ export function MateriasPage() {
     try {
       await apiFetch(`/subjects/${subject.id}`, { method: "DELETE" });
       setSubjects((current) => current.filter((item) => item.id !== subject.id));
-      toast("materia eliminada", "success");
+      toast(t("subjects.deleted"), "success");
     } catch (error) {
       if (error instanceof ApiHttpError && error.code === "subject_has_active_audios") {
         const classCount =
           typeof error.details.class_count === "number" ? error.details.class_count : 0;
         setActiveAudios({ name: subject.name, classCount });
       } else {
-        toast(error instanceof Error ? error.message : "no se pudo eliminar la materia", "error");
+        toast(error instanceof Error ? error.message : t("subjects.deleteFailed"), "error");
       }
     } finally {
       setBusy(false);
@@ -114,28 +116,33 @@ export function MateriasPage() {
       <section className="lowercase flex flex-col border-2 border-pure-black bg-surface shadow-block">
         <header className="flex flex-wrap items-start justify-between gap-3 p-4">
           <div className="flex flex-col gap-1">
-            <h1 className="capitalize text-2xl text-mint">materias</h1>
+            <h1 className="capitalize text-2xl text-mint">{t("subjects.title")}</h1>
             <p className="text-base text-lavender/80 max-w-prose">
-              &gt; tus materias, con el estado de sus clases y tareas.
+              &gt; {t("subjects.subtitle")}
             </p>
           </div>
           {form === null && !showEmptyState && (
-            <Button onClick={() => setForm({ mode: "create" })}>nueva materia</Button>
+            <Button onClick={() => setForm({ mode: "create" })}>{t("subjects.new")}</Button>
           )}
         </header>
 
         {!loading && !loadFailed && subjects.length > 0 && (
           <p className="border-t-2 border-lavender/20 px-4 py-2 text-base text-lavender/80">
-            {subjects.length} {subjects.length === 1 ? "materia" : "materias"} ·{" "}
-            {stats.readyClassCount}/{stats.classCount} clases listas · {stats.transcribedMinutes} min
-            · {stats.confirmedTaskCount} confirmadas / {stats.pendingTaskCount} pendientes
+            {t("subjects.summary", {
+              subjects: t("subjects.subjectCount", { count: subjects.length }),
+              ready: stats.readyClassCount,
+              total: stats.classCount,
+              minutes: stats.transcribedMinutes,
+              confirmed: stats.confirmedTaskCount,
+              pending: stats.pendingTaskCount,
+            })}
           </p>
         )}
 
         {form !== null && (
           <div className="flex flex-col gap-3 border-t-2 border-lavender/20 p-4">
             <h2 className="capitalize text-xl text-mint">
-              {editing != null ? `editar · ${editing.name}` : "nueva materia"}
+              {editing != null ? t("subjects.editing", { name: editing.name }) : t("subjects.new")}
             </h2>
             <div className="max-w-md">
               <SubjectForm
@@ -148,7 +155,7 @@ export function MateriasPage() {
                     ? { name: editing.name, color: editing.color, teacher: editing.teacher ?? "" }
                     : undefined
                 }
-                submitLabel={editing != null ? "guardar" : "crear"}
+                submitLabel={editing != null ? t("subjects.save") : t("subjects.create")}
                 busy={busy}
                 onSubmit={editing != null ? handleUpdate : handleCreate}
                 onCancel={() => setForm(null)}
@@ -159,16 +166,16 @@ export function MateriasPage() {
 
         <div className="border-t-2 border-lavender/20">
           {loading ? (
-            <p className="p-4 text-lavender/60">&gt; cargando…</p>
+            <p className="p-4 text-lavender/60">&gt; {t("subjects.loading")}</p>
           ) : loadFailed ? (
             <div className="p-4">
               <EmptyState
                 illustration="error"
-                title="no se pudieron cargar las materias"
-                description="revisa tu conexión e inténtalo de nuevo."
+                title={t("subjects.loadFailed")}
+                description={t("subjects.loadFailedHint")}
                 action={
                   <Button variant="secondary" onClick={() => void load()}>
-                    reintentar
+                    {t("subjects.retry")}
                   </Button>
                 }
               />
@@ -177,12 +184,12 @@ export function MateriasPage() {
             <div className="p-4">
               <EmptyState
                 illustration="library"
-                title="aún no tienes materias"
-                description="crea la primera para empezar a subir clases."
+                title={t("subjects.emptyTitle")}
+                description={t("subjects.emptyHint")}
                 action={
                   form === null ? (
                     <Button variant="secondary" onClick={() => setForm({ mode: "create" })}>
-                      crear materia
+                      {t("subjects.createSubject")}
                     </Button>
                   ) : undefined
                 }
@@ -194,10 +201,10 @@ export function MateriasPage() {
                 aria-hidden="true"
                 className={`hidden gap-4 border-b-2 border-lavender/20 px-4 py-2 text-sm text-lavender/60 ${gridCols}`}
               >
-                <span>materia</span>
-                <span>clases</span>
-                <span>listas · minutos · tareas</span>
-                <span className="text-right">acciones</span>
+                <span>{t("subjects.columns.subject")}</span>
+                <span>{t("subjects.columns.classes")}</span>
+                <span>{t("subjects.columns.stats")}</span>
+                <span className="text-right">{t("subjects.columns.actions")}</span>
               </div>
               <ul className="flex flex-col divide-y-2 divide-lavender/20">
                 {subjects.map((subject) => {
@@ -223,14 +230,20 @@ export function MateriasPage() {
                         )}
                       </span>
                       <span className="text-lavender/80">
-                        {subject.class_count} {subject.class_count === 1 ? "clase" : "clases"}
+                        {t("subjects.classCount", { count: subject.class_count })}
                       </span>
                       <span className="basis-full text-base text-lavender/80 lg:basis-auto">
                         {item === undefined
                           ? statsLoading
                             ? "…"
-                            : "sin datos"
-                          : `${item.readyClasses}/${item.totalClasses} listas · ${item.transcribedMinutes} min · ${item.confirmedTasks} confirmadas / ${item.pendingTasks} pendientes`}
+                            : t("subjects.noData")
+                          : t("subjects.rowStats", {
+                              ready: item.readyClasses,
+                              total: item.totalClasses,
+                              minutes: item.transcribedMinutes,
+                              confirmed: item.confirmedTasks,
+                              pending: item.pendingTasks,
+                            })}
                       </span>
                       <span className="ml-auto flex items-center gap-2">
                         <Button
@@ -238,7 +251,7 @@ export function MateriasPage() {
                           variant="secondary"
                           onClick={() => setForm({ mode: "edit", subject })}
                         >
-                          editar
+                          {t("subjects.edit")}
                         </Button>
                         <span className="ml-4 border-l-2 border-lavender/30 pl-4">
                           <Button
@@ -247,7 +260,7 @@ export function MateriasPage() {
                             disabled={busy}
                             onClick={() => void handleDelete(subject)}
                           >
-                            eliminar
+                            {t("subjects.delete")}
                           </Button>
                         </span>
                       </span>
@@ -261,7 +274,7 @@ export function MateriasPage() {
 
         <footer className="flex flex-wrap items-center justify-between gap-2 border-t-2 border-lavender/20 px-4 py-2">
           <span className="text-sm text-lavender/80">
-            solo metadatos y texto · audio original no conservado (g1)
+            {t("subjects.privacy")}
           </span>
           <Button
             type="button"
@@ -270,23 +283,24 @@ export function MateriasPage() {
             disabled={statsLoading}
             onClick={() => void reloadStats()}
           >
-            {statsLoading ? "actualizando…" : "actualizar"}
+            {statsLoading ? t("subjects.refreshing") : t("subjects.refresh")}
           </Button>
         </footer>
       </section>
 
       <ConfirmDialog
         open={activeAudios !== null}
-        title="materia con clases activas"
+        title={t("subjects.activeDialog.title")}
         description={
           activeAudios != null
-            ? `«${activeAudios.name}» tiene ${activeAudios.classCount} ${
-                activeAudios.classCount === 1 ? "clase activa" : "clases activas"
-              }. elimina o mueve esas clases primero; el borrado forzado estará disponible más adelante.`
+            ? t("subjects.activeDialog.description", {
+                name: activeAudios.name,
+                count: activeAudios.classCount,
+              })
             : ""
         }
-        confirmLabel="entendido"
-        cancelLabel="cerrar"
+        confirmLabel={t("subjects.activeDialog.confirm")}
+        cancelLabel={t("subjects.activeDialog.cancel")}
         onConfirm={() => setActiveAudios(null)}
         onCancel={() => setActiveAudios(null)}
       />

@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { apiFetch } from "./api";
 import { isRecord, readJson } from "./json";
 
@@ -78,7 +79,7 @@ export async function fetchCapabilities(): Promise<IngestionCapabilities> {
   const res = await apiFetch("/ingestion/capabilities");
   const payload = await readJson(res);
   if (!isIngestionCapabilities(payload)) {
-    throw new Error("Las capacidades de ingesta no coinciden con el contrato.");
+    throw new Error(i18n.t("study:capabilitiesLib.mismatch"));
   }
   return payload;
 }

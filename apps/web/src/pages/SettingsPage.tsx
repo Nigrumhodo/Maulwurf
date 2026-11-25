@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { GoogleReconnect } from "@/components/calendar/GoogleReconnect";
 import { AccountDeletionPanel } from "@/components/settings/AccountDeletionPanel";
+import { LegalLinks } from "@/components/legal/LegalLinks";
 import { DeliveryPanel } from "@/components/settings/DeliveryPanel";
 import { NotificationPreferences } from "@/components/settings/NotificationPreferences";
 import { Button } from "@/components/ui/Button";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { TimezoneSelect } from "@/components/ui/TimezoneSelect";
+import { UiLanguageSwitcher } from "@/components/ui/UiLanguageSwitcher";
 import { updateTimezone } from "@/lib/auth";
 import { ApiHttpError } from "@/lib/api";
 import {
@@ -38,7 +41,8 @@ interface RedirectNotice {
 }
 
 export function SettingsPage() {
-  useDocumentTitle("ajustes");
+  const { t } = useTranslation("settings");
+  useDocumentTitle(t("page.title"));
   const { user, retrySession } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [calendarNotice, setCalendarNotice] = useState<RedirectNotice | null>(null);
@@ -96,7 +100,7 @@ export function SettingsPage() {
       })
       .catch(() => {
         if (cancelled) return;
-        setStatusError("no se pudo comprobar el estado de Google Calendar.");
+        setStatusError(t("page.statusCheckFailed"));
       })
       .finally(() => {
         if (!cancelled) setStatusLoading(false);
@@ -104,7 +108,7 @@ export function SettingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [calendarNotice, gmailNotice]);
+  }, [calendarNotice, gmailNotice, t]);
 
   async function handleSaveTimezone(event: React.FormEvent): Promise<void> {
     event.preventDefault();
@@ -115,7 +119,7 @@ export function SettingsPage() {
     try {
       const updated = await updateTimezone(timezoneDraft);
       setTimezoneDraft(updated.timezone);
-      setTzNotice("zona horaria actualizada para futuros resúmenes.");
+      setTzNotice(t("profile.timezoneUpdated"));
       if (typeof retrySession === "function") {
         await retrySession();
       }
@@ -123,7 +127,7 @@ export function SettingsPage() {
       setTzError(
         err instanceof ApiHttpError
           ? err.message
-          : "no se pudo guardar la zona horaria.",
+          : t("profile.timezoneSaveFailed"),
       );
     } finally {
       setTzSaving(false);
@@ -184,7 +188,7 @@ export function SettingsPage() {
     try {
       const saved = await updateCalendarSettings(readIds);
       setReadIds(saved.read_calendar_ids);
-      setCalSettingsNotice("calendarios de lectura guardados.");
+      setCalSettingsNotice(t("calendars.readSaved"));
     } catch (err) {
       setCalSettingsError(calendarSyncErrorCopy(err));
     } finally {
@@ -199,7 +203,7 @@ export function SettingsPage() {
     try {
       const synced = await syncCalendarMirror();
       setCalSettingsNotice(
-        `espejo de calendar sincronizado (${synced.inserted} actualizados, ${synced.removed} retirados).`,
+        t("calendars.mirrorSynced", { inserted: synced.inserted, removed: synced.removed }),
       );
     } catch (err) {
       setCalSettingsError(calendarSyncErrorCopy(err));
@@ -211,24 +215,25 @@ export function SettingsPage() {
   const h2 = "capitalize text-xl text-mint";
   const h3 = "capitalize text-lg text-lavender";
   const sections = [
-    { id: "perfil", label: "perfil" },
-    { id: "notificaciones", label: "notificaciones" },
-    { id: "entregas", label: "entregas" },
-    { id: "cuenta", label: "cuenta" },
+    { id: "perfil", label: t("sections.profile") },
+    { id: "notificaciones", label: t("sections.notifications") },
+    { id: "entregas", label: t("sections.deliveries") },
+    { id: "cuenta", label: t("sections.account") },
+    { id: "privacidad", label: t("sections.privacy") },
   ];
 
   return (
     <div className="flex flex-col gap-4 border-2 border-pure-black bg-surface p-4 shadow-block sm:p-6">
       <header className="flex flex-col gap-1 border-b-2 border-lavender/30 pb-4">
-        <h1 className="capitalize text-2xl text-mint">ajustes</h1>
+        <h1 className="capitalize text-2xl text-mint">{t("page.title")}</h1>
         <p className="text-base text-lavender/80 max-w-prose">
-          perfil, notificaciones e integraciones con google.
+          {t("page.subtitle")}
         </p>
       </header>
 
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-8">
         <nav
-          aria-label="secciones de ajustes"
+          aria-label={t("page.sectionsLabel")}
           className="lg:sticky lg:top-24 lg:w-44 lg:shrink-0"
         >
           <ul className="flex flex-wrap gap-2 lg:flex-col lg:gap-0 lg:divide-y-2 lg:divide-lavender/20">
@@ -247,18 +252,25 @@ export function SettingsPage() {
 
         <div className="flex min-w-0 flex-1 flex-col gap-8 divide-y-2 divide-lavender/30 [&>section]:pt-8 [&>section:first-child]:pt-0">
           <section id="perfil" aria-labelledby="ajustes-perfil" className="flex scroll-mt-24 flex-col gap-3">
-            <h2 id="ajustes-perfil" className={h2}>perfil</h2>
+            <h2 id="ajustes-perfil" className={h2}>{t("sections.profile")}</h2>
+            <div className="lowercase flex flex-col gap-2 text-lavender">
+              <span className="text-mint">&gt; {t("profile.uiLanguage")}</span>
+              <div className="flex">
+                <UiLanguageSwitcher />
+              </div>
+              <p className="text-base text-lavender/60">{t("profile.uiLanguageHint")}</p>
+            </div>
         {user === null ? (
-          <p className="lowercase text-lavender">sin perfil cargado.</p>
+          <p className="lowercase text-lavender">{t("profile.none")}</p>
         ) : (
           <div className="lowercase flex flex-col gap-3 text-lavender">
             <dl className="flex flex-col gap-3">
               <div>
-                <dt className="text-mint">&gt; email</dt>
+                <dt className="text-mint">&gt; {t("profile.email")}</dt>
                 <dd>{user.email}</dd>
               </div>
               <div>
-                <dt className="text-mint">&gt; zona horaria</dt>
+                <dt className="text-mint">&gt; {t("profile.timezone")}</dt>
                 <dd>{user.timezone}</dd>
               </div>
             </dl>
@@ -269,7 +281,7 @@ export function SettingsPage() {
             >
               <div className="w-full max-w-sm">
               <TimezoneSelect
-                label="cambiar zona horaria"
+                label={t("profile.changeTimezone")}
                 value={timezoneDraft}
                 disabled={tzSaving}
                 onChange={(event) => setTimezoneDraft(event.target.value)}
@@ -281,7 +293,7 @@ export function SettingsPage() {
                 variant="secondary"
                 disabled={tzSaving || timezoneDraft === "" || timezoneDraft === user.timezone}
               >
-                {tzSaving ? "guardando…" : "guardar zona"}
+                {tzSaving ? t("profile.saving") : t("profile.saveTimezone")}
               </Button>
             </form>
 
@@ -300,10 +312,10 @@ export function SettingsPage() {
           </section>
 
           <section id="notificaciones" aria-labelledby="ajustes-notificaciones" className="flex scroll-mt-24 flex-col gap-6">
-            <h2 id="ajustes-notificaciones" className={h2}>notificaciones</h2>
+            <h2 id="ajustes-notificaciones" className={h2}>{t("sections.notifications")}</h2>
             <NotificationPreferences />
             <div className="flex flex-col gap-3 border-t-2 border-lavender/30 pt-6">
-              <h3 className={h3}>conexión gmail (opt-in)</h3>
+              <h3 className={h3}>{t("gmail.title")}</h3>
         <div className="lowercase flex flex-col gap-3 text-lavender">
           {gmailNotice !== null && (
             <div
@@ -311,7 +323,7 @@ export function SettingsPage() {
               className="border-2 border-mint px-3 py-2 text-mint"
             >
               {gmailNotice.kind === "connected" ? (
-                <p>&gt; permiso gmail.send conectado para tus recordatorios opt-in.</p>
+                <p>&gt; {t("gmail.connected")}</p>
               ) : (
                 <p>&gt; {gmailErrorCopy(gmailNotice.reason)}</p>
               )}
@@ -319,21 +331,20 @@ export function SettingsPage() {
           )}
 
           <p className="text-lavender/80">
-            solo concede envío (`gmail.send`) a tu dirección verificada; nunca lee tu bandeja y no
-            envía correos hasta activar el opt-in arriba.
+            {t("gmail.explainer")}
           </p>
 
           {!statusLoading && statusError === null && (
             <div className="flex flex-wrap items-center gap-3">
               <StatusBadge status={gmailReady ? "connected" : "disconnected"} />
               <span className="text-sm text-lavender/80">
-                {gmailReady ? "permiso gmail.send concedido" : "sin permiso gmail.send"}
+                {gmailReady ? t("gmail.granted") : t("gmail.notGranted")}
               </span>
               <a
                 href={GOOGLE_GMAIL_CONNECT_PATH}
                 className="inline-flex min-h-8 w-fit items-center gap-1 border-2 border-lavender/40 px-2 py-0.5 text-mint underline decoration-dotted hover:border-mint hover:bg-mint hover:text-on-accent"
               >
-                {gmailReady ? "reconectar gmail.send" : "conectar gmail (opt-in)"}
+                {gmailReady ? t("gmail.reconnect") : t("gmail.connect")}
               </a>
             </div>
           )}
@@ -342,15 +353,15 @@ export function SettingsPage() {
           </section>
 
           <section id="entregas" aria-labelledby="ajustes-entregas" className="flex scroll-mt-24 flex-col gap-3">
-            <h2 id="ajustes-entregas" className={h2}>entregas</h2>
-            <h3 className={h3}>entregas de correo</h3>
+            <h2 id="ajustes-entregas" className={h2}>{t("sections.deliveries")}</h2>
+            <h3 className={h3}>{t("deliveries.title")}</h3>
             <DeliveryPanel />
           </section>
 
           <section id="cuenta" aria-labelledby="ajustes-cuenta" className="flex scroll-mt-24 flex-col gap-6">
-            <h2 id="ajustes-cuenta" className={h2}>cuenta</h2>
+            <h2 id="ajustes-cuenta" className={h2}>{t("sections.account")}</h2>
             <div className="flex flex-col gap-3">
-              <h3 className={h3}>google calendar</h3>
+              <h3 className={h3}>{t("calendars.title")}</h3>
         {calendarNotice !== null && (
           <div
             role={calendarNotice.kind === "error" ? "alert" : "status"}
@@ -358,9 +369,9 @@ export function SettingsPage() {
           >
             {calendarNotice.kind === "connected" ? (
               <>
-                <p>&gt; google calendar conectado.</p>
+                <p>&gt; {t("calendars.connected")}</p>
                 <p className="text-sm">
-                  las tareas bloqueadas volvieron a pendiente; nada se confirmó automáticamente.
+                  {t("calendars.unblocked")}
                 </p>
               </>
             ) : (
@@ -370,7 +381,7 @@ export function SettingsPage() {
         )}
 
         {statusLoading ? (
-          <p className="lowercase text-lavender/80">&gt; comprobando Google Calendar…</p>
+          <p className="lowercase text-lavender/80">&gt; {t("calendars.checking")}</p>
         ) : statusError !== null ? (
           <p role="alert" className="lowercase text-mint">
             &gt; {statusError}
@@ -381,10 +392,13 @@ export function SettingsPage() {
 
             {calendarScopesReady && (
               <div className="lowercase flex flex-col gap-3 border-t-2 border-lavender/30 pt-3 text-lavender">
-                <p className="text-mint">&gt; calendarios de lectura para tu agenda</p>
+                <p className="text-mint">&gt; {t("calendars.readTitle")}</p>
                 <p className="text-sm text-lavender/80">
-                  maulwurf escribe tareas confirmadas solo en el calendario secundario{" "}
-                  <strong>Maulwurf</strong>; aquí eliges qué calendarios tuyos leer en la agenda.
+                  <Trans
+                    t={t}
+                    i18nKey="calendars.readExplainer"
+                    components={{ strong: <strong /> }}
+                  />
                 </p>
 
                 <label className="flex min-h-10 items-center gap-2 text-sm">
@@ -393,7 +407,7 @@ export function SettingsPage() {
                     checked={readIds.includes("primary")}
                     onChange={() => toggleReadCalendar("primary")}
                   />
-                  <span>calendario principal (primary)</span>
+                  <span>{t("calendars.primary")}</span>
                 </label>
 
                 {remoteCalendars
@@ -417,7 +431,7 @@ export function SettingsPage() {
                     disabled={calSaving}
                     onClick={() => void handleSaveReadCalendars()}
                   >
-                    {calSaving ? "guardando…" : "guardar lectura"}
+                    {calSaving ? t("calendars.saving") : t("calendars.saveRead")}
                   </Button>
                   <Button
                     type="button"
@@ -426,7 +440,7 @@ export function SettingsPage() {
                     disabled={calListLoading}
                     onClick={() => void handleLoadGoogleCalendars()}
                   >
-                    {calListLoading ? "cargando…" : "ver otros calendarios"}
+                    {calListLoading ? t("calendars.loading") : t("calendars.viewOthers")}
                   </Button>
                   <Button
                     type="button"
@@ -435,7 +449,7 @@ export function SettingsPage() {
                     disabled={calSyncing || readIds.length === 0}
                     onClick={() => void handleManualCalendarSync()}
                   >
-                    {calSyncing ? "sincronizando…" : "sincronizar ahora"}
+                    {calSyncing ? t("calendars.syncing") : t("calendars.syncNow")}
                   </Button>
                 </div>
 
@@ -455,9 +469,35 @@ export function SettingsPage() {
         ) : null}
             </div>
             <div className="flex flex-col gap-3 border-t-2 border-lavender/30 pt-6">
-              <h3 className={h3}>zona de peligro · eliminar cuenta</h3>
+              <h3 className={h3}>{t("account.dangerZone")}</h3>
               <AccountDeletionPanel />
             </div>
+          </section>
+
+          <section
+            id="privacidad"
+            aria-labelledby="ajustes-privacidad"
+            className="flex scroll-mt-24 flex-col gap-3"
+          >
+            <h2 id="ajustes-privacidad" className={h2}>
+              {t("sections.privacy")}
+            </h2>
+            <p className="max-w-prose text-lavender/80">
+              <Trans
+                t={t}
+                i18nKey="privacy.deletion"
+                components={{
+                  acct: (
+                    <a
+                      href="#cuenta"
+                      className="text-mint underline decoration-dotted hover:text-lavender"
+                    />
+                  ),
+                }}
+              />
+            </p>
+            <p className="max-w-prose text-lavender/80">{t("privacy.backups")}</p>
+            <LegalLinks />
           </section>
         </div>
       </div>
