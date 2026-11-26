@@ -2,7 +2,7 @@ title: |md
   # Figure 7.9 · Ingestion attempt state machine (ingestion_attempts.status)
 | {near: top-center}
 
-direction: right
+direction: down
 
 classes: {
   zone: {
@@ -131,6 +131,6 @@ await -> canc: "cancel, TTL expiry" {class: flow}
 recv -> canc: "cancel, discard" {class: flow}
 recv -> rej: "validation fails" {class: flow}
 trans -> rej: "no usable text" {class: flow}
-trans -> reup: "ASR deadline or retries\nexhausted, process lost" {class: flow}
+trans -> reup: "ASR deadline,\nretries spent,\nprocess lost" {class: flow}
 trans -> canc: "cancel" {class: flow}
 pend -> cs.c1: "cleanup runs" {class: flow}

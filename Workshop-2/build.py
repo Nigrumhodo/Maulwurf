@@ -3,15 +3,18 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Build the Workshop 2 deliverables: PlantUML sources to SVG, and every section into one PDF.
+"""Build the Workshop 2 deliverables: PlantUML and D2 sources to SVG, and every section into one PDF.
 
 Usage:
     uv run Workshop-2/build.py            # diagrams + PDF
-    uv run Workshop-2/build.py diagrams   # only the SVGs
+    uv run Workshop-2/build.py diagrams   # all SVGs (PlantUML + D2)
+    uv run Workshop-2/build.py plantuml   # only the PlantUML SVGs
+    uv run Workshop-2/build.py d2         # only the D2 SVGs
     uv run Workshop-2/build.py pdf        # only the PDF (uses the committed SVGs)
 
 Requirements:
-    PLANTUML_JAR  path to plantuml-mit-1.2026.8.jar (Java 17+ on PATH)
+    PLANTUML_JAR  path to plantuml-mit-1.2026.8.jar (Java 17+ on PATH; for PlantUML)
+    D2_BIN        path to d2 v0.9.0+ (optional if `d2` is on PATH; for D2)
     CHROME_PATH   path to Chrome or Chromium (headless printing)
 """
 
@@ -22,6 +25,7 @@ import hashlib
 import html
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -60,16 +64,26 @@ tr { break-inside: avoid; }
 code { font-family: "Noto Sans Mono", monospace; font-size: 9pt; background: #f3f3f3;
        padding: 0 2px; }
 pre { background: #f3f3f3; padding: 6px; white-space: pre-wrap; font-size: 8.5pt; }
-img { max-width: 100%; max-height: 235mm; display: block; margin: 6px auto; }
+ul, ol { margin: 6px 0; padding-left: 20px; }
+li { margin: 2px 0; }
+img { max-width: 100%; max-height: 210mm; display: block; margin: 6px auto; }
 p.figure { break-inside: avoid; text-align: center; }
-p.landscape { page: landscape; break-before: page; break-after: page; }
-p.landscape img { max-height: 180mm; }
+div.landscape { page: landscape; break-before: page; break-after: page; }
+div.landscape img { max-height: 154mm; }
 blockquote { border-left: 3px solid #999; margin: 8px 0; padding: 2px 10px; color: #444; }
 .crc table { width: 100%; }
 """
 
+D2_ARGS = (
+    "--layout=elk",
+    "--elk-nodeNodeBetweenLayers=20",
+    "--elk-edgeNodeBetweenLayers=15",
+    "--theme=1",
+    "--pad=40",
+)
 
-def render_diagrams() -> None:
+
+def render_plantuml() -> None:
     jar = os.environ.get("PLANTUML_JAR")
     if not jar or not Path(jar).is_file():
         sys.exit("set PLANTUML_JAR to plantuml-mit-1.2026.8.jar")
@@ -84,6 +98,22 @@ def render_diagrams() -> None:
     )
     for source in sources:
         print(source.with_suffix(".svg").relative_to(HERE))
+
+
+def render_d2() -> None:
+    d2_bin = os.environ.get("D2_BIN") or shutil.which("d2")
+    if not d2_bin or not Path(d2_bin).is_file():
+        sys.exit("set D2_BIN or put `d2` on PATH")
+    sources = sorted((HERE / "assets/diagrams").glob("*.d2"))
+    for source in sources:
+        target = source.with_suffix(".svg")
+        subprocess.run([d2_bin, *D2_ARGS, str(source), str(target)], check=True)
+        print(target.relative_to(HERE))
+
+
+def render_diagrams() -> None:
+    render_plantuml()
+    render_d2()
 
 
 def _is_wide(svg: Path) -> bool:
@@ -107,9 +137,48 @@ def _markdown_html(text: str) -> str:
     lines = text.splitlines()
     out: list[str] = []
     i = 0
-    in_list = False
+    list_tag: str | None = None
     while i < len(lines):
         line = lines[i]
+        ul_match = re.match(r"^\s*[-*]\s+(.*)$", line)
+        ol_match = None if ul_match else re.match(r"^\s*\d+\.\s+(.*)$", line)
+        if ul_match or ol_match:
+            tag = "ul" if ul_match else "ol"
+            match = ul_match or ol_match
+            assert match is not None
+            if list_tag != tag:
+                if list_tag:
+                    out.append(f"</{list_tag}>")
+                out.append(f"<{tag}>")
+                list_tag = tag
+            item = [match.group(1).strip()]
+            i += 1
+            while (
+                i < len(lines)
+                and lines[i].strip()
+                and re.match(r"^\s{2,}\S", lines[i])
+                and not re.match(r"^\s*([-*]|\d+\.)\s+", lines[i])
+                and not lines[i].lstrip().startswith(("#", "```", "> ", "| "))
+            ):
+                item.append(lines[i].strip())
+                i += 1
+            out.append(f"<li>{_inline(' '.join(item))}</li>")
+            continue
+        if not line.strip():
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if list_tag == "ol" and j < len(lines) and re.match(r"^\s*\d+\.\s+", lines[j]):
+                i = j
+                continue
+            if list_tag:
+                out.append(f"</{list_tag}>")
+                list_tag = None
+            i = j
+            continue
+        if list_tag:
+            out.append(f"</{list_tag}>")
+            list_tag = None
         if line.startswith("```"):
             language = line[3:].strip()
             code: list[str] = []
@@ -123,8 +192,6 @@ def _markdown_html(text: str) -> str:
             continue
         heading = re.match(r"^(#{1,6})\s+(.*)$", line)
         if heading:
-            if in_list:
-                out.append("</ul>"); in_list = False
             level = len(heading.group(1))
             out.append(f"<h{level}>{_inline(heading.group(2).rstrip('#').strip())}</h{level}>")
             i += 1
@@ -141,27 +208,23 @@ def _markdown_html(text: str) -> str:
             out.extend("<tr>" + "".join(f"<td>{_inline(c)}</td>" for c in row) + "</tr>" for row in rows[1:])
             out.append("</tbody></table>")
             continue
-        bullet = re.match(r"^\s*[-*]\s+(.*)$", line)
-        if bullet:
-            if not in_list:
-                out.append("<ul>"); in_list = True
-            out.append(f"<li>{_inline(bullet.group(1))}</li>"); i += 1; continue
-        if in_list:
-            out.append("</ul>"); in_list = False
         if line.startswith("> "):
             quote: list[str] = []
             while i < len(lines) and lines[i].startswith("> "):
                 quote.append(lines[i][2:]); i += 1
             out.append(f"<blockquote>{_inline(' '.join(quote))}</blockquote>"); continue
-        if not line.strip():
-            i += 1; continue
         paragraph = [line]
         i += 1
-        while i < len(lines) and lines[i].strip() and not lines[i].startswith(("#", "```", "> ", "| ", "- ", "* ")):
+        while (
+            i < len(lines)
+            and lines[i].strip()
+            and not lines[i].startswith(("#", "```", "> ", "| "))
+            and not re.match(r"^\s*([-*]|\d+\.)\s+", lines[i])
+        ):
             paragraph.append(lines[i]); i += 1
         out.append(f"<p>{_inline(' '.join(paragraph))}</p>")
-    if in_list:
-        out.append("</ul>")
+    if list_tag:
+        out.append(f"</{list_tag}>")
     return "\n".join(out)
 
 
@@ -187,18 +250,34 @@ def _section_html(name: str) -> str:
     body = re.sub(r'href="([^"]+)"', link, body)
 
     def figure(match: re.Match[str]) -> str:
-        src = match.group(1)
-        css = "figure landscape" if src.endswith(".svg") and _is_wide(HERE / src) else "figure"
-        return f'<p class="{css}">{match.group(0)[3:-4]}</p>'
+        img_html = match.group(1)
+        src = match.group(2)
+        caption = match.group(3)
+        wide = src.endswith(".svg") and _is_wide(HERE / src)
+        if not wide:
+            suffix = f"\n{caption}" if caption else ""
+            return f'<p class="figure">{img_html}</p>{suffix}'
+        if caption and "<img " not in caption and len(re.sub(r"<[^>]+>", "", caption)) <= 600:
+            return f'<div class="landscape"><p class="figure">{img_html}</p>\n{caption}</div>'
+        suffix = f"\n{caption}" if caption else ""
+        return f'<div class="landscape"><p class="figure">{img_html}</p></div>{suffix}'
 
-    body = re.sub(r'<p><img [^>]*src="([^"]+)"[^>]*/?></p>', figure, body)
+    body = re.sub(
+        r'<p>(<img [^>]*src="([^"]+)"[^>]*/?>)</p>(?:\n(<p>.*?</p>))?',
+        figure,
+        body,
+    )
     return f'<section id="{Path(name).stem}">{body}</section>'
 
 
 def build_pdf() -> None:
-    chrome = os.environ.get("CHROME_PATH")
+    chrome = (
+        os.environ.get("CHROME_PATH")
+        or shutil.which("chromium")
+        or shutil.which("google-chrome")
+    )
     if not chrome or not Path(chrome).is_file():
-        sys.exit("set CHROME_PATH to a Chrome or Chromium binary")
+        sys.exit("set CHROME_PATH or install Chrome/Chromium on PATH")
     sections = "\n".join(_section_html(name) for name in SECTIONS)
     try:
         commit = subprocess.run(
@@ -216,8 +295,10 @@ def build_pdf() -> None:
     )
     with tempfile.TemporaryDirectory() as tmp:
         page = Path(tmp) / "workshop-2.html"
+        profile = Path(tmp) / "chrome-profile"
         page.write_text(document, encoding="utf-8")
         argv = [chrome, "--headless", "--disable-gpu", "--no-pdf-header-footer",
+                f"--user-data-dir={profile}",
                 f"--print-to-pdf={HERE / PDF_NAME}", page.as_uri()]
         if getattr(os, "geteuid", lambda: 1)() == 0:
             # Chrome refuses to start as root with its sandbox (typical inside containers).
@@ -228,11 +309,16 @@ def build_pdf() -> None:
 
 def main(argv: list[str]) -> int:
     steps = argv or ["diagrams", "pdf"]
-    unknown = set(steps) - {"diagrams", "pdf"}
+    unknown = set(steps) - {"diagrams", "plantuml", "d2", "pdf"}
     if unknown:
         sys.exit(f"unknown step(s): {', '.join(sorted(unknown))}")
     if "diagrams" in steps:
         render_diagrams()
+    else:
+        if "plantuml" in steps:
+            render_plantuml()
+        if "d2" in steps:
+            render_d2()
     if "pdf" in steps:
         build_pdf()
     return 0

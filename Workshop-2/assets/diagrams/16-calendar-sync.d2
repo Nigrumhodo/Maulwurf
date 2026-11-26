@@ -116,9 +116,10 @@ st: "calendar_sync_status" {
   pe -> bl: "invalid_grant" {class: flow}
   bl -> pe: "reconnect resumes the same version" {class: flow}
   fa -> pe: "explicit retry" {class: flow}
+  sy -> pe: "confirm new task version" {class: flow}
 }
 
-confirm: "POST /tasks/{id}/confirm\none transaction: task version +\nsync_task_event outbox row" {class: svc}
+confirm: "POST /tasks/{id}/confirm\none transaction: task version +\nsync_task_event outbox row\n(new version moves any sync status\nto pending, or blocked if unconfigured)" {class: svc}
 disp: "outbox dispatcher\nIDs and version only" {class: svc}
 job: "worker job sync_task_event\nresolve task under the jobs policy,\nbind owner; stale version cannot write" {class: svc}
 tok: "google_tokens\nrefresh access token from the encrypted\nrefresh token, under a row lock" {class: svc}

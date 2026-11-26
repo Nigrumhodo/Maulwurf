@@ -11,7 +11,8 @@ to ingestion), [ADR-0009](../docs/adr/ADR-0009-run-fencing.md) (run fencing) and
 stay in [ESPECIFICACION.md](../docs/ESPECIFICACION.md); the claim registry
 [CLAIMS.md](../docs/sprints/CLAIMS.md) is the authority on what is `done`.
 
-Paths in backticks are relative to the repository root.
+Paths in backticks are relative to the repository root unless scoped by the enclosing package
+heading (`apps/web`, `apps/api/app`, `apps/ingest/maulwurf_ingest` or `Workshop-2`).
 
 ## 7.1 Overview and architectural style
 
@@ -57,16 +58,12 @@ d2 --layout=elk --elk-nodeNodeBetweenLayers=20 --elk-edgeNodeBetweenLayers=15 \
 Figures 7.1 to 7.3 give the overview. Figures 7.4 to 7.18 zoom into one module or flow each and sit
 next to the text they illustrate in §7.3 and §7.4.
 
-### Figure 7.1a · Layers: request path and audio ingestion
-
 ![Layers: student browser, Caddy and web, api, ingest, PostgreSQL and NVIDIA Riva](./assets/diagrams/01a-layers-request-path.svg)
 
 The browser reaches Caddy, which serves the SPA from `web` and forwards REST, SSE and the binary
 upload to `api`. The API streams audio to `ingest` (amber, the only place audio exists) and reads
 and writes tenant data in PostgreSQL. `ingest` writes the transcript and the cleanup evidence to
 PostgreSQL and is the only component that talks to NVIDIA Riva.
-
-### Figure 7.1b · Layers: asynchronous processing and integrations
 
 ![Layers: api, scheduler, Redis, worker, PostgreSQL, LLM and embeddings, Google](./assets/diagrams/01b-layers-async-integrations.svg)
 
@@ -76,15 +73,11 @@ Gmail. `api` and `worker` call the LLM and embeddings gateway; `api` also calls 
 Calendar reads. Redis sits with the async layer because its main role is the ARQ queue; the API
 additionally keeps rate-limit counters there (see §7.5).
 
-### Figure 7.2a · Data flow: from upload to stored text
-
 ![Sequence: reserve and upload, then transcribe and commit](./assets/diagrams/02a-flow-upload-transcribe.svg)
 
 Stages 1 and 2 of §7.4 (flow B): reserve and stream the upload through `api` to `ingest`, then
 transcribe with Riva, commit transcript and segments with disabled outbox rows, delete the audio and
 verify cleanup. The cleanup verification precedes the enabling of the outbox rows.
-
-### Figure 7.2b · Data flow: from stored text to cited answer and Calendar
 
 ![Sequence: dispatch, index and analyze, then ask, review and schedule](./assets/diagrams/02b-flow-index-answer.svg)
 
@@ -92,16 +85,12 @@ Stages 3 and 4 of §7.4 (flows C to E): the scheduler dispatches the enabled out
 worker indexes and analyzes the text, the student asks a cited question, and a confirmed task becomes
 a Calendar event through a `sync_task_event` outbox row.
 
-### Figure 7.3a · Deployment: Docker Compose networks and services
-
 ![Docker Compose edge and data networks, services and the production-only overlay](./assets/diagrams/03a-deployment-compose.svg)
 
 `caddy` and `web` are on the `edge` network; `api` is on both networks; everything else, including
 `ingest`, is on the private `data` network and publishes no host port (Redis is published on
 loopback in development only). The dashed purple elements exist only in the production compose
-(`infra/docker-compose.prod.yml`).
-
-### Figure 7.3b · External integrations and their configuration
+(`infra/docker-compose.prod.yml`; Prometheus runs under the `observability` profile).
 
 ![Ingest, api and worker calling NVIDIA Riva, the LLM and embeddings gateway, and Google](./assets/diagrams/03b-integrations.svg)
 
@@ -118,8 +107,6 @@ Only `ingest` sends audio, and only to Riva; text goes only to the LLM and embed
 | Routing order | `PUT /audios/*/content` → `api` (upload, 1100 MB body limit); `/internal/*` → `404`; SSE routes `/audios/*/progress` and `/chat/conversations/*/messages` → `api` with `flush_interval -1`; the API path allowlist (`/auth/*`, `/me`, `/subjects`, `/integrations/*`, `/audios`, `/ingestion/*`, `/search`, `/chat/*`, `/calendar`, `/tasks`, `/notifications`, `/healthz`, `/readyz`) → `api`; anything else → `web` |
 | Limits | 10 MB body on every route except the upload; `read_body` 40m, `read_header` 30s, `write` 0 (SSE), `idle` 5m |
 | Hardening | `admin off`, `-Server`, `nosniff`, `X-Frame-Options: DENY`, referrer policy; scanner paths (`/.env`, `/wp-admin`, `*.php`…) answer `404`; OAuth callback paths are skipped in the access log and `code`/`state` query values are redacted |
-
-**Figure 7.4 · Caddy routing**
 
 ![Caddy rules evaluated in order and their destinations](./assets/diagrams/04-edge-routing.svg)
 
@@ -138,9 +125,8 @@ Rules are `handle` blocks in `infra/Caddyfile`; the first match wins, so scanner
 | `public/sw.js`, `manifest.webmanifest` | PWA shell-only service worker |
 
 There is no server-side rendering: private data is fetched from the API after login. The streaming
-upload client (D2.2) and the library (D2.4) are still `in progress` in `CLAIMS.md`.
-
-**Figure 7.5 · SPA structure**
+upload, SSE progress and library views are merged in `apps/web`; claim rows `D1.7` and `D2.1`–`D2.4`
+remain `in progress` in `CLAIMS.md` pending live review.
 
 ![Express server, SPA shell, pages, components, lib modules and the API](./assets/diagrams/05-web-spa.svg)
 
@@ -151,9 +137,8 @@ The Express server only delivers static files; every private datum is fetched th
 **Process.** `apps/api/app/main.py` assembles the FastAPI app: `RequestIdMiddleware`,
 `NoStoreMiddleware` (private responses are `no-store`), the typed error handlers and the routers.
 OpenAPI and `/docs` are exposed only when `MAULWURF_ENV=local`. On boot (`apps/api/Dockerfile`) the
-container runs `alembic upgrade head` and then Uvicorn; production uses the separate `migrate` job.
-
-**Figure 7.6 · API request pipeline**
+local container runs `alembic upgrade head` and then Uvicorn; `infra/docker-compose.prod.yml`
+overrides the command to start Uvicorn directly after the one-shot `migrate` job completes.
 
 ![Middleware, session and CSRF dependencies, service, transaction role binding and RLS, error envelope](./assets/diagrams/06-api-request-pipeline.svg)
 
@@ -191,8 +176,6 @@ Every private route resolves the user from the session cookie, mutations also pa
 | Outbox and recovery | `outbox`, `outbox_retry`, `outbox_metrics`, `reconciliation`, `runs`, `orphan_sweep`, `generation_cleanup` |
 | Lifecycle and cost control | `deletion`, `provider_budget`, `exports` |
 
-**Figure 7.7 · API modules**
-
 ![Routers grouped by area, the services they call, persistence, Redis and external services](./assets/diagrams/07-api-modules.svg)
 
 Routers stay thin and delegate to services grouped by capability. Services that change business state write `outbox_events` rows in the same transaction; only the worker side acts on them.
@@ -209,8 +192,9 @@ conversations, messages and sources, processing runs, outbox events, tasks with 
 and revisions, calendar events, notifications, settings, scheduler leases and account deletions.
 `apps/api/prompts/v1/` holds the versioned chat, extraction and summary prompts.
 
-**Core** (`apps/api/app/core/`): `config.py` (Pydantic settings, `MAULWURF_*`, `extra="forbid"`,
-fail-fast), `db.py` (async engine, per-transaction role and tenant binding), `deps.py` (session,
+**Core** (`apps/api/app/core/`): `config.py` (Pydantic settings, `MAULWURF_*`, `extra="ignore"` for
+shared `.env` keys plus a validator that rejects unknown `MAULWURF_*` variables, fail-fast), `db.py`
+(async engine, per-transaction role and tenant binding), `deps.py` (session,
 CSRF, Origin), `crypto.py` (AES-GCM), `security.py` (HMAC-signed OAuth state), `errors.py`,
 `logging.py`, `request_context.py`, `redis.py`, `providers.py`, `prometheus.py`,
 `cache_control.py`, `validation.py`.
@@ -220,8 +204,6 @@ CSRF, Origin), `crypto.py` (AES-GCM), `security.py` (HMAC-signed OAuth state), `
 `apps/ingest/maulwurf_ingest/main.py` exposes `/healthz`, `/readyz` (hardening, tmpfs, PostgreSQL and
 credential checks) and `/internal/metrics`; `receptions.py` adds the internal reception routes. The
 package is a running service, not only a library.
-
-**Figure 7.8 · Ingestion modules**
 
 ![Ingest reception, attempt execution, commit and recovery modules, tmpfs, PostgreSQL and Riva](./assets/diagrams/08-ingest-internals.svg)
 
@@ -239,10 +221,8 @@ Amber boxes are the parts that touch audio. The supervisor is the single owner o
 | `persistence.py` | One transaction writes transcript, segments and **disabled** `index`/`analyze` outbox rows; after verified cleanup a second transaction enables them |
 | `cleanup.py`, `recovery.py`, `reconciler.py`, `audio_absence.py` | Delete the attempt directory and verify it in `/proc`; periodic sweeper and post-commit recovery; the audio-absence sweep used by tests |
 | `rls.py` | Per-transaction `SET LOCAL ROLE maulwurf_ingest` and `app.user_id` |
-| `hardening.py`, `capacity.py`, `capabilities.py`, `config.py` | Startup self-check, RAM budget per slot, observed capabilities, `INGEST_*` settings |
+| `hardening.py`, `capacity.py`, `capabilities.py`, `config.py` | Startup self-check, RAM budget per slot, observed capabilities, `INGEST_*` settings (`extra="forbid"`) |
 | `metrics.py`, `logs.py`, `request_context.py` | Prometheus text, redacted JSON logs, request correlation |
-
-**Figure 7.9 · Ingestion attempt states**
 
 ![State machine of ingestion_attempts.status and cleanup_status](./assets/diagrams/09-attempt-states.svg)
 
@@ -259,8 +239,6 @@ Amber boxes are the parts that touch audio. The supervisor is the single owner o
    (`Secure`, `HttpOnly`, `SameSite=Lax`; only its SHA-256 is stored).
 3. `GET /me` returns the profile and a CSRF token derived from the session by HMAC; every mutation
    must send that token and a same-origin `Origin`.
-
-**Figure 7.10 · Sign-in with Google**
 
 ![Sequence of the Google sign-in, callback, session cookie and CSRF bootstrap](./assets/diagrams/10-signin-sequence.svg)
 
@@ -310,24 +288,19 @@ The sequence of flow B is Figure 7.2a, the module view is Figure 7.8 and the sta
 3. `analyze` (`workers/jobs/analyze.py`) plans bounded sentence-aligned windows (at most
    `MAULWURF_ANALYSIS_MAX_WINDOWS`, 24 by default), asks the LLM for structured proposals with the
    `prompts/v1` templates, validates every date and evidence span against the persisted transcript and
-   writes summary, topics and task proposals in one transaction. Without a configured LLM it fails
-   the run and writes no tasks.
+   writes summary, topics and task proposals in one transaction. Unlike `index`, `analyze` and `chat`
+   are gated by `MAULWURF_LLM_*` rather than `MAULWURF_D3_TEXT_CLOSED_MODELS`: without a configured LLM
+   `analyze` fails the run and writes no tasks.
 4. `reconcile` (every 5 minutes) repairs lost dispatches, dead runs and orphan generations from the
    database, so a lost Redis queue loses nothing.
-
-**Figure 7.11 · Transactional outbox**
 
 ![Producers, outbox_events, dispatcher, publication policy, revalidation, Redis and worker](./assets/diagrams/11-outbox-dispatch.svg)
 
 The dispatcher never trusts the queue: it applies the publication policy and revalidates the event right before enqueueing IDs, and the reconciler returns lost dispatches to `pending`.
 
-**Figure 7.12 · Job `index`**
-
 ![Text gate, run claim, chunking, embedding, building generation and activation](./assets/diagrams/12-index-job.svg)
 
 The new generation stays invisible (`building`) until one transaction activates it, so search never mixes vectors of two models or versions.
-
-**Figure 7.13 · Job `analyze`**
 
 ![Run claim, window planning, LLM extraction, validation and one-transaction write](./assets/diagrams/13-analyze-job.svg)
 
@@ -347,8 +320,6 @@ Nothing is written until every window and the summary have returned; edited, con
 4. `citations.py` and `evidence.py` validate every cited segment ID and span against PostgreSQL for the
    authenticated tenant; without enough evidence the assistant says so.
 
-**Figure 7.14 · Cited chat**
-
 ![Chat request, limiter, retrieval with RRF, prompt, LLM, tool loop, citation validation and SSE events](./assets/diagrams/14-chat-rag.svg)
 
 The database session is released before streaming starts; citations are validated against PostgreSQL after generation, and a cancel is cooperative and durable.
@@ -366,13 +337,9 @@ The database session is released before streaming starts; citations are validate
    for review instead of an overwrite.
 4. Dismissing or completing a task cancels unsent reminders and keeps the linked event with a notice.
 
-**Figure 7.15 · Task lifecycle**
-
 ![Task statuses pending, needs_review, confirmed, completed, dismissed and the revision statuses](./assets/diagrams/15-task-lifecycle.svg)
 
 The transition table in `apps/api/app/services/task_state.py` is the single authority; `completed` and `dismissed` are terminal, and editing a confirmed task never touches the active version until the revision is confirmed.
-
-**Figure 7.16 · Calendar sync**
 
 ![calendar_sync_status states and the sync_task_event pipeline to Google Calendar](./assets/diagrams/16-calendar-sync.svg)
 
@@ -389,8 +356,6 @@ The Calendar status is independent of the task status. A job enqueued for an old
 3. Both crons are off by default: `MAULWURF_NOTIFICATION_SCHEDULER_ENABLED` and
    `MAULWURF_NOTIFICATION_DELIVERY_ENABLED` are `false`.
 
-**Figure 7.17 · Reminders and digests**
-
 ![Notification statuses, scheduler claim, delivery pre-flight and Gmail](./assets/diagrams/17-notifications.svg)
 
 Delivery is one attempt only. An unknown outcome (`delivery_unknown`) is never resent automatically; only an explicit resend does it.
@@ -402,8 +367,6 @@ revokes other sessions, creates `account_deletions`), then runs authorised Googl
 encrypted credential still exists, and finally purges tenant data, profile and tokens. It is resumable
 through `POST /me/deletion/{id}/resume`. The hourly `purge_residuals` cron deletes expired residual
 rows in bounded batches.
-
-**Figure 7.18 · Account deletion**
 
 ![Tombstone, claim, Google remote deletions, purge and residual retention](./assets/diagrams/18-account-deletion.svg)
 
@@ -466,8 +429,8 @@ the CSRF token in memory.
 | Resilience | Outbox with retry and backoff, lease plus fencing (ADR-0009), reconciler, idempotent jobs, bounded provider retries with jitter, `invalid_grant` handling |
 | Rate limits and budgets | Per-user chat streams (2) and search quota; per-minute auth and integration limits; monthly provider budgets with a warning ratio |
 | Logging | Structured JSON with `request_id`, `audio_id`, `attempt_id`, `run_id`; a redaction filter removes tokens, cookies, prompts and transcripts; workers log error types only |
-| Observability | `GET /internal/metrics` on `api` and `ingest` (outbox lag, cleanup/admission, budgets) scraped by Prometheus in production; alert rules in `infra/alerting/maulwurf.rules.yml`; runbooks in `docs/runbooks/` |
-| Deployment | `infra/docker-compose.yml` (8 services, digest-pinned images, healthchecks), `infra/docker-compose.e2e.yml` (deterministic Riva and provider doubles), `infra/docker-compose.prod.yml` (registry images, `migrate` job, Prometheus, Redis password, larger ingest tmpfs) |
+| Observability | `GET /internal/metrics` on `api` and `ingest` (outbox lag, cleanup/admission, budgets) scraped by Prometheus in production (`observability` profile); alert rules in `infra/alerting/maulwurf.rules.yml`; runbooks in `docs/runbooks/` |
+| Deployment | `infra/docker-compose.yml` (8 services, digest-pinned images, healthchecks), `infra/docker-compose.e2e.yml` (deterministic Riva and provider doubles), `infra/docker-compose.prod.yml` (registry images, `migrate` job, Prometheus under `observability`, Redis password, larger ingest tmpfs) |
 | CI | `.github/workflows/quality.yml`: Ruff and mypy, unit tests, web lint/typecheck/test/build, integration tests with PostgreSQL and Redis, image builds, secret and license scans, compose and Caddy limit checks, the E2E smoke and the documentation reference check |
 
 ## 7.7 Implementation status and open gates
@@ -482,7 +445,7 @@ the CSRF token in memory.
 | Real-text indexing | Closed by default until D3-Texto is recorded for the embedding model |
 | Analysis, tasks, review, Calendar sync | Implemented; Calendar is written only after explicit confirmation |
 | Reminders, digests, Gmail | Implemented; scheduler and delivery are disabled by default |
-| Web SPA | Present; streaming upload (D2.2) and library (D2.4) still `in progress` |
+| Web SPA | Implemented (merged on `develop`; `D1.7` and `D2.1`–`D2.4` remain `in progress` in `CLAIMS.md` pending live review) |
 | Reference production stack and alerting | Merged, `in progress` (J4.7, J4.8) |
 
 The open gates D2, D3-Audio, D3-Texto, D4 and D6 are tracked in

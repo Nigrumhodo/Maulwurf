@@ -2,7 +2,7 @@ title: |md
   # Figure 7.3a · Deployment: Docker Compose networks and services
 | {near: top-center}
 
-direction: right
+direction: down
 
 classes: {
   zone: {
@@ -81,7 +81,7 @@ host: Docker Compose host {
 
   data: "data network" {
     class: zone
-    api: "api :8000 · role maulwurf_app\nedge + data networks\nalembic upgrade head on boot" {class: svc}
+    api: "api :8000 · role maulwurf_app\nedge + data networks\nalembic upgrade head on boot (dev)" {class: svc}
     worker: "worker\ncap_drop ALL\nrole maulwurf_jobs" {class: svc}
     scheduler: "scheduler\ncap_drop ALL\nrole maulwurf_jobs" {class: svc}
     ingest: "ingest :8000 · role maulwurf_ingest\nUID 10001, read-only root,\ntmpfs, no swap" {class: ephemeral}
@@ -92,7 +92,7 @@ host: Docker Compose host {
   prod: "production overlay only" {
     class: zone
     migrate: "migrate\none-shot job" {class: prod}
-    prom: "prometheus 2.55" {class: prod}
+    prom: "prometheus 2.55\nprofile: observability" {class: prod}
   }
 }
 
