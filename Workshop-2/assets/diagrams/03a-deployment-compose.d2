@@ -1,5 +1,5 @@
 title: |md
-  # Figure 7.3 · Deployment and external integrations
+  # Figure 7.3a · Deployment: Docker Compose networks and services
 | {near: top-center}
 
 direction: right
@@ -96,10 +96,6 @@ host: Docker Compose host {
   }
 }
 
-riva: "NVIDIA Riva\nwhisper-large-v3" {class: external}
-llm: "LLM and embeddings\nOpenAI-compatible" {class: external}
-google: "Google\nOAuth, Calendar, Gmail" {class: external}
-
 host.edge.caddy -> host.edge.web: "static" {class: flow}
 host.edge.caddy -> host.data.api: "REST, SSE, PUT" {class: flow}
 host.data.api -> host.data.ingest: "internal HTTP/1.1" {class: flow}
@@ -111,9 +107,3 @@ host.data.worker -> host.data.pg: "SQL" {class: flow}
 host.prod.migrate -> host.data.pg: "migrations" {class: flow}
 host.prod.prom -> host.data.api: "scrape /internal/metrics" {class: flow}
 host.prod.prom -> host.data.ingest: "scrape /internal/metrics" {class: flow}
-
-host.data.ingest -> riva: "gRPC TLS\nNVIDIA_API_KEY, RIVA_*" {class: flow}
-host.data.api -> llm: "HTTPS\nMAULWURF_LLM_*,\nMAULWURF_EMBEDDING_*" {class: flow}
-host.data.worker -> llm: "HTTPS" {class: flow}
-host.data.api -> google: "HTTPS\nMAULWURF_GOOGLE_*" {class: flow}
-host.data.worker -> google: "HTTPS" {class: flow}

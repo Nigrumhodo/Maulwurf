@@ -1,0 +1,137 @@
+title: |md
+  # Figure 7.18 · Account deletion and residual retention (services/deletion.py)
+| {near: top-center}
+
+direction: down
+
+classes: {
+  zone: {
+    style: {
+      fill: "#F7F8FA"
+      stroke: "#B8C0CC"
+      border-radius: 10
+      font-size: 18
+    }
+  }
+  svc: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  ephemeral: {
+    style: {
+      fill: "#FFF3D6"
+      stroke: "#B26A00"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  store: {
+    shape: cylinder
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  bus: {
+    shape: queue
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  external: {
+    shape: cloud
+    style: {
+      fill: "#EAF0FB"
+      stroke: "#4766B8"
+      font-size: 15
+    }
+  }
+  flow: {
+    style: {
+      stroke: "#55606E"
+      font-size: 13
+    }
+  }
+  state: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  ok: {
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  bad: {
+    style: {
+      fill: "#FBEAEA"
+      stroke: "#B24A4A"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  neutral: {
+    style: {
+      fill: "#EEF0F3"
+      stroke: "#55606E"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  note: {
+    style: {
+      fill: "#FFFBEA"
+      stroke: "#B8A04A"
+      border-radius: 4
+      font-size: 13
+    }
+  }
+}
+
+
+req: "DELETE /me\nreturns 202" {class: neutral}
+tomb: "1 · tombstone, ONE transaction\nblock the account, revoke other sessions,\nstop jobs and active attempts,\ncreate account_deletions (pending)" {class: svc}
+claim: "2 · execute_account_deletion\nclaim pending → running\nbounded lease; a lost claim is a no-op" {class: svc}
+
+remote: "3 · authorised Google deletions\nwhile the encrypted credential still exists" {
+  class: zone
+  k1: "delete_event" {class: svc}
+  k2: "delete_calendar" {class: svc}
+  k3: "account_cleanup" {class: svc}
+  rs: "google_remote_operations\npending → running → succeeded | failed\nredacted error codes only" {class: store}
+  k1 -> rs {class: flow}
+  k2 -> rs {class: flow}
+  k3 -> rs {class: flow}
+}
+
+purge: "4 · purge tenant data,\nprofile and tokens" {class: svc}
+ok: "completed" {class: ok}
+partial: "completed_with_remote_failures\nthe user can see why" {class: bad}
+resume: "POST /me/deletion/{id}/resume\nafter a purge exception the claim is released;\nsucceeded remote operations are not resent" {class: note}
+ret: "scheduler cron purge_residuals\nhourly, bounded batches\ndeletes expired account_deletions and\ngoogle_remote_operations rows" {class: svc}
+
+req -> tomb {class: flow}
+tomb -> claim {class: flow}
+claim -> remote.k1 {class: flow}
+claim -> remote.k2 {class: flow}
+claim -> remote.k3 {class: flow}
+remote.rs -> purge: "a failed remote operation\nnever cancels the purge" {class: flow}
+purge -> ok {class: flow}
+purge -> partial {class: flow}
+purge -> resume: "exception" {class: flow}
+resume -> claim {class: flow}
+ok -> ret {class: flow}
+partial -> ret {class: flow}

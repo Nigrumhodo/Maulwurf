@@ -1,0 +1,143 @@
+title: |md
+  # Figure 7.17 · Reminders and digests: from schedule to Gmail
+| {near: top-center}
+
+direction: down
+
+classes: {
+  zone: {
+    style: {
+      fill: "#F7F8FA"
+      stroke: "#B8C0CC"
+      border-radius: 10
+      font-size: 18
+    }
+  }
+  svc: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  ephemeral: {
+    style: {
+      fill: "#FFF3D6"
+      stroke: "#B26A00"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  store: {
+    shape: cylinder
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  bus: {
+    shape: queue
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  external: {
+    shape: cloud
+    style: {
+      fill: "#EAF0FB"
+      stroke: "#4766B8"
+      font-size: 15
+    }
+  }
+  flow: {
+    style: {
+      stroke: "#55606E"
+      font-size: 13
+    }
+  }
+  state: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  ok: {
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  bad: {
+    style: {
+      fill: "#FBEAEA"
+      stroke: "#B24A4A"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  neutral: {
+    style: {
+      fill: "#EEF0F3"
+      stroke: "#55606E"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  note: {
+    style: {
+      fill: "#FFFBEA"
+      stroke: "#B8A04A"
+      border-radius: 4
+      font-size: 13
+    }
+  }
+}
+
+
+prod: "Producers" {
+  class: zone
+  rem: "reminders for confirmed tasks\nT-48h, T-24h, T-2h (timed)\nT-3d, T-1d (all-day)" {class: svc}
+  dig: "materialize_digests cron\ndigest_daily, digest_weekly" {class: svc}
+  tst: "POST /notifications/test" {class: svc}
+}
+
+st: "notifications.status" {
+  class: zone
+  pe: "pending" {class: state}
+  se: "sending\nclaimed with a fence" {class: state}
+  sent: "sent" {class: ok}
+  fa: "failed\n4xx or local rejection" {class: bad}
+  du: "delivery_unknown\n5xx, timeout, expired lease" {class: bad}
+  ca: "cancelled\ntask dismissed or completed" {class: neutral}
+  pe -> se: "claim" {class: flow}
+  pe -> ca {class: flow}
+  se -> sent {class: flow}
+  se -> fa {class: flow}
+  se -> du {class: flow}
+}
+
+sched: "scheduler cron schedule_notifications\nevery minute\nelect one role via scheduler_leases,\nclaim due rows, enqueue IDs" {class: svc}
+gate: "Gates, default off\nMAULWURF_NOTIFICATION_SCHEDULER_ENABLED\nMAULWURF_NOTIFICATION_DELIVERY_ENABLED" {class: note}
+job: "worker job deliver_notification\none attempt only" {class: svc}
+pre: "pre-flight before any HTTP call\nfence still live, delivery enabled,\nemail verified, gmail opt-in,\ngmail.send scope, task and due_version current" {class: svc}
+gmail: "Gmail API\nrecipient = account owner" {class: external}
+resend: "POST /notifications/{id}/resend\nthe only way to retry an unknown outcome" {class: note}
+
+prod.rem -> st.pe {class: flow}
+prod.dig -> st.pe {class: flow}
+prod.tst -> st.pe {class: flow}
+gate -> sched {class: flow}
+st.pe -> sched: "due" {class: flow}
+sched -> job: "enqueue" {class: flow}
+job -> pre {class: flow}
+pre -> gmail: "send" {class: flow}
+gmail -> st.sent: "2xx + message id" {class: flow}
+st.du -> resend {class: flow}

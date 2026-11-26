@@ -1,0 +1,142 @@
+title: |md
+  # Figure 7.6 · API: request pipeline, authorization and tenant binding
+| {near: top-center}
+
+direction: down
+
+classes: {
+  zone: {
+    style: {
+      fill: "#F7F8FA"
+      stroke: "#B8C0CC"
+      border-radius: 10
+      font-size: 18
+    }
+  }
+  svc: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  ephemeral: {
+    style: {
+      fill: "#FFF3D6"
+      stroke: "#B26A00"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  store: {
+    shape: cylinder
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  bus: {
+    shape: queue
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  external: {
+    shape: cloud
+    style: {
+      fill: "#EAF0FB"
+      stroke: "#4766B8"
+      font-size: 15
+    }
+  }
+  flow: {
+    style: {
+      stroke: "#55606E"
+      font-size: 13
+    }
+  }
+  state: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  ok: {
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  bad: {
+    style: {
+      fill: "#FBEAEA"
+      stroke: "#B24A4A"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  neutral: {
+    style: {
+      fill: "#EEF0F3"
+      stroke: "#55606E"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  note: {
+    style: {
+      fill: "#FFFBEA"
+      stroke: "#B8A04A"
+      border-radius: 4
+      font-size: 13
+    }
+  }
+}
+
+
+req: "HTTP request\nfrom Caddy" {class: neutral}
+mw: "Middleware\nRequestId (log correlation)\nNoStore (private responses)" {class: svc}
+route: "Router\nhealth, auth, me, subjects, audios,\nsearch, chat, tasks, calendar, ..." {class: svc}
+
+auth: "Dependencies (core/deps.py)" {
+  class: zone
+  session: "current_session\ncookie mw_session → SHA-256\nlookup in sessions" {class: svc}
+  mut: "require_mutation\nCSRF token (HMAC) +\nsame-origin Origin check" {class: svc}
+}
+
+public: "Public paths without session\n/healthz, /readyz,\n/auth/google/start|callback,\n/internal/metrics (own bearer)" {class: neutral}
+
+svc: "Service\nownership via get_owned\nvalidation, business rules" {class: svc}
+
+tx: "session_scope (core/db.py)" {
+  class: zone
+  role: "BEGIN\nSET LOCAL ROLE maulwurf_app" {class: ephemeral}
+  uid: "set_config app.user_id\n(from the session, never\nthe body or an LLM)" {class: ephemeral}
+}
+
+pg: "PostgreSQL\nforced RLS on user_id" {class: store}
+err: "Typed error envelope\n{error: {code, message, details}}\nfixed messages, no input echoed" {class: bad}
+resp: "Response" {class: ok}
+
+req -> mw {class: flow}
+mw -> route {class: flow}
+route -> public: "exempt" {class: flow}
+route -> auth.session: "all other routes" {class: flow}
+auth.session -> auth.mut: "POST, PUT, PATCH, DELETE" {class: flow}
+auth.session -> svc: "GET" {class: flow}
+auth.mut -> svc {class: flow}
+svc -> tx.role {class: flow}
+tx.role -> tx.uid {class: flow}
+tx.uid -> pg {class: flow}
+pg -> resp {class: flow}
+auth.session -> err: "401 auth_required" {class: flow}
+auth.mut -> err: "403 forbidden" {class: flow}
+svc -> err: "409, 413, 415, 422, 429" {class: flow}

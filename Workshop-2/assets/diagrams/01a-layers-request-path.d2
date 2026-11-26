@@ -1,5 +1,5 @@
 title: |md
-  # Figure 7.1 · Maulwurf architecture by layers
+  # Figure 7.1a · Layers: request path and audio ingestion
 | {near: top-center}
 
 direction: right
@@ -85,40 +85,20 @@ audio: Ephemeral audio zone {
   ingest: "ingest · FastAPI\nffmpeg, Riva client,\nprivate tmpfs" {class: ephemeral}
 }
 
-async: Async processing layer {
-  class: zone
-  scheduler: "scheduler · ARQ cron\noutbox dispatch,\nreconcile, retention" {class: svc}
-  redis: "Redis 7.4\nARQ queues, IDs only,\nno persistence" {class: bus}
-  worker: "worker · ARQ jobs\nindex, analyze,\nCalendar, Gmail" {class: svc}
-}
-
 data: Data layer {
   class: zone
-  pg: "PostgreSQL 16 + pgvector\ntext, embeddings, tasks,\noutbox, forced RLS" {class: store}
+  pg: "PostgreSQL 16\n+ pgvector" {class: store}
 }
 
-ext: External services {
+ext: External service {
   class: zone
   riva: "NVIDIA Riva\nwhisper-large-v3" {class: external}
-  llm: "LLM and\nembeddings" {class: external}
-  google: "Google\nOAuth, Calendar,\nGmail" {class: external}
 }
 
 student -> edge.caddy: HTTPS {class: flow}
 edge.caddy -> edge.web: "SPA, static" {class: flow}
 edge.caddy -> app.api: "REST, SSE,\nPUT upload" {class: flow}
-
 app.api -> audio.ingest: "chunked PUT,\nadmit / discard" {class: flow}
-audio.ingest -> ext.riva: "gRPC TLS,\nfragments" {class: flow}
-audio.ingest -> data.pg: "transcript,\ncleanup evidence" {class: flow}
-
 app.api -> data.pg: "tenant data,\noutbox rows" {class: flow}
-app.api -> ext.llm: "query embedding,\nchat stream" {class: flow}
-app.api -> ext.google: "OAuth, reads" {class: flow}
-
-async.scheduler -> data.pg: "reads outbox" {class: flow}
-async.scheduler -> async.redis: "enqueues IDs" {class: flow}
-async.redis -> async.worker: jobs {class: flow}
-async.worker -> data.pg: "index, tasks" {class: flow}
-async.worker -> ext.llm: "embeddings,\nextraction" {class: flow}
-async.worker -> ext.google: "confirmed events,\nopt-in mail" {class: flow}
+audio.ingest -> data.pg: "transcript,\ncleanup evidence" {class: flow}
+audio.ingest -> ext.riva: "gRPC TLS,\nfragments" {class: flow}

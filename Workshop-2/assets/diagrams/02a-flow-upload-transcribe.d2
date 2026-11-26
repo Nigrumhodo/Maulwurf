@@ -1,0 +1,29 @@
+title: |md
+  # Figure 7.2a · Data flow: from upload to stored text
+| {near: top-center}
+
+shape: sequence_diagram
+
+student: Student {shape: person}
+api: api
+ingest: ingest
+riva: "NVIDIA Riva" {shape: cloud}
+pg: PostgreSQL {shape: cylinder}
+
+"1 · Reserve and upload": {
+  student -> api: "POST /audios (consent, language, subject)"
+  api -> pg: "reserve slot, check quota and dedupe"
+  api -> student: "201 upload_url"
+  student -> api: "PUT /audios/{id}/content (stream)"
+  api -> ingest: "chunked PUT with attempt credential"
+  api -> ingest: "POST admit"
+}
+
+"2 · Transcribe and commit": {
+  ingest -> ingest: "ffprobe, 30 s fragments in tmpfs"
+  ingest -> riva: "gRPC TLS, one fragment at a time"
+  riva -> ingest: "text and offsets"
+  ingest -> pg: "commit transcript, segments, disabled outbox rows"
+  ingest -> ingest: "delete audio, verify cleanup"
+  ingest -> pg: "enable outbox rows, attempt succeeded"
+}

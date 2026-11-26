@@ -1,0 +1,128 @@
+title: |md
+  # Figure 7.12 · Worker job index: transcript to active index generation
+| {near: top-center}
+
+direction: down
+
+classes: {
+  zone: {
+    style: {
+      fill: "#F7F8FA"
+      stroke: "#B8C0CC"
+      border-radius: 10
+      font-size: 18
+    }
+  }
+  svc: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  ephemeral: {
+    style: {
+      fill: "#FFF3D6"
+      stroke: "#B26A00"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  store: {
+    shape: cylinder
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  bus: {
+    shape: queue
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  external: {
+    shape: cloud
+    style: {
+      fill: "#EAF0FB"
+      stroke: "#4766B8"
+      font-size: 15
+    }
+  }
+  flow: {
+    style: {
+      stroke: "#55606E"
+      font-size: 13
+    }
+  }
+  state: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  ok: {
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  bad: {
+    style: {
+      fill: "#FBEAEA"
+      stroke: "#B24A4A"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  neutral: {
+    style: {
+      fill: "#EEF0F3"
+      stroke: "#55606E"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  note: {
+    style: {
+      fill: "#FFFBEA"
+      stroke: "#B8A04A"
+      border-radius: 4
+      font-size: 13
+    }
+  }
+}
+
+
+start: "index(audio_id, transcript_version)\nARQ job, 600 s timeout" {class: neutral}
+gate: "1 · text gate\nrequire_text_kind (D3-Texto)\nreal text only for models in\nMAULWURF_D3_TEXT_CLOSED_MODELS" {class: svc}
+noop1: "no-op\nwrites nothing" {class: bad}
+claim: "2 · revalidate and claim run\nprocessing_runs lease + fencing" {class: svc}
+noop2: "no-op\nfailed check or live lease" {class: bad}
+chunk: "3 · chunk the transcript\n≈800 tokens, 100 overlap\nUnicode offsets" {class: svc}
+embed: "4 · embed in batches\nOpenAI-compatible provider\nvector(1536), bounded retries" {class: svc}
+gen: "5 · generation status: building\nchunks, chunk_segments, embeddings\ninvisible to search" {class: store}
+act: "6 · activate in ONE transaction\nbuilding → active\nprevious active → retired" {class: ok}
+rec: "7 · record run\nsucceeded | cancelled (superseded)\n| failed (typed code)" {class: svc}
+retry: "Retry policy\ntransient errors only, 4 tries,\noutbox backoff; permanent errors\nlogged, not raised" {class: note}
+sweep: "reconcile cron\nexpired run → lease_expired + re-enqueue\norphan building and surplus retired deleted" {class: note}
+
+start -> gate {class: flow}
+gate -> noop1: "decision open" {class: flow}
+gate -> claim: "closed" {class: flow}
+claim -> noop2 {class: flow}
+claim -> chunk {class: flow}
+chunk -> embed {class: flow}
+embed -> gen {class: flow}
+gen -> act {class: flow}
+act -> rec {class: flow}
+embed -> retry: "transient error" {class: flow}
+gen -> sweep: "never activated" {class: flow}

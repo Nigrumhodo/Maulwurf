@@ -1,0 +1,136 @@
+title: |md
+  # Figure 7.9 · Ingestion attempt state machine (ingestion_attempts.status)
+| {near: top-center}
+
+direction: right
+
+classes: {
+  zone: {
+    style: {
+      fill: "#F7F8FA"
+      stroke: "#B8C0CC"
+      border-radius: 10
+      font-size: 18
+    }
+  }
+  svc: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  ephemeral: {
+    style: {
+      fill: "#FFF3D6"
+      stroke: "#B26A00"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  store: {
+    shape: cylinder
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  bus: {
+    shape: queue
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  external: {
+    shape: cloud
+    style: {
+      fill: "#EAF0FB"
+      stroke: "#4766B8"
+      font-size: 15
+    }
+  }
+  flow: {
+    style: {
+      stroke: "#55606E"
+      font-size: 13
+    }
+  }
+  state: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  ok: {
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  bad: {
+    style: {
+      fill: "#FBEAEA"
+      stroke: "#B24A4A"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  neutral: {
+    style: {
+      fill: "#EEF0F3"
+      stroke: "#55606E"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  note: {
+    style: {
+      fill: "#FFFBEA"
+      stroke: "#B8A04A"
+      border-radius: 4
+      font-size: 13
+    }
+  }
+}
+
+
+await: "awaiting_upload\nreservation, no bytes yet" {class: state}
+recv: "receiving\nbytes streaming to tmpfs" {class: state}
+trans: "transcribing\nfragments to Riva" {class: state}
+pend: "transcript_committed_\ncleanup_pending\ntext stored, outbox disabled" {class: state}
+ok: "succeeded\ncleanup verified,\noutbox enabled" {class: ok}
+
+reup: "requires_reupload\ntechnical loss" {class: bad}
+rej: "rejected\nsilence, no usable text,\ninvalid audio" {class: bad}
+canc: "cancelled\nuser cancel or\nexpired reservation" {class: neutral}
+
+cs: "cleanup_status" {
+  class: zone
+  c1: "pending" {class: state}
+  c2: "verified" {class: ok}
+  c3: "failed\ncloses admission latch" {class: bad}
+  c1 -> c2: "directory deleted,\nverified in /proc" {class: flow}
+  c1 -> c3: "cleanup error" {class: flow}
+}
+
+note: "Only transcript_committed_cleanup_pending → succeeded needs\ncleanup_status = verified. A cancel after the commit is a\nconflict and never destroys the transcript." {class: note}
+
+await -> recv: "first byte accepted" {class: flow}
+recv -> trans: "admit" {class: flow}
+trans -> pend: "atomic transcript commit" {class: flow}
+pend -> ok: "cleanup verified" {class: flow}
+await -> canc: "cancel, TTL expiry" {class: flow}
+recv -> canc: "cancel, discard" {class: flow}
+recv -> rej: "validation fails" {class: flow}
+trans -> rej: "no usable text" {class: flow}
+trans -> reup: "ASR deadline or retries\nexhausted, process lost" {class: flow}
+trans -> canc: "cancel" {class: flow}
+pend -> cs.c1: "cleanup runs" {class: flow}
