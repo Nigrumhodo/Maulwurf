@@ -20,11 +20,7 @@
 
 <br />
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="apps/web/src/components/Visual/hero-madriguera.webp" />
-  <source media="(prefers-color-scheme: light)" srcset="apps/web/src/components/Visual/hero-pergamino-claro.webp" />
-  <img src="apps/web/src/components/Visual/hero-madriguera.webp" alt="Maulwurf — 16-bit study burrow" width="760" />
-</picture>
+<img src="docs/assets/hero-madriguera.gif" alt="Maulwurf — animated 16-bit study burrow" width="560" />
 
 </div>
 
