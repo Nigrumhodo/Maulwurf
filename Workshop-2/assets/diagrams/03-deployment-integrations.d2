@@ -1,0 +1,119 @@
+title: |md
+  # Figure 7.3 · Deployment and external integrations
+| {near: top-center}
+
+direction: right
+
+classes: {
+  zone: {
+    style: {
+      fill: "#F7F8FA"
+      stroke: "#B8C0CC"
+      border-radius: 10
+      font-size: 18
+    }
+  }
+  svc: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 6
+      font-size: 14
+    }
+  }
+  ephemeral: {
+    style: {
+      fill: "#FFF3D6"
+      stroke: "#B26A00"
+      border-radius: 6
+      font-size: 14
+    }
+  }
+  prod: {
+    style: {
+      fill: "#F2EEF9"
+      stroke: "#7050A8"
+      border-radius: 6
+      stroke-dash: 4
+      font-size: 14
+    }
+  }
+  store: {
+    shape: cylinder
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 14
+    }
+  }
+  bus: {
+    shape: queue
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 14
+    }
+  }
+  external: {
+    shape: cloud
+    style: {
+      fill: "#EAF0FB"
+      stroke: "#4766B8"
+      font-size: 14
+    }
+  }
+  flow: {
+    style: {
+      stroke: "#55606E"
+      font-size: 12
+    }
+  }
+}
+
+host: Docker Compose host {
+  class: zone
+
+  edge: "edge network" {
+    class: zone
+    caddy: "caddy 2.8\n80 / 443 on loopback" {class: svc}
+    web: "web\nExpress 5 :3000" {class: svc}
+  }
+
+  data: "data network" {
+    class: zone
+    api: "api :8000 · role maulwurf_app\nedge + data networks\nalembic upgrade head on boot" {class: svc}
+    worker: "worker\ncap_drop ALL\nrole maulwurf_jobs" {class: svc}
+    scheduler: "scheduler\ncap_drop ALL\nrole maulwurf_jobs" {class: svc}
+    ingest: "ingest :8000 · role maulwurf_ingest\nUID 10001, read-only root,\ntmpfs, no swap" {class: ephemeral}
+    pg: "PostgreSQL 16\n+ pgvector" {class: store}
+    redis: "Redis 7.4\nno RDB or AOF\nnoeviction" {class: bus}
+  }
+
+  prod: "production overlay only" {
+    class: zone
+    migrate: "migrate\none-shot job" {class: prod}
+    prom: "prometheus 2.55" {class: prod}
+  }
+}
+
+riva: "NVIDIA Riva\nwhisper-large-v3" {class: external}
+llm: "LLM and embeddings\nOpenAI-compatible" {class: external}
+google: "Google\nOAuth, Calendar, Gmail" {class: external}
+
+host.edge.caddy -> host.edge.web: "static" {class: flow}
+host.edge.caddy -> host.data.api: "REST, SSE, PUT" {class: flow}
+host.data.api -> host.data.ingest: "internal HTTP/1.1" {class: flow}
+host.data.api -> host.data.pg: "SQL" {class: flow}
+host.data.ingest -> host.data.pg: "SQL" {class: flow}
+host.data.scheduler -> host.data.redis: "enqueue IDs" {class: flow}
+host.data.redis -> host.data.worker: jobs {class: flow}
+host.data.worker -> host.data.pg: "SQL" {class: flow}
+host.prod.migrate -> host.data.pg: "migrations" {class: flow}
+host.prod.prom -> host.data.api: "scrape /internal/metrics" {class: flow}
+host.prod.prom -> host.data.ingest: "scrape /internal/metrics" {class: flow}
+
+host.data.ingest -> riva: "gRPC TLS\nNVIDIA_API_KEY, RIVA_*" {class: flow}
+host.data.api -> llm: "HTTPS\nMAULWURF_LLM_*,\nMAULWURF_EMBEDDING_*" {class: flow}
+host.data.worker -> llm: "HTTPS" {class: flow}
+host.data.api -> google: "HTTPS\nMAULWURF_GOOGLE_*" {class: flow}
+host.data.worker -> google: "HTTPS" {class: flow}
