@@ -1,0 +1,128 @@
+title: |md
+  # Figure 7.13 · Worker job analyze: transcript to task proposals
+| {near: top-center}
+
+direction: down
+
+classes: {
+  zone: {
+    style: {
+      fill: "#F7F8FA"
+      stroke: "#B8C0CC"
+      border-radius: 10
+      font-size: 18
+    }
+  }
+  svc: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  ephemeral: {
+    style: {
+      fill: "#FFF3D6"
+      stroke: "#B26A00"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  store: {
+    shape: cylinder
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  bus: {
+    shape: queue
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  external: {
+    shape: cloud
+    style: {
+      fill: "#EAF0FB"
+      stroke: "#4766B8"
+      font-size: 15
+    }
+  }
+  flow: {
+    style: {
+      stroke: "#55606E"
+      font-size: 13
+    }
+  }
+  state: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  ok: {
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  bad: {
+    style: {
+      fill: "#FBEAEA"
+      stroke: "#B24A4A"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  neutral: {
+    style: {
+      fill: "#EEF0F3"
+      stroke: "#55606E"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  note: {
+    style: {
+      fill: "#FFFBEA"
+      stroke: "#B8A04A"
+      border-radius: 4
+      font-size: 13
+    }
+  }
+}
+
+
+start: "analyze(audio_id)\nARQ job" {class: neutral}
+claim: "claim analyze run\nactive transcript + prompt version\nfenced lease" {class: svc}
+load: "load persisted text\nsegments, class date, timezone" {class: svc}
+plan: "plan windows (analysis_windows)\nsentence-aligned, ≤ 24 windows,\ncapped overlap and token budget" {class: svc}
+budget: "provider budget check\n(provider_budget)" {class: svc}
+llm: "LLM extraction per window + class summary\nprompts/v1 system and user templates\nbounded deadline below 600 s" {class: external}
+dedupe: "dedupe by evidence identity\nsegment + char range + literal quote" {class: svc}
+valid: "validate\ndates against class date and timezone,\nspans against the persisted transcript" {class: svc}
+plan2: "plan_task_writes\nnever overwrite edited, confirmed or\nscheduled tasks → pending revisions" {class: svc}
+apply: "apply in ONE transaction\ntasks, evidence, summary, topics,\nanalysis version" {class: ok}
+fin: "finish run" {class: svc}
+err: "Errors\npermanent: recorded, no retry\ntransient: Retry with S3.6 delay\nLLM not configured: run failed, no tasks" {class: bad}
+
+start -> claim {class: flow}
+claim -> load {class: flow}
+load -> plan {class: flow}
+plan -> budget {class: flow}
+budget -> llm {class: flow}
+llm -> dedupe: "all windows returned" {class: flow}
+dedupe -> valid {class: flow}
+valid -> plan2 {class: flow}
+plan2 -> apply {class: flow}
+apply -> fin {class: flow}
+llm -> err {class: flow}

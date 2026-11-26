@@ -1,0 +1,138 @@
+title: |md
+  # Figure 7.15 · Task lifecycle and revisions (task_state.py)
+| {near: top-center}
+
+direction: down
+
+classes: {
+  zone: {
+    style: {
+      fill: "#F7F8FA"
+      stroke: "#B8C0CC"
+      border-radius: 10
+      font-size: 18
+    }
+  }
+  svc: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  ephemeral: {
+    style: {
+      fill: "#FFF3D6"
+      stroke: "#B26A00"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  store: {
+    shape: cylinder
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  bus: {
+    shape: queue
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  external: {
+    shape: cloud
+    style: {
+      fill: "#EAF0FB"
+      stroke: "#4766B8"
+      font-size: 15
+    }
+  }
+  flow: {
+    style: {
+      stroke: "#55606E"
+      font-size: 13
+    }
+  }
+  state: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  ok: {
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  bad: {
+    style: {
+      fill: "#FBEAEA"
+      stroke: "#B24A4A"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  neutral: {
+    style: {
+      fill: "#EEF0F3"
+      stroke: "#55606E"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  note: {
+    style: {
+      fill: "#FFFBEA"
+      stroke: "#B8A04A"
+      border-radius: 4
+      font-size: 13
+    }
+  }
+}
+
+
+orig: "Origins\nextraction (analyze job),\nchat propose_task, manual POST /tasks" {class: neutral}
+
+pend: "pending\ndate resolved" {class: state}
+nr: "needs_review\ndate ambiguous or missing" {class: state}
+conf: "confirmed\nversion bumped,\nCalendar sync requested" {class: ok}
+comp: "completed\nterminal" {class: neutral}
+dism: "dismissed\nterminal" {class: neutral}
+
+rev: "Revisions" {
+  class: zone
+  r1: "pending_confirmation\nedit of a confirmed task, or\nre-analysis proposal" {class: state}
+  r2: "activated\nbecomes the active version" {class: ok}
+  r3: "discarded" {class: neutral}
+  r1 -> r2: "confirm with expected version" {class: flow}
+  r1 -> r3: "discard" {class: flow}
+}
+
+rules: "confirm validates\ndate_status = resolved,\nCalendar block, evidence spans\nstale version → 409 version_conflict" {class: note}
+keep: "complete or dismiss cancels unsent reminders\nand keeps the linked Calendar event\nwith a notice" {class: note}
+
+orig -> pend: "date resolved" {class: flow}
+orig -> nr: "date ambiguous or missing" {class: flow}
+pend -> pend: "edit in place" {class: flow}
+nr -> nr: "edit in place" {class: flow}
+pend -> conf: "confirm" {class: flow}
+nr -> conf: "confirm" {class: flow}
+pend -> dism: "dismiss" {class: flow}
+nr -> dism: "dismiss" {class: flow}
+conf -> comp: "complete" {class: flow}
+conf -> dism: "dismiss" {class: flow}
+conf -> rev.r1: "edit creates a revision;\nactive columns untouched" {class: flow}
+conf -> rules {class: flow}
+comp -> keep {class: flow}
+dism -> keep {class: flow}

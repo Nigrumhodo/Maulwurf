@@ -1,0 +1,95 @@
+title: |md
+  # Figure 7.1b · Layers: asynchronous processing and integrations
+| {near: top-center}
+
+direction: right
+
+classes: {
+  zone: {
+    style: {
+      fill: "#F7F8FA"
+      stroke: "#B8C0CC"
+      border-radius: 10
+      font-size: 18
+    }
+  }
+  svc: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  ephemeral: {
+    style: {
+      fill: "#FFF3D6"
+      stroke: "#B26A00"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  store: {
+    shape: cylinder
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  bus: {
+    shape: queue
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  external: {
+    shape: cloud
+    style: {
+      fill: "#EAF0FB"
+      stroke: "#4766B8"
+      font-size: 15
+    }
+  }
+  flow: {
+    style: {
+      stroke: "#55606E"
+      font-size: 13
+    }
+  }
+}
+
+app: Application layer {
+  class: zone
+  api: "api · FastAPI" {class: svc}
+}
+
+async: Async processing layer {
+  class: zone
+  scheduler: "scheduler · ARQ cron\noutbox dispatch,\nreconcile, retention" {class: svc}
+  redis: "Redis 7.4\nARQ queues, IDs only,\nno persistence" {class: bus}
+  worker: "worker · ARQ jobs\nindex, analyze,\nCalendar, Gmail" {class: svc}
+}
+
+data: Data layer {
+  class: zone
+  pg: "PostgreSQL 16\n+ pgvector" {class: store}
+}
+
+ext: External services {
+  class: zone
+  llm: "LLM and\nembeddings" {class: external}
+  google: "Google\nOAuth, Calendar,\nGmail" {class: external}
+}
+
+app.api -> data.pg: "tenant data,\noutbox rows" {class: flow}
+async.scheduler -> data.pg: "reads outbox" {class: flow}
+async.scheduler -> async.redis: "enqueues IDs" {class: flow}
+async.redis -> async.worker: jobs {class: flow}
+async.worker -> data.pg: "index, tasks" {class: flow}
+app.api -> ext.llm: "query embedding,\nchat stream" {class: flow}
+app.api -> ext.google: "OAuth, reads" {class: flow}
+async.worker -> ext.llm: "embeddings,\nextraction" {class: flow}
+async.worker -> ext.google: "confirmed events,\nopt-in mail" {class: flow}

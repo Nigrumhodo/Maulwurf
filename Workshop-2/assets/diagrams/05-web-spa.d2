@@ -1,0 +1,154 @@
+title: |md
+  # Figure 7.5 · Web: SPA structure (apps/web)
+| {near: top-center}
+
+direction: down
+
+classes: {
+  zone: {
+    style: {
+      fill: "#F7F8FA"
+      stroke: "#B8C0CC"
+      border-radius: 10
+      font-size: 18
+    }
+  }
+  svc: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  ephemeral: {
+    style: {
+      fill: "#FFF3D6"
+      stroke: "#B26A00"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  store: {
+    shape: cylinder
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  bus: {
+    shape: queue
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  external: {
+    shape: cloud
+    style: {
+      fill: "#EAF0FB"
+      stroke: "#4766B8"
+      font-size: 15
+    }
+  }
+  flow: {
+    style: {
+      stroke: "#55606E"
+      font-size: 13
+    }
+  }
+  state: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  ok: {
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  bad: {
+    style: {
+      fill: "#FBEAEA"
+      stroke: "#B24A4A"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  neutral: {
+    style: {
+      fill: "#EEF0F3"
+      stroke: "#55606E"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  note: {
+    style: {
+      fill: "#FFFBEA"
+      stroke: "#B8A04A"
+      border-radius: 4
+      font-size: 13
+    }
+  }
+}
+
+
+browser: Browser {
+  shape: person
+  style: {
+    fill: "#EEF0F3"
+    stroke: "#55606E"
+  }
+}
+
+server: "Express 5 · src/server\nserves dist/public and\nSPA fallback, security headers\nno env, no secrets" {class: svc}
+
+spa: "SPA shell\nmain.tsx, App.tsx\nReact Router 7, AuthProvider" {class: svc}
+sw: "sw.js\nshell-only PWA" {class: neutral}
+
+pages: "src/pages" {
+  class: zone
+  pub: "public\nLanding, Login, Register,\nWelcome, Privacy, Terms" {class: svc}
+  area: "/gestion\nsubir, biblioteca, reader,\nchat, materias, tareas, agenda" {class: svc}
+  misc: "Dashboard, Settings" {class: svc}
+}
+
+comps: "src/components\nauth, upload, library, transcript,\nchat, tasks, calendar (FullCalendar),\nsettings, layout, ui" {class: svc}
+
+lib: "src/lib" {
+  class: zone
+  api: "api.ts, csrf.ts\ntyped client, CSRF header" {class: svc}
+  up: "upload.ts, audios.ts\nstreaming PUT, real progress,\ncancel aborts the fetch" {class: svc}
+  sse: "sse.ts, progress.ts\nEventSource + bounded polling" {class: svc}
+  chat: "chat.ts, stream.ts\nSSE chat stream" {class: svc}
+}
+
+i18n: "i18n + locales\nes, en, fr" {class: neutral}
+api: "api via Caddy\nsame origin" {class: svc}
+
+browser -> server: "HTML, JS, CSS" {class: flow}
+server -> spa: "index.html" {class: flow}
+spa -> sw: "registers" {class: flow}
+spa -> pages.pub {class: flow}
+spa -> pages.area: "RequireAuth" {class: flow}
+spa -> pages.misc {class: flow}
+pages.area -> comps {class: flow}
+pages.misc -> comps {class: flow}
+comps -> lib.api {class: flow}
+comps -> lib.up {class: flow}
+comps -> lib.sse {class: flow}
+comps -> lib.chat {class: flow}
+comps -> i18n {class: flow}
+lib.api -> api: "REST" {class: flow}
+lib.up -> api: "PUT stream" {class: flow}
+lib.sse -> api: "SSE" {class: flow}
+lib.chat -> api: "SSE" {class: flow}

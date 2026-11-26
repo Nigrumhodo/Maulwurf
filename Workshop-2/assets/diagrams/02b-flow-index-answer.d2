@@ -1,0 +1,32 @@
+title: |md
+  # Figure 7.2b · Data flow: from stored text to cited answer and Calendar
+| {near: top-center}
+
+shape: sequence_diagram
+
+student: Student {shape: person}
+api: api
+pg: PostgreSQL {shape: cylinder}
+scheduler: scheduler
+redis: Redis {shape: queue}
+worker: worker
+llm: "LLM and embeddings" {shape: cloud}
+google: Google {shape: cloud}
+
+"3 · Dispatch, index and analyze": {
+  scheduler -> pg: "read enabled outbox events"
+  scheduler -> redis: "enqueue index / analyze IDs"
+  redis -> worker: "deliver job"
+  worker -> llm: "chunk text, extraction windows"
+  worker -> pg: "index generation, task proposals"
+}
+
+"4 · Ask, review and schedule": {
+  student -> api: "chat question (SSE)"
+  api -> pg: "hybrid retrieval, validate citations"
+  api -> llm: "question and evidence chunks"
+  api -> student: "streamed answer with citations"
+  student -> api: "POST /tasks/{id}/confirm"
+  api -> pg: "task version and sync_task_event outbox, one transaction"
+  worker -> google: "create Calendar event (idempotent)"
+}

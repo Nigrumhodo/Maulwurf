@@ -1,0 +1,138 @@
+title: |md
+  # Figure 7.4 · Edge: Caddy routing (first matching rule wins)
+| {near: top-center}
+
+direction: right
+
+classes: {
+  zone: {
+    style: {
+      fill: "#F7F8FA"
+      stroke: "#B8C0CC"
+      border-radius: 10
+      font-size: 18
+    }
+  }
+  svc: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  ephemeral: {
+    style: {
+      fill: "#FFF3D6"
+      stroke: "#B26A00"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  store: {
+    shape: cylinder
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  bus: {
+    shape: queue
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  external: {
+    shape: cloud
+    style: {
+      fill: "#EAF0FB"
+      stroke: "#4766B8"
+      font-size: 15
+    }
+  }
+  flow: {
+    style: {
+      stroke: "#55606E"
+      font-size: 13
+    }
+  }
+  state: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  ok: {
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  bad: {
+    style: {
+      fill: "#FBEAEA"
+      stroke: "#B24A4A"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  neutral: {
+    style: {
+      fill: "#EEF0F3"
+      stroke: "#55606E"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  note: {
+    style: {
+      fill: "#FFFBEA"
+      stroke: "#B8A04A"
+      border-radius: 4
+      font-size: 13
+    }
+  }
+}
+
+
+browser: Browser {
+  shape: person
+  style: {
+    fill: "#EEF0F3"
+    stroke: "#55606E"
+  }
+}
+
+caddy: "caddy 2.8\nTLS, admin off\nread_header 30s, read_body 40m\nwrite 0, idle 5m" {class: svc}
+
+rules: "Rules, evaluated in this order" {
+  class: zone
+  scan: "1 · scanner paths\n/.env, /wp-admin, *.php …" {class: neutral}
+  upload: "2 · PUT /audios/*/content\nbody ≤ 1100 MB" {class: ephemeral}
+  internal: "3 · /internal/*" {class: neutral}
+  progress: "4 · /audios/*/progress\nSSE, flush_interval -1" {class: svc}
+  chat: "5 · /chat/conversations/*/messages\nSSE, flush_interval -1" {class: svc}
+  api_allow: "6 · API allowlist\n/auth, /me, /subjects, /audios, /ingestion,\n/search, /chat, /calendar, /tasks,\n/notifications, /integrations, /healthz, /readyz" {class: svc}
+  fallback: "7 · anything else" {class: svc}
+}
+
+api: "api:8000" {class: svc}
+web: "web:3000" {class: svc}
+nf: "404" {class: bad}
+
+browser -> caddy: HTTPS {class: flow}
+caddy -> rules.scan {class: flow}
+rules.scan -> nf: "respond" {class: flow}
+rules.internal -> nf: "never routed" {class: flow}
+rules.upload -> api: "no buffering" {class: flow}
+rules.progress -> api: "10 MB" {class: flow}
+rules.chat -> api: "10 MB" {class: flow}
+rules.api_allow -> api: "10 MB" {class: flow}
+rules.fallback -> web: "10 MB" {class: flow}

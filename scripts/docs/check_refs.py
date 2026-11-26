@@ -4,7 +4,7 @@
 The documentation uses inline code spans for repository paths (for example
 ``apps/api/app/main.py``). A path that is renamed or never created is easy to miss
 in review, so this checker fails when a documented path is absent from the tree. It scans
-``AGENTS.md``, ``README.md`` and every Markdown file under ``docs/``.
+``AGENTS.md``, ``README.md`` and every Markdown file under ``docs/`` and ``Workshop-2/``.
 
 How a span is classified
 ------------------------
@@ -142,6 +142,9 @@ EXPECTED_FILES: dict[str, str] = {
 def iter_markdown_files() -> list[Path]:
     files = [ROOT / "AGENTS.md", ROOT / "README.md"]
     files.extend(sorted(DOCS.rglob("*.md")))
+    workshop = ROOT / "Workshop-2"
+    if workshop.is_dir():
+        files.extend(sorted(workshop.rglob("*.md")))
     return [
         path
         for path in files

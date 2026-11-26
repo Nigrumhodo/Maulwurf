@@ -1,0 +1,144 @@
+title: |md
+  # Figure 7.14 · Chat: retrieval-augmented answer with validated citations
+| {near: top-center}
+
+direction: down
+
+classes: {
+  zone: {
+    style: {
+      fill: "#F7F8FA"
+      stroke: "#B8C0CC"
+      border-radius: 10
+      font-size: 18
+    }
+  }
+  svc: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  ephemeral: {
+    style: {
+      fill: "#FFF3D6"
+      stroke: "#B26A00"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  store: {
+    shape: cylinder
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  bus: {
+    shape: queue
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  external: {
+    shape: cloud
+    style: {
+      fill: "#EAF0FB"
+      stroke: "#4766B8"
+      font-size: 15
+    }
+  }
+  flow: {
+    style: {
+      stroke: "#55606E"
+      font-size: 13
+    }
+  }
+  state: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  ok: {
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  bad: {
+    style: {
+      fill: "#FBEAEA"
+      stroke: "#B24A4A"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  neutral: {
+    style: {
+      fill: "#EEF0F3"
+      stroke: "#55606E"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  note: {
+    style: {
+      fill: "#FFFBEA"
+      stroke: "#B8A04A"
+      border-radius: 4
+      font-size: 13
+    }
+  }
+}
+
+
+q: "POST /chat/conversations/{id}/messages\nSSE response" {class: neutral}
+auth: "router: session, CSRF, ownership\nshort DB session, not held\nwhile the stream runs" {class: svc}
+lim: "Redis limiter (Lua)\n≤ 2 concurrent streams per user" {class: bus}
+prep: "RAGService.prepare\npersist user message and\nassistant placeholder" {class: svc}
+
+ret: "Retrieval (SearchService, services/retrieval.py)" {
+  class: zone
+  emb: "embed the query\nper-user quota in Redis" {class: svc}
+  lex: "lexical branch\nts_rank_cd on chunks.tsv" {class: svc}
+  vec: "vector branch\ncosine on embeddings" {class: svc}
+  rrf: "RRF fusion, k = 60\ntop 8 chunks\ntenant + active generation" {class: svc}
+}
+
+bud: "token budget\nhistory cap, output reserve,\ncontext margin; persist sources" {class: svc}
+prompt: "chat_prompt\nprompts/v1/chat_system.txt\n+ evidence + history" {class: svc}
+llm: "LLM stream\nOpenAI-compatible" {class: external}
+tools: "Tool loop, ≤ 4 rounds (tools.py)\nget_calendar_events\nget_pending_tasks\npropose_task → inbox only" {class: svc}
+cit: "citations.py, evidence.py\nvalidate segment IDs and spans\nin PostgreSQL, tenant-scoped" {class: ok}
+abst: "no evidence\nabstention text" {class: neutral}
+sse: "SSE events\nsnapshot, delta, citation, ping,\nterminal done | error" {class: ok}
+cancel: "POST .../messages/{id}/cancel\nstream polls the state, persists the\npartial text, closes done: cancelled" {class: note}
+
+q -> auth {class: flow}
+auth -> lim {class: flow}
+lim -> prep {class: flow}
+prep -> ret.emb {class: flow}
+ret.emb -> ret.lex {class: flow}
+ret.emb -> ret.vec {class: flow}
+ret.lex -> ret.rrf {class: flow}
+ret.vec -> ret.rrf {class: flow}
+ret.rrf -> bud {class: flow}
+bud -> abst: "no chunks" {class: flow}
+bud -> prompt {class: flow}
+prompt -> llm {class: flow}
+llm -> tools: "JSON tool call" {class: flow}
+tools -> llm: "tool result is data" {class: flow}
+llm -> cit: "answer with citations" {class: flow}
+cit -> sse {class: flow}
+abst -> sse {class: flow}
+cancel -> sse {class: flow}

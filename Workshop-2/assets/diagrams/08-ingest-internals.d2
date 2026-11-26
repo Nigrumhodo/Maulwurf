@@ -1,0 +1,158 @@
+title: |md
+  # Figure 7.8 · Ingestion: internal modules (apps/ingest/maulwurf_ingest)
+| {near: top-center}
+
+direction: down
+
+classes: {
+  zone: {
+    style: {
+      fill: "#F7F8FA"
+      stroke: "#B8C0CC"
+      border-radius: 10
+      font-size: 18
+    }
+  }
+  svc: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  ephemeral: {
+    style: {
+      fill: "#FFF3D6"
+      stroke: "#B26A00"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  store: {
+    shape: cylinder
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  bus: {
+    shape: queue
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 15
+    }
+  }
+  external: {
+    shape: cloud
+    style: {
+      fill: "#EAF0FB"
+      stroke: "#4766B8"
+      font-size: 15
+    }
+  }
+  flow: {
+    style: {
+      stroke: "#55606E"
+      font-size: 13
+    }
+  }
+  state: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  ok: {
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  bad: {
+    style: {
+      fill: "#FBEAEA"
+      stroke: "#B24A4A"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  neutral: {
+    style: {
+      fill: "#EEF0F3"
+      stroke: "#55606E"
+      border-radius: 20
+      font-size: 15
+    }
+  }
+  note: {
+    style: {
+      fill: "#FFFBEA"
+      stroke: "#B8A04A"
+      border-radius: 4
+      font-size: 13
+    }
+  }
+}
+
+
+api: "api\nIngestReceptionSink" {class: svc}
+
+rec: "Reception" {
+  class: zone
+  routes: "receptions.py\nPUT /internal/v1/receptions/{attempt}\nPOST admit, POST discard" {class: ephemeral}
+  cred: "credential.py\nverify per-attempt HMAC credential\n(key id, rotation)" {class: svc}
+  adm: "admission.py\nlatch: a failed cleanup\ncloses new uploads" {class: svc}
+  lease: "lease.py\nlease, heartbeat,\nfencing token" {class: svc}
+  recv: "receiver.py\nstream to tmpfs, SHA-256,\nsize cap, timeout" {class: ephemeral}
+}
+
+tmpfs: "attempt tmpfs\nprivate, noexec, no swap" {class: ephemeral}
+
+run: "Attempt execution" {
+  class: zone
+  sup: "supervisor.py\none attempt end to end\ncleanup in finally" {class: ephemeral}
+  val: "audio/validate.py\nffprobe: format,\nduration, streams" {class: svc}
+  job: "asr_job.py\nsubprocess in its own\nprocess group" {class: ephemeral}
+  pipe: "pipeline.py, audio/ffmpeg,\naudio/fragmenter\n30 s fragments, 0.25 s overlap,\none at a time" {class: ephemeral}
+  riva: "asr/riva_client.py\ngRPC TLS, bounded retries" {class: svc}
+  recon: "audio/reconcile, timestamps\noverlaps, global offsets" {class: svc}
+}
+
+fin: "Commit and recovery" {
+  class: zone
+  pers: "persistence.py\natomic commit, then gate release\nafter verified cleanup" {class: svc}
+  clean: "cleanup.py\nkill group, delete directory,\nverify in /proc" {class: svc}
+  recov: "recovery.py, reconciler.py\nperiodic sweeper,\npost-commit recovery" {class: svc}
+  rls: "rls.py\nSET LOCAL ROLE maulwurf_ingest\napp.user_id per transaction" {class: svc}
+}
+
+pg: "PostgreSQL" {class: store}
+riva_ext: "NVIDIA Riva" {class: external}
+
+api -> rec.routes: "internal HTTP/1.1" {class: flow}
+rec.routes -> rec.cred {class: flow}
+rec.routes -> rec.adm {class: flow}
+rec.routes -> rec.lease {class: flow}
+rec.routes -> rec.recv {class: flow}
+rec.recv -> tmpfs: "bytes" {class: flow}
+rec.routes -> run.val: "probe on admit" {class: flow}
+rec.routes -> run.sup: "admit" {class: flow}
+run.sup -> run.job: "launch" {class: flow}
+run.job -> run.pipe {class: flow}
+run.pipe -> run.riva {class: flow}
+run.pipe -> run.recon {class: flow}
+run.riva -> riva_ext: "gRPC TLS" {class: flow}
+run.sup -> fin.pers: "transcript" {class: flow}
+run.sup -> fin.clean {class: flow}
+fin.clean -> tmpfs: "delete, verify" {class: flow}
+fin.pers -> fin.rls {class: flow}
+fin.rls -> pg {class: flow}
+fin.recov -> pg: "stranded attempts" {class: flow}
+fin.recov -> fin.clean {class: flow}

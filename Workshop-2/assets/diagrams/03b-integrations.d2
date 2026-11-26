@@ -1,0 +1,88 @@
+title: |md
+  # Figure 7.3b · External integrations and their configuration
+| {near: top-center}
+
+direction: right
+
+classes: {
+  zone: {
+    style: {
+      fill: "#F7F8FA"
+      stroke: "#B8C0CC"
+      border-radius: 10
+      font-size: 18
+    }
+  }
+  svc: {
+    style: {
+      fill: "#FFFFFF"
+      stroke: "#3B5B8C"
+      border-radius: 6
+      font-size: 14
+    }
+  }
+  ephemeral: {
+    style: {
+      fill: "#FFF3D6"
+      stroke: "#B26A00"
+      border-radius: 6
+      font-size: 14
+    }
+  }
+  prod: {
+    style: {
+      fill: "#F2EEF9"
+      stroke: "#7050A8"
+      border-radius: 6
+      stroke-dash: 4
+      font-size: 14
+    }
+  }
+  store: {
+    shape: cylinder
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 14
+    }
+  }
+  bus: {
+    shape: queue
+    style: {
+      fill: "#E6F2EA"
+      stroke: "#2E7D5B"
+      font-size: 14
+    }
+  }
+  external: {
+    shape: cloud
+    style: {
+      fill: "#EAF0FB"
+      stroke: "#4766B8"
+      font-size: 14
+    }
+  }
+  flow: {
+    style: {
+      stroke: "#55606E"
+      font-size: 12
+    }
+  }
+}
+
+internal: Maulwurf services {
+  class: zone
+  ingest: "ingest\nonly component that\nhandles audio" {class: ephemeral}
+  api: "api\nchat, search,\nOAuth, reads" {class: svc}
+  worker: "worker\nindex, analyze,\nCalendar, Gmail" {class: svc}
+}
+
+riva: "NVIDIA Riva\nwhisper-large-v3" {class: external}
+llm: "LLM and embeddings\nOpenAI-compatible" {class: external}
+google: "Google\nOAuth, Calendar, Gmail" {class: external}
+
+internal.ingest -> riva: "gRPC TLS · audio fragments\nNVIDIA_API_KEY, RIVA_*" {class: flow}
+internal.api -> llm: "HTTPS · questions, query text\nMAULWURF_LLM_*,\nMAULWURF_EMBEDDING_*" {class: flow}
+internal.worker -> llm: "HTTPS · chunk text,\nextraction windows" {class: flow}
+internal.api -> google: "HTTPS · OAuth, calendar reads\nMAULWURF_GOOGLE_*" {class: flow}
+internal.worker -> google: "HTTPS · confirmed events,\nopt-in mail (gmail.send)" {class: flow}

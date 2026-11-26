@@ -5,7 +5,7 @@ searchable transcripts, cited RAG answers, reviewable task proposals, Google Cal
 and optional Gmail reminders. The repository contains the product and planning documentation
 plus the **S1 foundation**, the **S2 knowledge slice**, and partial **S3/S4** code
 (ownership and state in `docs/sprints/CLAIMS.md`): a Docker Compose stack of 8 services
-with healthchecks, twenty-four Alembic migrations (`0001`–`0024`), real API routers (health,
+with healthchecks, twenty-five Alembic migrations (`0001`–`0025`), real API routers (health,
 session/CSRF, Google login, `GET/PATCH /me`, subject CRUD, `POST /audios`, streaming `PUT`
 with dedupe, search, chat SSE, integrations status, tasks, calendar, notifications,
 account deletion), a hardened ingestion package with internal reception endpoints, leases
@@ -13,9 +13,9 @@ and cleanup, ARQ worker/scheduler processes with outbox dispatch, indexing,
 reconciliation and an analyze job, unit and integration test suites, and a GitHub Actions
 quality pipeline. There is still **no end-to-end class** on the default stack: the ingest
 sink answers `503` until `MAULWURF_INGEST_URL` and the ingest credential are configured,
-the browser upload form does not send bytes yet (D2.2), real-text indexing stays closed
-while D3-Texto is open, Calendar/Gmail writes stay behind explicit confirmation, and real
-ingestion is gated by the open F0 decisions (D2/D6 `pending`, D3-Audio/D4 `blocked`).
+real-text indexing stays closed while D3-Texto is open, Calendar/Gmail writes stay behind
+explicit confirmation, and real ingestion is gated by the open F0 decisions (D2/D6 `pending`,
+D3-Audio/D4 `blocked`).
 Elevator pitch: upload a class recording, keep only its durable text, and turn what the
 teacher said into evidence-backed study actions without silently writing to external
 services.
