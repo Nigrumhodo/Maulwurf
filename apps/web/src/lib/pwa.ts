@@ -26,6 +26,7 @@ export const CACHEABLE_EXACT_PATHS = [
   "/index.html",
   "/manifest.webmanifest",
   "/icon.svg",
+  "/icon-light.svg",
 ] as const;
 
 /** Extensions allowed under `/assets/`. Anything else stays uncached. */

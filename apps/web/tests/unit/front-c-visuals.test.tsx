@@ -7,6 +7,7 @@ import { AppSidebar } from "@/components/layout/AppSidebar";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { RetroVisual } from "@/components/ui/RetroVisual";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { applyTheme } from "@/lib/theme";
 import { LandingPage } from "@/pages/LandingPage";
 
 vi.mock("@/components/auth/AuthProvider", () => ({
@@ -41,7 +42,36 @@ describe("Front C 16-bit RPG visuals and accessibility", () => {
     );
     expect(darkImg?.getAttribute("src")).toBe("/dark-anim.webp");
     expect(lightImg?.getAttribute("src")).toBe("/light-anim.webp");
+    expect(darkImg?.getAttribute("loading")).toBe("lazy");
+    expect(lightImg?.getAttribute("loading")).toBe("lazy");
+    expect(darkImg?.getAttribute("decoding")).toBe("async");
+    expect(lightImg?.getAttribute("decoding")).toBe("async");
     expect(lightSource?.getAttribute("srcset")).toBe("/light-static.webp");
+  });
+
+  it("syncs favicon and theme-color metadata with the active app theme", () => {
+    const meta = document.createElement("meta");
+    meta.name = "theme-color";
+    meta.content = "#12101a";
+    const link = document.createElement("link");
+    link.rel = "icon";
+    link.href = "/icon.svg";
+    document.head.append(meta, link);
+
+    try {
+      applyTheme("light");
+      expect(meta.content).toBe("#efe7da");
+      expect(link.getAttribute("href")).toBe("/icon-light.svg");
+
+      applyTheme("dark");
+      expect(meta.content).toBe("#12101a");
+      expect(link.getAttribute("href")).toBe("/icon.svg");
+    } finally {
+      meta.remove();
+      link.remove();
+      document.documentElement.classList.remove("light");
+      localStorage.clear();
+    }
   });
 
   it("renders theme-paired 16-bit illustrations for every EmptyState kind while preserving copy", () => {

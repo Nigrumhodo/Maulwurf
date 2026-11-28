@@ -24,6 +24,9 @@ function renderPicture(
       aria-hidden={alt === "" ? true : undefined}
       className={className}
       style={{ imageRendering: "pixelated" }}
+      // Lazy loading keeps the hidden opposite-theme variant from downloading until toggled.
+      loading="lazy"
+      decoding="async"
     />
   );
 
