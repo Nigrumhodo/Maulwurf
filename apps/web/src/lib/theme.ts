@@ -11,9 +11,16 @@ export function getStoredTheme(): ThemeMode {
   return window.localStorage.getItem(STORAGE_KEY) === "light" ? "light" : "dark";
 }
 
+const THEME_COLOR: Record<ThemeMode, string> = {
+  dark: "#12101a",
+  light: "#efe7da",
+};
+
 /** Aplica el tema sobre `document.documentElement` y lo persiste. */
 export function applyTheme(mode: ThemeMode): void {
   document.documentElement.classList.toggle("light", mode === "light");
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (meta !== null) meta.content = THEME_COLOR[mode];
   if (typeof window !== "undefined") {
     window.localStorage.setItem(STORAGE_KEY, mode);
   }

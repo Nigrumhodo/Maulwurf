@@ -5,7 +5,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { GestionLayout } from "@/components/layout/GestionLayout";
 import { BlinkingCaret } from "@/components/motion/BlinkingCaret";
 import { RetroVisual } from "@/components/ui/RetroVisual";
-import { estadoError404, estadoError404Anim } from "@/components/Visual";
+import { estadoError404, estadoError404Anim, estadoError404Claro } from "@/components/Visual";
 import { LandingPage } from "@/pages/LandingPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { RegisterPage } from "@/pages/RegisterPage";
@@ -44,6 +44,7 @@ function HomeRoute() {
           <RetroVisual
             src={estadoError404Anim}
             staticSrc={estadoError404}
+            lightSrc={estadoError404Claro}
             className="h-32 w-32 object-contain"
           />
         </div>

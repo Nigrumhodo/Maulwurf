@@ -11,6 +11,7 @@ import {
   estadoLeyendoCitas,
   estadoLeyendoCitasAnim,
   iconChatCrt,
+  iconChatCrtOscuro,
   loaderCassetteAmbar,
   loaderCassetteAmbarStatic,
   loaderCassetteLavanda,
@@ -689,7 +690,11 @@ export function ChatWorkspace({
               >
                 <div className="flex items-center gap-2 text-sm text-lavender/60">
                   {message.role === "assistant" && (
-                    <RetroVisual src={iconChatCrt} className="h-5 w-5 object-contain" />
+                    <RetroVisual
+                      src={iconChatCrtOscuro}
+                      lightSrc={iconChatCrt}
+                      className="h-5 w-5 object-contain"
+                    />
                   )}
                   <span>{message.role === "user" ? t("chatWorkspace.you") : t("chatWorkspace.assistant")}</span>
                   {message.role === "assistant" && <StatusBadge status={message.status} />}

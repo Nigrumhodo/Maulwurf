@@ -6,10 +6,13 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
   estadoError404,
   estadoError404Anim,
+  estadoError404Claro,
   estadoPrivacidadRam,
   estadoPrivacidadRamAnim,
+  estadoPrivacidadRamClaro,
   estadoTranscribiendo,
   estadoTranscribiendoAnim,
+  estadoTranscribiendoClaro,
   loaderCassetteAmbar,
   loaderCassetteAmbarStatic,
   loaderCassetteLavanda,
@@ -90,6 +93,7 @@ export function IngestProgress({ audioId }: IngestProgressProps) {
           <RetroVisual
             src={estadoError404Anim}
             staticSrc={estadoError404}
+            lightSrc={estadoError404Claro}
             className="h-16 w-16 object-contain"
           />
         </div>
@@ -141,25 +145,21 @@ export function IngestProgress({ audioId }: IngestProgressProps) {
         <>
           {state.terminal === null && !cleanupPending && (
             <div className="flex items-center gap-3 border-2 border-lavender/30 bg-dark p-2">
+              <div className="shrink-0">
+                <RetroVisual
+                  src={estadoTranscribiendoAnim}
+                  staticSrc={estadoTranscribiendo}
+                  lightSrc={estadoTranscribiendoClaro}
+                  className="h-14 w-14 object-contain"
+                />
+              </div>
               <RetroVisual
-                src={estadoTranscribiendoAnim}
-                staticSrc={estadoTranscribiendo}
-                className="h-14 w-14 shrink-0 object-contain"
+                src={loaderCassetteLavanda}
+                staticSrc={loaderCassetteLavandaStatic}
+                lightSrc={loaderCassetteAmbar}
+                lightStaticSrc={loaderCassetteAmbarStatic}
+                className="h-10 w-auto object-contain"
               />
-              <span className="img-dark-only">
-                <RetroVisual
-                  src={loaderCassetteLavanda}
-                  staticSrc={loaderCassetteLavandaStatic}
-                  className="h-10 w-auto object-contain"
-                />
-              </span>
-              <span className="img-light-only">
-                <RetroVisual
-                  src={loaderCassetteAmbar}
-                  staticSrc={loaderCassetteAmbarStatic}
-                  className="h-10 w-auto object-contain"
-                />
-              </span>
             </div>
           )}
           <div className="flex flex-wrap items-center gap-2 text-lavender/80">
@@ -202,6 +202,7 @@ export function IngestProgress({ audioId }: IngestProgressProps) {
                 <RetroVisual
                   src={estadoPrivacidadRamAnim}
                   staticSrc={estadoPrivacidadRam}
+                  lightSrc={estadoPrivacidadRamClaro}
                   className="h-12 w-12 object-contain"
                 />
               </div>

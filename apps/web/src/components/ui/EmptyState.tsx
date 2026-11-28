@@ -2,14 +2,17 @@ import type { ReactNode } from "react";
 import { RetroVisual } from "@/components/ui/RetroVisual";
 import {
   estadoBibliotecaVacia,
+  estadoBibliotecaVaciaOscuro,
   estadoBusquedaRag,
   estadoBusquedaRagAnim,
   estadoError404,
   estadoError404Anim,
+  estadoError404Claro,
   estadoLeyendoCitas,
   estadoLeyendoCitasAnim,
   estadoTareasCafe,
   estadoTareasCafeAnim,
+  estadoTareasCafeOscuro,
 } from "@/components/Visual";
 
 export type EmptyStateIllustration = "library" | "tasks" | "error" | "reading";
@@ -28,7 +31,11 @@ function Illustration({ kind }: { kind: EmptyStateIllustration }) {
   if (kind === "library") {
     return (
       <div className="border-2 border-pure-black bg-dark p-2 shadow-block-sm">
-        <RetroVisual src={estadoBibliotecaVacia} className="h-36 w-36 object-contain" />
+        <RetroVisual
+          src={estadoBibliotecaVaciaOscuro}
+          lightSrc={estadoBibliotecaVacia}
+          className="h-36 w-36 object-contain"
+        />
       </div>
     );
   }
@@ -36,8 +43,9 @@ function Illustration({ kind }: { kind: EmptyStateIllustration }) {
     return (
       <div className="border-2 border-pure-black bg-dark p-2 shadow-block-sm">
         <RetroVisual
-          src={estadoTareasCafeAnim}
-          staticSrc={estadoTareasCafe}
+          src={estadoTareasCafeOscuro}
+          lightSrc={estadoTareasCafeAnim}
+          lightStaticSrc={estadoTareasCafe}
           className="h-36 w-36 object-contain"
         />
       </div>
@@ -49,6 +57,7 @@ function Illustration({ kind }: { kind: EmptyStateIllustration }) {
         <RetroVisual
           src={estadoError404Anim}
           staticSrc={estadoError404}
+          lightSrc={estadoError404Claro}
           className="h-36 w-36 object-contain"
         />
       </div>
@@ -56,20 +65,13 @@ function Illustration({ kind }: { kind: EmptyStateIllustration }) {
   }
   return (
     <div className="border-2 border-pure-black bg-dark p-2 shadow-block-sm">
-      <span className="img-dark-only">
-        <RetroVisual
-          src={estadoBusquedaRagAnim}
-          staticSrc={estadoBusquedaRag}
-          className="h-36 w-36 object-contain"
-        />
-      </span>
-      <span className="img-light-only">
-        <RetroVisual
-          src={estadoLeyendoCitasAnim}
-          staticSrc={estadoLeyendoCitas}
-          className="h-36 w-36 object-contain"
-        />
-      </span>
+      <RetroVisual
+        src={estadoBusquedaRagAnim}
+        staticSrc={estadoBusquedaRag}
+        lightSrc={estadoLeyendoCitasAnim}
+        lightStaticSrc={estadoLeyendoCitas}
+        className="h-36 w-36 object-contain"
+      />
     </div>
   );
 }

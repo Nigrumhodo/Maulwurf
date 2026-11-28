@@ -3,15 +3,22 @@ import { useTranslation } from "react-i18next";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { LegalLinks } from "@/components/legal/LegalLinks";
+import { RetroVisual } from "@/components/ui/RetroVisual";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { UiLanguageSwitcher } from "@/components/ui/UiLanguageSwitcher";
 import {
   iconCalendario,
+  iconCalendarioOscuro,
   iconCarpeta,
+  iconCarpetaClaro,
   iconCassette,
+  iconCassetteClaro,
   iconChatCrt,
+  iconChatCrtOscuro,
   iconMadriguera,
+  iconMadrigueraClaro,
   iconTareas,
+  iconTareasOscuro,
 } from "@/components/Visual";
 import { Clock } from "./Clock";
 import { Header } from "./Header";
@@ -24,15 +31,15 @@ import {
 } from "./gestionNav";
 import type { AppNavItem } from "./gestionNav";
 
-const NAV_ICONS: Record<string, string> = {
-  [HOME_ITEM.to]: iconMadriguera,
-  [PANEL_ITEM.to]: iconCarpeta,
-  "/gestion/subir": iconCassette,
-  "/gestion/biblioteca": iconCarpeta,
-  "/gestion/chat": iconChatCrt,
-  "/gestion/materias": iconCarpeta,
-  "/gestion/tareas": iconTareas,
-  "/gestion/agenda": iconCalendario,
+const NAV_ICONS: Record<string, { dark: string; light: string }> = {
+  [HOME_ITEM.to]: { dark: iconMadriguera, light: iconMadrigueraClaro },
+  [PANEL_ITEM.to]: { dark: iconCarpeta, light: iconCarpetaClaro },
+  "/gestion/subir": { dark: iconCassette, light: iconCassetteClaro },
+  "/gestion/biblioteca": { dark: iconCarpeta, light: iconCarpetaClaro },
+  "/gestion/chat": { dark: iconChatCrtOscuro, light: iconChatCrt },
+  "/gestion/materias": { dark: iconCarpeta, light: iconCarpetaClaro },
+  "/gestion/tareas": { dark: iconTareasOscuro, light: iconTareas },
+  "/gestion/agenda": { dark: iconCalendarioOscuro, light: iconCalendario },
 };
 
 const GLYPH = "w-6 shrink-0 text-center";
@@ -60,11 +67,10 @@ function ItemIcon({ item }: { item: AppNavItem }) {
   }
   return (
     <span aria-hidden="true" className="flex w-6 shrink-0 justify-center">
-      <img
-        src={icon}
-        alt=""
+      <RetroVisual
+        src={icon.dark}
+        lightSrc={icon.light}
         className="h-6 w-6 object-contain"
-        style={{ imageRendering: "pixelated" }}
       />
     </span>
   );

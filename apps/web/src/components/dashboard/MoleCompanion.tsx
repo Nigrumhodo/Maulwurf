@@ -4,6 +4,7 @@ import { RetroVisual } from "@/components/ui/RetroVisual";
 import {
   estadoPrivacidadRam,
   estadoPrivacidadRamAnim,
+  estadoPrivacidadRamClaro,
   heroEscritorioSnes,
   heroEscritorioSnesAnim,
   spriteEscuchandoNotas,
@@ -48,6 +49,7 @@ export function MoleCompanion() {
           <RetroVisual
             src={estadoPrivacidadRamAnim}
             staticSrc={estadoPrivacidadRam}
+            lightSrc={estadoPrivacidadRamClaro}
             className="h-11 w-11 object-contain"
           />
         </div>

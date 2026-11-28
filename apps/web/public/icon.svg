@@ -1,5 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Maulwurf">
-  <rect width="64" height="64" fill="#12101a"/>
-  <rect x="2" y="2" width="60" height="60" fill="none" stroke="#c084fc" stroke-width="4"/>
-  <path d="M12 46V18h8l12 14 12-14h8v28h-8V31L32 45 20 31v15z" fill="#c084fc"/>
+  <style>
+    .bg { fill: #12101a; }
+    .fg { fill: #c084fc; }
+    .frame { stroke: #c084fc; }
+    @media (prefers-color-scheme: light) {
+      .bg { fill: #efe7da; }
+      .fg { fill: #b45309; }
+      .frame { stroke: #b45309; }
+    }
+  </style>
+  <rect class="bg" width="64" height="64"/>
+  <rect class="frame" x="2" y="2" width="60" height="60" fill="none" stroke-width="4"/>
+  <path class="fg" d="M12 46V18h8l12 14 12-14h8v28h-8V31L32 45 20 31v15z"/>
 </svg>
