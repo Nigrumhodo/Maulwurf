@@ -8,7 +8,7 @@ import { TaskReviewDialog } from "@/components/tasks/TaskReviewDialog";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { RetroVisual } from "@/components/ui/RetroVisual";
-import { estadoTareasCafe, estadoTareasCafeAnim } from "@/components/Visual";
+import { estadoTareasCafe, estadoTareasCafeAnim, estadoTareasCafeOscuro } from "@/components/Visual";
 import i18n from "@/i18n";
 import { ApiHttpError } from "@/lib/api";
 import {
@@ -302,8 +302,9 @@ export function TareasPage() {
         <div className="flex items-center gap-3">
           <div className="hidden shrink-0 border-2 border-pure-black bg-dark p-1 shadow-block-sm sm:block">
             <RetroVisual
-              src={estadoTareasCafeAnim}
-              staticSrc={estadoTareasCafe}
+              src={estadoTareasCafeOscuro}
+              lightSrc={estadoTareasCafeAnim}
+              lightStaticSrc={estadoTareasCafe}
               className="h-14 w-14 object-contain"
             />
           </div>

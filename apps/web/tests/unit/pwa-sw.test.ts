@@ -31,6 +31,7 @@ describe("PWA shell-only caching guard (D4.5 / D4.8)", () => {
     expect(isCacheableRequest("/index.html", "GET")).toBe(true);
     expect(isCacheableRequest("/manifest.webmanifest", "GET")).toBe(true);
     expect(isCacheableRequest("/icon.svg", "GET")).toBe(true);
+    expect(isCacheableRequest("/icon-light.svg", "GET")).toBe(true);
     expect(isCacheableRequest("/assets/index-123.js", "GET")).toBe(true);
     for (const extension of CACHEABLE_ASSET_EXTENSIONS) {
       expect(isCacheableRequest(`/assets/shell${extension}`, "GET")).toBe(true);

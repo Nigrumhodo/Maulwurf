@@ -10,6 +10,7 @@ import { buttonClasses } from "@/components/ui/buttonStyles";
 import {
   estadoPrivacidadRam,
   estadoPrivacidadRamAnim,
+  estadoPrivacidadRamClaro,
   heroMadriguera,
   heroMadrigueraAnim,
   heroPergaminoClaro,
@@ -116,6 +117,7 @@ export function LandingPage() {
               <RetroVisual
                 src={estadoPrivacidadRamAnim}
                 staticSrc={estadoPrivacidadRam}
+                lightSrc={estadoPrivacidadRamClaro}
                 className="h-20 w-20 object-contain"
               />
             </div>

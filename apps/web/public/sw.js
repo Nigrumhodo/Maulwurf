@@ -5,8 +5,8 @@
 // v2 drops entries the previous denylist policy may have stored.
 
 const CACHE_NAME = "maulwurf-shell-v2";
-const PRECACHE_URLS = ["/", "/manifest.webmanifest", "/icon.svg"];
-const CACHEABLE_EXACT = new Set(["/", "/index.html", "/manifest.webmanifest", "/icon.svg"]);
+const PRECACHE_URLS = ["/", "/manifest.webmanifest", "/icon.svg", "/icon-light.svg"];
+const CACHEABLE_EXACT = new Set(["/", "/index.html", "/manifest.webmanifest", "/icon.svg", "/icon-light.svg"]);
 const CACHEABLE_ASSET_EXTENSIONS = [".js", ".css", ".webp", ".svg", ".png", ".woff2"];
 
 const PRIVATE_PATH_PREFIXES = [
